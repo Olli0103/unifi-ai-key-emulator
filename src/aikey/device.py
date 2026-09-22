@@ -28,7 +28,8 @@ from urllib.parse import urlsplit
 import aiohttp
 from aiohttp import web
 
-from .protocol import ContractError, decode_message, encode_message
+from .protocol import (COMPATIBILITY_MANIFEST_VERSION, ContractError, classify_controller_version,
+                       decode_message, encode_message)
 from .config import validate_factory_enrollment_deadline
 
 
@@ -272,6 +273,7 @@ class DeviceService:
         self._adoption_generation = 0
         self._connection_generation: int | None = None
         self._connection_token: str | None = None
+        self._closing_task: asyncio.Task | None = None
         self._active_admissions = 0
         self._control_diagnostics = {name: {"count": 0, "last_result_code": None,
                                            "result_code_counts": _result_counts()} for name in (
@@ -323,8 +325,17 @@ class DeviceService:
                 "control_commands": deepcopy(self._control_diagnostics),
                 "recognize_key_frames": deepcopy(self._recognize_diagnostics),
                 "clock_offset_ms": self._clock_offset_ms, "discovery": "unsupported",
+                "compatibility": self._compatibility_status(),
                 "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "changeUserPassword", "RequestAI"]
                     + (["recognizeKeyFrames"] if basic_enabled else [])}
+
+    def _compatibility_status(self) -> dict:
+        """Fixed categories only; never echoes controller-supplied text."""
+        console = self._state.get("console_info")
+        reported = console.get("protectVersion") if isinstance(console, dict) else None
+        version, evidence = classify_controller_version(reported)
+        return {"manifest": COMPATIBILITY_MANIFEST_VERSION, "controller_version": version,
+                "controller_version_evidence": evidence}
 
     def _load_state(self) -> dict:
         if not self.state_path.exists():
@@ -634,6 +645,7 @@ class DeviceService:
                 self._connections += 1
                 self._connection_generation = generation
                 self._connection_token = headers.get("x-token")
+                self._closing_task = None
                 self._time_sync_id = secrets.token_hex(16)
                 self._last_t0 = int(time.time() * 1000)
                 await ws.send_bytes(encode_message({"type": "request", "action": "timeSync", "id": self._time_sync_id,
@@ -653,6 +665,13 @@ class DeviceService:
                         if ws.close_code == 1006:
                             raise AbnormalControlClosure("Control transport closed abnormally")
                         raise ContractError("Control WebSocket failed")
+                closing = self._closing_task
+                if closing is not None:
+                    # A handler's close() ends iteration. Let it send its own close
+                    # code before the context manager's default 1000 close can win.
+                    if not closing.done():
+                        await asyncio.wait({closing}, timeout=5)
+                    raise ContractError("Control message rejected")
                 # aiohttp also exposes transport loss as CLOSED/1006, which ends
                 # async iteration without raising or yielding an ERROR frame.
                 if ws.close_code == 1006:
@@ -668,6 +687,7 @@ class DeviceService:
                 code = ws.close_code
                 self._last_close_code = int(code) if isinstance(code, int) and 1000 <= code <= 4999 else None
             self._ws = None
+            self._closing_task = None
             self._time_sync_id = None
             self._last_t0 = None
             self._connection_token = None
@@ -679,12 +699,18 @@ class DeviceService:
             if response is not None and not ws.closed:
                 await ws.send_bytes(response)
         except (ContractError, ValueError):
-            await ws.close(code=1002, message=b"Invalid UCP4 message")
+            await self._close_control(ws, 1002, b"Invalid UCP4 message")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             self.log.warning("Control response failed (%s)", type(exc).__name__)
-            await ws.close(code=1011, message=b"Control processing failed")
+            await self._close_control(ws, 1011, b"Control processing failed")
+
+    async def _close_control(self, ws, code: int, message: bytes) -> None:
+        """Close with an explicit code; the reader waits for this task to send it."""
+        if ws is self._ws and self._closing_task is None:
+            self._closing_task = asyncio.current_task()
+        await ws.close(code=code, message=message)
 
     async def handle_message(self, wire: bytes, *, _connection=None) -> bytes | None:
         message = decode_message(wire)
@@ -865,12 +891,19 @@ class DeviceService:
                 raise ContractError("Invalid timeoutMs")
             if "resUrl" in body and body["resUrl"] is not None:
                 _text(body["resUrl"], "resUrl", 2048)
+            from .worker import WorkerError
             self._active_admissions += 1
             try:
                 async with asyncio.timeout(min(timeout_ms / 1000, 30)):
                     admitted = await self.job_handler(deepcopy(body))
                 if not isinstance(admitted, dict):
                     raise ContractError("Job admission must return an object")
+            except WorkerError as exc:
+                # Exact worker message only: an unimplemented target is an
+                # unsupported feature (ENOTSUP), not a generic processing failure.
+                if str(exc) == "Unsupported RequestAI targetUri":
+                    raise CommandFailure(95, "Unsupported RequestAI targetUri") from None
+                raise
             finally:
                 self._active_admissions -= 1
             return body
@@ -921,6 +954,12 @@ class DeviceService:
                     if set(body["controller"]) - allowed:
                         raise ContractError("Unsupported controller info fields")
                     self._state["console_info"] = _finite_json(body["controller"])
+                    _, evidence = classify_controller_version(
+                        self._state["console_info"].get("protectVersion"))
+                    if evidence in {"unknown", "unrecognized_format"}:
+                        # Metadata is still saved; adoption and the baseline are unchanged.
+                        self.log.warning("Controller version has no compatibility evidence (%s)",
+                                         evidence)
                 elif action == "setInfo":
                     if set(body) != {"hostname"}:
                         raise ContractError("Only a logical hostname is supported")
