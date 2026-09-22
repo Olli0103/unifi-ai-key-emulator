@@ -1,0 +1,29 @@
+{
+  "passed": true,
+  "scope": "synthetic loopback integration",
+  "checks": [
+    "management_rejects_wrong_password",
+    "normal_token_adoption_over_tls",
+    "device_info_and_honest_capabilities",
+    "unsupported_command_rejected",
+    "mtls_media_download",
+    "vision_http_request",
+    "task_callback_preserves_identity",
+    "description_embedding_384",
+    "e5_query_socket_and_document_query_prefixes",
+    "restart_reuses_identity_without_adoption_token",
+    "persisted_job_deduplication",
+    "health_status_contains_no_credentials"
+  ],
+  "counts": {
+    "inference": 1,
+    "callbacks": 1,
+    "media": 1,
+    "connections": 2
+  },
+  "timestamp": "2026-09-22T14:05:38.200536+00:00",
+  "real_controller_contacted": false,
+  "real_inference_performed": false,
+  "native_protect_7_3_56": "needs_evidence",
+  "nas_deployment": "not_run"
+}

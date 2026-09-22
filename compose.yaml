@@ -1,0 +1,50 @@
+name: local-aikey
+services:
+  emulator:
+    build: .
+    image: local-aikey:0.1.0
+    user: "${AIKEY_UID:-10001}:${AIKEY_GID:-10001}"
+    init: true
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,nosuid,noexec,size=256m
+    volumes:
+      - ./state:/state
+    command: ["run", "--config", "/state/config.json"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+
+  postgres:
+    profiles: [search]
+    build: deployment/postgres
+    image: local-aikey-postgres:0.1.0
+    network_mode: host
+    read_only: true
+    environment:
+      CONSOLE_IP: "${CONSOLE_IP:-}"
+      EMULATOR_IP: 127.0.0.1
+      POSTGRES_PASSWORD_FILE: /aikey-state/database-password
+      POSTGRES_TLS_CERT_FILE: /aikey-state/device.crt
+      POSTGRES_TLS_KEY_FILE: /aikey-state/device.key
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - ./state:/aikey-state:ro
+      - aikey-postgres:/var/lib/postgresql/data
+    tmpfs:
+      - /run:rw,nosuid,size=32m
+      - /tmp:rw,nosuid,noexec,size=64m
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U unifi-protect -d unifi-protect"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  aikey-postgres:
