@@ -6,7 +6,7 @@ The result is a runnable experimental implementation with source, tests, a Pytho
 
 ## Observed checks
 
-- The current Python suite passed: 369 tests and 56 subtests. Ruff also passed after the adoption, scoped-camera and basic-description changes.
+- The current Python suite passed: 442 tests and 56 subtests. Ruff also passed after the adoption, scoped-camera, basic-description, compatibility-manifest and camera-inventory changes.
 - The standalone CLI lab passed all 12 checks in [lab-results.json](lab-results.json). It used real loopback TLS, client certificates, HTTP and WebSocket connections with synthetic controller and model services.
 - The lab exercised credential rejection, normal adoption, control commands, media download, vision inference, a description callback, 384-dimensional document/query embeddings, restart with the same identity, callback deduplication and a health response without credentials.
 - Provider tests exercised OpenAI Responses, native Ollama and compatible Chat Completions against loopback HTTP fixtures. They checked response errors, redirects, credential separation and explicit configuration. Invalid setup commands preserved existing settings, and readiness rejected invalid credentials. No real model output was evaluated.
@@ -24,6 +24,8 @@ The static protocol evidence came from AI Key 2.2.8 and Protect 7.2.105. Public 
 Native adoption on Protect 7.3.56 is now observed: the controller shows the AI Key online, the pinned control connection completed time synchronization, Protect rotated its management password, and the emulator reconnected after a restart with factory enrollment disabled. The former setup credentials returned HTTP 401. A bounded macOS discovery companion also supplied the advertised address to Protect.
 
 A real OpenAI request using a synthetic image succeeded. A subsequent native test on Protect 7.3.60 used the already authenticated Safari session to request one on-demand camera description. Protect dispatched the clip to the emulator; the worker recorded a completed job and HTTP 200 callback; Protect returned the real description with HTTP 200. No password login or session-cookie export was needed. A separately created integration API key read documented camera metadata but received HTTP 401 on the private application API.
+
+A later read-only preflight used that integration API key and the independently pinned web certificate against the documented Protect 7.3.60 local integration API. It returned 11 cameras: 8 connected cameras advertising onboard smart detections, 2 connected cameras without those detections, and 1 offline camera. The client saved a private JSON and static HTML report, with processing disabled. The response included the audio flag `smoke_cmonx`, absent from the published 7.3.60 OpenAPI enum. This inventory read does not establish AI Key event delivery on the other camera families or a legacy-camera ingress path.
 
 On-demand analysis returns a description without persisting it. A separate fresh G5 Flex smart detection completed through the automatic `recognizeKeyFrames` path. Its full RAM callback returned HTTP 200. A subsequent exact-event GET returned `metadata.ramState: "done"` and the generated `metadata.ramDescription`; both remained present after a full Safari page reload. The native event summary panel displayed that caption. The emulator subsequently reconnected after a restart without processing another event. No other camera was processed. The single-use permit is consumed, so this result does not establish continuous operation.
 

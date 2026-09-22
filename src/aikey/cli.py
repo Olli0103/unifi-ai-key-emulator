@@ -37,6 +37,12 @@ def _parser():
     trust.add_argument("--port", type=int, help="TLS endpoint, defaults to configured control port")
     lab = commands.add_parser("lab", help="Run synthetic end-to-end loopback test, without Protect")
     lab.add_argument("--output", type=Path, default=Path("lab-results.json"))
+    inventory = commands.add_parser("inventory", help="Read-only Protect camera preflight; no processing is enabled")
+    inventory.add_argument("--config", type=Path, default=Path("config.json"))
+    inventory.add_argument("--api-key-file", type=Path, required=True)
+    inventory.add_argument("--web-trust-file", type=Path, required=True)
+    inventory.add_argument("--web-cert-file", type=Path, required=True)
+    inventory.add_argument("--output", type=Path, help="Private report beside the API key file by default")
     return parser
 
 
@@ -73,6 +79,28 @@ def main(argv=None):
             print(json.dumps(report, indent=2))
             return 0 if report["passed"] else 1
         config = load_config(args.config)
+        if args.command == "inventory":
+            from .camera_inventory import fetch_inventory, render_html
+            output = args.output or args.api_key_file.with_name("camera-inventory-preflight.json")
+            if (output.suffix != ".json" or output.parent.resolve() != args.api_key_file.parent.resolve()
+                    or output.is_symlink()):
+                raise ConfigError("Inventory report must be beside the private API key file")
+            html_output = output.with_suffix(".html")
+            if html_output.is_symlink():
+                raise ConfigError("Inventory HTML report path must not be a symlink")
+            protected = {path.resolve() for path in (args.config, args.api_key_file,
+                         args.web_trust_file, args.web_cert_file)}
+            if output.resolve() in protected or html_output.resolve() in protected:
+                raise ConfigError("Inventory report cannot replace configuration, key or trust files")
+            report = asyncio.run(fetch_inventory(config["controller"]["host"],
+                api_key_file=args.api_key_file, trust_file=args.web_trust_file,
+                cert_file=args.web_cert_file))
+            atomic_private(output, json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+            atomic_private(html_output, render_html(report))
+            print(json.dumps({"report": str(output), "html_report": str(html_output),
+                              "protect_version": report["protect_version"],
+                              "summary": report["summary"], "processing_enabled": False}))
+            return 0
         if args.command == "provider":
             if args.name == "openai" and args.api_key_file is None:
                 raise ConfigError("OpenAI requires --api-key-file; do not pass a key in a command argument")
