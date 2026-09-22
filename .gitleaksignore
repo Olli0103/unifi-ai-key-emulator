@@ -1,0 +1,4 @@
+# False positives: the detector parsed the legacy compatibility profile name
+# `key-2.2.8` followed by the Protect version as an API-key assignment.
+67aa5e8941d7162c06ea65c5020e124e089ac547:src/aikey/worker.py:generic-api-key:291
+67aa5e8941d7162c06ea65c5020e124e089ac547:tests/test_worker.py:generic-api-key:279
