@@ -146,8 +146,9 @@ def _loopback(host: str) -> bool:
 class DeviceService:
     """Management routes and a reconnecting control client, without an HTTP runner.
 
-    ``job_handler`` admits a complete RequestAI body and returns promptly after
-    reservation. It owns inference and result uploads. Returning an object means
+    ``job_handler`` admits a complete RequestAI body, or an explicit
+    ``{command: recognizeKeyFrames, payload: body}`` wrapper, after reservation.
+    It owns inference and result uploads. Returning an object means
     admission succeeded; raising means admission failed. No shell dispatch is used.
     """
 
@@ -212,6 +213,10 @@ class DeviceService:
         self._connection_generation: int | None = None
         self._connection_token: str | None = None
         self._active_admissions = 0
+        self._control_diagnostics = {name: {"count": 0, "last_result_code": None} for name in (
+            "getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone",
+            "changeUserPassword", "RequestAI", "recognizeKeyFrames", "changeAiInferAgentSettings",
+            "changeDescribePrompts", "networkStatus", "sshService", "unknown")}
         # Process-local counts only; never retain request bodies or credentials.
         self._management_diagnostics = {
             "info_post_requests": 0, "info_credential_rejections": 0,
@@ -227,12 +232,16 @@ class DeviceService:
 
     @property
     def status(self) -> dict:
+        scope = self.config.get("worker", {}).get("test_scope")
+        basic_enabled = isinstance(scope, dict) and scope.get("kind") == "recognizeKeyFrames"
         return {"adopted": bool(self._state.get("adopted")), "connected": self._ws is not None and not self._ws.closed,
                 "connections": self._connections, "last_error": self._last_error,
                 "last_close_code": self._last_close_code,
                 "management": dict(self._management_diagnostics),
+                "control_commands": deepcopy(self._control_diagnostics),
                 "clock_offset_ms": self._clock_offset_ms, "discovery": "unsupported",
-                "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "changeUserPassword", "RequestAI"]}
+                "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "changeUserPassword", "RequestAI"]
+                    + (["recognizeKeyFrames"] if basic_enabled else [])}
 
     def _load_state(self) -> dict:
         if not self.state_path.exists():
@@ -335,6 +344,23 @@ class DeviceService:
         if not isinstance(overrides, dict):
             raise ContractError("feature_flags must be an object")
         flags.update(_finite_json(overrides))
+        # The summary flag remains an explicit opt-in and requires the local
+        # caption path. It says nothing about deep mode, tags or search.
+        summary = flags.get("supportAiSummary")
+        if isinstance(summary, dict) and summary.get("enabled") is True:
+            worker = self.config.get("worker", {})
+            inference = self.config.get("inference", {})
+            scope = worker.get("test_scope")
+            scope_supported = scope is None or (
+                isinstance(scope, dict) and scope.get("kind", "on_demand") in
+                ("on_demand", "recognizeKeyFrames"))
+            decoder = worker.get("ffmpeg_path")
+            configured = (isinstance(inference.get("model"), str) and bool(inference["model"])
+                          and worker.get("callback_mode", "enabled") == "enabled"
+                          and isinstance(decoder, str) and Path(decoder).is_absolute()
+                          and Path(decoder).is_file() and scope_supported)
+            if not configured:
+                flags["supportAiSummary"] = {**summary, "enabled": False}
         return {"type": self.device.get("model", "UP-AI-KEY"), "sysid": self.device.get("sysid", "0xa5f0"),
                 "version": self.device.get("firmware_version", "2.2.8"), "mac": self.mac,
                 "uptime": int(time.monotonic() - self._started_at), "poeType": self.device.get("poe_type", "unknown"),
@@ -630,6 +656,8 @@ class DeviceService:
             return await asyncio.shield(future)
         future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = (digest, future)
+        diagnostic = self._control_diagnostics.get(action, self._control_diagnostics["unknown"])
+        diagnostic["count"] = min(diagnostic["count"] + 1, 2 ** 31 - 1)
         try:
             try:
                 result = await self._command(action, body, _connection=_connection)
@@ -645,6 +673,7 @@ class DeviceService:
             except Exception as exc:
                 self.log.warning("Command failed (%s)", type(exc).__name__)
                 result, error, code = {}, "Command failed", 5
+            diagnostic["last_result_code"] = code
             response = encode_message({"id": request_id, "type": "response", "timestamp": int(time.time() * 1000),
                                        "error": error, "errorCode": code}, result)
             self._completed[request_id] = (digest, response)
@@ -690,6 +719,20 @@ class DeviceService:
             try:
                 async with asyncio.timeout(min(timeout_ms / 1000, 30)):
                     admitted = await self.job_handler(deepcopy(body))
+                if not isinstance(admitted, dict):
+                    raise ContractError("Job admission must return an object")
+            finally:
+                self._active_admissions -= 1
+            return body
+        if action == "recognizeKeyFrames":
+            scope = self.config.get("worker", {}).get("test_scope", {})
+            if (not isinstance(scope, dict) or scope.get("kind") != "recognizeKeyFrames"
+                    or body.get("camera") != scope.get("camera_id")):
+                raise CommandFailure(95, "recognizeKeyFrames is outside the configured single-use scope")
+            self._active_admissions += 1
+            try:
+                async with asyncio.timeout(30):
+                    admitted = await self.job_handler({"command": action, "payload": deepcopy(body)})
                 if not isinstance(admitted, dict):
                     raise ContractError("Job admission must return an object")
             finally:

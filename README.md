@@ -4,9 +4,9 @@ An independent experimental AI processor for UniFi Protect. Native adoption has 
 
 The local build has device management/adoption, UCP4 control, UDP discovery, a bounded vision worker, version-specific description callbacks and an E5 query responder. Vision providers are configurable: OpenAI Responses, native Ollama and OpenAI-compatible APIs. Search embeddings are configured separately. No vendor firmware or model weights are bundled.
 
-**Status: native adoption and control verified; native AI processing remains unverified.** The ARM64 image built and ran under Apple container 1.4.1. Protect 7.3.56 displayed the processor online; local checks confirmed adopted state, control time synchronization, management-password rotation, disabled factory authentication and reconnect after a planned restart. No actual native camera description, persistent description or search result has been verified. NAS deployment has not been tested.
+**Status: native adoption, control and one on-demand camera description verified.** The ARM64 image built and ran under Apple container 1.4.1. Protect 7.3.56 displayed the processor online; local checks confirmed adopted state, control time synchronization, management-password rotation, disabled factory authentication and reconnect after a planned restart. A later test on Protect 7.3.60 sent one selected camera clip through the emulator to OpenAI and returned its real description through Protect with HTTP 200. Persistent descriptions and search remain unverified. NAS deployment has not been tested.
 
-The inspected controller source is 7.2.105, alongside AI Key firmware 2.2.8. Public metadata did not return a 7.3.56 package during inspection. The live 7.3.56 results above establish those specific behaviors, not full protocol or feature compatibility.
+The inspected controller source is 7.2.105, alongside AI Key firmware 2.2.8. Public metadata did not return a 7.3.56 package during inspection. The live results above establish those specific behaviors, not full protocol or feature compatibility. The [bounded automatic-description path](docs/basic-descriptions.md) has separate persistence acceptance checks.
 
 ## Run the local lab
 

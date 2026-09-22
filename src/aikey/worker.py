@@ -30,11 +30,15 @@ class WorkerError(RuntimeError):
 
 def validate_test_scope_config(value):
     """The opt-in scope has one camera and one explicit, single-use permit."""
-    if not isinstance(value, dict) or set(value) != {"permit_id", "camera_id"}:
-        raise WorkerError("worker.test_scope requires exactly permit_id and camera_id")
+    if (not isinstance(value, dict) or not {"permit_id", "camera_id"} <= set(value)
+            or set(value) - {"permit_id", "camera_id", "kind"}):
+        raise WorkerError("worker.test_scope requires permit_id, camera_id and optional kind")
     if any(not isinstance(value[key], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value[key])
            for key in ("permit_id", "camera_id")):
         raise WorkerError("Test scope permit_id and camera_id must be nonempty identifiers")
+    if (not isinstance(value.get("kind", "on_demand"), str)
+            or value.get("kind", "on_demand") not in {"on_demand", "recognizeKeyFrames"}):
+        raise WorkerError("Test scope kind must be on_demand or recognizeKeyFrames")
     return dict(value)
 
 
@@ -270,6 +274,8 @@ class JobProcessor:
     def _normalize(self, command):
         if not isinstance(command, dict) or len(_json(command)) > 65536:
             raise WorkerError("Invalid or oversized RequestAI command")
+        if "command" in command:
+            return self._normalize_recognize_key_frames(command)
         target = command.get("targetUri")
         if target not in {":7968/describe", ":7968/on_demand_inference"}:
             raise WorkerError("Unsupported RequestAI targetUri")
@@ -334,7 +340,8 @@ class JobProcessor:
     def _validate_test_scope(self, operation, body, media):
         if self.test_scope is None:
             return
-        if operation != "on_demand" or body.get("cameraId") != self.test_scope["camera_id"]:
+        if (self.test_scope.get("kind", "on_demand") != "on_demand"
+                or operation != "on_demand" or body.get("cameraId") != self.test_scope["camera_id"]):
             raise WorkerError("Test scope permits only on-demand work for its configured camera")
         if len(media) != 1 or media[0][0] != "video":
             raise WorkerError("Test scope requires one video export")
@@ -362,6 +369,64 @@ class JobProcessor:
                 and start <= body["timestamp"] < end):
             raise WorkerError("Test scope export must contain the requested timestamp and span at most 10 seconds")
 
+    def _normalize_recognize_key_frames(self, command):
+        """Accept the observed basic video command only under a single-use scope.
+
+        This internal wrapper is supplied by the UCP dispatcher, not a fabricated
+        RequestAI target URI. Recognition, audio and deep-mode jobs remain separate.
+        """
+        if (set(command) != {"command", "payload"} or command["command"] != "recognizeKeyFrames"
+                or self.test_scope is None
+                or self.test_scope.get("kind") != "recognizeKeyFrames"):
+            raise WorkerError("recognizeKeyFrames requires its explicit single-use test scope")
+        body = command["payload"]
+        required = {"reqUrl", "resUrl", "ramType", "camera", "event", "channel", "start", "end",
+                    "type", "mute", "format", "createEvent", "keyMoments", "postVLM"}
+        if (not isinstance(body, dict) or not required <= set(body)
+                or set(body) - required - {"roiMeta", "thumbnailMs", "thumbnailMeta"}):
+            raise WorkerError("Unsupported recognizeKeyFrames payload fields")
+        body = json.loads(_json(body))
+        if (body["camera"] != self.test_scope["camera_id"]
+                or not isinstance(body["event"], str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])
+                or body["ramType"] != "video" or body["postVLM"] is not True
+                or type(body["channel"]) is not int or body["channel"] != 0
+                or body["type"] != "rotating" or body["mute"] is not True
+                or body["format"] not in {"ubv", "mp4"} or body["createEvent"] is not False):
+            raise WorkerError("recognizeKeyFrames is limited to captioned, muted target-camera video")
+        if (any(type(body[key]) is not int for key in ("start", "end"))
+                or not 0 <= body["start"] < body["end"] <= 2 ** 53 - 1
+                or body["end"] - body["start"] > 10000):
+            raise WorkerError("recognizeKeyFrames video must span at most 10 seconds")
+        moments = body["keyMoments"]
+        if (not isinstance(moments, list) or not 1 <= len(moments) <= self.max_images
+                or any(type(value) is not int or not body["start"] <= value < body["end"]
+                       for value in moments) or len(set(moments)) != len(moments)):
+            raise WorkerError("recognizeKeyFrames requires bounded distinct timestamps inside the video")
+        callback = self._url(body["resUrl"], "callback")
+        if urlsplit(callback).path != _LEGACY_CALLBACK:
+            raise WorkerError("recognizeKeyFrames requires the observed RAM callback")
+        original_media = self._url(body["reqUrl"], "media")
+        parsed = urlsplit(original_media)
+        if parsed.path != "/internal/aiprocessors/video/export":
+            raise WorkerError("recognizeKeyFrames requires the AI processor video export route")
+        try:
+            pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+        except ValueError as exc:
+            raise WorkerError("recognizeKeyFrames export query is malformed") from exc
+        expected = {"camera": body["camera"], "event": body["event"], "channel": "0",
+                    "start": str(body["start"]), "end": str(body["end"]), "type": "rotating",
+                    "mute": "true", "format": body["format"], "createEvent": "false"}
+        if len(pairs) != len(expected) or dict(pairs) != expected:
+            raise WorkerError("recognizeKeyFrames export must exactly match the command camera and interval")
+        media = [("video", self._mp4_export_url(original_media))]
+        normalized = {"operation": "recognizeKeyFrames", "payload": body,
+                      "callback": callback, "callbackKind": "legacy_tagging", "media": media}
+        fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
+        job_id = hashlib.sha256(f"recognizeKeyFrames:{body['camera']}:{body['event']}".encode()).hexdigest()
+        return (job_id, fingerprint, "recognizeKeyFrames", body, callback, "legacy_tagging",
+                media, min(self.timeout_s, 30))
+
     def _read_scope_reservation(self):
         path = self._scope_path
         if path is None:
@@ -374,9 +439,11 @@ class JobProcessor:
             if not path.is_file() or path.stat().st_size > 4096:
                 raise ValueError
             record = json.loads(path.read_text())
-            if (set(record) != {"schema", "permit_id", "camera_id", "job_id", "fingerprint", "consumed_at"}
+            required = {"schema", "permit_id", "camera_id", "job_id", "fingerprint", "consumed_at"}
+            if (not required <= set(record) or set(record) - required - {"kind"}
                     or record["schema"] != 1 or record["permit_id"] != self.test_scope["permit_id"]
                     or record["camera_id"] != self.test_scope["camera_id"]
+                    or record.get("kind", "on_demand") != self.test_scope.get("kind", "on_demand")
                     or any(not isinstance(record[key], str) or not re.fullmatch(r"[0-9a-f]{64}", record[key])
                            for key in ("job_id", "fingerprint"))
                     or type(record["consumed_at"]) is not int or record["consumed_at"] <= 0):
@@ -576,14 +643,14 @@ class JobProcessor:
             return "image/webp"
         raise WorkerError("Unsupported image format; expected JPEG, PNG, or WebP")
 
-    async def _video_frame(self, data, headers, url, job):
+    async def _video_frame(self, data, headers, url, job, *, timestamp=None):
         executable = self.options.get("ffmpeg_path")
         if not executable or not Path(executable).is_absolute() or not Path(executable).is_file():
             raise WorkerError("Video jobs require an explicit absolute ffmpeg_path")
         if len(data) < 12 or data[4:8] != b"ftyp":
             raise WorkerError("Only MP4 video is supported; UBV requires a separate verified converter")
         offset = 0.0
-        if job.operation == "on_demand":
+        if job.operation == "on_demand" or timestamp is not None:
             lowered = {key.lower(): value for key, value in headers.items()}
             start = lowered.get("x-start-timestamp")
             if start is None:
@@ -591,10 +658,11 @@ class JobProcessor:
                 start = values[0] if values else None
             try:
                 start = int(start)
-                offset = (job.payload["timestamp"] - start) / 1000
+                requested = job.payload["timestamp"] if timestamp is None else timestamp
+                offset = (requested - start) / 1000
             except (ValueError, TypeError) as exc:
                 raise WorkerError("Video start timestamp is missing or invalid") from exc
-            if not 0 <= offset <= 3600:
+            if not 0 <= offset <= (10 if job.operation == "recognizeKeyFrames" else 3600):
                 raise WorkerError("Requested video frame is outside the supported interval")
         with tempfile.TemporaryDirectory(prefix="aikey-video-", dir=self.state_dir) as temporary:
             source, output = Path(temporary) / "input.mp4", Path(temporary) / "frame.jpg"
@@ -637,16 +705,32 @@ class JobProcessor:
             raise WorkerError("Inference did not return a complete, nonempty text description") from exc
 
     async def _execute(self, job):
+        started = time.monotonic()
         images = []
         for kind, url in job.media:
             data, headers = await self._fetch(url, kind)
+            if job.operation == "recognizeKeyFrames":
+                for timestamp in job.payload["keyMoments"]:
+                    frame = await self._video_frame(data, headers, url, job, timestamp=timestamp)
+                    self._image_type(frame)
+                    images.append(frame)
+                continue
             if kind == "video":
                 data = await self._video_frame(data, headers, url, job)
             self._image_type(data)
             images.append(data)
+        prepared = time.monotonic()
         description = await self._infer(images)
+        inferred = time.monotonic()
         if job.callback_kind == "on_demand":
             payload = {"description": description}
+        elif job.callback_kind == "legacy_tagging":
+            payload = {"cameraId": job.payload["camera"], "eventId": job.payload["event"],
+                       "description": description, "status": "success", "keyMomentsTags": [],
+                       "inferBoxMs": 0, "inferTagMs": 0,
+                       "inferTxtMs": round((inferred - prepared) * 1000),
+                       "preProcessMs": round((prepared - started) * 1000),
+                       "timeElapsedMs": round((inferred - started) * 1000)}
         elif job.callback_kind == "legacy":
             payload = {"eventId": job.payload["event"], "status": "success", "description": description}
             if self.options["legacy_profile"] == "protect-7.2.105":
@@ -671,7 +755,7 @@ class JobProcessor:
     async def _post_callback(self, job, payload):
         self._record(job, "callback_sending")
         try:
-            if job.callback_kind == "legacy":
+            if job.callback_kind in {"legacy", "legacy_tagging"}:
                 form = aiohttp.FormData()
                 form.add_field("ram", _json(payload), filename="description.json", content_type="application/json")
                 kwargs = {"data": form}
