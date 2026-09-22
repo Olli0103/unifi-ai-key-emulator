@@ -1,6 +1,6 @@
-# Local AI Key emulator
+# Local AI processor for Protect
 
-An independent experimental AI processor for UniFi Protect. Native adoption has been tested with Protect 7.3.56 on a UDM Pro Max using Apple container 1.4.1 on an Apple silicon Mac. UGREEN NAS deployment remains planned. This is an unofficial project and is not affiliated with Ubiquiti.
+An independent experimental AI processor for UniFi Protect. The implemented profile currently emulates a bounded subset of AI Key. The roadmap also targets a separate AI Port compatibility profile for G3, G4/G5 and ONVIF cameras. Native AI Key adoption has been tested with Protect 7.3.56 on a UDM Pro Max using Apple container 1.4.1 on an Apple silicon Mac. AI Port adoption and UGREEN NAS deployment remain planned. This is an unofficial project and is not affiliated with Ubiquiti.
 
 The local build has device management/adoption, UCP4 control, UDP discovery, a bounded vision worker, version-specific description callbacks and an E5 query responder. Vision providers are configurable: OpenAI Responses, native Ollama and OpenAI-compatible APIs. Search embeddings are configured separately. No vendor firmware or model weights are bundled.
 
@@ -10,7 +10,7 @@ The inspected controller source is 7.2.105, alongside AI Key firmware 2.2.8. Pub
 
 ## Roadmap and product status
 
-The [roadmap](PLAN.md) covers native AI Key behavior, automatic camera discovery, legacy-camera detection, a provider/model control site, security and detection-quality checks, and the path to a maintained open-source product. Work is tracked in the [issue index](docs/planning/issues.md), with [Claude/contributor handoff instructions](docs/planning/claude-handoff.md).
+The [roadmap](PLAN.md) covers native AI Key and AI Port behavior, automatic camera discovery, AI Port processing for legacy and ONVIF cameras, a provider/model control site, security and detection-quality checks, and the path to a maintained open-source product. Work is tracked in the [issue index](docs/planning/issues.md), with [Claude/contributor handoff instructions](docs/planning/claude-handoff.md).
 
 The repository currently has no license. Licensing, provenance and release governance are explicit product work; public source availability alone does not establish an open-source release. All-camera processing and the control site are planned, not deployed.
 
