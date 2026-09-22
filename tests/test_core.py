@@ -73,6 +73,20 @@ def test_config_validation_and_runtime_share_remote_policy(tmp_path):
     validate_inference_config(config["inference"])
 
 
+def test_config_validation_requires_explicit_remote_embedding_policy(tmp_path):
+    config = ready_config(tmp_path)
+    config["embeddings"]["base_url"] = "https://embeddings.example/v1"
+    with pytest.raises(ConfigError, match="embeddings.allow_remote"):
+        validate_config(config)
+    config["embeddings"]["allow_remote"] = True
+    validate_config(config)
+    config["embeddings"]["base_url"] = "http://192.0.2.20:8080/v1"
+    with pytest.raises(ConfigError, match="HTTPS"):
+        validate_config(config)
+    config["embeddings"]["allow_insecure_http"] = True
+    validate_config(config)
+
+
 def test_runtime_openai_still_requires_hydrated_key():
     config = {"provider": "openai", "model": "fixture-model", "allow_remote": True}
     validate_inference_config(config, require_api_key=False)

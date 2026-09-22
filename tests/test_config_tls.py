@@ -62,6 +62,8 @@ def test_incomplete_identity_is_not_regenerated(tmp_path):
     ("controller", "host", "host\r\nX-Token: other"),
     ("inference", "base_url", "http://user:secret@localhost/v1"),
     ("inference", "allow_remote", "false"), ("search", "enabled", "false"),
+    ("embeddings", "allow_remote", "false"),
+    ("embeddings", "allow_insecure_http", "false"),
     ("worker", "description_embeddings", "false"),
     ("worker", "max_video_duration_ms", False),
     ("worker", "max_video_duration_ms", 0),

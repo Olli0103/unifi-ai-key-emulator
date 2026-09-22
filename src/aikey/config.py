@@ -113,6 +113,7 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
             raise ConfigError(f"Missing configuration section: {key}")
     boolean_fields = {
         "runtime": ("enable_http",), "inference": ("allow_remote", "allow_insecure_http"),
+        "embeddings": ("allow_remote", "allow_insecure_http"),
         "worker": ("description_embeddings", "request_mp4_exports"),
         "search": ("enabled",), "database": ("enabled",),
         "discovery": ("enabled", "multicast"),
@@ -229,6 +230,12 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
         validate_inference_config(inference, lab=runtime["mode"] == "lab", require_api_key=False)
     except ProviderError as exc:
         raise ConfigError(str(exc)) from None
+    if config["embeddings"].get("backend", "http") == "http":
+        from .search import EmbeddingError, EmbeddingService
+        try:
+            EmbeddingService(config["embeddings"]).identity
+        except EmbeddingError as exc:
+            raise ConfigError(str(exc)) from None
     config["controller_origins"] = []
     if host:
         authority = f"[{host}]" if ":" in host else host
