@@ -72,3 +72,20 @@ def test_invalid_provider_settings_never_replace_config(tmp_path, arguments, mon
     monkeypatch.setattr(socket, "getaddrinfo", forbidden_network)
     assert main(["provider", *arguments, "--config", str(config)]) == 2
     assert config.read_bytes() == original
+
+
+def test_inventory_report_cannot_replace_api_key_or_config(tmp_path):
+    config = tmp_path / "config.json"
+    main(["init", "--config", str(config), "--state-dir", str(tmp_path / "state"),
+          "--controller", "192.168.1.1"])
+    key = tmp_path / "protect-api-key"
+    key.write_text("synthetic-private-key")
+    key.chmod(0o600)
+    arguments = ["inventory", "--config", str(config), "--api-key-file", str(key),
+                 "--web-trust-file", str(tmp_path / "web-trust.json"),
+                 "--web-cert-file", str(tmp_path / "web-cert.pem")]
+    original_config, original_key = config.read_bytes(), key.read_bytes()
+    assert main([*arguments, "--output", str(key)]) == 2
+    assert main([*arguments, "--output", str(config)]) == 2
+    assert config.read_bytes() == original_config
+    assert key.read_bytes() == original_key

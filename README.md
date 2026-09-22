@@ -14,6 +14,8 @@ The [roadmap](PLAN.md) covers native AI Key and AI Port behavior, automatic came
 
 The repository currently has no license. Licensing, provenance and release governance are explicit product work; public source availability alone does not establish an open-source release. All-camera processing and the control site are planned, not deployed.
 
+A [read-only camera inventory preflight](docs/camera-inventory-preflight.md) is available for Protect 7.3.60. It reads the local integration API with a private API-key file and pinned web certificate, then writes a private eligibility report. It does not enable processing. Automatic registry refresh, all-camera admission and the control site remain planned.
+
 ## Run the local lab
 
 Requires Python 3.12 or newer. The lab uses synthetic loopback controller, media, model and embedding services. It does not contact Protect or send images to an external model.
