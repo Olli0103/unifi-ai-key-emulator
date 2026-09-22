@@ -55,6 +55,6 @@ Diagnostic bundles use a field allowlist. Do not export raw configuration, envir
 
 ## Required release checks
 
-The security gate for an experimental release includes the full test suite, dependency and secret scanning, an SBOM, container configuration checks and review of all outbound destinations. Malformed media, oversized responses, redirect attempts, credentialed URLs and cross-client credential leakage require negative tests.
+The security workflow runs the full test suite, static checks, a package build, a locked-runtime dependency audit, a validated CycloneDX SBOM and a full-history secret scan. Third-party actions use immutable commit SHAs with read-only repository permissions. Malformed media, oversized responses, redirect attempts, credentialed URLs and cross-client credential leakage require negative tests.
 
-Private security reporting, dependency-scanner selection, signed update verification, model file hashing and restore testing remain `needs_evidence`. Track them in issues #11, #16, #24 and the relevant provider/model work rather than treating this document as completion evidence.
+Private security reporting, signed update verification, model file hashing and restore testing remain `needs_evidence`. Track them in issues #11, #16, #24 and the relevant provider/model work rather than treating this document as completion evidence.

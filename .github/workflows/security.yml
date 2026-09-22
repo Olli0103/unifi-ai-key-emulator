@@ -1,0 +1,82 @@
+name: Security and quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-runtime.lock '.[dev]'
+      - name: Run tests
+        run: python -m pytest -q
+      - name: Run static checks
+        run: python -m ruff check .
+      - name: Build package
+        run: python -m build
+
+  dependency-and-sbom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - name: Install pinned security tools
+        run: python -m pip install --disable-pip-version-check pip-audit==2.10.1 cyclonedx-bom==7.4.0
+      - name: Create isolated runtime environment
+        run: |
+          python -m venv .runtime-sbom
+          .runtime-sbom/bin/python -m pip install --disable-pip-version-check -r requirements-runtime.lock
+      - name: Generate and validate CycloneDX SBOM
+        run: >-
+          python -m cyclonedx_py environment .runtime-sbom
+          --pyproject pyproject.toml --output-reproducible --of JSON -o sbom.cdx.json
+      - name: Upload SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: runtime-sbom
+          path: sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Audit locked runtime dependencies
+        run: python -m pip_audit -r requirements-runtime.lock --strict
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan history for secrets
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
