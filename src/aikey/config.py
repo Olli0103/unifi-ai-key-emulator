@@ -42,6 +42,7 @@ def defaults(state_dir: Path, mac: str) -> dict:
                        "protect_version": "7.3.56", "verify_hostname": True},
         "inference": {"provider": "openai-compatible", "base_url": "http://127.0.0.1:11434/v1", "model": ""},
         "worker": {"max_queue": 8, "max_concurrency": 1, "timeout_s": 120,
+                   "max_video_duration_ms": 120000,
                    "legacy_profile": "protect-7.2.105", "callback_mode": "enabled"},
         "embeddings": {"backend": "http", "base_url": "http://127.0.0.1:8081/v1",
                        "model": "intfloat/multilingual-e5-small"},
@@ -124,6 +125,10 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
             if field in options and type(options[field]) is not bool:
                 raise ConfigError(f"{section}.{field} must be a JSON boolean")
     runtime, device, controller = config["runtime"], config["device"], config["controller"]
+    if "max_video_duration_ms" in config["worker"]:
+        duration = config["worker"]["max_video_duration_ms"]
+        if type(duration) is not int or duration <= 0:
+            raise ConfigError("worker.max_video_duration_ms must be a positive integer")
     if "test_scope" in config["worker"]:
         from .worker import WorkerError, validate_test_scope_config
         try:

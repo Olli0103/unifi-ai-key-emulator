@@ -43,6 +43,66 @@ _QUEUE_FIELDS = (
 _MAX_STATE_BYTES = 64 * 1024
 _MAX_MESSAGE_BYTES = 2 * 1024 * 1024 + 16
 _FACTORY_CONFIRMATION_TIMEOUT = 5
+_RESULT_CODES = (0, 5, 13, 22, 95, 110, 409)
+_COUNTER_LIMIT = 2 ** 31 - 1
+_JSON_SHAPES = ("missing", "null", "string", "boolean", "number", "array", "object", "other")
+_RAM_TYPES = ("video", "videoWithRecognition", "image", "multipleImages")
+# Exact local validation messages only. Never expose an arbitrary exception string.
+_WORKER_REJECTION_REASONS = {
+    "Invalid or oversized RequestAI command": "command_size_or_shape",
+    "Job must contain finite JSON": "invalid_json",
+    "recognizeKeyFrames requires its explicit single-use test scope": "scope_kind",
+    "Unsupported recognizeKeyFrames payload fields": "payload_fields",
+    "recognizeKeyFrames is limited to captioned, muted target-camera video": "video_contract",
+    "recognizeKeyFrames video must span at most 10 seconds": "video_interval",
+    "recognizeKeyFrames video exceeds configured duration bound": "video_interval",
+    "recognizeKeyFrames requires bounded distinct timestamps inside the video": "key_moments",
+    "recognizeKeyFrames requires at most 128 integer timestamps inside the video": "key_moments",
+    "recognizeKeyFrames requires the observed RAM callback": "callback_path",
+    "recognizeKeyFrames requires the AI processor video export route": "media_path",
+    "recognizeKeyFrames export query is malformed": "export_query",
+    "recognizeKeyFrames export must exactly match the command camera and interval": "export_query_match",
+    "Invalid callback URL": "callback_url",
+    "Invalid media URL": "media_url",
+    "Invalid HTTP origin or URL": "http_origin",
+    "callback URL is outside configured controller origins": "callback_origin",
+    "media URL is outside configured controller origins": "media_origin",
+    "Invalid callback path": "callback_path",
+    "Invalid media path": "media_path",
+    "Unsupported callback path": "callback_path",
+    "Unsupported controller media path": "media_path",
+    "MP4 adaptation is restricted to the verified AI processor export route": "mp4_path",
+    "MP4 adaptation cannot rewrite signed or unknown query fields": "mp4_query",
+    "MP4 adaptation requires a bounded start/end interval": "mp4_interval",
+    "MP4 adaptation requires a literal format=ubv component": "mp4_format",
+    "Task identity reused with different input": "job_identity_conflict",
+    "Callback outcome is uncertain; review journal before retrying": "callback_uncertain",
+    "Test scope permit is already consumed; no further media or inference is allowed": "permit_consumed",
+    "Test scope permit is already consumed": "permit_consumed",
+    "Invalid test scope reservation; inspect it without resetting the permit": "permit_state",
+    "Cannot persist test scope reservation; no work was admitted": "permit_persistence",
+    "Worker queue is full": "queue_full",
+    "Worker journal is full; archive reviewed entries": "journal_full",
+    "Worker has stopped": "worker_stopped",
+}
+
+
+def _increment(counter, key):
+    counter[key] = min(counter[key] + 1, _COUNTER_LIMIT)
+
+
+def _result_counts():
+    return dict.fromkeys([str(code) for code in _RESULT_CODES] + ["other"], 0)
+
+
+def _field_shape(body, field):
+    if field not in body:
+        return "missing"
+    value = body[field]
+    if value is None:
+        return "null"
+    return {str: "string", bool: "boolean", int: "number", float: "number",
+            list: "array", dict: "object"}.get(type(value), "other")
 
 
 class CommandFailure(Exception):
@@ -213,10 +273,32 @@ class DeviceService:
         self._connection_generation: int | None = None
         self._connection_token: str | None = None
         self._active_admissions = 0
-        self._control_diagnostics = {name: {"count": 0, "last_result_code": None} for name in (
+        self._control_diagnostics = {name: {"count": 0, "last_result_code": None,
+                                           "result_code_counts": _result_counts()} for name in (
             "getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone",
             "changeUserPassword", "RequestAI", "recognizeKeyFrames", "changeAiInferAgentSettings",
             "changeDescribePrompts", "networkStatus", "sshService", "unknown")}
+        self._recognize_diagnostics = {
+            "camera_shape_counts": dict.fromkeys(_JSON_SHAPES, 0),
+            "cameraId_shape_counts": dict.fromkeys(_JSON_SHAPES, 0),
+            "camera_match_counts": dict.fromkeys(("matches", "different", "not_comparable"), 0),
+            "cameraId_match_counts": dict.fromkeys(("matches", "different", "not_comparable"), 0),
+            "ram_type_counts": dict.fromkeys((*_RAM_TYPES, "missing", "invalid_type", "other_string"), 0),
+            "metadata_presence_counts": dict.fromkeys(("personMeta", "faceMeta", "vehicleMeta"), 0),
+            "video_interval_counts": dict.fromkeys(("missing", "invalid_type", "invalid_order_or_range",
+                                                    "up_to_10_seconds", "over_10_seconds"), 0),
+            "duration_limit_counts": dict.fromkeys(("within", "exceeds", "not_comparable"), 0),
+            "key_moments_counts": dict.fromkeys(("missing", "invalid_type", "empty", "at_or_below_sampling_limit",
+                "above_sampling_limit", "over_128_inputs", "duplicates", "non_integer", "outside_interval",
+                "interval_not_comparable"), 0),
+            "matching_camera_result_code_counts": _result_counts(),
+            "matching_cameraId_result_code_counts": _result_counts(),
+            "phase_counts": dict.fromkeys(("scope_disabled", "camera_mismatch", "worker_admission",
+                "admitted", "worker_rejected", "admission_timeout", "admission_cancelled",
+                "admission_exception", "invalid_admission_result"), 0),
+            "worker_rejection_counts": dict.fromkeys(
+                sorted(set(_WORKER_REJECTION_REASONS.values()) | {"unclassified_worker_error"}), 0),
+        }
         # Process-local counts only; never retain request bodies or credentials.
         self._management_diagnostics = {
             "info_post_requests": 0, "info_credential_rejections": 0,
@@ -239,6 +321,7 @@ class DeviceService:
                 "last_close_code": self._last_close_code,
                 "management": dict(self._management_diagnostics),
                 "control_commands": deepcopy(self._control_diagnostics),
+                "recognize_key_frames": deepcopy(self._recognize_diagnostics),
                 "clock_offset_ms": self._clock_offset_ms, "discovery": "unsupported",
                 "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "changeUserPassword", "RequestAI"]
                     + (["recognizeKeyFrames"] if basic_enabled else [])}
@@ -657,7 +740,8 @@ class DeviceService:
         future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = (digest, future)
         diagnostic = self._control_diagnostics.get(action, self._control_diagnostics["unknown"])
-        diagnostic["count"] = min(diagnostic["count"] + 1, 2 ** 31 - 1)
+        _increment(diagnostic, "count")
+        matches = self._record_recognize_shape(body) if action == "recognizeKeyFrames" else ()
         try:
             try:
                 result = await self._command(action, body, _connection=_connection)
@@ -673,7 +757,12 @@ class DeviceService:
             except Exception as exc:
                 self.log.warning("Command failed (%s)", type(exc).__name__)
                 result, error, code = {}, "Command failed", 5
-            diagnostic["last_result_code"] = code
+            known_code = type(code) is int and code in _RESULT_CODES
+            diagnostic["last_result_code"] = code if known_code else None
+            code_bucket = str(code) if known_code else "other"
+            _increment(diagnostic["result_code_counts"], code_bucket)
+            for field in matches:
+                _increment(self._recognize_diagnostics[f"matching_{field}_result_code_counts"], code_bucket)
             response = encode_message({"id": request_id, "type": "response", "timestamp": int(time.time() * 1000),
                                        "error": error, "errorCode": code}, result)
             self._completed[request_id] = (digest, response)
@@ -685,6 +774,67 @@ class DeviceService:
             self._pending.pop(request_id, None)
             if not future.done():
                 future.cancel()
+
+    def _record_recognize_shape(self, body: dict) -> tuple[str, ...]:
+        """Retain only fixed field names and categories, never request values."""
+        scope = self.config.get("worker", {}).get("test_scope")
+        target = scope.get("camera_id") if isinstance(scope, dict) else None
+        matches = []
+        for field in ("camera", "cameraId"):
+            _increment(self._recognize_diagnostics[f"{field}_shape_counts"], _field_shape(body, field))
+            value = body.get(field)
+            if isinstance(value, str) and isinstance(target, str):
+                outcome = "matches" if value == target else "different"
+            else:
+                outcome = "not_comparable"
+            _increment(self._recognize_diagnostics[f"{field}_match_counts"], outcome)
+            if outcome == "matches":
+                matches.append(field)
+        value = body.get("ramType")
+        category = ("missing" if "ramType" not in body else "invalid_type"
+                    if not isinstance(value, str) else value if value in _RAM_TYPES else "other_string")
+        _increment(self._recognize_diagnostics["ram_type_counts"], category)
+        for field in self._recognize_diagnostics["metadata_presence_counts"]:
+            if field in body:
+                _increment(self._recognize_diagnostics["metadata_presence_counts"], field)
+        start, end = body.get("start"), body.get("end")
+        interval_valid = (type(start) is int and type(end) is int
+                          and 0 <= start < end <= 2 ** 53 - 1)
+        interval_category = (
+            "missing" if "start" not in body or "end" not in body else
+            "invalid_type" if type(start) is not int or type(end) is not int else
+            "invalid_order_or_range" if not interval_valid else
+            "over_10_seconds" if end - start > 10000 else "up_to_10_seconds")
+        _increment(self._recognize_diagnostics["video_interval_counts"], interval_category)
+        duration_limit = self.config.get("worker", {}).get("max_video_duration_ms", 120000)
+        duration_limit = duration_limit if type(duration_limit) is int and duration_limit > 0 else 120000
+        duration_category = ("not_comparable" if not interval_valid else
+                             "exceeds" if end - start > duration_limit else "within")
+        _increment(self._recognize_diagnostics["duration_limit_counts"], duration_category)
+        moments = body.get("keyMoments")
+        moment_counts = self._recognize_diagnostics["key_moments_counts"]
+        if "keyMoments" not in body:
+            _increment(moment_counts, "missing")
+        elif not isinstance(moments, list):
+            _increment(moment_counts, "invalid_type")
+        elif not moments:
+            _increment(moment_counts, "empty")
+        else:
+            limit = self.config.get("worker", {}).get("max_images", 4)
+            limit = limit if type(limit) is int and limit > 0 else 4
+            _increment(moment_counts, "above_sampling_limit" if len(moments) > limit else "at_or_below_sampling_limit")
+            if len(moments) > 128:
+                _increment(moment_counts, "over_128_inputs")
+            if any(type(moment) is not int for moment in moments):
+                _increment(moment_counts, "non_integer")
+            else:
+                if len(set(moments)) != len(moments):
+                    _increment(moment_counts, "duplicates")
+                if not interval_valid:
+                    _increment(moment_counts, "interval_not_comparable")
+                elif any(not start <= moment < end for moment in moments):
+                    _increment(moment_counts, "outside_interval")
+        return tuple(matches)
 
     async def _command(self, action: str, body: dict, *, _connection=None) -> dict:
         if action == "getInfo":
@@ -725,18 +875,40 @@ class DeviceService:
                 self._active_admissions -= 1
             return body
         if action == "recognizeKeyFrames":
+            from .worker import WorkerError
+            phases = self._recognize_diagnostics["phase_counts"]
             scope = self.config.get("worker", {}).get("test_scope", {})
-            if (not isinstance(scope, dict) or scope.get("kind") != "recognizeKeyFrames"
-                    or body.get("camera") != scope.get("camera_id")):
+            if not isinstance(scope, dict) or scope.get("kind") != "recognizeKeyFrames":
+                _increment(phases, "scope_disabled")
+                raise CommandFailure(95, "recognizeKeyFrames is outside the configured single-use scope")
+            if not isinstance(body.get("camera"), str) or body["camera"] != scope.get("camera_id"):
+                _increment(phases, "camera_mismatch")
                 raise CommandFailure(95, "recognizeKeyFrames is outside the configured single-use scope")
             self._active_admissions += 1
+            _increment(phases, "worker_admission")
             try:
                 async with asyncio.timeout(30):
                     admitted = await self.job_handler({"command": action, "payload": deepcopy(body)})
-                if not isinstance(admitted, dict):
-                    raise ContractError("Job admission must return an object")
+            except WorkerError as exc:
+                _increment(phases, "worker_rejected")
+                reason = _WORKER_REJECTION_REASONS.get(str(exc), "unclassified_worker_error")
+                _increment(self._recognize_diagnostics["worker_rejection_counts"], reason)
+                raise
+            except asyncio.TimeoutError:
+                _increment(phases, "admission_timeout")
+                raise
+            except asyncio.CancelledError:
+                _increment(phases, "admission_cancelled")
+                raise
+            except Exception:
+                _increment(phases, "admission_exception")
+                raise
             finally:
                 self._active_admissions -= 1
+            if not isinstance(admitted, dict):
+                _increment(phases, "invalid_admission_result")
+                raise ContractError("Job admission must return an object")
+            _increment(phases, "admitted")
             return body
         if action in {"setConsoleInfo", "setInfo", "updateTimezone", "changeUserPassword"}:
             if action == "changeUserPassword":

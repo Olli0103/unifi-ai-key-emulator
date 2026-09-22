@@ -60,13 +60,13 @@ That command makes a TLS handshake to the configured controller, sends no HTTP c
 | --- | --- | --- |
 | Management/control | HTTPS info/adoption, stable identity, UCP4, time sync, credential rotation and reconnect observed on 7.3.56 | Additional controller commands and longer recovery testing |
 | Discovery | Read-only v1 queries, exact controller allowlist, optional Linux multicast and macOS host companion; native candidate and address observed | Other network layouts and NAS discovery |
-| Descriptions | Bounded queue, configurable vision provider, image/MP4 input, on-demand/task/legacy callback profiles | Correct real job and persistent native description |
+| Descriptions | Bounded queue, configurable vision provider, image/MP4 input; one native on-demand description verified | Automatic event processing and persistent native description |
 | Search | Matched E5 document/query adapter, 384 dimensions, model guard, query socket | Matching actual controller profile and retrieval quality |
 | Search database | PostgreSQL/pgvector preparation and credential rotation hook | Docker execution, controller migrations and restart recovery |
 
 Unsupported capabilities default to disabled. The controller source inspected here couples VLM and deep-mode flags, so the build does not automatically advertise full intelligence. Face/plate recognition, audio, legacy CLIP image search, hybrid BM25/reranking and full legacy-camera enhancement are not implemented.
 
-For video, set `worker.ffmpeg_path` to an absolute executable path. `worker.request_mp4_exports=true` changes only the verified AI export route's supported `format=ubv` parameter to MP4, retaining its other allowed parameters. Arbitrary UBV files are rejected. Acceptance of this MP4 request on 7.3.56 still needs a native test.
+For video, set `worker.ffmpeg_path` to an absolute executable path. `worker.request_mp4_exports=true` changes only the verified AI export route's supported `format=ubv` parameter to MP4, retaining its other allowed parameters. Arbitrary UBV files are rejected. Protect 7.3.60 accepted this MP4 export in the native on-demand test.
 
 Descriptions become candidates for semantic indexing only when the actual controller creates the required task/session and the compatible search database is ready. Set `worker.description_embeddings=true` and `search.enabled=true` together for the E5 profile. Use the same `embeddings` configuration for document and query encoding. A shape-correct embedding is not proof of model compatibility. The HTTP backend expects E5 text embeddings; the optional local backend loads an existing checkpoint without downloading or executing remote model code.
 

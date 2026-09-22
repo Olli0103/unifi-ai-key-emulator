@@ -1,7 +1,9 @@
 """One native basic-description command, with synthetic loopback services only."""
 
 from copy import deepcopy
+import asyncio
 import json
+import shutil
 from urllib.parse import parse_qsl, urlencode
 
 import pytest
@@ -32,8 +34,8 @@ def command(event="event-fixture"):
         "resUrl": "/internal/aiprocessors/recognize-anything"}}
 
 
-def make_worker(services, tmp_path, monkeypatch):
-    worker = JobProcessor(options(services), tmp_path)
+def make_worker(services, tmp_path, monkeypatch, config=None):
+    worker = JobProcessor(config or options(services), tmp_path)
     timestamps = []
     async def decode(data, headers, url, job, *, timestamp=None):
         timestamps.append(timestamp)
@@ -84,11 +86,44 @@ async def test_real_http_caption_and_full_ram_envelope_once_across_restart(servi
         await restarted.stop()
 
 
+@pytest.mark.parametrize("ram_type", ["video", "videoWithRecognition"])
+async def test_native_video_metadata_and_longer_timeline_use_bounded_frames(
+        services, tmp_path, monkeypatch, ram_type):
+    item = command()
+    body = item["payload"]
+    body.update(ramType=ram_type, end=29300,
+                keyMoments=[29000, 1000, 9000, 9000, 16000, 4000, 12000, 22000],
+                personMeta=[{"ts": 9000, "roi": {"trackerId": 7}}],
+                faceMeta=[], vehicleMeta=[])
+    query = dict(parse_qsl(body["reqUrl"].split("?", 1)[1]))
+    query["end"] = "29300"
+    body["reqUrl"] = "/internal/aiprocessors/video/export?" + urlencode(query)
+    original = deepcopy(item)
+    worker, timestamps = make_worker(services, tmp_path, monkeypatch)
+    try:
+        result = await worker.handle(item)
+        assert timestamps == [1000, 9000, 16000, 29000]
+        assert item == original
+        assert len(services.requests[0]["messages"][0]["content"]) == 5
+        assert len(services.media_requests) == len(services.callbacks) == 1
+        assert result["result"]["description"] == DESCRIPTION
+        assert result["result"]["keyMomentsTags"] == []
+        assert "face" not in result["result"] and "lpr" not in result["result"]
+        assert (await worker.submit(original))["duplicate"] is True
+        changed = deepcopy(original)
+        changed["payload"]["personMeta"] = []
+        with pytest.raises(WorkerError, match="different input"):
+            await worker.submit(changed)
+        assert len(services.requests) == len(services.callbacks) == 1
+    finally:
+        await worker.stop()
+
+
 @pytest.mark.parametrize("variant", [
     "camera", "event_query", "camera_query", "start_query", "extra_query", "duplicate_query",
     "callback", "foreign_media", "image_path", "too_long", "bool_timestamp", "outside_timestamp",
-    "too_many_frames", "duplicate_frame", "recognition", "images", "no_summary", "audio",
-    "channel", "format", "unknown_body", "face_metadata", "empty_frames",
+    "too_many_frames", "unknown_variant", "images", "no_summary", "audio",
+    "channel", "format", "unknown_body", "empty_frames",
 ])
 async def test_rejects_unrelated_work_before_any_media_or_inference(services, tmp_path, variant):
     item = command()
@@ -97,12 +132,12 @@ async def test_rejects_unrelated_work_before_any_media_or_inference(services, tm
         "camera": {"camera": "other-camera"}, "callback": {"resUrl": "/internal/aiprocessors/descriptions/task"},
         "foreign_media": {"reqUrl": "https://unapproved.invalid/internal/aiprocessors/video/export"},
         "image_path": {"reqUrl": "/internal/aiprocessors/image/fixture"},
-        "too_long": {"end": 11001}, "bool_timestamp": {"keyMoments": [True]},
-        "outside_timestamp": {"keyMoments": [11000]}, "too_many_frames": {"keyMoments": [2000, 3000, 4000, 5000, 6000]},
-        "duplicate_frame": {"keyMoments": [6000, 6000]}, "recognition": {"ramType": "videoWithRecognition"},
+        "too_long": {"end": 121001}, "bool_timestamp": {"keyMoments": [True]},
+        "outside_timestamp": {"keyMoments": [11000]}, "too_many_frames": {"keyMoments": [6000] * 129},
+        "unknown_variant": {"ramType": "unrecognizedVariant"},
         "images": {"ramType": "multipleImages"}, "no_summary": {"postVLM": False},
         "audio": {"mute": False}, "channel": {"channel": 1}, "format": {"format": "jpeg"},
-        "unknown_body": {"unknown": True}, "face_metadata": {"faceMeta": []}, "empty_frames": {"keyMoments": []},
+        "unknown_body": {"unknown": True}, "empty_frames": {"keyMoments": []},
     }
     if variant in changes:
         body.update(changes[variant])
@@ -124,6 +159,56 @@ async def test_rejects_unrelated_work_before_any_media_or_inference(services, tm
             await worker.submit(item)
         assert services.media_requests == services.requests == services.callbacks == []
         assert worker._read_scope_reservation() is None
+    finally:
+        await worker.stop()
+
+
+@pytest.mark.parametrize(("maximum", "expected"), [(1, [6000]), (2, [2000, 10000])])
+async def test_configured_frame_budget_applies_after_raw_timestamp_validation(
+        services, tmp_path, monkeypatch, maximum, expected):
+    config = options(services)
+    config["worker"]["max_images"] = maximum
+    config["worker"]["max_video_duration_ms"] = 10000
+    worker, timestamps = make_worker(services, tmp_path, monkeypatch, config)
+    invalid = command()
+    invalid["payload"]["end"] = 11001
+    try:
+        with pytest.raises(WorkerError, match="configured duration bound"):
+            await worker.submit(invalid)
+        assert worker._read_scope_reservation() is None
+        assert services.media_requests == services.requests == services.callbacks == []
+        valid = command()
+        valid["payload"]["keyMoments"] = [2000, 6000, 10000] + [6000] * 125
+        await worker.handle(valid)
+        assert timestamps == expected
+        assert len(services.requests[0]["messages"][0]["content"]) == maximum + 1
+    finally:
+        await worker.stop()
+
+
+async def test_real_decoder_accepts_selected_frame_after_ten_seconds(services, tmp_path):
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("Real ffmpeg executable unavailable")
+    video_path = tmp_path / "synthetic-long-video.mp4"
+    process = await asyncio.create_subprocess_exec(
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+        "color=c=blue:s=32x32:r=1:d=31", "-c:v", "mpeg4", "-y", str(video_path))
+    assert await process.wait() == 0
+    services.video = video_path.read_bytes()
+    config = options(services)
+    config["worker"]["ffmpeg_path"] = ffmpeg
+    worker = JobProcessor(config, tmp_path)
+    item = command()
+    item["payload"].update(end=32000, keyMoments=[1000, 31000])
+    query = dict(parse_qsl(item["payload"]["reqUrl"].split("?", 1)[1]))
+    query["end"] = "32000"
+    item["payload"]["reqUrl"] = "/internal/aiprocessors/video/export?" + urlencode(query)
+    try:
+        result = await worker.handle(item)
+        assert result["result"]["description"] == DESCRIPTION
+        assert len(services.requests[0]["messages"][0]["content"]) == 3
+        assert len(services.callbacks) == 1
     finally:
         await worker.stop()
 
@@ -194,11 +279,15 @@ async def test_device_admits_explicit_wrapper_and_sanitizes_bounded_diagnostics(
     await service.handle_message(request)
     assert len(calls) == 1
     diagnostics = service.status["control_commands"]
-    assert diagnostics["recognizeKeyFrames"] == {"count": 1, "last_result_code": 0}
+    assert diagnostics["recognizeKeyFrames"]["count"] == 1
+    assert diagnostics["recognizeKeyFrames"]["last_result_code"] == 0
+    assert diagnostics["recognizeKeyFrames"]["result_code_counts"]["0"] == 1
     secret = "secret-must-not-be-in-health"
     unknown = decode_message(await service.handle_message(wire(secret, {"token": secret}, "unknown")))
     assert unknown.header["errorCode"] == 95
-    assert service.status["control_commands"]["unknown"] == {"count": 1, "last_result_code": 95}
+    assert service.status["control_commands"]["unknown"]["count"] == 1
+    assert service.status["control_commands"]["unknown"]["last_result_code"] == 95
+    assert service.status["control_commands"]["unknown"]["result_code_counts"]["95"] == 1
     assert secret not in json.dumps(service.status)
     diagnostics["recognizeKeyFrames"]["count"] = 500
     assert service.status["control_commands"]["recognizeKeyFrames"]["count"] == 1

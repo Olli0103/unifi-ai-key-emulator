@@ -152,6 +152,7 @@ class JobProcessor:
             self._read_scope_reservation()
         self.max_bytes = self._positive("max_media_bytes", 10 * 1024 * 1024)
         self.max_video_bytes = self._positive("max_video_bytes", 100 * 1024 * 1024)
+        self.max_video_duration_ms = self._positive("max_video_duration_ms", 120000)
         self.max_images = self._positive("max_images", 4)
         self.max_description = self._positive("max_description_chars", 8192)
         self.timeout_s = self._positive("timeout_s", 120)
@@ -373,7 +374,8 @@ class JobProcessor:
         """Accept the observed basic video command only under a single-use scope.
 
         This internal wrapper is supplied by the UCP dispatcher, not a fabricated
-        RequestAI target URI. Recognition, audio and deep-mode jobs remain separate.
+        RequestAI target URI. Both native video labels use the caption-only profile;
+        optional recognition metadata is retained for identity but not processed.
         """
         if (set(command) != {"command", "payload"} or command["command"] != "recognizeKeyFrames"
                 or self.test_scope is None
@@ -383,26 +385,27 @@ class JobProcessor:
         required = {"reqUrl", "resUrl", "ramType", "camera", "event", "channel", "start", "end",
                     "type", "mute", "format", "createEvent", "keyMoments", "postVLM"}
         if (not isinstance(body, dict) or not required <= set(body)
-                or set(body) - required - {"roiMeta", "thumbnailMs", "thumbnailMeta"}):
+                or set(body) - required - {"roiMeta", "thumbnailMs", "thumbnailMeta",
+                                          "personMeta", "faceMeta", "vehicleMeta"}):
             raise WorkerError("Unsupported recognizeKeyFrames payload fields")
         body = json.loads(_json(body))
         if (body["camera"] != self.test_scope["camera_id"]
                 or not isinstance(body["event"], str)
                 or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])
-                or body["ramType"] != "video" or body["postVLM"] is not True
+                or body["ramType"] not in ("video", "videoWithRecognition") or body["postVLM"] is not True
                 or type(body["channel"]) is not int or body["channel"] != 0
                 or body["type"] != "rotating" or body["mute"] is not True
                 or body["format"] not in {"ubv", "mp4"} or body["createEvent"] is not False):
             raise WorkerError("recognizeKeyFrames is limited to captioned, muted target-camera video")
         if (any(type(body[key]) is not int for key in ("start", "end"))
                 or not 0 <= body["start"] < body["end"] <= 2 ** 53 - 1
-                or body["end"] - body["start"] > 10000):
-            raise WorkerError("recognizeKeyFrames video must span at most 10 seconds")
+                or body["end"] - body["start"] > self.max_video_duration_ms):
+            raise WorkerError("recognizeKeyFrames video exceeds configured duration bound")
         moments = body["keyMoments"]
-        if (not isinstance(moments, list) or not 1 <= len(moments) <= self.max_images
+        if (not isinstance(moments, list) or not 1 <= len(moments) <= 128
                 or any(type(value) is not int or not body["start"] <= value < body["end"]
-                       for value in moments) or len(set(moments)) != len(moments)):
-            raise WorkerError("recognizeKeyFrames requires bounded distinct timestamps inside the video")
+                       for value in moments)):
+            raise WorkerError("recognizeKeyFrames requires at most 128 integer timestamps inside the video")
         callback = self._url(body["resUrl"], "callback")
         if urlsplit(callback).path != _LEGACY_CALLBACK:
             raise WorkerError("recognizeKeyFrames requires the observed RAM callback")
@@ -662,7 +665,8 @@ class JobProcessor:
                 offset = (requested - start) / 1000
             except (ValueError, TypeError) as exc:
                 raise WorkerError("Video start timestamp is missing or invalid") from exc
-            if not 0 <= offset <= (10 if job.operation == "recognizeKeyFrames" else 3600):
+            maximum_offset = self.max_video_duration_ms / 1000 if job.operation == "recognizeKeyFrames" else 3600
+            if not 0 <= offset <= maximum_offset:
                 raise WorkerError("Requested video frame is outside the supported interval")
         with tempfile.TemporaryDirectory(prefix="aikey-video-", dir=self.state_dir) as temporary:
             source, output = Path(temporary) / "input.mp4", Path(temporary) / "frame.jpg"
@@ -710,7 +714,14 @@ class JobProcessor:
         for kind, url in job.media:
             data, headers = await self._fetch(url, kind)
             if job.operation == "recognizeKeyFrames":
-                for timestamp in job.payload["keyMoments"]:
+                moments = sorted(set(job.payload["keyMoments"]))
+                if len(moments) > self.max_images:
+                    if self.max_images == 1:
+                        moments = [moments[len(moments) // 2]]
+                    else:
+                        moments = [moments[index * (len(moments) - 1) // (self.max_images - 1)]
+                                   for index in range(self.max_images)]
+                for timestamp in moments:
                     frame = await self._video_frame(data, headers, url, job, timestamp=timestamp)
                     self._image_type(frame)
                     images.append(frame)

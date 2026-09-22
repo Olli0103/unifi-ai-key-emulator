@@ -6,7 +6,7 @@ The result is a runnable experimental implementation with source, tests, a Pytho
 
 ## Observed checks
 
-- The current Python suite passed: 345 tests and 56 subtests. Ruff also passed after the adoption, scoped-camera and basic-description changes.
+- The current Python suite passed: 369 tests and 56 subtests. Ruff also passed after the adoption, scoped-camera and basic-description changes.
 - The standalone CLI lab passed all 12 checks in [lab-results.json](lab-results.json). It used real loopback TLS, client certificates, HTTP and WebSocket connections with synthetic controller and model services.
 - The lab exercised credential rejection, normal adoption, control commands, media download, vision inference, a description callback, 384-dimensional document/query embeddings, restart with the same identity, callback deduplication and a health response without credentials.
 - Provider tests exercised OpenAI Responses, native Ollama and compatible Chat Completions against loopback HTTP fixtures. They checked response errors, redirects, credential separation and explicit configuration. Invalid setup commands preserved existing settings, and readiness rejected invalid credentials. No real model output was evaluated.
@@ -28,5 +28,7 @@ A real OpenAI request using a synthetic image succeeded. A subsequent native tes
 On-demand analysis returns a description without persisting it. Description persistence, search retrieval and NAS operation remain `needs_evidence`. The optional database prepares dense search only. Hybrid BM25/reranking, face/plate recognition, audio and complete legacy-camera enhancement are unsupported. Capability defaults reflect those limits.
 
 The successful Mac trial used an opt-in camera scope permitting one on-demand job for a verified Protect camera ID. That permit is consumed. Tests cover mismatched media, duplicate requests, consumed permits across restart, timeout and storage failure. The [automatic-description trial](docs/basic-descriptions.md) requires its own explicit scope and separate persistence verification.
+
+The first native automatic event reached the worker but failed validation before admission. That build retained only the error class, so the exact rejection remains unknown. Source-backed compatibility fixes now accept both native video labels, optional recognition metadata, longer bounded clips and sampled key moments. Regression tests cover those forms, including a real decoder check after ten seconds. Fixed diagnostic counters distinguish future rejection causes without recording request values. Live automatic persistence still requires a successful fresh-event check.
 
 The next deployment trial uses one separately identified test processor and one selected camera. First verify the NAS directory, account and free ports. Then build the images, initialize identity, select a vision model, establish controller trust and verify ordinary adoption. Prepare database credential synchronization before adoption if search is intended. Check persisted descriptions and native search separately, including after a restart. See [NAS deployment](docs/nas-deployment.md) for the commands and rollback.

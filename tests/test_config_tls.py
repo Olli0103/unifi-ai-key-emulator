@@ -63,6 +63,10 @@ def test_incomplete_identity_is_not_regenerated(tmp_path):
     ("inference", "base_url", "http://user:secret@localhost/v1"),
     ("inference", "allow_remote", "false"), ("search", "enabled", "false"),
     ("worker", "description_embeddings", "false"),
+    ("worker", "max_video_duration_ms", False),
+    ("worker", "max_video_duration_ms", 0),
+    ("worker", "max_video_duration_ms", -1),
+    ("worker", "max_video_duration_ms", "120000"),
 ])
 def test_configuration_rejects_unsafe_or_ambiguous_values(tmp_path, section, key, value):
     path = tmp_path / "config.json"
@@ -71,6 +75,15 @@ def test_configuration_rejects_unsafe_or_ambiguous_values(tmp_path, section, key
     path.write_text(json.dumps(config))
     with pytest.raises(ConfigError):
         load_config(path)
+
+
+def test_basic_video_duration_has_explicit_default_and_accepts_override(tmp_path):
+    path = tmp_path / "config.json"
+    config = initialize(path, tmp_path / "state")
+    assert config["worker"]["max_video_duration_ms"] == 120000
+    config["worker"]["max_video_duration_ms"] = 60000
+    path.write_text(json.dumps(config))
+    assert load_config(path)["worker"]["max_video_duration_ms"] == 60000
 
 
 def test_lab_cannot_bind_to_lan_or_call_lan_controller(tmp_path):
