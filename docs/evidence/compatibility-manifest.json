@@ -1,0 +1,1967 @@
+{
+ "schema": "aikey-compatibility-manifest/1",
+ "manifest_version": "ai-key/2026-09-22.2",
+ "processor_profile": "ai-key",
+ "base_commit": "54160ce",
+ "emulated_identity": {
+  "type": "UP-AI-KEY",
+  "sysid": "0xa5f0",
+  "reported_firmware_version": "2.2.8"
+ },
+ "scope": "AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.",
+ "statuses": {
+  "native-verified": "Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.",
+  "fixture-tested": "Implemented and covered by synthetic tests; native behavior is not individually verified.",
+  "implemented": "Code exists without a dedicated synthetic test.",
+  "unsupported": "Not provided by this build. The per-feature rejection field describes whether it is rejected, disabled, empty, ignored or simply unavailable.",
+  "needs_evidence": "The native contract or behavior is not established; nothing may be claimed."
+ },
+ "live_results": {
+  "native-verified": "This behavior was individually observed and recorded.",
+  "indirect": "Necessarily exercised by another verified workflow, but not individually recorded.",
+  "not_observed": "Not exercised or not recorded on this version."
+ },
+ "evidence_sources": [
+  {
+   "id": "live-protect-7.3.56",
+   "kind": "live",
+   "protect_version": "7.3.56",
+   "date": "2026-09-22",
+   "console": "UDM Pro Max",
+   "deployment": "Linux ARM64 image under Apple container 1.4.1 on an Apple silicon Mac",
+   "operator": "integration owner",
+   "observed": [
+    "native candidate discovery and address display through the macOS host companion",
+    "administrator adoption with temporary factory enrollment (no custom-password field in the tested UI)",
+    "device-service control profile: the frontend returned no selected WebSocket subprotocol",
+    "matching control time synchronization and local adoption confirmation",
+    "management-password rotation; former setup credentials then returned HTTP 401",
+    "reconnect after a planned restart with factory enrollment disabled"
+   ],
+   "not_observed": [
+    "AI jobs, callbacks, search or database activity",
+    "individual getInfo/setConsoleInfo bodies"
+   ],
+   "records": [
+    "BUILD-RESULT.md",
+    "docs/factory-enrollment.md",
+    "docs/device-contract.md",
+    "docs/apple-container.md"
+   ],
+   "raw_traces_public": false
+  },
+  {
+   "id": "live-protect-7.3.60",
+   "kind": "live",
+   "protect_version": "7.3.60",
+   "date": "2026-09-22",
+   "console": "UDM Pro Max",
+   "camera_family": "G5 Flex (one camera)",
+   "vision_provider": "OpenAI Responses; the exact model identifier is not in the public records",
+   "operator": "integration owner",
+   "observed": [
+    "one scoped on-demand description: Protect dispatched the clip, the worker called back, Protect returned the description with HTTP 200",
+    "Protect accepted the MP4 variant of the AI processor video export for that on-demand job",
+    "one automatic recognizeKeyFrames event with a full RAM callback; exact-event GET returned metadata.ramState done and metadata.ramDescription, still present after a full page reload and shown in the native event summary panel",
+    "reconnect after an emulator restart without processing another event"
+   ],
+   "not_observed": [
+    "fresh adoption on 7.3.60",
+    "continuous or multi-camera processing",
+    "search, database, deep mode or /describe tasks",
+    "persistence across a controller restart",
+    "the advertised featureFlags during the trial"
+   ],
+   "limits": "Single-use permits for one on-demand job and one automatic event, both consumed. Not continuous operation.",
+   "records": [
+    "BUILD-RESULT.md",
+    "docs/basic-descriptions.md",
+    "README.md"
+   ],
+   "raw_traces_public": false
+  },
+  {
+   "id": "static-protect-7.2.105",
+   "kind": "static",
+   "protect_version": "7.2.105",
+   "date": "2026-09-22",
+   "artifacts": [
+    {
+     "name": "usr/share/unifi-protect/app/service.js",
+     "version": "Protect 7.2.105",
+     "sha256": "a7370e9a1b35db67d56104268841b9c2ba16342befb750ffef6654ee2b07bfdb"
+    },
+    {
+     "name": "Protect 7.2.105 firmware metadata",
+     "url": "https://fw-update.ui.com/api/firmware/67518b21-bd28-40df-8b3a-e21098ecc6e2",
+     "sha256": "d6ee4477bf09e353cbbf3e963ee3d3a9451735e671066fc477ac4a8efe77317e"
+    },
+    {
+     "name": "AI feature controller 2.0.17 metadata",
+     "url": "https://fw-update.ui.com/api/firmware/083a0b4c-16a8-4bb0-b333-16614e7b4588",
+     "sha256": "654f5d91d9f74ebd2ab7406a13a0c9c7a6bd0caf22f19c76f939f5c51ae4fe7e"
+    },
+    {
+     "name": "Device service 7.2.14 metadata",
+     "url": "https://fw-update.ui.com/api/firmware/a0ddfc8d-2c9e-439b-8a6a-2486e1b63b37",
+     "sha256": "deadb1a749301f17061363c1b220180bd05eea4712c9ae2c83a0b757d7df668d"
+    }
+   ],
+   "records": [
+    "docs/evidence/adoption-evidence.md",
+    "docs/evidence/controller-evidence.md",
+    "docs/evidence/search-evidence.md",
+    "docs/device-contract.md",
+    "docs/basic-descriptions.md",
+    "docs/worker-contract.md"
+   ],
+   "note": "Static inspection only. No controller was executed. Not the installed 7.3.56 or 7.3.60 package."
+  },
+  {
+   "id": "static-aikey-2.2.8",
+   "kind": "static",
+   "firmware_version": "2.2.8",
+   "date": "2026-09-22",
+   "artifacts": [
+    {
+     "name": "AI Key firmware tar (OrinNX256)",
+     "url": "https://fw-download.ubnt.com/data/AI-Key/7dbe-OrinNX256-2.2.8-d4ed6b70-79dc-4fdd-8451-4f51d21f3773.tar",
+     "sha256": "f7cd2e12cbe45f1a9c781bb13da8a0c7c23c66d325f8c8dd1bbc162c08f59081"
+    },
+    {
+     "name": "ui-websocketd 0.1.47.1",
+     "sha256": "829e1e376649fe81c1636cd9ca2aa69b8bf5602f91c9fe3b49477a18003cc503"
+    },
+    {
+     "name": "ui-httpd 0.1.7",
+     "sha256": "778af590c3a5c72f3ce9710e60df25354b488d079f5974f7aa48e71ca823d2a7"
+    },
+    {
+     "name": "ubntbox 0.1.7",
+     "sha256": "e16b4d5bae3b440221b7a20fc2bbee19fa732af451c8d787ff6d76956bc23807"
+    }
+   ],
+   "records": [
+    "docs/evidence/adoption-evidence.md",
+    "docs/evidence/search-evidence.md",
+    "docs/device-contract.md",
+    "docs/worker-contract.md"
+   ],
+   "note": "Static inspection only. Firmware was not executed. Nothing is redistributed here."
+  },
+  {
+   "id": "vendor-docs",
+   "kind": "vendor_documentation",
+   "urls": [
+    "https://help.ui.com/hc/en-us/articles/29221435686039-UniFi-AI-Key-Setup-and-FAQs",
+    "https://techspecs.ui.com/unifi/cameras-nvrs/ai-key",
+    "https://help.ui.com/hc/en-us/articles/360058867233-UniFi-Protect-Cameras-AI-Detections-and-Facial-Recognition"
+   ],
+   "records": [
+    "PLAN.md"
+   ],
+   "note": "Product claims, not protocol contracts."
+  },
+  {
+   "id": "synthetic-lab",
+   "kind": "synthetic",
+   "records": [
+    "lab-results.json",
+    "tests/fixtures/compatibility/ucp4-control-v1.json"
+   ],
+   "note": "Independent loopback controller, media, model and embedding services. Never native evidence."
+  }
+ ],
+ "features": [
+  {
+   "id": "discovery.udp_v1_query",
+   "area": "adoption",
+   "title": "Read-only UDP discovery: v1 information query and v1 command 4 MAC query",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "indirect",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_discovery.py::test_real_loopback_udp_query_reply_and_mutation_silence",
+    "tests/test_discovery.py::test_discovery_encoder_matches_static_byte_contract",
+    "tests/test_host_discovery.py::test_refresh_uses_pinned_https_gets_and_live_adoption_state"
+   ],
+   "implementation": [
+    "src/aikey/discovery.py",
+    "src/aikey/host_discovery.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "The discovered-device workflow used the macOS host companion; its exact UDP exchange was not individually recorded, and multicast through container networking is unverified",
+    "NAS and other network layouts",
+    "Exact native UDP query opcode and response were not recorded in public evidence",
+    "Full UDP packet schema and the layer-2 discovery-to-record path"
+   ]
+  },
+  {
+   "id": "discovery.other_opcodes",
+   "area": "adoption",
+   "title": "Discovery v0/v2, mutation opcodes, GUID/controller UUID, DDC and Wi-Fi fields",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_discovery.py::test_query_parser_accepts_only_observed_read_only_opcodes"
+   ],
+   "implementation": [
+    "src/aikey/discovery.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Whether Protect 7.3.x requires any of these fields"
+   ],
+   "rejection": "No reply; mutation queries stay silent."
+  },
+  {
+   "id": "adoption.management_info_post",
+   "area": "adoption",
+   "title": "Credentialed HTTPS POST /api/info before adoption",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "indirect",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_device.py::test_controller_post_info_authenticates_without_adopting_or_echoing_credentials",
+    "tests/test_device.py::test_controller_post_info_requires_tls_in_device_mode"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "The individual 7.3.56 request and response were not recorded; only the surrounding adoption succeeded"
+   ]
+  },
+  {
+   "id": "adoption.management_adopt",
+   "area": "adoption",
+   "title": "HTTPS POST /api/adopt with controller token, WSS mode 0 and configured controller host",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.56": "native-verified",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_device.py::test_adoption_checks_credentials_scope_and_persists_no_password",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Fresh adoption on 7.3.60",
+    "Adoption after removing the device from Protect (forget and re-adopt)"
+   ]
+  },
+  {
+   "id": "adoption.layer3_host_adoption",
+   "area": "adoption",
+   "title": "Layer-3 host adoption route (/api/adopt_layer3 in firmware)",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-aikey-2.2.8"
+   ],
+   "tests": [],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Whether any tested Protect flow uses layer-3 adoption for AI Key"
+   ],
+   "rejection": "Route is not registered; requests receive HTTP 404."
+  },
+  {
+   "id": "adoption.factory_enrollment",
+   "area": "adoption",
+   "title": "Bounded factory-credential enrollment window (at most ten minutes)",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.56": "native-verified",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [
+    "tests/test_factory_enrollment.py::test_pinned_tls_control_confirms_then_rotates_factory_enrollment",
+    "tests/test_factory_enrollment.py::test_factory_http_auth_stops_at_expiry_and_adoption",
+    "tests/test_factory_enrollment.py::test_enrollment_deadline_is_explicit_and_at_most_ten_minutes"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "experimental_opt_in",
+   "missing_evidence": [
+    "Enrollment on 7.3.60"
+   ]
+  },
+  {
+   "id": "adoption.generated_password_flow",
+   "area": "adoption",
+   "title": "Credentialed adoption with the generated private management password",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [
+    "tests/test_factory_enrollment.py::test_factory_credentials_default_off_and_expired_but_strong_credentials_work",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "A Protect UI or API flow that submits a custom password; the tested 7.3.56 UI had no such field"
+   ]
+  },
+  {
+   "id": "adoption.readoption_refused",
+   "area": "adoption",
+   "title": "Re-adoption of an already adopted device is refused until an explicit local reset",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [],
+   "tests": [
+    "tests/test_compatibility_fixtures.py::test_readoption_of_adopted_device_is_refused_without_losing_state"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Controller behavior when an adopted processor is forgotten and offered again"
+   ],
+   "rejection": "HTTP 409; state and pinned identity are unchanged."
+  },
+  {
+   "id": "control.connection_headers",
+   "area": "adoption",
+   "title": "WSS control connection with client certificate and x-ident/x-type/x-sysid/x-ip/x-version/x-mode/x-adopted/x-token",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "indirect",
+    "live-protect-7.3.60": "indirect"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_device.py::test_tls_control_handshake_pin_then_adoption_and_info",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "The actual accepted header set and its validation were not separately recorded on either version"
+   ],
+   "notes": "On both live versions the control connection necessarily worked for later commands; the complete header set and its validation were not individually recorded."
+  },
+  {
+   "id": "control.profile_ucp4_negotiated",
+   "area": "adoption",
+   "title": "Strict ucp4 control profile requiring a negotiated Sec-WebSocket-Protocol",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [
+    "tests/test_device.py::test_upgrade_without_ucp4_is_rejected_before_timesync_or_adoption",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect",
+    "tests/test_compatibility_fixtures.py::test_malformed_frames_close_then_supported_baseline_reconnects"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "A live controller that returns ucp4; the 7.3.56 frontend returned no subprotocol"
+   ]
+  },
+  {
+   "id": "control.profile_device_service",
+   "area": "adoption",
+   "title": "device-service control profile: absent subprotocol accepted only with a token or confirmed adoption and an explicit pin",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.56": "native-verified",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [],
+   "tests": [
+    "tests/test_control_profiles.py::test_device_service_missing_subprotocol_confirms_only_matching_timesync",
+    "tests/test_control_profiles.py::test_missing_or_wrong_protocol_does_not_bypass_scope",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect",
+    "tests/test_compatibility_fixtures.py::test_malformed_frames_close_then_supported_baseline_reconnects"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Which control profile the 7.3.60 trial configuration used is not in the public records"
+   ]
+  },
+  {
+   "id": "adoption.time_sync_confirmation",
+   "area": "adoption",
+   "title": "Adoption is confirmed only by a matching timeSync response on the current token connection",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.56": "native-verified",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_device.py::test_only_valid_matching_timesync_confirms_current_pending_token",
+    "tests/test_device.py::test_replaced_pending_token_cannot_be_consumed_by_old_connection",
+    "tests/test_control_profiles.py::test_missing_subprotocol_invalid_timesync_preserves_pending_token"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [],
+   "notes": "A local confirmation policy, corroborated on 7.3.56 by the online display, rotation and reconnect. It does not prove capability acceptance."
+  },
+  {
+   "id": "lifecycle.credential_rotation",
+   "area": "lifecycle",
+   "title": "changeUserPassword rotates the management password, stored only as a PBKDF2 hash",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.56": "native-verified",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_device.py::test_password_rotation_is_persistent_and_checks_old_password",
+    "tests/test_factory_enrollment.py::test_factory_rotation_erases_marker_and_cannot_keep_public_password",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Rotation with search enabled and a real PostgreSQL role"
+   ]
+  },
+  {
+   "id": "lifecycle.factory_login_disabled",
+   "area": "lifecycle",
+   "title": "Factory credentials rejected after rotation or enrollment expiry",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.56": "native-verified",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [],
+   "tests": [
+    "tests/test_factory_enrollment.py::test_factory_http_auth_stops_at_expiry_and_adoption",
+    "tests/test_factory_enrollment.py::test_factory_pair_is_exact_and_requires_configured_ui_account"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": []
+  },
+  {
+   "id": "lifecycle.reconnect_after_restart",
+   "area": "lifecycle",
+   "title": "Restart reuses identity and certificate and reconnects adopted without a token",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.56": "native-verified",
+    "live-protect-7.3.60": "native-verified"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_control_profiles.py::test_previously_confirmed_device_reconnects_without_token",
+    "tests/test_lab.py::test_assembled_service_against_independent_loopback_controller",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Reconnect after a controller restart or controller upgrade",
+    "Longer outage and recovery testing"
+   ]
+  },
+  {
+   "id": "lifecycle.abnormal_closure_backoff",
+   "area": "lifecycle",
+   "title": "Abnormal transport loss preserves adoption and reconnects with capped exponential backoff",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [],
+   "tests": [
+    "tests/test_device.py::test_control_reset_uses_exponential_backoff",
+    "tests/test_device.py::test_upgraded_control_reset_preserves_pending_or_confirmed_adoption"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Real network interruption against Protect"
+   ]
+  },
+  {
+   "id": "lifecycle.protocol_violation_close",
+   "area": "lifecycle",
+   "title": "Malformed or unsupported frames close the control socket with 1002 (1003 for text) without changing adoption",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [],
+   "tests": [
+    "tests/test_compatibility_fixtures.py::test_malformed_frames_close_then_supported_baseline_reconnects",
+    "tests/test_control_profiles.py::test_device_service_keeps_strict_binary_ucp_parsing"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "How Protect reacts to a 1002 close from an AI processor"
+   ],
+   "notes": "Before this change a handler's 1002 lost a race with the context manager, so the controller received 1000 normal closure."
+  },
+  {
+   "id": "lifecycle.unknown_controller_version",
+   "area": "lifecycle",
+   "title": "Unknown or unrecognized Protect versions in setConsoleInfo are reported as fixed categories; adoption and the baseline continue",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [],
+   "tests": [
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect",
+    "tests/test_compatibility_manifest.py::test_controller_version_classification_is_fixed_and_never_echoes_input"
+   ],
+   "implementation": [
+    "src/aikey/protocol.py",
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "The exact protectVersion value, if any, sent by 7.3.56 or 7.3.60 in setConsoleInfo was not recorded"
+   ],
+   "notes": "Report, not refuse: a supported baseline must keep working on a newer controller. No feature is gated on version yet."
+  },
+  {
+   "id": "lifecycle.controller_upgrade",
+   "area": "lifecycle",
+   "title": "Adoption survives an in-place Protect upgrade",
+   "status": "needs_evidence",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [],
+   "tests": [],
+   "implementation": [],
+   "activation": "default",
+   "missing_evidence": [
+    "The public records do not state whether the 7.3.60 trial used an adoption carried over from 7.3.56 or a fresh adoption",
+    "A deliberate upgrade test with before/after adoption state"
+   ]
+  },
+  {
+   "id": "lifecycle.emulator_upgrade",
+   "area": "lifecycle",
+   "title": "Adoption and identity survive an emulator version upgrade",
+   "status": "needs_evidence",
+   "live": {},
+   "static": [],
+   "tests": [
+    "tests/test_config_tls.py::test_incomplete_identity_is_not_regenerated"
+   ],
+   "implementation": [
+    "src/aikey/device.py",
+    "src/aikey/tls.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "No release-to-release upgrade exists yet; state schema 1 has no migration path (issue #24)"
+   ]
+  },
+  {
+   "id": "control.get_info",
+   "area": "control",
+   "title": "getInfo returns type, sysid, version, MAC, uptime, poeType, storageSize and featureFlags",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "indirect",
+    "live-protect-7.3.60": "indirect"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_device.py::test_info_reports_observed_fields_and_explicit_disabled_capabilities",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "The getInfo exchange and the capability state Protect stored were not recorded on either live version"
+   ]
+  },
+  {
+   "id": "control.get_task_queue_info",
+   "area": "control",
+   "title": "getTaskQueueInfo reports the six observed queue fields",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_device.py::test_queue_provider_must_supply_truthful_observed_contract",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Whether Protect schedules differently from these counts"
+   ],
+   "notes": "Only UI_TASK_NUM carries data; legacy category counts are always zero."
+  },
+  {
+   "id": "control.set_console_info",
+   "area": "control",
+   "title": "setConsoleInfo stores consoleName, id, protectVersion and supportsDbCredential locally",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_device.py::test_metadata_stays_local_and_unknown_mutations_fail",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "The live body shape; a 7.3.x controller sending an extra field would currently receive errorCode 22"
+   ],
+   "rejection": "Any other controller field returns errorCode 22 and leaves stored metadata unchanged."
+  },
+  {
+   "id": "control.set_info",
+   "area": "control",
+   "title": "setInfo accepts only {hostname} as logical metadata",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_device.py::test_metadata_stays_local_and_unknown_mutations_fail",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Live body shape"
+   ]
+  },
+  {
+   "id": "control.update_timezone",
+   "area": "control",
+   "title": "updateTimezone accepts only {timezone} as logical metadata",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_device.py::test_metadata_stays_local_and_unknown_mutations_fail",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Live body shape"
+   ]
+  },
+  {
+   "id": "control.request_ai.on_demand_inference",
+   "area": "control",
+   "title": "RequestAI :7968/on_demand_inference, admitted before inference",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "native-verified"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_worker.py::test_real_ffmpeg_on_demand_frame_and_exact_callback",
+    "tests/test_worker_scope.py::test_one_durable_job_deduplicates_inflight_completed_and_restart",
+    "tests/test_device.py::test_request_ai_only_echoes_after_admission_and_deduplicates",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py",
+    "src/aikey/worker.py"
+   ],
+   "activation": "experimental_opt_in",
+   "missing_evidence": [
+    "Unscoped or repeated on-demand operation",
+    "Other camera families"
+   ],
+   "notes": "Verified once, under a single-use on-demand scope for one camera."
+  },
+  {
+   "id": "control.request_ai.describe",
+   "area": "control",
+   "title": "RequestAI :7968/describe session task with image or video inputs",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [
+    "tests/test_lab.py::test_assembled_service_against_independent_loopback_controller",
+    "tests/test_worker.py::test_real_http_media_model_callback_and_persistent_dedup",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py",
+    "src/aikey/worker.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Whether 7.3.60 dispatches /describe at all (issue #10)",
+    "promptProfile session-v1 behavior is not reproduced"
+   ]
+  },
+  {
+   "id": "control.request_ai.unknown_target",
+   "area": "control",
+   "title": "RequestAI with an unimplemented or malformed targetUri",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py",
+    "src/aikey/worker.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Protect's retry treatment of errorCode 95 versus 5 for RequestAI"
+   ],
+   "rejection": "Unimplemented target: errorCode 95 'Unsupported RequestAI targetUri'. Malformed target or timeout: errorCode 22. Nothing is admitted.",
+   "notes": "Before this change an unimplemented target surfaced as errorCode 5 'Command failed'."
+  },
+  {
+   "id": "control.recognize_key_frames",
+   "area": "control",
+   "title": "recognizeKeyFrames video caption command within an explicit single-camera, single-use scope",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "native-verified"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_basic_descriptions.py::test_real_http_caption_and_full_ram_envelope_once_across_restart",
+    "tests/test_basic_descriptions.py::test_native_video_metadata_and_longer_timeline_use_bounded_frames",
+    "tests/test_basic_descriptions.py::test_device_admits_explicit_wrapper_and_sanitizes_bounded_diagnostics",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py",
+    "src/aikey/worker.py"
+   ],
+   "activation": "experimental_opt_in",
+   "missing_evidence": [
+    "Continuous and all-camera operation (issue #12)",
+    "A second camera family",
+    "Persistence after a controller restart"
+   ],
+   "notes": "One G5 Flex event. Out-of-scope camera returns errorCode 95 before the worker is called."
+  },
+  {
+   "id": "control.recognize_key_frames.other_variants",
+   "area": "control",
+   "title": "recognizeKeyFrames image, multipleImages, audio and retroactive variants",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_basic_descriptions.py::test_rejects_unrelated_work_before_any_media_or_inference",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Which variants 7.3.60 sends in normal operation"
+   ],
+   "rejection": "Worker rejects before media or inference; the UCP response is errorCode 5 with generic text."
+  },
+  {
+   "id": "control.host_management",
+   "area": "control",
+   "title": "reboot, factoryReset, firmware install, SSH management, support upload and hardware statistics",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_device.py::test_unknown_and_host_commands_fail_without_success",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [],
+   "rejection": "errorCode 95 with an empty body; no host action."
+  },
+  {
+   "id": "control.ai_settings_commands",
+   "area": "control",
+   "title": "changeAiInferAgentSettings, changeDescribePrompts, networkStatus and sshService",
+   "status": "unsupported",
+   "live": {},
+   "static": [],
+   "tests": [
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "These names appear in the device diagnostic allowlist, but no public record states their source or when Protect sends them"
+   ],
+   "rejection": "errorCode 95 with an empty body; counted in fixed diagnostics."
+  },
+  {
+   "id": "control.unknown_command",
+   "area": "control",
+   "title": "Any other command name",
+   "status": "unsupported",
+   "live": {},
+   "static": [],
+   "tests": [
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect",
+    "tests/test_control_diagnostics.py::test_unknown_names_codes_and_ram_values_cannot_expand_diagnostics"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [],
+   "rejection": "errorCode 95 with an empty body; adoption unchanged."
+  },
+  {
+   "id": "framing.ucp_two_record",
+   "area": "framing",
+   "title": "Binary two-record JSON framing (type, format 1, uncompressed)",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "indirect",
+    "live-protect-7.3.60": "indirect"
+   },
+   "static": [
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_protocol.py::FramingTests::test_fixed_wire_bytes",
+    "tests/test_protocol.py::FramingTests::test_all_record_flags_checked",
+    "tests/test_compatibility_fixtures.py::test_malformed_frames_close_then_supported_baseline_reconnects"
+   ],
+   "implementation": [
+    "src/aikey/protocol.py",
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "No raw native frame capture or independently recorded two-record layout"
+   ],
+   "notes": "The 7.3.56 timeSync exchange and rotation necessarily exercised framing, but did not record its exact byte layout."
+  },
+  {
+   "id": "framing.compressed_or_other_format",
+   "area": "framing",
+   "title": "Compressed records or record format versions other than 1",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_compatibility_fixtures.py::test_malformed_frames_close_then_supported_baseline_reconnects",
+    "tests/test_protocol.py::FramingTests::test_all_record_flags_checked"
+   ],
+   "implementation": [
+    "src/aikey/protocol.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Whether any Protect version sends compressed or other-format records"
+   ],
+   "rejection": "Control socket closed with 1002; adoption preserved; reconnect follows."
+  },
+  {
+   "id": "framing.request_deduplication",
+   "area": "framing",
+   "title": "Identical request IDs share a result; a reused ID with changed content is a protocol violation",
+   "status": "fixture-tested",
+   "live": {},
+   "static": [],
+   "tests": [
+    "tests/test_device.py::test_request_ai_only_echoes_after_admission_and_deduplicates",
+    "tests/test_compatibility_fixtures.py::test_malformed_frames_close_then_supported_baseline_reconnects"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Whether Protect ever retries with the same request ID"
+   ]
+  },
+  {
+   "id": "framing.binary_only",
+   "area": "framing",
+   "title": "Text WebSocket frames are rejected",
+   "status": "fixture-tested",
+   "live": {},
+   "static": [],
+   "tests": [
+    "tests/test_control_profiles.py::test_device_service_keeps_strict_binary_ucp_parsing",
+    "tests/test_compatibility_fixtures.py::test_malformed_frames_close_then_supported_baseline_reconnects"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [],
+   "rejection": "Close 1003."
+  },
+  {
+   "id": "framing.event_messages",
+   "area": "framing",
+   "title": "Controller event messages",
+   "status": "unsupported",
+   "live": {},
+   "static": [],
+   "tests": [
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Which events Protect sends to AI processors and whether any need handling"
+   ],
+   "rejection": "Ignored without a response or acknowledgement."
+  },
+  {
+   "id": "media.video_export_mp4",
+   "area": "media",
+   "title": "Opt-in MP4 adaptation of the verified AI processor video export route",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "native-verified"
+   },
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [
+    "tests/test_worker.py::test_mp4_adaptation_rejects_signed_ambiguous_or_unverified_urls",
+    "tests/test_worker.py::test_real_ffmpeg_on_demand_frame_and_exact_callback"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "The public record confirms MP4 for the on-demand job; the automatic event's export format is not recorded"
+   ]
+  },
+  {
+   "id": "media.ubv_decoding",
+   "area": "media",
+   "title": "Decoding raw UBV",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [
+    "tests/test_worker.py::test_ubv_rejected_without_vendor_program_execution"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [],
+   "rejection": "Rejected; no vendor program is executed."
+  },
+  {
+   "id": "media.images_and_snapshots",
+   "area": "media",
+   "title": "Image and snapshot inputs for session descriptions",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [
+    "tests/test_worker.py::test_real_http_media_model_callback_and_persistent_dedup"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Any live image or snapshot job"
+   ]
+  },
+  {
+   "id": "media.origin_and_redirect_policy",
+   "area": "media",
+   "title": "Exact controller-origin allowlist, known paths only, no redirects",
+   "status": "fixture-tested",
+   "live": {},
+   "static": [],
+   "tests": [
+    "tests/test_worker.py::test_untrusted_origins_and_unsupported_paths_rejected_before_io",
+    "tests/test_worker.py::test_redirect_is_never_followed"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "default",
+   "missing_evidence": []
+  },
+  {
+   "id": "callback.on_demand_camera_upload",
+   "area": "callbacks",
+   "title": "On-demand result JSON at /internal/camera-upload/<token>",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "native-verified"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_worker.py::test_real_ffmpeg_on_demand_frame_and_exact_callback",
+    "tests/test_worker.py::test_on_demand_failure_callback_is_explicit_and_not_replayed"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [],
+   "notes": "The caller receives the description. On-demand results are not persisted by design."
+  },
+  {
+   "id": "callback.ram_full_event_tagging",
+   "area": "callbacks",
+   "title": "Full RAM event-tagging multipart callback with keyMomentsTags []",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "native-verified"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_basic_descriptions.py::test_real_http_caption_and_full_ram_envelope_once_across_restart",
+    "tests/test_basic_descriptions.py::test_model_failure_never_claims_tagging_success_or_restores_permit"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Persistence after a controller restart",
+    "More than one event",
+    "Effect on events that already carry native tags"
+   ],
+   "notes": "Persistence verified by an exact-event GET (ramState done, ramDescription) and a full page reload, not by HTTP 200."
+  },
+  {
+   "id": "callback.ram_description_only",
+   "area": "callbacks",
+   "title": "Legacy description-only multipart profiles key-2.2.8 and protect-7.2.105",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_worker.py::test_explicit_legacy_multipart_profiles",
+    "tests/test_protocol.py::DescriptionTests::test_receiver_profile_rejects_device_shape_missing_camera"
+   ],
+   "implementation": [
+    "src/aikey/protocol.py",
+    "src/aikey/worker.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Live receiver behavior for either profile",
+    "Description-only updates existing rows only; no initial insert"
+   ]
+  },
+  {
+   "id": "callback.task_description",
+   "area": "callbacks",
+   "title": "Session description JSON at /internal/aiprocessors/descriptions/<taskId>",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [
+    "tests/test_protocol.py::TaskDescriptionTests::test_task_route_and_json_keep_all_identities",
+    "tests/test_lab.py::test_assembled_service_against_independent_loopback_controller"
+   ],
+   "implementation": [
+    "src/aikey/protocol.py",
+    "src/aikey/worker.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "A live controller task ledger entry; unknown task IDs are dropped after HTTP 200"
+   ]
+  },
+  {
+   "id": "callback.origin_allowlist",
+   "area": "callbacks",
+   "title": "Callbacks only to configured controller origins and known routes",
+   "status": "fixture-tested",
+   "live": {},
+   "static": [],
+   "tests": [
+    "tests/test_worker.py::test_untrusted_origins_and_unsupported_paths_rejected_before_io",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [],
+   "rejection": "Admission fails before any I/O; the UCP response is errorCode 5 'Command failed'.",
+   "notes": "The generic errorCode 5 hides the rejection category from Protect; see the PR proposal."
+  },
+  {
+   "id": "callback.journal_and_uncertain_delivery",
+   "area": "callbacks",
+   "title": "Private job journal; completed callbacks deduplicated and uncertain callbacks never replayed",
+   "status": "fixture-tested",
+   "live": {},
+   "static": [],
+   "tests": [
+    "tests/test_worker.py::test_uncertain_callback_is_not_replayed_after_restart",
+    "tests/test_worker.py::test_real_http_media_model_callback_and_persistent_dedup"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Exactly-once delivery is not claimed",
+    "Controller-side retry behavior for AI Key tasks"
+   ]
+  },
+  {
+   "id": "capability.explicit_disabled_flags",
+   "area": "capabilities",
+   "title": "Object capabilities advertised as {enabled:false, version:v1} because the controller fills missing flags as enabled",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [
+    "tests/test_device.py::test_info_reports_observed_fields_and_explicit_disabled_capabilities",
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "The capability state Protect displayed or stored on either live version"
+   ]
+  },
+  {
+   "id": "capability.ai_mode_basic",
+   "area": "capabilities",
+   "title": "aiMode reported as basic",
+   "status": "fixture-tested",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [
+    "tests/test_device.py::test_info_reports_observed_fields_and_explicit_disabled_capabilities"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "How 7.3.x interprets aiMode"
+   ]
+  },
+  {
+   "id": "capability.support_ai_summary",
+   "area": "capabilities",
+   "title": "supportAiSummary advertised only with explicit opt-in and a configured caption path",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [
+    "tests/test_basic_descriptions.py::test_summary_advertisement_requires_explicit_opt_in_and_caption_configuration"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "experimental_opt_in",
+   "missing_evidence": [
+    "Whether supportAiSummary was advertised as enabled during the 7.3.60 caption trial is not in the public records"
+   ]
+  },
+  {
+   "id": "capability.deep_mode_vlm",
+   "area": "capabilities",
+   "title": "supportDeepMode / supportVlm",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [
+    "tests/test_device.py::test_info_reports_observed_fields_and_explicit_disabled_capabilities"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Whether 7.3.x still couples the two flags"
+   ],
+   "rejection": "Both false. Protect 7.2.105 couples them (supportDeepMode ?? supportVlm), so they cannot be advertised independently."
+  },
+  {
+   "id": "capability.face_recognition",
+   "area": "capabilities",
+   "title": "Face grouping, enrollment and recognition",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Native contract (issue #20)"
+   ],
+   "rejection": "supportFaceRecognition disabled; faceMeta accepted and ignored."
+  },
+  {
+   "id": "capability.license_plate_recognition",
+   "area": "capabilities",
+   "title": "License-plate recognition",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Native contract (issue #19)"
+   ],
+   "rejection": "supportLicensePlateRecognition disabled; vehicleMeta accepted and ignored."
+  },
+  {
+   "id": "capability.face_enhancement",
+   "area": "capabilities",
+   "title": "Automatic and manual face enhancement",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Native contract (issue #23)"
+   ],
+   "rejection": "supportFaceEnhancement disabled."
+  },
+  {
+   "id": "capability.retroactive_processing",
+   "area": "capabilities",
+   "title": "Retroactive processing of older footage",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Native media forms for retroactive jobs"
+   ],
+   "rejection": "supportRetroactiveProcessing disabled."
+  },
+  {
+   "id": "capability.recognize_anything_tagging",
+   "area": "capabilities",
+   "title": "Recognize Anything tags, detections and key-moment snapshots",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [],
+   "implementation": [
+    "src/aikey/device.py",
+    "src/aikey/worker.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Structured object results (issue #14)"
+   ],
+   "rejection": "supportRecognizeAnything disabled; captions report keyMomentsTags [] and never invent tags."
+  },
+  {
+   "id": "capability.audio_speech",
+   "area": "capabilities",
+   "title": "Audio detection and speech transcription",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105",
+    "vendor-docs"
+   ],
+   "tests": [],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Native contract (issue #15)",
+    "Vendor camera eligibility differs between sources"
+   ],
+   "rejection": "Audio variants rejected before media or inference."
+  },
+  {
+   "id": "capability.ai_alarms",
+   "area": "capabilities",
+   "title": "AI query matches in Alarm Manager",
+   "status": "unsupported",
+   "live": {},
+   "static": [],
+   "tests": [],
+   "implementation": [],
+   "activation": "default",
+   "missing_evidence": [
+    "Native contract (issue #26)"
+   ],
+   "rejection": "Not implemented."
+  },
+  {
+   "id": "database.credential_rotation_hook",
+   "area": "database",
+   "title": "PostgreSQL unifi-protect role rotated before management-password rotation",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_database.py::test_rotation_stages_before_sql_and_commits_before_persisting",
+    "tests/test_device.py::test_search_credential_rotation_requires_handler_and_acknowledges_only_success"
+   ],
+   "implementation": [
+    "src/aikey/database.py",
+    "src/aikey/device.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "A real PostgreSQL transaction",
+    "Protect connecting with the rotated password"
+   ]
+  },
+  {
+   "id": "database.supports_db_credential_handoff",
+   "area": "database",
+   "title": "supportsDbCredential console capability and controller access-rule update",
+   "status": "needs_evidence",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Live setConsoleInfo sequence and flag value",
+    "Access-rule behavior expected by 7.3.x"
+   ],
+   "notes": "setConsoleInfo stores the flag; no access rules are edited."
+  },
+  {
+   "id": "database.controller_migrations",
+   "area": "database",
+   "title": "Protect migrations and extensions applied to the processor database",
+   "status": "needs_evidence",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [],
+   "implementation": [],
+   "activation": "default",
+   "missing_evidence": [
+    "Real PostgreSQL/pgvector execution",
+    "Migration acceptance and restart recovery on 7.3.x"
+   ]
+  },
+  {
+   "id": "database.bm25_rerank",
+   "area": "database",
+   "title": "pg_tokenizer, vchord_bm25 and rerank function",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [],
+   "implementation": [],
+   "activation": "default",
+   "missing_evidence": [
+    "Whether 7.3.x requires hybrid search"
+   ],
+   "rejection": "Not provisioned; controllers expecting hybrid search may return no results."
+  },
+  {
+   "id": "search.e5_nl_parse",
+   "area": "search",
+   "title": "NL_PARSE with multilingual-e5-small returns a 384-value query embedding",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [
+    "tests/test_search.py::test_session_response_uses_requested_id_and_explicit_profile",
+    "tests/test_search.py::test_websocket_registration_and_real_http_adapter",
+    "tests/test_lab.py::test_assembled_service_against_independent_loopback_controller"
+   ],
+   "implementation": [
+    "src/aikey/search.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Which search path 7.3.60 uses (issue #10)",
+    "Encoder compatibility with vendor vectors"
+   ]
+  },
+  {
+   "id": "search.description_embedding",
+   "area": "search",
+   "title": "384-value passage embedding attached to task descriptions",
+   "status": "fixture-tested",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [
+    "tests/test_worker.py::test_real_embedding_http_is_used_for_optional_description_vector"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/search.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Document preprocessing used by the vendor",
+    "Native retrieval with positive and negative examples"
+   ]
+  },
+  {
+   "id": "search.legacy_clip_image",
+   "area": "search",
+   "title": "Legacy 768-value CLIP text/image search and IMAGE_SEARCH",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_search.py::test_unsupported_queries_have_error_without_fake_success"
+   ],
+   "implementation": [
+    "src/aikey/search.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [],
+   "rejection": "Nonzero error code without embedding data; no padded or fabricated vectors."
+  },
+  {
+   "id": "search.tags_and_time_filters",
+   "area": "search",
+   "title": "NL_PARSE tag extraction, object types and time filters",
+   "status": "unsupported",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [],
+   "implementation": [
+    "src/aikey/search.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [],
+   "rejection": "Returned as empty arrays with exact_match false."
+  },
+  {
+   "id": "search.native_retrieval",
+   "area": "search",
+   "title": "Find Anything retrieval of processor results in Protect",
+   "status": "needs_evidence",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [],
+   "implementation": [],
+   "activation": "default",
+   "missing_evidence": [
+    "Any live search result",
+    "Matched query/document encoders",
+    "Index population by the controller"
+   ]
+  },
+  {
+   "id": "search.index_recovery",
+   "area": "search",
+   "title": "Search index recovery after restart or model change",
+   "status": "needs_evidence",
+   "live": {},
+   "static": [
+    "static-protect-7.2.105"
+   ],
+   "tests": [],
+   "implementation": [],
+   "activation": "default",
+   "missing_evidence": [
+    "Controller reconciliation writes null embeddings and does not regenerate them (7.2.105 static)",
+    "Live recovery test"
+   ]
+  }
+ ],
+ "contradictions": [
+  {
+   "id": "C1",
+   "type": "target_version",
+   "sources": [
+    "docs/evidence/README.md",
+    "docs/search-contract.md",
+    "docs/worker-contract.md",
+    "lab-results.json",
+    "PLAN.md",
+    "BUILD-RESULT.md"
+   ],
+   "statement": "Several records name Protect 7.3.56 as the target, while issue #2, PLAN.md and the caption trial use 7.3.60. No controller package for either 7.3.56 or 7.3.60 was inspected; static evidence is from 7.2.105.",
+   "resolution": "Manifest records results per version. Neither live version is a static reference."
+  },
+  {
+   "id": "C2",
+   "type": "stale_record",
+   "sources": [
+    "docs/device-contract.md",
+    "BUILD-RESULT.md",
+    "docs/basic-descriptions.md"
+   ],
+   "statement": "docs/device-contract.md says native camera descriptions and description persistence remain unverified; BUILD-RESULT.md and docs/basic-descriptions.md record one verified on-demand description and one persisted automatic caption on 7.3.60.",
+   "resolution": "Manifest follows the later live records. device-contract.md is outside this issue's boundary; update proposed in the PR."
+  },
+  {
+   "id": "C3",
+   "type": "stale_record",
+   "sources": [
+    "docs/evidence/adoption-evidence.md",
+    "BUILD-RESULT.md"
+   ],
+   "statement": "adoption-evidence.md says acceptance by an unmodified running controller remains needs_evidence; native adoption was later observed on 7.3.56.",
+   "resolution": "The static record is dated and version-scoped; the live 7.3.56 source supersedes it for adoption only."
+  },
+  {
+   "id": "C4",
+   "type": "version_scope",
+   "sources": [
+    "docs/worker-contract.md",
+    "README.md"
+   ],
+   "statement": "worker-contract.md says MP4 export adaptation has not been tested against 7.3.56; README.md says 7.3.60 accepted it for the on-demand job.",
+   "resolution": "Both can be true. Recorded as native-verified on 7.3.60 only."
+  },
+  {
+   "id": "C5",
+   "type": "static_contract",
+   "sources": [
+    "static-aikey-2.2.8",
+    "static-protect-7.2.105"
+   ],
+   "statement": "AI Key 2.2.8's description-only sender omits cameraId; the Protect 7.2.105 description-only schema requires it.",
+   "resolution": "Kept as two explicit callback profiles. Runtime rejection by the middleware was never exercised."
+  },
+  {
+   "id": "C6",
+   "type": "static_contract",
+   "sources": [
+    "static-aikey-2.2.8",
+    "static-protect-7.2.105"
+   ],
+   "statement": "AI Key 2.2.8 NL_PARSE returns 768-value CLIP embeddings and has no /describe route; Protect 7.2.105 session search requests multilingual-e5-small and rejects non-384 vectors.",
+   "resolution": "The two packages are not a confirmed matched pair. Search status stays needs_evidence pending issue #10."
+  },
+  {
+   "id": "C7",
+   "type": "static_vs_live",
+   "sources": [
+    "static-protect-7.2.105",
+    "live-protect-7.3.56"
+   ],
+   "statement": "The 7.2.105 verifier accepts only ucp4 or updates as the requested subprotocol, but the live 7.3.56 frontend returned no selected subprotocol, so the strict ucp4 profile would fail there.",
+   "resolution": "Separate device-service profile, verified on 7.3.56 with a required pin."
+  },
+  {
+   "id": "C8",
+   "type": "static_internal",
+   "sources": [
+    "static-aikey-2.2.8"
+   ],
+   "statement": "An inference-gateway comment calls the device certificate NVR-issued; syswrapper.sh generates a self-signed RSA-2048 certificate.",
+   "resolution": "The generation code is treated as evidence; the comment is not."
+  },
+  {
+   "id": "C9",
+   "type": "vendor_docs",
+   "sources": [
+    "vendor-docs"
+   ],
+   "statement": "The AI Key FAQ lists 1,000 detections per hour; the technical specifications list 1,800.",
+   "resolution": "No throughput claim is made. Measure actual behavior."
+  },
+  {
+   "id": "C10",
+   "type": "vendor_docs",
+   "sources": [
+    "vendor-docs"
+   ],
+   "statement": "Audio eligibility differs between the AI Key FAQ and the camera capability guide.",
+   "resolution": "Audio is unsupported; eligibility needs evidence per camera."
+  },
+  {
+   "id": "C11",
+   "type": "misleading_label",
+   "sources": [
+    "lab-results.json",
+    "live-protect-7.3.56"
+   ],
+   "statement": "lab-results.json reports native_protect_7_3_56 as needs_evidence although native adoption was observed on 7.3.56. The field describes the synthetic lab run, not project evidence.",
+   "resolution": "Treat lab output as synthetic only. The lab's schema is outside this issue."
+  },
+  {
+   "id": "C12",
+   "type": "static_contract",
+   "sources": [
+    "static-protect-7.2.105"
+   ],
+   "statement": "Protect 7.2.105 fills missing capability flags with enabled values, so an absent flag reads as support.",
+   "resolution": "Unsupported capabilities are sent explicitly disabled. A capability flag is never treated as evidence."
+  }
+ ],
+ "trial_activation": {
+  "rule": "Every live trial must record each experimental activation below that was in effect, with the exact Protect version, camera family and permit ID. A capability flag or UI toggle is configuration, not acceptance evidence.",
+  "recorded": [
+   {
+    "source": "live-protect-7.3.56",
+    "activation": "device.factory_enrollment_until",
+    "state": "enabled for a bounded window, then disabled after pairing"
+   },
+   {
+    "source": "live-protect-7.3.56",
+    "activation": "controller.control_profile",
+    "state": "device-service"
+   },
+   {
+    "source": "live-protect-7.3.60",
+    "activation": "worker.test_scope (on_demand)",
+    "state": "single-use permit for one camera, consumed"
+   },
+   {
+    "source": "live-protect-7.3.60",
+    "activation": "worker.test_scope (recognizeKeyFrames)",
+    "state": "single-use permit for one G5 Flex camera, consumed"
+   },
+   {
+    "source": "live-protect-7.3.60",
+    "activation": "worker.request_mp4_exports",
+    "state": "enabled for the on-demand job"
+   }
+  ],
+  "not_recorded": [
+   {
+    "source": "live-protect-7.3.60",
+    "activation": "device.feature_flags.supportAiSummary",
+    "state": "needs_evidence"
+   },
+   {
+    "source": "live-protect-7.3.60",
+    "activation": "Protect recognizeAnythingSettings / aiSummarySettings for the test camera",
+    "state": "needs_evidence"
+   },
+   {
+    "source": "live-protect-7.3.60",
+    "activation": "controller.control_profile",
+    "state": "needs_evidence"
+   },
+   {
+    "source": "live-protect-7.3.60",
+    "activation": "vision model identifier",
+    "state": "needs_evidence"
+   }
+  ]
+ },
+ "remaining_native_tests": [
+  {
+   "id": "N1",
+   "features": [
+    "lifecycle.unknown_controller_version",
+    "control.set_console_info",
+    "database.supports_db_credential_handoff"
+   ],
+   "procedure": "On the adopted test processor, read device health after connection and record compatibility.controller_version_evidence plus the setConsoleInfo result code from control_commands. Confirm whether 7.3.60 sends only the four allowlisted controller fields."
+  },
+  {
+   "id": "N2",
+   "features": [
+    "control.get_info",
+    "capability.explicit_disabled_flags",
+    "capability.support_ai_summary",
+    "capability.deep_mode_vlm"
+   ],
+   "procedure": "Record the capability state Protect shows for the processor, and the exact device.feature_flags in effect, before any caption trial."
+  },
+  {
+   "id": "N3",
+   "features": [
+    "lifecycle.controller_upgrade"
+   ],
+   "procedure": "Record adoption state before and after an in-place Protect upgrade; confirm reconnect without re-adoption."
+  },
+  {
+   "id": "N4",
+   "features": [
+    "adoption.management_adopt",
+    "adoption.time_sync_confirmation",
+    "lifecycle.credential_rotation"
+   ],
+   "procedure": "Fresh adoption of a separately identified test processor on 7.3.60, including rotation and planned restart."
+  },
+  {
+   "id": "N5",
+   "features": [
+    "lifecycle.protocol_violation_close",
+    "control.request_ai.unknown_target"
+   ],
+   "procedure": "Only if a malformed or unsupported command occurs naturally: record the close or error code and whether Protect retries. Do not inject traffic into the production controller."
+  },
+  {
+   "id": "N6",
+   "features": [
+    "control.recognize_key_frames",
+    "callback.ram_full_event_tagging"
+   ],
+   "procedure": "Repeat the persisted-caption check after a controller restart and on a second camera family, each with a new reviewed permit."
+  },
+  {
+   "id": "N7",
+   "features": [
+    "control.request_ai.describe",
+    "search.e5_nl_parse",
+    "search.native_retrieval"
+   ],
+   "procedure": "Issue #10: determine whether 7.3.60 dispatches /describe and which search path it uses, before any search trial."
+  },
+  {
+   "id": "N8",
+   "features": [
+    "lifecycle.abnormal_closure_backoff"
+   ],
+   "procedure": "Interrupt the network path briefly and record reconnect timing and adoption state."
+  }
+ ]
+}

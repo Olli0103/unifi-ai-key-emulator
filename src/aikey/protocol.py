@@ -15,6 +15,36 @@ MAX_RECORD_BYTES = 1024 * 1024  # Local guard, not an observed protocol maximum.
 RECOGNIZE_ANYTHING_PATH = "/internal/aiprocessors/recognize-anything"
 _RECORD = struct.Struct(">BBBBI")
 
+# Must equal docs/evidence/compatibility-manifest.json; a test enforces this.
+COMPATIBILITY_MANIFEST_VERSION = "ai-key/2026-09-22.2"
+# Evidence scope per Protect version. "live_partial" means some behaviors were
+# observed on a live controller; it never means every feature is compatible.
+# "static_only" means source inspection without a live controller of that version.
+CONTROLLER_VERSION_EVIDENCE = {
+    "7.3.56": "live_partial",
+    "7.3.60": "live_partial",
+    "7.2.105": "static_only",
+}
+_VERSION = re.compile(r"[0-9]{1,4}(?:\.[0-9]{1,6}){1,3}")
+
+
+def classify_controller_version(value):
+    """Return (fixed_version_or_None, category) for a reported Protect version.
+
+    Categories: live_partial, static_only, unknown, unrecognized_format, not_reported. The
+    version string is returned only when it is one of the fixed known values, so
+    callers can report it without echoing controller-supplied text. An unknown
+    version does not disable the supported baseline; it only has no evidence.
+    """
+    if value is None:
+        return None, "not_reported"
+    if not isinstance(value, str) or not _VERSION.fullmatch(value):
+        return None, "unrecognized_format"
+    category = CONTROLLER_VERSION_EVIDENCE.get(value)
+    if category is None:
+        return None, "unknown"
+    return value, category
+
 
 class ContractError(ValueError):
     """The message is outside the explicitly supported offline subset."""
