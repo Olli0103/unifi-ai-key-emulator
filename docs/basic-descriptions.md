@@ -1,14 +1,14 @@
 # Bounded automatic event descriptions
 
-The worker can accept one native `recognizeKeyFrames` video command and return a real vision-model caption through the adopted device's callback. This is an experimental basic-mode path. It does not implement deep understanding, object indexing, ReID, face or plate recognition, audio, or semantic search.
+The worker accepts one native `recognizeKeyFrames` video command within an explicit camera scope and returns a real vision-model caption through the adopted device's callback. This experimental basic-mode path does not implement deep understanding, object indexing, ReID, face or plate recognition, audio, or semantic search. Continuous all-camera processing is planned in the [feature-parity roadmap](../PLAN.md).
 
 The command and persistence contract below come from Protect 7.2.105 source. Native acceptance and durable display on another Protect version must be verified separately. Loopback tests prove the emulator's request handling and callback format, not Protect's database writes.
 
-The separate native on-demand route has completed successfully on Protect 7.3.60: the worker generated a real OpenAI caption, Protect accepted its callback, and the requesting API returned the description. That result does not verify this automatic path or persistent event storage.
+Protect 7.3.60 has completed both the separate native on-demand route and one automatic G5 Flex event. For the automatic event, the worker generated a real OpenAI caption and Protect accepted its full RAM callback. An exact-event GET returned `metadata.ramState: "done"` and the saved `metadata.ramDescription`, including after a full Safari page reload. The native event summary panel then displayed the stored caption. This verifies storage and display for that one event. Continuous processing, search and recovery after a controller restart remain separate checks.
 
 ## Scope and trigger
 
-Enable the worker path only with an explicit single-camera, single-use scope:
+For a first test, enable the worker path with an explicit single-camera, single-use scope:
 
 ```json
 {
@@ -26,13 +26,15 @@ Enable the worker path only with an explicit single-camera, single-use scope:
 
 Existing scopes without `kind` retain their on-demand-only behavior. This scope accepts no on-demand or deep-mode jobs. The reservation is durable before the first media fetch, survives restart, and cannot be reused after a failure or uncertain callback. Repeated delivery of a completed identical job returns the existing result without another inference or upload.
 
+Continuous mode is not yet deployed. Its planned global limit is 12 new jobs per rolling hour across all discovered cameras, persisted across restarts.
+
 In the examined controller, a new smart-detection event passes through native key-moment selection and a short coalescing delay. The basic dispatcher requires `recognizeAnythingSettings.enabled` and the selected camera in its camera list, or `allCameras`. It sets `postVLM` from `aiSummarySettings.enabled`. Configure only the intended camera through the normal Protect UI. These settings are controller policies, distinct from the worker's local permit.
 
 The UI summary capability is `supportAiSummary.enabled`. It remains an explicit opt-in and is reported as disabled if the local model, video decoder, callback mode or caption scope is not configured. Normal runtime construction also validates the inference provider. A caption test does not establish object indexing or any search capability. Keep `supportDeepMode`, `supportVlm`, and unsupported recognition capabilities disabled, with `aiMode: "basic"`. This implementation does not enable those flags or change Protect policies automatically. Opening the summary action on an older event can invoke the separate on-demand route; it does not prove this automatic path works. Retroactive jobs use other media forms and remain unsupported here.
 
 ## Accepted command
 
-The UCP command is `recognizeKeyFrames`, not a fabricated `RequestAI` target. The device passes its body to the worker in an internal `{command, payload}` wrapper and acknowledges only after queue admission and permit reservation.
+The UCP command is `recognizeKeyFrames`, not a fabricated `RequestAI` target. The device passes its body to the worker in an internal `{command, payload}` wrapper and acknowledges only after queue admission and durable scope reservation.
 
 The source-evidenced `ramType: "video"` and `ramType: "videoWithRecognition"` forms with `postVLM: true` are accepted for caption generation only. AI Key 2.2.8 firmware routes both labels through the same video branch and controls recognition separately. Each command must have the exact permitted camera, an event identifier, channel `0`, rotating video, `mute: true`, and `createEvent: false`. Its start and end must fit `worker.max_video_duration_ms`, which defaults to 120 seconds. The existing on-demand scope keeps its ten-second limit. The native command may contain up to 128 absolute integer key-moment timestamps inside the video interval. The worker removes duplicates, then samples at most `worker.max_images` frames across the timeline. The original command remains unchanged for duplicate-request detection.
 
@@ -52,11 +54,11 @@ This differs materially from a description-only RAM response. In the examined so
 
 After saving the supplied results, the receiver completes the aggregate recognition task. This caption-only callback does not defer face, plate or object recognition to a later attempt of that task. Keep unsupported recognition capabilities and the corresponding test-camera policies disabled; this adapter supplies no recognition outputs, even for the `videoWithRecognition` transport label.
 
-Protect responds HTTP 200 before completing its asynchronous persistence work. Worker status `http_accepted` therefore means only that the upload was accepted. Confirm the description on the correct event after a page reload, and verify that no other camera or second event was processed, before claiming native persistence.
+Protect responds HTTP 200 before completing its asynchronous persistence work. Worker status `http_accepted` therefore means only that the upload was accepted. Confirm the description on the correct event after a page reload, and verify that processing stayed within the configured camera and admission limit, before claiming native persistence.
 
 ## Diagnostics and source evidence
 
-An earlier live automatic trial reached the worker but failed admission without consuming its permit. That build retained no rejection categories, so the exact cause remains `needs_evidence`. Static comparison established that its metadata, duration and timestamp restrictions excluded valid native commands. These compatibility fixes address those exclusions; they do not establish which check rejected the earlier live requests or prove that native persistence now works.
+An earlier live automatic trial reached the worker but failed admission without consuming its permit. That build retained no rejection categories, so the exact cause remains `needs_evidence`. Static comparison established that its metadata, duration and timestamp restrictions excluded valid native commands. These compatibility fixes address those exclusions; they do not establish which check rejected the earlier requests. The subsequent fresh-event test independently verified native persistence as described above.
 
 Device health includes process-local `control_commands` counters, fixed result-code counts and the latest result code for a fixed command allowlist. Unknown command names share one aggregate entry. Separate `recognize_key_frames` counters record fixed field-type categories, whether `camera` or alternate `cameraId` matches the configured camera, known RAM variants, and result codes for matching-camera attempts. They also count admission phases and exact allowlisted worker rejection categories. No arbitrary exception text is retained.
 

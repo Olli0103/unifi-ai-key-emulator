@@ -2,7 +2,7 @@
 
 This guide uses Apple container 1.4.1 on an Apple silicon Mac. The Linux ARM64 image has been built and run against Protect 7.3.56 on a UDM Pro Max. Native discovery, adoption, an online control connection, matching time synchronization, management-password rotation and reconnect after a planned restart were observed. Factory authentication was rejected after enrollment.
 
-These results cover management and control. A later test on Protect 7.3.60 verified one native on-demand description: Protect dispatched a selected camera clip, the emulator used OpenAI, and Protect returned the generated description with HTTP 200. This route does not persist an event summary. Persistent descriptions and search remain unverified. Face/plate recognition, audio and full legacy-camera enhancement are not implemented. Search and PostgreSQL remained disabled. NAS deployment is untested. The static protocol research uses Protect 7.2.105 and AI Key firmware 2.2.8, distinct from these live checks.
+Later tests on Protect 7.3.60 verified one native on-demand description and one automatic G5 Flex event caption through OpenAI. The on-demand route returned its caption without persisting it. The automatic route saved the caption to the event, verified by an exact-event GET after a full Safari page reload. Each used a separate single-use camera permit; continuous operation remains unverified. Face/plate recognition, audio and full legacy-camera enhancement are not implemented. Search and PostgreSQL remained disabled. NAS deployment is untested. The static protocol research uses Protect 7.2.105 and AI Key firmware 2.2.8, distinct from these live checks.
 
 Install the release from [Apple's 1.4.1 release page](https://github.com/apple/container/releases/tag/1.4.1). The commands below use its [command reference](https://github.com/apple/container/blob/1.4.1/docs/command-reference.md). Use a dedicated directory outside the repository for state and replace the uppercase address placeholders. No real LAN addresses or API secrets belong in this guide.
 
@@ -103,7 +103,7 @@ Keep discovery disabled inside the container. Publishing UDP 10001 does not esta
 
 Keep search and PostgreSQL disabled until the network design is verified separately. The NAS recipe assumes Linux host networking and a PostgreSQL peer allowlist containing the console's actual address. A Mac published-port proxy changes that assumption. Dense search also needs the matched E5 backend, database migrations and credential synchronization before adoption rotates credentials. The [search contract](search-contract.md) and [database contract](database-contract.md) describe those requirements. This guide does not supply a working Mac search deployment.
 
-Stop the test with `container stop local-aikey-mac`. Retain the state directory for recovery. Adoption, reconnect and one native on-demand description passed in the tested setup. Persistence, search retrieval and longer recovery tests remain separate acceptance checks.
+Stop the test with `container stop local-aikey-mac`. Retain the state directory for recovery. Adoption, reconnect, native on-demand analysis and one persisted automatic caption passed in the tested setup. Continuous operation, search retrieval and longer recovery tests remain separate acceptance checks.
 
 ## Optional host discovery companion
 
