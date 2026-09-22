@@ -33,6 +33,8 @@ Camera media, transcripts, face templates, plates, provider keys, controller cre
 
 Issue #13 must keep the administration listener separate from both emulated device profiles. LAN administration requires HTTPS, an administrator created during first-run setup and no default password. State-changing requests require an authenticated session, a same-origin check and a CSRF token. Login and mutation endpoints need bounded request bodies and rate limits.
 
+The framework-independent `AdminSecurity` module implements password hashing, signed expiring sessions, exact-origin enforcement, CSRF checks, bounded login-rate state and allowlisted audit decisions. The future HTTP adapter must create and persist its random signing key, store the password record, and set the `__Host-aikey_admin` cookie with `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/` and no `Domain`. HTTP routing and first-run enrollment remain `needs_evidence` until issue #13 integrates and tests them.
+
 The administration API returns secret references and replacement status, never saved values. The browser must not store secrets in local storage, history or diagnostic state. Configuration writes use revision checks, validation, atomic replacement and rollback. Audit events record the actor, action, result and configuration revision without request bodies, secret values or camera identifiers.
 
 Backup, restore and update actions require separate authorization and an explicit preview. Restores must validate identity, schema and integrity before changing active state. An update must retain the last working artifact and configuration until the new version passes its startup checks.
