@@ -7,6 +7,7 @@ It cannot encode legacy CLIP queries or image embeddings.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import math
@@ -34,6 +35,15 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 class EmbeddingError(RuntimeError):
     """A real compatible embedding could not be produced."""
+
+
+def _loopback(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def normalize_embedding(values: Any) -> list[float]:
@@ -119,8 +129,18 @@ class EmbeddingService:
             base = str(self.config.get("base_url", "")).rstrip("/")
             endpoint = base + ("/embeddings" if base.endswith("/v1") else "/v1/embeddings")
         parsed = urlsplit(endpoint)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.fragment or parsed.query:
+        if (parsed.scheme not in ("http", "https") or not parsed.hostname
+                or parsed.username or parsed.password or parsed.fragment or parsed.query
+                or any(char.isspace() for char in endpoint)
+                or any(char in endpoint for char in "\\%")):
             raise EmbeddingError("Set a valid local embedding API URL without credentials")
+        if not _loopback(parsed.hostname) and self.config.get("allow_remote") is not True:
+            raise EmbeddingError("Remote embeddings require explicit embeddings.allow_remote=true")
+        if (parsed.scheme == "http" and not _loopback(parsed.hostname)
+                and self.config.get("allow_insecure_http") is not True):
+            raise EmbeddingError(
+                "Non-loopback embeddings require HTTPS or explicit allow_insecure_http"
+            )
         return endpoint
 
     async def _http_encode(self, texts: list[str]) -> list[list[float]]:
@@ -128,7 +148,9 @@ class EmbeddingService:
             timeout = float(self.config.get("timeout_seconds", 8))
             if not math.isfinite(timeout) or timeout <= 0:
                 raise EmbeddingError("Embedding timeout must be positive")
-            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout))
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=timeout), trust_env=False
+            )
         headers = {}
         token_file = self.config.get("bearer_token_file")
         if token_file:

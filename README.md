@@ -95,6 +95,7 @@ The Linux ARM64 image was built and run with Apple's container runtime. Docker a
 - [Vision providers](docs/providers.md)
 - [Search contract](docs/search-contract.md)
 - [Database credential contract](docs/database-contract.md)
+- [Security policy](SECURITY.md) and [security contract](docs/security-contract.md)
 - [Research source index](docs/evidence/README.md)
 
 Use a separately identified test processor and one selected camera for the first real trial. Native adoption, persistent descriptions, search retrieval and recovery are separate acceptance checks.

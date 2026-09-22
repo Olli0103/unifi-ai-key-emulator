@@ -40,7 +40,11 @@ The HTTP backend calls an explicitly configured local OpenAI-compatible embeddin
 }
 ```
 
-It posts to `/embeddings` when the base ends in `/v1`, otherwise `/v1/embeddings`. An optional `endpoint` overrides the full path. `bearer_token_file` reads a secret from a file. Credentials or query strings in the URL and redirects are rejected. Responses must contain indexed vectors in an OpenAI-style `data` array. A supplied incompatible response model, wrong dimensions, nonfinite values or a zero norm fails the request.
+It posts to `/embeddings` when the base ends in `/v1`, otherwise `/v1/embeddings`. An optional `endpoint` overrides the full path. `bearer_token_file` reads a secret from a file. Credentials, query strings, fragments, ambiguous escaped paths and redirects are rejected. The client does not inherit proxy settings from the environment.
+
+Loopback is the default boundary. A non-loopback endpoint requires `embeddings.allow_remote: true`. Plain HTTP outside loopback also requires `embeddings.allow_insecure_http: true`. These opt-ins permit the exact configured endpoint; they do not add fallback providers.
+
+Responses must contain indexed vectors in an OpenAI-style `data` array. A supplied incompatible response model, wrong dimensions, nonfinite values or a zero norm fails the request.
 
 The local backend uses a checkpoint that the operator has already placed on disk:
 

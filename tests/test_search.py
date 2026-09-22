@@ -165,6 +165,36 @@ async def test_api_failure_and_redirect_are_not_followed(tmp_path):
         await runner.cleanup()
 
 
+@pytest.mark.parametrize("url", [
+    "https://user:secret@embeddings.example/v1",
+    "https://embeddings.example/v1?token=secret",
+    "https://embeddings.example/v1#fragment",
+    "https://embeddings.example/v1%2fhidden",
+    "https://embeddings.example/v1\\hidden",
+])
+def test_embedding_endpoint_rejects_credential_and_ambiguous_urls(url):
+    service = EmbeddingService({"backend": "http", "endpoint": url, "allow_remote": True})
+    with pytest.raises(EmbeddingError, match="valid local embedding API URL"):
+        service.identity
+
+
+def test_embedding_endpoint_requires_explicit_remote_and_plain_http_opt_ins():
+    with pytest.raises(EmbeddingError, match="allow_remote"):
+        EmbeddingService({
+            "backend": "http", "base_url": "https://embeddings.example/v1"
+        }).identity
+    with pytest.raises(EmbeddingError, match="HTTPS"):
+        EmbeddingService({
+            "backend": "http", "base_url": "http://192.0.2.20:8080/v1",
+            "allow_remote": True,
+        }).identity
+    identity = EmbeddingService({
+        "backend": "http", "base_url": "http://192.0.2.20:8080/v1",
+        "allow_remote": True, "allow_insecure_http": True,
+    }).identity
+    assert identity["source"] == "http://192.0.2.20:8080/v1/embeddings"
+
+
 async def test_profile_change_requires_reconciliation(tmp_path):
     original = SearchService({"embeddings": {"backend": "http", "base_url": "http://localhost:9000"}}, tmp_path)
     original._check_profile()
