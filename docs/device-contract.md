@@ -1,6 +1,8 @@
 # Device management and control contract
 
-This implementation covers a bounded AI Key management, control, and discovery profile. It was written independently from static observations of AI Key firmware 2.2.8 and Protect 7.2.105. It has passed local transport tests. Acceptance by a UDM Pro Max running Protect 7.3.56 remains `needs_evidence`; the matching public package was unavailable during this inspection.
+This implementation covers a bounded AI Key management, control, and discovery profile. It was written independently from static observations of AI Key firmware 2.2.8 and Protect 7.2.105. Live checks with Protect 7.3.56 on a UDM Pro Max confirmed native discovery/adoption, an online control connection, matching time synchronization, management-password rotation and reconnect after a planned restart. The emulator ran in a built Linux ARM64 image under Apple container 1.4.1.
+
+The matching 7.3.56 controller package was unavailable during inspection. Static source conclusions and live checks therefore have different version scopes. Native camera descriptions, description persistence, search and database interoperability remain unverified; the Mac test had search and PostgreSQL disabled. Full legacy-camera enhancement, face/plate recognition and audio are not implemented. NAS deployment remains untested.
 
 No vendor executable or script is imported or run. The module never dispatches shell commands, changes the host clock, creates operating-system users, or edits a controller database.
 
@@ -33,17 +35,27 @@ Required configuration sections are `device`, `controller`, and `runtime`. Ident
 | Interface | Implemented behavior |
 | --- | --- |
 | `GET /api/info` | Returns the observed identity and capability object. No mutation. |
+| `POST /api/info` | Controller-compatible JSON request using current local management credentials. Requires HTTPS in device mode. Returns identity/capabilities without echoing credentials or changing adoption state. |
 | `POST /api/adopt` | Requires JSON and correct local management credentials. Device mode requires HTTPS. Validates WSS mode 0 and requires a host matching the independently configured controller. Saves a pending token privately and wakes the control client. |
 | Control connection | `wss://<configured host>:<control_port>/`, default port 7442, subprotocol `ucp4`. |
-| Initial unadopted connection | Omits the token. An ordinary Protect rejection is expected until administrator adoption supplies a token; the inspected verifier may create the candidate record first. Candidate visibility in the real UI is unverified. |
-| Successful WebSocket upgrade | Requires negotiated UCP4, persists adopted state, removes the one-use pending token, and sends a `timeSync` request. |
+| Initial unadopted connection | Omits the token. An ordinary Protect rejection is expected until administrator adoption supplies a token; the inspected verifier may create the candidate record first. The tested setup used host-side discovery and displayed a native candidate with its management address. |
+| Successful WebSocket upgrade | Uses the configured UCP4 negotiation profile and sends a `timeSync` request. An upgrade alone does not change adoption state or consume the pending token. |
+| Local control confirmation | Requires a successful `timeSync` response matching the current socket's request ID and `t0`, integer-zero `errorCode`, absent/null or empty-string `error`, valid integer `t0`/`t1`/`t2` and ordered server timestamps. With the same pending adoption token and attempt still current, persists adopted state and removes that token. Without a pending token, time sync only updates clock state. |
 | Reconnect | Retains device identity and certificate. It sends adopted state without the consumed token. |
 
 The HTTP adoption success response is a sanitized echo. Stock firmware echoes the original request; this implementation omits the password and token from the HTTP response. A local state file records pending configuration with mode 0600 through an atomic replacement. It records rotated management passwords only as salted PBKDF2-SHA256 hashes. Re-adoption of an already-adopted record is rejected; resetting state is a separate explicit local operation.
 
+The time-sync rule is a local confirmation policy. In the 7.3.56 test, local confirmation was corroborated by the native online device display, credential rotation and a successful reconnect. It does not prove acceptance of AI capabilities. The pending token and attempt counter are captured before connecting. A delayed response from an older attempt cannot consume a replacement token, even if the replacement repeats the same token value. A failed confirmation write restores the pending token in memory. Disconnects preserve previously confirmed adoption.
+
+The default `controller.control_profile` is `ucp4` and requires a negotiated `ucp4` subprotocol. The explicit `device-service` profile permits an absent subprotocol response header only when the handshake carries a pending adoption token or the device was already confirmed adopted. It requires an explicit controller certificate pin in addition to TLS verification. A different named subprotocol remains rejected. Both profiles require binary UCP framing and the same time-sync confirmation before consuming a pending token. The `device-service` profile passed the native 7.3.56 adoption and reconnect checks; the frontend did not return a selected subprotocol. An immediate transport reset preserves pending adoption. Diagnostics record a numeric close code without transport exception text; abnormal closure 1006 triggers exponential reconnect delays, capped at 30 seconds. The service does not interpret a WebSocket upgrade or normal iterator termination as adoption evidence.
+
+New configurations use management username `ui` and a random private password. In inspected Protect 7.2.105, AI processors inherit username `ui`, and the ordinary adoption route forwards a password override without a username override. Supply the generated private password when the controller offers a credentialed adoption flow. For a flow that only submits factory credentials, [temporary factory enrollment](factory-enrollment.md) provides an explicit window of at most ten minutes without replacing the generated password. That enrollment path passed native 7.3.56 adoption and credential rotation; the tested UI had no custom-password field. Existing explicit usernames are preserved; they need a compatible controller username override or deliberate local configuration alignment before adoption. The disconnected information path uses POST JSON in 7.2.105 controller modules 86525 and 92444; the firmware information handler calls `json_auth_verify` at address `0x6858`.
+
 The control headers are `x-ident`, `x-type`, `x-sysid`, `x-ip`, `x-version`, `x-mode:0`, `x-adopted`, and a pending `x-token` when present. The configured client certificate is supplied by the TLS context. The device never accepts controller host redirection from the adoption payload.
 
 `VerifiedConnector` requires certificate verification. It also requires either hostname verification or an explicit SHA-256 certificate pin. Its connection hook checks the optional leaf pin after TLS verification and before aiohttp receives the transport for an HTTP write. Redirects on the control connection are rejected before a second request. Tests verify that a bad pin sends no HTTP request or token and that a redirect cannot forward a token.
+
+The health response includes `device.management` counters for credentialed information and adoption requests, rejection categories, and accepted pending configurations. `last_adoption_result` contains a fixed label only. These in-memory counters reset when the process restarts; they contain no request bodies or credentials. An accepted HTTP adoption request is not proof that the subsequent control connection was accepted.
 
 ## UCP requests
 
@@ -87,11 +99,11 @@ Only two read-only query shapes are implemented:
 
 Replies retain the query command and encode a big-endian 16-bit payload length. Each field has a one-byte tag and big-endian 16-bit length. Implemented fields are interface MAC plus IPv4, device MAC, uptime, hostname, platform, factory-default flag, firmware version, and sysid. The inspected ARM64 firmware stores sysid as a raw little-endian 16-bit value. Uptime and factory-default flag are big-endian 32-bit values. The factory-default value is one before adoption and zero afterward.
 
-This is an intentionally bounded discovery profile. Version 0, version 2, mutation opcodes, optional GUID/controller UUID fields, DDC capability bits, and Wi-Fi fields are unsupported. No packet capture from the target controller was available. Real candidate discovery and adoption-list display remain `needs_evidence`.
+This is an intentionally bounded discovery profile. Version 0, version 2, mutation opcodes, optional GUID/controller UUID fields, DDC capability bits, and Wi-Fi fields are unsupported. The Mac test demonstrated native candidate discovery and address display using a host-side responder. That result does not establish multicast forwarding through Apple container networking or discovery on the NAS.
 
 ## Static evidence
 
-The full package hashes and local source roots are recorded in `research/unifi-protect-ai-key/validation/adoption-evidence.md` in the parent workspace.
+The [research source index](evidence/README.md) records the public package provenance. Vendor packages and private runtime records are not bundled here.
 
 - AI Key `ui-websocketd` 0.1.47.1: `ucpv4_route_on_request` at ELF address `0x10480`, getInfo format string `0x14ab0`; `aikey_route_on_request` at `0x9280`; RequestAI handler `0x7960`; `ucpv4_echo_response` at `0xe130`; time-sync request builder `0xd4f0`.
 - `syswrapper.sh`: RequestAI parsing and dispatch lines 3907-4003; credential rotation and console capability handling lines 804-977. The emulator does not execute these routines.

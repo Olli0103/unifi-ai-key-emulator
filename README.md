@@ -1,10 +1,12 @@
 # Local AI Key emulator
 
-An independent experimental AI processor for UniFi Protect. The current target is Protect 7.3.56 on a UDM Pro Max, with deployment on a UGREEN NAS. This is an unofficial project and is not affiliated with Ubiquiti.
+An independent experimental AI processor for UniFi Protect. Native adoption has been tested with Protect 7.3.56 on a UDM Pro Max using Apple container 1.4.1 on an Apple silicon Mac. UGREEN NAS deployment remains planned. This is an unofficial project and is not affiliated with Ubiquiti.
 
 The local build has device management/adoption, UCP4 control, UDP discovery, a bounded vision worker, version-specific description callbacks and an E5 query responder. Vision providers are configurable: OpenAI Responses, native Ollama and OpenAI-compatible APIs. Search embeddings are configured separately. No vendor firmware or model weights are bundled.
 
-**Status: runnable lab implementation. Native Protect 7.3.56 compatibility and NAS deployment are unverified.** The inspected controller package is 7.2.105. Public metadata did not return a 7.3.56 package during this build. Passing the simulator does not establish adoption, native descriptions or Find Anything on the UDM.
+**Status: native adoption and control verified; native AI processing remains unverified.** The ARM64 image built and ran under Apple container 1.4.1. Protect 7.3.56 displayed the processor online; local checks confirmed adopted state, control time synchronization, management-password rotation, disabled factory authentication and reconnect after a planned restart. No actual native camera description, persistent description or search result has been verified. NAS deployment has not been tested.
+
+The inspected controller source is 7.2.105, alongside AI Key firmware 2.2.8. Public metadata did not return a 7.3.56 package during inspection. The live 7.3.56 results above establish those specific behaviors, not full protocol or feature compatibility.
 
 ## Run the local lab
 
@@ -56,8 +58,8 @@ That command makes a TLS handshake to the configured controller, sends no HTTP c
 
 | Component | Implemented | Remaining native proof |
 | --- | --- | --- |
-| Management/control | HTTPS info/adoption, credential checks, stable identity, UCP4, reconnect, state, queue count, bounded commands | Discovery/adoption UI and all required commands on 7.3.56 |
-| Discovery | Read-only v1 information/targeted queries, exact controller allowlist, optional multicast on Linux | Packet accepted by actual Protect discovery |
+| Management/control | HTTPS info/adoption, stable identity, UCP4, time sync, credential rotation and reconnect observed on 7.3.56 | Additional controller commands and longer recovery testing |
+| Discovery | Read-only v1 queries, exact controller allowlist, optional Linux multicast and macOS host companion; native candidate and address observed | Other network layouts and NAS discovery |
 | Descriptions | Bounded queue, configurable vision provider, image/MP4 input, on-demand/task/legacy callback profiles | Correct real job and persistent native description |
 | Search | Matched E5 document/query adapter, 384 dimensions, model guard, query socket | Matching actual controller profile and retrieval quality |
 | Search database | PostgreSQL/pgvector preparation and credential rotation hook | Docker execution, controller migrations and restart recovery |
@@ -72,9 +74,11 @@ HTTP callback success is reported as `http_accepted`, not as successful indexing
 
 ## NAS deployment
 
+For the tested Mac deployment, use the separate [Apple container guide](docs/apple-container.md). It publishes management through the Mac's LAN address, uses an optional host discovery companion, and leaves container discovery and search disabled.
+
 See [NAS setup](docs/nas-deployment.md). Compose uses Linux host networking so Protect can address management, discovery and the dedicated search database at the emulator's advertised NAS IP. This requires checking port availability on the NAS first. It adds no vision-model service, so an existing local inference server can be used.
 
-Docker is unavailable on the build Mac. The container and Compose files were prepared for the NAS, but a successful image build or NAS run is not claimed.
+The Linux ARM64 image was built and run with Apple's container runtime. Docker and Compose execution on the NAS, including the optional PostgreSQL deployment, remain unverified.
 
 ## Engineering records
 

@@ -29,6 +29,7 @@ import aiohttp
 from aiohttp import web
 
 from .protocol import ContractError, decode_message, encode_message
+from .config import validate_factory_enrollment_deadline
 
 
 _OBJECT_CAPABILITIES = (
@@ -41,6 +42,7 @@ _QUEUE_FIELDS = (
 )
 _MAX_STATE_BYTES = 64 * 1024
 _MAX_MESSAGE_BYTES = 2 * 1024 * 1024 + 16
+_FACTORY_CONFIRMATION_TIMEOUT = 5
 
 
 class CommandFailure(Exception):
@@ -49,6 +51,10 @@ class CommandFailure(Exception):
     def __init__(self, code: int, message: str):
         super().__init__(message)
         self.code = code
+
+
+class AbnormalControlClosure(ConnectionError):
+    """The control transport ended without a WebSocket close handshake."""
 
 
 class VerifiedConnector(aiohttp.TCPConnector):
@@ -180,7 +186,14 @@ class DeviceService:
             raise ValueError("Lab mode is restricted to loopback addresses")
         self.username = _text(self.device.get("management_username"), "management username")
         self._initial_password = _text(self.device.get("management_password"), "management password", 1024)
+        self._factory_until = validate_factory_enrollment_deadline(self.device.get("factory_enrollment_until", 0))
+        self._factory_monotonic_until = time.monotonic() + max(0, self._factory_until - time.time())
+        if self._factory_until > time.time() and _parse_pin(self.controller.get("expected_fingerprint")) is None:
+            raise ValueError("Active factory enrollment requires an explicit controller SHA-256 pin")
         self._state = self._load_state()
+        self._confirmed_control_connection = None
+        self._confirmation_waiting_connection = None
+        self._confirmation_event = asyncio.Event()
         self._started_at = time.monotonic()
         self._task: asyncio.Task | None = None
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -191,10 +204,21 @@ class DeviceService:
         self._completed: OrderedDict[str, tuple[bytes, bytes]] = OrderedDict()
         self._connections = 0
         self._last_error: str | None = None
+        self._last_close_code: int | None = None
         self._clock_offset_ms: float | None = None
         self._time_sync_id: str | None = None
         self._last_t0: int | None = None
+        self._adoption_generation = 0
+        self._connection_generation: int | None = None
+        self._connection_token: str | None = None
         self._active_admissions = 0
+        # Process-local counts only; never retain request bodies or credentials.
+        self._management_diagnostics = {
+            "info_post_requests": 0, "info_credential_rejections": 0,
+            "adopt_requests": 0, "adopt_credential_rejections": 0,
+            "adopt_invalid_payloads": 0, "adopt_accepted": 0,
+            "last_adoption_result": None,
+        }
 
     @property
     def control_url(self) -> str:
@@ -205,6 +229,8 @@ class DeviceService:
     def status(self) -> dict:
         return {"adopted": bool(self._state.get("adopted")), "connected": self._ws is not None and not self._ws.closed,
                 "connections": self._connections, "last_error": self._last_error,
+                "last_close_code": self._last_close_code,
+                "management": dict(self._management_diagnostics),
                 "clock_offset_ms": self._clock_offset_ms, "discovery": "unsupported",
                 "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "changeUserPassword", "RequestAI"]}
 
@@ -250,6 +276,58 @@ class DeviceService:
             return hmac.compare_digest(username.encode(), credential["username"].encode()) and hmac.compare_digest(actual, credential["hash"])
         return hmac.compare_digest(username.encode(), self.username.encode()) and hmac.compare_digest(password.encode(), self._initial_password.encode())
 
+    def _factory_window_active(self) -> bool:
+        return (self.username == "ui" and time.time() < self._factory_until
+                and time.monotonic() < self._factory_monotonic_until)
+
+    async def _http_credentials_match(self, username, password) -> bool:
+        """Called under the state lock; HTTP factory credentials end at adoption."""
+        if await asyncio.to_thread(self._password_matches, username, password):
+            return True
+        if (not self._state.get("adopted") and not self._state.get("credential")
+                and self._factory_window_active() and username == "ui" and password == "ui"):
+            previous = self._state.get("factory_enrollment_used")
+            self._state["factory_enrollment_used"] = True
+            try:
+                self._save_state()
+            except Exception:
+                if previous is None:
+                    self._state.pop("factory_enrollment_used", None)
+                else:
+                    self._state["factory_enrollment_used"] = previous
+                raise
+            return True
+        return False
+
+    def _factory_rotation_allowed(self, username, password, connection) -> bool:
+        return (username == "ui" and password == "ui" and self._factory_window_active()
+                and self._state.get("factory_enrollment_used") is True
+                and self._state.get("adopted") is True and not self._state.get("credential")
+                and connection is not None and connection is self._ws and not connection.closed
+                and connection is self._confirmed_control_connection)
+
+    async def _await_factory_confirmation(self, body: dict, connection) -> None:
+        """Allow startup ordering without holding the lock needed by timeSync."""
+        if (body.get("username") != "ui" or body.get("passwordOld") != "ui"
+                or not self._factory_window_active()
+                or self._state.get("factory_enrollment_used") is not True
+                or self._state.get("credential") or connection is None
+                or connection is not self._ws or connection.closed
+                or connection is self._confirmed_control_connection):
+            return
+        if not self._state.get("adopted") and not (
+                self._connection_token and self._connection_generation == self._adoption_generation
+                and self._state.get("management", {}).get("token") == self._connection_token):
+            return
+        if self._confirmation_waiting_connection is not connection:
+            self._confirmation_waiting_connection = connection
+            self._confirmation_event = asyncio.Event()
+        timeout = min(_FACTORY_CONFIRMATION_TIMEOUT, self._factory_until - time.time(),
+                      self._factory_monotonic_until - time.monotonic())
+        if timeout > 0:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._confirmation_event.wait(), timeout=timeout)
+
     def get_info(self) -> dict:
         flags = {name: {"enabled": False, "version": "v1"} for name in _OBJECT_CAPABILITIES}
         flags.update({"supportDeepMode": False, "supportVlm": False, "aiMode": "basic"})
@@ -265,10 +343,25 @@ class DeviceService:
     def create_app(self) -> web.Application:
         app = web.Application(client_max_size=_MAX_STATE_BYTES)
         app.router.add_get("/api/info", self._http_info)
+        app.router.add_post("/api/info", self._http_info)
         app.router.add_post("/api/adopt", self._http_adopt)
         return app
 
     async def _http_info(self, request: web.Request) -> web.Response:
+        if request.method == "POST":
+            self._management_diagnostics["info_post_requests"] += 1
+            if self.mode == "device" and not request.secure:
+                return web.json_response({"error": "Credentialed information requests require HTTPS"}, status=400)
+            if request.content_type != "application/json":
+                return web.json_response({"error": "JSON content type required"}, status=415)
+            try:
+                body = _object_json(await request.read())
+            except ContractError:
+                return web.json_response({"error": "Invalid JSON"}, status=422)
+            async with self._lock:
+                if not await self._http_credentials_match(body.get("username"), body.get("password")):
+                    self._management_diagnostics["info_credential_rejections"] += 1
+                    return web.json_response({"error": "Invalid credentials"}, status=401)
         return web.json_response(self.get_info())
 
     def _validate_adoption(self, body: dict) -> dict:
@@ -300,27 +393,51 @@ class DeviceService:
                 result[name] = _text(body[name], name)
         return result
 
+    def _adoption_result(self, result: str) -> None:
+        self._management_diagnostics["last_adoption_result"] = result
+        counter = {"invalid_credentials": "adopt_credential_rejections",
+                   "invalid_payload": "adopt_invalid_payloads", "accepted": "adopt_accepted"}.get(result)
+        if counter is not None:
+            self._management_diagnostics[counter] += 1
+
     async def _http_adopt(self, request: web.Request) -> web.Response:
+        self._management_diagnostics["adopt_requests"] += 1
+        self._adoption_result("received")
         if self.mode == "device" and not request.secure:
+            self._adoption_result("https_required")
             return web.json_response({"error": "Adoption requires HTTPS"}, status=400)
         if request.content_type != "application/json":
+            self._adoption_result("invalid_payload")
             return web.json_response({"error": "JSON content type required"}, status=415)
         try:
             body = _object_json(await request.read())
+        except web.HTTPRequestEntityTooLarge:
+            self._adoption_result("invalid_payload")
+            return web.json_response({"error": "Request exceeds size limit"}, status=413)
         except ContractError:
+            self._adoption_result("invalid_payload")
             return web.json_response({"error": "Invalid JSON"}, status=422)
         async with self._lock:
-            if not await asyncio.to_thread(self._password_matches, body.get("username"), body.get("password")):
+            if not await self._http_credentials_match(body.get("username"), body.get("password")):
+                self._adoption_result("invalid_credentials")
                 return web.json_response({"error": "Invalid credentials"}, status=401)
             try:
                 management = self._validate_adoption(body)
             except ContractError as exc:
+                self._adoption_result("invalid_payload")
                 return web.json_response({"error": str(exc)}, status=400)
             except CommandFailure as exc:
+                self._adoption_result("already_adopted")
                 return web.json_response({"error": str(exc)}, status=exc.code)
             self._state["management"] = management
-            self._save_state()
+            try:
+                self._save_state()
+            except Exception:
+                self._adoption_result("state_error")
+                raise
+            self._adoption_generation += 1
             self._wake.set()
+            self._adoption_result("accepted")
         if self._ws is not None:
             await self._ws.close()
         # Stock firmware echoes the request. Omit credentials and token here.
@@ -385,20 +502,29 @@ class DeviceService:
 
     async def _connect_once(self) -> None:
         assert self._session is not None
+        profile = self.controller.get("control_profile", "ucp4")
+        if profile not in {"ucp4", "device-service"}:
+            raise ContractError("Unsupported controller control profile")
+        if profile == "device-service" and _parse_pin(self.controller.get("expected_fingerprint")) is None:
+            raise ContractError("Device Service control profile requires an explicit controller certificate pin")
         handlers: set[asyncio.Task] = set()
+        ws = None
+        async with self._lock:
+            headers = self._headers()
+            generation = self._adoption_generation
         try:
-            async with self._session.ws_connect(self.control_url, protocols=("ucp4",), headers=self._headers(),
+            async with self._session.ws_connect(self.control_url, protocols=("ucp4",), headers=headers,
                                                 heartbeat=20, max_msg_size=_MAX_MESSAGE_BYTES,
                                                 autoclose=True, autoping=True) as ws:
-                if ws.protocol != "ucp4":
+                device_service = (profile == "device-service" and ws.protocol is None
+                                  and "Sec-WebSocket-Protocol" not in ws._response.headers
+                                  and (bool(headers.get("x-token")) or headers.get("x-adopted") == "true"))
+                if ws.protocol != "ucp4" and not device_service:
                     raise ContractError("Controller did not negotiate UCP4")
                 self._ws = ws
                 self._connections += 1
-                self._last_error = None
-                async with self._lock:
-                    self._state["adopted"] = True
-                    self._state.setdefault("management", {}).pop("token", None)
-                    self._save_state()
+                self._connection_generation = generation
+                self._connection_token = headers.get("x-token")
                 self._time_sync_id = secrets.token_hex(16)
                 self._last_t0 = int(time.time() * 1000)
                 await ws.send_bytes(encode_message({"type": "request", "action": "timeSync", "id": self._time_sync_id,
@@ -415,17 +541,32 @@ class DeviceService:
                         await ws.close(code=1003, message=b"Binary UCP4 required")
                         break
                     elif frame.type == aiohttp.WSMsgType.ERROR:
+                        if ws.close_code == 1006:
+                            raise AbnormalControlClosure("Control transport closed abnormally")
                         raise ContractError("Control WebSocket failed")
+                # aiohttp also exposes transport loss as CLOSED/1006, which ends
+                # async iteration without raising or yielding an ERROR frame.
+                if ws.close_code == 1006:
+                    raise AbnormalControlClosure("Control transport closed abnormally")
+                if ws.close_code not in (1000, 1001):
+                    raise ContractError("Control WebSocket closed unexpectedly")
         finally:
             for task in handlers:
                 task.cancel()
             if handlers:
                 await asyncio.gather(*handlers, return_exceptions=True)
+            if ws is not None:
+                code = ws.close_code
+                self._last_close_code = int(code) if isinstance(code, int) and 1000 <= code <= 4999 else None
             self._ws = None
+            self._time_sync_id = None
+            self._last_t0 = None
+            self._connection_token = None
+            self._connection_generation = None
 
     async def _respond(self, ws, wire: bytes) -> None:
         try:
-            response = await self.handle_message(wire)
+            response = await self.handle_message(wire, _connection=ws)
             if response is not None and not ws.closed:
                 await ws.send_bytes(response)
         except (ContractError, ValueError):
@@ -436,14 +577,38 @@ class DeviceService:
             self.log.warning("Control response failed (%s)", type(exc).__name__)
             await ws.close(code=1011, message=b"Control processing failed")
 
-    async def handle_message(self, wire: bytes) -> bytes | None:
+    async def handle_message(self, wire: bytes, *, _connection=None) -> bytes | None:
         message = decode_message(wire)
         header, body = message.header, message.body
         kind = header.get("type")
         if kind == "response":
-            if header.get("id") == self._time_sync_id and not header.get("errorCode"):
-                if all(type(body.get(k)) is int for k in ("t0", "t1", "t2")) and body["t0"] == self._last_t0:
+            if (_connection is not None and _connection is self._ws and not _connection.closed
+                    and self._time_sync_id is not None and header.get("id") == self._time_sync_id
+                    and type(header.get("errorCode")) is int and header["errorCode"] == 0
+                    and header.get("error") in (None, "")):
+                if (all(type(body.get(k)) is int and 0 <= body[k] <= 2 ** 53 - 1 for k in ("t0", "t1", "t2"))
+                        and body["t0"] == self._last_t0 and body["t2"] >= body["t1"]):
                     self._clock_offset_ms = ((body["t1"] - body["t0"]) + (body["t2"] - int(time.time() * 1000))) / 2
+                    self._last_error = None
+                    async with self._lock:
+                        if _connection is self._ws and not _connection.closed:
+                            self._confirmed_control_connection = _connection
+                        if (_connection is self._ws and not _connection.closed
+                                and self._connection_token
+                                and self._connection_generation == self._adoption_generation
+                                and self._state.get("management", {}).get("token") == self._connection_token):
+                            previously_adopted = self._state["adopted"]
+                            self._state["adopted"] = True
+                            self._state["management"].pop("token")
+                            try:
+                                self._save_state()
+                            except Exception:
+                                self._state["adopted"] = previously_adopted
+                                self._state["management"]["token"] = self._connection_token
+                                raise
+                            self._connection_token = None
+                        if self._confirmation_waiting_connection is _connection:
+                            self._confirmation_event.set()
             return None
         if kind == "event":
             # No event contract is implemented; never acknowledge a mutation.
@@ -467,7 +632,7 @@ class DeviceService:
         self._pending[request_id] = (digest, future)
         try:
             try:
-                result = await self._command(action, body)
+                result = await self._command(action, body, _connection=_connection)
                 error, code = None, 0
             except CommandFailure as exc:
                 result, error, code = {}, str(exc), exc.code
@@ -492,7 +657,7 @@ class DeviceService:
             if not future.done():
                 future.cancel()
 
-    async def _command(self, action: str, body: dict) -> dict:
+    async def _command(self, action: str, body: dict, *, _connection=None) -> dict:
         if action == "getInfo":
             return self.get_info()
         if action == "getTaskQueueInfo":
@@ -531,6 +696,8 @@ class DeviceService:
                 self._active_admissions -= 1
             return body
         if action in {"setConsoleInfo", "setInfo", "updateTimezone", "changeUserPassword"}:
+            if action == "changeUserPassword":
+                await self._await_factory_confirmation(body, _connection)
             async with self._lock:
                 if action == "setConsoleInfo":
                     if not isinstance(body.get("controller"), dict):
@@ -551,15 +718,26 @@ class DeviceService:
                     username = _text(body.get("username"), "username")
                     old = _text(body.get("passwordOld"), "old password", 1024)
                     new = _text(body.get("passwordNew"), "new password", 1024)
-                    if not await asyncio.to_thread(self._password_matches, username, old):
+                    factory_rotation = self._factory_rotation_allowed(username, old, _connection)
+                    if not await asyncio.to_thread(self._password_matches, username, old) and not factory_rotation:
                         raise CommandFailure(13, "Invalid current credentials")
+                    if username == "ui" and new == "ui":
+                        raise CommandFailure(22, "Factory enrollment must rotate to a nonfactory password")
                     if self.config.get("search", {}).get("enabled") and self.credential_handler is None:
                         raise CommandFailure(95, "Search requires a database credential rotation handler")
                     if self.credential_handler is not None:
                         await self.credential_handler(username, new)
                     salt = secrets.token_bytes(16)
                     hashed = await asyncio.to_thread(hashlib.pbkdf2_hmac, "sha256", new.encode(), salt, 200_000)
+                    previous_state = deepcopy(self._state)
                     self._state["credential"] = {"username": username, "salt": salt.hex(), "hash": hashed.hex()}
+                    self._state.pop("factory_enrollment_used", None)
+                    try:
+                        self._save_state()
+                    except Exception:
+                        self._state = previous_state
+                        raise
+                    return body
                 self._save_state()
             return body
         raise CommandFailure(95, f"Unsupported command: {action}")

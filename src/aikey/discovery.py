@@ -2,7 +2,7 @@
 
 Only empty information queries and a query targeting our configured MAC are
 answered. No mutation opcode, credential, shell command, or device inventory is
-accepted. Real LAN operation requires explicit enablement on Linux.
+accepted. Real LAN operation requires Linux or explicit macOS host enablement.
 """
 
 from __future__ import annotations
@@ -108,11 +108,15 @@ class DiscoveryService(asyncio.DatagramProtocol):
     """
 
     def __init__(self, config: dict, info_provider: Callable[[], dict],
-                 adopted_provider: Callable[[], bool], logger=None):
+                 adopted_provider: Callable[[], bool], logger=None, *,
+                 allow_macos_host: bool = False,
+                 ready_provider: Callable[[], bool] | None = None):
         self.config = config
         self.settings = config.get("discovery", {})
         self.info_provider = info_provider
         self.adopted_provider = adopted_provider
+        self.allow_macos_host = allow_macos_host
+        self.ready_provider = ready_provider
         self.log = logger or logging.getLogger(__name__)
         self.transport: asyncio.DatagramTransport | None = None
         self._closed: asyncio.Future | None = None
@@ -137,8 +141,9 @@ class DiscoveryService(asyncio.DatagramProtocol):
         bind_ip = ipaddress.IPv4Address(bind)
         if mode == "lab" and not bind_ip.is_loopback:
             raise ValueError("Lab discovery is restricted to loopback")
-        if not bind_ip.is_loopback and sys.platform != "linux":
-            raise ValueError("Real LAN discovery is enabled only on Linux")
+        macos_host = sys.platform == "darwin" and self.allow_macos_host is True and mode == "device"
+        if not bind_ip.is_loopback and sys.platform != "linux" and not macos_host:
+            raise ValueError("Real LAN discovery requires Linux or explicit macOS host enablement")
         peer_values = self.settings.get("allowed_controller_ips")
         if peer_values is None:
             peer_values = [self.config.get("controller", {}).get("host", "127.0.0.1")]
@@ -195,6 +200,9 @@ class DiscoveryService(asyncio.DatagramProtocol):
 
     def datagram_received(self, data, addr):
         if self.transport is None or addr[0] not in self._allowed:
+            self.rejected += 1
+            return
+        if self.ready_provider is not None and self.ready_provider() is not True:
             self.rejected += 1
             return
         command = parse_discovery_query(data, self.config["device"]["mac"])

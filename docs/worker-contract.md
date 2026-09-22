@@ -19,6 +19,8 @@ await processor.stop()
 
 Each input is a RequestAI body with `targetUri`, `payload`, `resUrl`, and optional `timeoutMs`. Only `:7968/describe` and `:7968/on_demand_inference` are implemented. The worker never executes a supplied port, path, command, or local file reference. The command deadline includes queue waiting, downloads, inference, and callback.
 
+For a bounded native trial, [one-camera, one-job test scope](scoped-camera-test.md) adds an explicit camera ID, strict export-query binding, and a durable single-use permit. It is opt-in and does not change existing unscoped configurations.
+
 ## Separate result contracts
 
 | Job | Required input | Result callback |

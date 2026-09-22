@@ -80,3 +80,20 @@ def test_runtime_openai_still_requires_hydrated_key():
         validate_inference_config(config)
     with pytest.raises(ProviderError, match="api_key_file"):
         VisionProvider(config)
+
+
+def test_readiness_reports_optional_deployment_label(tmp_path):
+    config = ready_config(tmp_path)
+    assert "deployment" not in config["runtime"]
+    assert readiness(config)["target"]["deployment"] == "unspecified"
+    config["runtime"]["deployment"] = " Apple container on macOS "
+    checked = validate_config(config)
+    assert readiness(checked)["target"]["deployment"] == "Apple container on macOS"
+
+
+@pytest.mark.parametrize("label", [None, True, 12, "", "  ", "x" * 129, "Mac\nLAN", "Mac\x00"])
+def test_invalid_deployment_labels_are_rejected(tmp_path, label):
+    config = ready_config(tmp_path)
+    config["runtime"]["deployment"] = label
+    with pytest.raises(ConfigError, match="runtime.deployment"):
+        validate_config(config)

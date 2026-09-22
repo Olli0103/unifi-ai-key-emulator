@@ -53,7 +53,7 @@ docker compose run --rm --no-deps emulator trust --config /state/config.json --f
 docker compose up -d emulator
 ```
 
-7. For discovery, explicitly enable it, use the NAS interface address and set `allowed_controller_ips` to the exact UDM IPv4. Multicast is optional and restricted to device mode on Linux. Before clicking Adopt, prepare the database section below if search is intended. Normal admin adoption uses the generated `management_username` and the initial private `state/management-password` file. Protect may rotate the management password after adoption; that initial file is not updated to the controller-managed password. Do not paste credentials into chat or logs.
+7. For discovery, explicitly enable it, use the NAS interface address and set `allowed_controller_ips` to the exact UDM IPv4. Multicast is optional and restricted to device mode on Linux. Before clicking Adopt, prepare the database section below if search is intended. New configurations use management username `ui`, matching the ordinary AI processor adoption path in inspected Protect 7.2.105. Supply the random password from the private `state/management-password` file through credentialed adoption; a factory-password-only attempt will fail. Existing explicit usernames remain unchanged and need deliberate alignment or a verified controller username override. Target 7.3.56 behavior still needs a live check. Protect may rotate the management password after adoption; that initial file is not updated to the controller-managed password. Do not paste credentials into chat or logs.
 
 ## Prepare search before adopting the processor
 

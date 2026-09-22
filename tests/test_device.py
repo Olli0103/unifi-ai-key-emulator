@@ -11,7 +11,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 import pytest
 
-from aikey.device import DeviceService, VerifiedConnector, verify_peer_pin
+from aikey.device import AbnormalControlClosure, DeviceService, VerifiedConnector, verify_peer_pin
 from aikey.protocol import ContractError, decode_message, encode_message
 from aikey.tls import ensure_identity_certificate, server_context
 
@@ -54,6 +54,51 @@ async def test_info_reports_observed_fields_and_explicit_disabled_capabilities(c
     assert response.body["featureFlags"]["supportFaceEnhancement"]["enabled"] is False
     assert response.body["featureFlags"]["supportRecognizeAnything"]["enabled"] is False
     assert response.body["featureFlags"]["supportDeepMode"] is False
+
+
+async def test_controller_post_info_authenticates_without_adopting_or_echoing_credentials(config, tmp_path):
+    device = service(config, tmp_path)
+    async with TestClient(TestServer(device.create_app())) as client:
+        credentials = {"username": "lab-admin", "password": "test-only-password"}
+        assert (await client.post("/api/info", json={})).status == 401
+        assert (await client.post("/api/info", json={**credentials, "password": "wrong"})).status == 401
+        assert (await client.post("/api/info", data="invalid")).status == 415
+        assert (await client.post("/api/info", data="{", headers={"Content-Type": "application/json"})).status == 422
+        reply = await client.post("/api/info", json=credentials)
+        assert reply.status == 200
+        info = await reply.json()
+        assert info["mac"] == "020000000001"
+        assert info["type"] == "UP-AI-KEY"
+        assert "username" not in info and "password" not in info
+        assert credentials["password"] not in json.dumps(info)
+        assert (await client.get("/api/info")).status == 200
+        assert not device.status["adopted"]
+        assert not device.state_path.exists()
+
+        await device.handle_message(request("changeUserPassword", {
+            "username": credentials["username"], "passwordOld": credentials["password"],
+            "passwordNew": "rotated-test-password",
+        }))
+        assert (await client.post("/api/info", json=credentials)).status == 401
+        assert (await client.post("/api/info", json={**credentials, "password": "rotated-test-password"})).status == 200
+        diagnostics = device.status["management"]
+        assert diagnostics["info_post_requests"] == 7
+        assert diagnostics["info_credential_rejections"] == 3
+        assert diagnostics["adopt_requests"] == 0
+        assert diagnostics["last_adoption_result"] is None
+        assert credentials["password"] not in json.dumps(device.status)
+        assert "rotated-test-password" not in json.dumps(device.status)
+
+
+async def test_controller_post_info_requires_tls_in_device_mode(config, tmp_path):
+    config["runtime"]["mode"] = "device"
+    device = service(config, tmp_path)
+    async with TestClient(TestServer(device.create_app())) as client:
+        response = await client.post("/api/info", json={
+            "username": "lab-admin", "password": "test-only-password",
+        })
+        assert response.status == 400
+        assert not device.state_path.exists()
 
 
 async def test_unknown_and_host_commands_fail_without_success(config, tmp_path):
@@ -113,9 +158,12 @@ async def test_adoption_checks_credentials_scope_and_persists_no_password(config
         body = adoption(config)
         bad = {**body, "password": "wrong"}
         assert (await client.post("/api/adopt", json=bad)).status == 401
+        assert device.status["management"]["last_adoption_result"] == "invalid_credentials"
+        assert device.status["management"]["adopt_credential_rejections"] == 1
         assert not device.state_path.exists()
         wrong_host = {**body, "hosts": ["192.0.2.20:7442"]}
         assert (await client.post("/api/adopt", json=wrong_host)).status == 400
+        assert device.status["management"]["last_adoption_result"] == "invalid_payload"
         assert (await client.post("/api/adopt", data='{"username":1,"username":2}', headers={"Content-Type": "application/json"})).status == 422
         reply = await client.post("/api/adopt", json=body)
         assert reply.status == 200
@@ -127,6 +175,20 @@ async def test_adoption_checks_credentials_scope_and_persists_no_password(config
         reloaded = service(config, tmp_path)
         assert reloaded._headers()["x-token"] == body["token"]
         assert not reloaded.status["adopted"]
+        assert device.status["management"] == {
+            "info_post_requests": 0, "info_credential_rejections": 0,
+            "adopt_requests": 4, "adopt_credential_rejections": 1,
+            "adopt_invalid_payloads": 2, "adopt_accepted": 1,
+            "last_adoption_result": "accepted",
+        }
+        assert body["password"] not in json.dumps(device.status)
+        assert body["token"] not in json.dumps(device.status)
+        assert body["username"] not in json.dumps(device.status)
+        assert reloaded.status["management"]["adopt_requests"] == 0
+        assert reloaded.status["management"]["last_adoption_result"] is None
+        snapshot = device.status["management"]
+        snapshot["adopt_requests"] = -1
+        assert device.status["management"]["adopt_requests"] == 4
     finally:
         await client.close()
 
@@ -260,6 +322,7 @@ async def test_tls_control_handshake_pin_then_adoption_and_info(config, tmp_path
         assert result.body["mac"] == "020000000001"
         assert headers[0]["x-token"] == "synthetic-lab-token"
         assert headers[0]["x-mode"] == "0"
+        await _wait_until(lambda: device.status["adopted"])
         assert device.status["adopted"]
         assert "token" not in device._state["management"]
         persisted = json.loads(device.state_path.read_text())
@@ -267,6 +330,233 @@ async def test_tls_control_handshake_pin_then_adoption_and_info(config, tmp_path
     finally:
         await device.stop()
         await server.close()
+
+
+async def _control_fixture(config, tmp_path, handler):
+    server_dir = tmp_path / "controller"
+    cert, _ = ensure_identity_certificate(server_dir, "020000000010")
+    app = web.Application()
+    app.router.add_get("/", handler)
+    server = TestServer(app)
+    await server.start_server(ssl=server_context(server_dir))
+    config["controller"]["control_port"] = server.port
+    device = service(config, tmp_path / "device", tls_context=ssl.create_default_context(cafile=str(cert)))
+    return server, device
+
+
+async def _wait_until(predicate):
+    async with asyncio.timeout(3):
+        while not predicate():
+            await asyncio.sleep(.01)
+
+
+@pytest.mark.parametrize("already_adopted", [False, True])
+async def test_upgraded_control_reset_preserves_pending_or_confirmed_adoption(config, tmp_path, already_adopted):
+    received = []
+    async def reset_after_upgrade(req):
+        ws = web.WebSocketResponse(protocols=("ucp4",))
+        await ws.prepare(req)
+        received.append(decode_message((await ws.receive()).data))
+        req.transport.abort()
+        return ws
+
+    server, device = await _control_fixture(config, tmp_path, reset_after_upgrade)
+    device._state["adopted"] = already_adopted
+    if not already_adopted:
+        device._state["management"] = {"token": "synthetic-pending-token"}
+    device._save_state()
+    original = device.state_path.read_bytes()
+    try:
+        await device.start()
+        await _wait_until(lambda: device.status["last_error"] == "AbnormalControlClosure")
+        assert received[0].header["action"] == "timeSync"
+        assert device.status["last_close_code"] == 1006
+        assert device.status["adopted"] is already_adopted
+        assert device.state_path.read_bytes() == original
+        if not already_adopted:
+            assert device._headers()["x-token"] == "synthetic-pending-token"
+        assert not device.status["connected"]
+    finally:
+        await device.stop()
+        await server.close()
+
+
+async def test_upgrade_without_ucp4_is_rejected_before_timesync_or_adoption(config, tmp_path):
+    received = []
+    async def no_protocol(req):
+        ws = web.WebSocketResponse()
+        await ws.prepare(req)
+        async for frame in ws:
+            received.append(frame)
+        return ws
+
+    server, device = await _control_fixture(config, tmp_path, no_protocol)
+    device._state["management"] = {"token": "synthetic-pending-token"}
+    device._save_state()
+    original = device.state_path.read_bytes()
+    try:
+        await device.start()
+        await _wait_until(lambda: device.status["last_error"] == "ContractError")
+        assert device.status["connections"] == 0
+        assert not device.status["adopted"]
+        assert device.state_path.read_bytes() == original
+        assert received == []
+    finally:
+        await device.stop()
+        await server.close()
+
+
+@pytest.mark.parametrize("invalid", ["wrong_id", "wrong_t0", "failed", "error", "missing_code", "boolean_code", "invalid_timestamp", "reversed_time"])
+async def test_only_valid_matching_timesync_confirms_current_pending_token(config, tmp_path, invalid):
+    completed = asyncio.get_running_loop().create_future()
+    device = None
+    async def confirm(req):
+        ws = web.WebSocketResponse(protocols=("ucp4",))
+        await ws.prepare(req)
+        sync = decode_message((await ws.receive()).data)
+        # Native DeviceConnection serializes successful responses with error="".
+        valid_header = {"type": "response", "id": sync.header["id"], "errorCode": 0, "error": ""}
+        t0 = sync.body["t0"]
+        valid_body = {"t0": t0, "t1": t0, "t2": t0}
+        bad_header, bad_body = dict(valid_header), dict(valid_body)
+        if invalid == "wrong_id":
+            bad_header["id"] = "wrong-response"
+        elif invalid == "wrong_t0":
+            bad_body["t0"] += 1
+        elif invalid == "failed":
+            bad_header["errorCode"] = 13
+        elif invalid == "error":
+            bad_header["error"] = "Synthetic failure"
+        elif invalid == "missing_code":
+            bad_header.pop("errorCode")
+        elif invalid == "boolean_code":
+            bad_header["errorCode"] = False
+        elif invalid == "invalid_timestamp":
+            bad_body["t1"] = True
+        else:
+            bad_body["t2"] -= 1
+        await ws.send_bytes(encode_message(bad_header, bad_body))
+        await ws.send_bytes(request("getInfo", request_id="after-invalid"))
+        barrier = decode_message((await ws.receive()).data)
+        assert barrier.header["id"] == "after-invalid"
+        assert not device.status["adopted"]
+        assert device._headers()["x-token"] == "synthetic-pending-token"
+        await ws.send_bytes(encode_message(valid_header, valid_body))
+        await ws.send_bytes(request("getInfo", request_id="after-valid"))
+        await ws.receive()
+        completed.set_result(True)
+        async for _ in ws:
+            pass
+        return ws
+
+    server, device = await _control_fixture(config, tmp_path, confirm)
+    device._state["management"] = {"token": "synthetic-pending-token"}
+    try:
+        await device.start()
+        await asyncio.wait_for(completed, 3)
+        assert device.status["adopted"]
+        assert "x-token" not in device._headers()
+        assert device.status["clock_offset_ms"] is not None
+        saved = json.loads(device.state_path.read_text())
+        assert saved["adopted"] and "token" not in saved["management"]
+    finally:
+        await device.stop()
+        await server.close()
+
+
+async def test_tokenless_valid_timesync_does_not_imply_adoption(config, tmp_path):
+    confirmed = asyncio.get_running_loop().create_future()
+    async def respond(req):
+        ws = web.WebSocketResponse(protocols=("ucp4",))
+        await ws.prepare(req)
+        sync = decode_message((await ws.receive()).data)
+        t0 = sync.body["t0"]
+        await ws.send_bytes(encode_message({"type": "response", "id": sync.header["id"], "errorCode": 0},
+                                           {"t0": t0, "t1": t0, "t2": t0}))
+        await ws.send_bytes(request("getInfo", request_id="barrier"))
+        await ws.receive()
+        confirmed.set_result(True)
+        async for _ in ws:
+            pass
+        return ws
+
+    server, device = await _control_fixture(config, tmp_path, respond)
+    try:
+        await device.start()
+        await asyncio.wait_for(confirmed, 3)
+        assert device.status["clock_offset_ms"] is not None
+        assert not device.status["adopted"]
+        assert not device.state_path.exists()
+    finally:
+        await device.stop()
+        await server.close()
+
+
+@pytest.mark.parametrize("replacement", ["replacement-fixture-token", "old-fixture-token"])
+async def test_replaced_pending_token_cannot_be_consumed_by_old_connection(config, tmp_path, replacement):
+    # Deliver a delayed old response after a new HTTP adoption attempt, including
+    # when that new attempt repeats the same token value.
+    device = service(config, tmp_path)
+    device._state["management"] = {"token": "old-fixture-token"}
+    old_socket = type("FixtureSocket", (), {"closed": False})()
+    device._ws = old_socket
+    device._connection_token = "old-fixture-token"
+    device._connection_generation = device._adoption_generation
+    device._time_sync_id, device._last_t0 = "old-timesync", 100
+    response = encode_message({"type": "response", "id": "old-timesync", "errorCode": 0},
+                              {"t0": 100, "t1": 100, "t2": 100})
+    async with TestClient(TestServer(device.create_app())) as client:
+        # Keep the socket alive for the stale-response regression despite the
+        # production handler requesting its closure.
+        async def ignored_close():
+            pass
+        old_socket.close = ignored_close
+        payload = adoption(config)
+        payload["token"] = replacement
+        reply = await client.post("/api/adopt", json=payload)
+        assert reply.status == 200
+        await device.handle_message(response, _connection=old_socket)
+        assert not device.status["adopted"]
+        assert device._headers()["x-token"] == replacement
+        assert json.loads(device.state_path.read_text())["management"]["token"] == replacement
+
+
+async def test_control_reset_uses_exponential_backoff(config, tmp_path, monkeypatch):
+    device = service(config, tmp_path)
+    waits = []
+    async def disconnected():
+        raise AbnormalControlClosure("Synthetic reset")
+    async def capture_wait(waiter, *, timeout):
+        waiter.close()
+        waits.append(timeout)
+        if len(waits) == 3:
+            raise asyncio.CancelledError
+        raise asyncio.TimeoutError
+    monkeypatch.setattr(device, "_connect_once", disconnected)
+    with monkeypatch.context() as scoped:
+        scoped.setattr("aikey.device.asyncio.wait_for", capture_wait)
+        with pytest.raises(asyncio.CancelledError):
+            await device._run()
+    assert waits == [2.0, 4.0, 8.0]
+    assert device.status["last_error"] == "AbnormalControlClosure"
+
+
+async def test_adoption_confirmation_does_not_consume_token_if_persistence_fails(config, tmp_path, monkeypatch):
+    device = service(config, tmp_path)
+    device._state["management"] = {"token": "synthetic-pending-token"}
+    socket = type("FixtureSocket", (), {"closed": False})()
+    device._ws = socket
+    device._connection_token = "synthetic-pending-token"
+    device._connection_generation = device._adoption_generation
+    device._time_sync_id, device._last_t0 = "timesync", 100
+    def failed_save():
+        raise OSError("Synthetic persistence failure")
+    monkeypatch.setattr(device, "_save_state", failed_save)
+    with pytest.raises(OSError, match="persistence"):
+        await device.handle_message(encode_message({"type": "response", "id": "timesync", "errorCode": 0},
+                                                  {"t0": 100, "t1": 100, "t2": 100}), _connection=socket)
+    assert not device.status["adopted"]
+    assert device._headers()["x-token"] == "synthetic-pending-token"
 
 
 async def test_redirect_cannot_forward_token(config, tmp_path):

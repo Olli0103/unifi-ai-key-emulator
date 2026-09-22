@@ -5,6 +5,7 @@ import struct
 
 import pytest
 
+import aikey.discovery as discovery_module
 from aikey.discovery import DiscoveryService, build_discovery_response, parse_discovery_query
 from aikey.protocol import ContractError
 
@@ -64,6 +65,56 @@ async def test_lab_discovery_cannot_bind_lan():
     service = DiscoveryService(config, lambda: INFO, lambda: False)
     with pytest.raises(ValueError, match="loopback"):
         await service.start()
+
+
+@pytest.mark.parametrize("platform,allow_macos", [("darwin", False), ("win32", True)])
+async def test_host_opt_in_does_not_remove_platform_guard(monkeypatch, platform, allow_macos):
+    config = deepcopy(CONFIG)
+    config["runtime"]["mode"] = "device"
+    config["discovery"].update(bind="0.0.0.0", port=10001)
+    monkeypatch.setattr(discovery_module.sys, "platform", platform)
+    service = DiscoveryService(config, lambda: INFO, lambda: False, allow_macos_host=allow_macos)
+    with pytest.raises(ValueError, match="requires Linux or explicit macOS"):
+        await service.start()
+
+
+async def test_explicit_macos_host_joins_only_selected_interface(monkeypatch):
+    config = deepcopy(CONFIG)
+    config["runtime"]["mode"] = "device"
+    config["device"]["ip"] = "192.0.2.5"
+    config["controller"]["host"] = "192.0.2.1"
+    config["discovery"].update(bind="0.0.0.0", port=10001, multicast=True,
+                               interface_ip="192.0.2.5")
+    monkeypatch.setattr(discovery_module.sys, "platform", "darwin")
+    calls = []
+
+    class FakeSocket:
+        def setblocking(self, value):
+            calls.append(("blocking", value))
+        def bind(self, address):
+            calls.append(("bind", address))
+        def setsockopt(self, level, option, value):
+            calls.append(("option", level, option, value))
+        def close(self):
+            pass
+
+    class FakeTransport:
+        def close(self):
+            service.connection_lost(None)
+
+    async def endpoint(factory, *, sock):
+        assert isinstance(sock, FakeSocket)
+        factory().connection_made(FakeTransport())
+
+    monkeypatch.setattr(discovery_module.socket, "socket", lambda *args: FakeSocket())
+    monkeypatch.setattr(asyncio.get_running_loop(), "create_datagram_endpoint", endpoint)
+    service = DiscoveryService(config, lambda: INFO, lambda: False, allow_macos_host=True)
+    await service.start()
+    assert ("bind", ("0.0.0.0", 10001)) in calls
+    assert ("option", socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+            socket.inet_aton("233.89.188.1") + socket.inet_aton("192.0.2.5")) in calls
+    assert service._allowed == {"192.0.2.1"}
+    await service.stop()
 
 
 async def test_real_loopback_udp_query_reply_and_mutation_silence():

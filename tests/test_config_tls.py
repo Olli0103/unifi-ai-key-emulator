@@ -18,6 +18,8 @@ def test_initialize_keeps_identity_private_and_refuses_overwrite(tmp_path):
     cert = (state / "device.crt").read_bytes()
     password = (state / "management-password").read_bytes()
     assert len(first["device"]["mac"]) == 12
+    assert first["device"]["management_username"] == "ui"
+    assert len(password.decode().strip()) >= 16
     assert int(first["device"]["mac"][:2], 16) & 3 == 2
     assert (state / "device.key").stat().st_mode & 0o077 == 0
     assert path.stat().st_mode & 0o077 == 0
@@ -36,6 +38,15 @@ def test_initialize_keeps_identity_private_and_refuses_overwrite(tmp_path):
     assert report["native_compatibility"] == "needs_evidence"
     assert not report["ready_for_device_start"]
     assert password.decode().strip() not in json.dumps(report)
+
+
+def test_existing_explicit_management_username_is_preserved(tmp_path):
+    path = tmp_path / "config.json"
+    config = initialize(path, tmp_path / "state")
+    config["device"]["management_username"] = "existing-local-account"
+    path.write_text(json.dumps(config))
+    assert load_config(path)["device"]["management_username"] == "existing-local-account"
+    assert hydrate_secrets(load_config(path))["device"]["management_username"] == "existing-local-account"
 
 
 def test_incomplete_identity_is_not_regenerated(tmp_path):

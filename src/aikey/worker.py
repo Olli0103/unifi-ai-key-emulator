@@ -28,6 +28,16 @@ class WorkerError(RuntimeError):
     """A job was rejected or could not be completed safely."""
 
 
+def validate_test_scope_config(value):
+    """The opt-in scope has one camera and one explicit, single-use permit."""
+    if not isinstance(value, dict) or set(value) != {"permit_id", "camera_id"}:
+        raise WorkerError("worker.test_scope requires exactly permit_id and camera_id")
+    if any(not isinstance(value[key], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value[key])
+           for key in ("permit_id", "camera_id")):
+        raise WorkerError("Test scope permit_id and camera_id must be nonempty identifiers")
+    return dict(value)
+
+
 _CALLBACK_TASK = re.compile(r"^/internal/aiprocessors/descriptions/([A-Za-z0-9_-]+)$")
 _CALLBACK_UPLOAD = re.compile(r"^/internal/camera-upload/[A-Za-z0-9_-]+$")
 _LEGACY_CALLBACK = "/internal/aiprocessors/recognize-anything"
@@ -125,6 +135,17 @@ class JobProcessor:
             raise WorkerError("Controller media origin must be one of controller_origins")
         self.state_dir = Path(state_dir) / "worker-jobs"
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.test_scope = (validate_test_scope_config(self.options["test_scope"])
+                           if "test_scope" in self.options else None)
+        self._scope_path = None
+        if self.test_scope is not None:
+            scope_dir = self.state_dir.parent / "worker-test-scopes"
+            if scope_dir.is_symlink():
+                raise WorkerError("Test scope state directory must not be a symlink")
+            scope_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            permit_hash = hashlib.sha256(self.test_scope["permit_id"].encode()).hexdigest()
+            self._scope_path = scope_dir / f"{permit_hash}.json"
+            self._read_scope_reservation()
         self.max_bytes = self._positive("max_media_bytes", 10 * 1024 * 1024)
         self.max_video_bytes = self._positive("max_video_bytes", 100 * 1024 * 1024)
         self.max_images = self._positive("max_images", 4)
@@ -293,10 +314,13 @@ class JobProcessor:
                 callback_kind = "legacy"
             else:
                 raise WorkerError("Description callbacks require a task or legacy RAM route")
+        self._validate_test_scope(operation, body, media)
         timeout_ms = command.get("timeoutMs", self.timeout_s * 1000)
         if type(timeout_ms) is not int or timeout_ms <= 0:
             raise WorkerError("timeoutMs must be positive")
         budget = min(self.timeout_s, timeout_ms / 1000)
+        if self.test_scope is not None:
+            budget = min(budget, 15)
         normalized = {"operation": operation, "payload": body, "callback": callback,
                       "callbackKind": callback_kind, "media": media}
         fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
@@ -306,6 +330,89 @@ class JobProcessor:
                     else f"{callback_kind}:{callback_path}")
         job_id = hashlib.sha256(identity.encode()).hexdigest()
         return job_id, fingerprint, operation, body, callback, callback_kind, media, budget
+
+    def _validate_test_scope(self, operation, body, media):
+        if self.test_scope is None:
+            return
+        if operation != "on_demand" or body.get("cameraId") != self.test_scope["camera_id"]:
+            raise WorkerError("Test scope permits only on-demand work for its configured camera")
+        if len(media) != 1 or media[0][0] != "video":
+            raise WorkerError("Test scope requires one video export")
+        parsed = urlsplit(media[0][1])
+        if parsed.path != "/internal/aiprocessors/video/export":
+            raise WorkerError("Test scope requires the AI processor video export route")
+        try:
+            pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+        except ValueError as exc:
+            raise WorkerError("Test scope export query is malformed") from exc
+        fields = {"camera", "channel", "type", "mute", "format", "createEvent", "event", "start", "end"}
+        keys = [key for key, _ in pairs]
+        if len(keys) != len(set(keys)) or set(keys) != fields:
+            raise WorkerError("Test scope export query has missing, repeated, or unknown fields")
+        query = dict(pairs)
+        if (query["camera"] != body["cameraId"] or query["event"] != body["eventId"]
+                or query["channel"] != "0" or query["mute"] != "true"
+                or query["createEvent"] != "false" or query["format"] not in {"ubv", "mp4"}
+                or query["type"] != "rotating"):
+            raise WorkerError("Test scope export does not match the permitted camera, channel, event, or format")
+        if any(not re.fullmatch(r"[0-9]{1,16}", query[key]) for key in ("start", "end")):
+            raise WorkerError("Test scope export timestamps must be integer milliseconds")
+        start, end = int(query["start"]), int(query["end"])
+        if not (0 <= start < end <= 2 ** 53 - 1 and end - start <= 10000
+                and start <= body["timestamp"] < end):
+            raise WorkerError("Test scope export must contain the requested timestamp and span at most 10 seconds")
+
+    def _read_scope_reservation(self):
+        path = self._scope_path
+        if path is None:
+            return None
+        try:
+            if path.is_symlink():
+                raise ValueError
+            if not path.exists():
+                return None
+            if not path.is_file() or path.stat().st_size > 4096:
+                raise ValueError
+            record = json.loads(path.read_text())
+            if (set(record) != {"schema", "permit_id", "camera_id", "job_id", "fingerprint", "consumed_at"}
+                    or record["schema"] != 1 or record["permit_id"] != self.test_scope["permit_id"]
+                    or record["camera_id"] != self.test_scope["camera_id"]
+                    or any(not isinstance(record[key], str) or not re.fullmatch(r"[0-9a-f]{64}", record[key])
+                           for key in ("job_id", "fingerprint"))
+                    or type(record["consumed_at"]) is not int or record["consumed_at"] <= 0):
+                raise ValueError
+            return record
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            raise WorkerError("Invalid test scope reservation; inspect it without resetting the permit") from exc
+
+    def _reserve_test_scope(self, job):
+        if self.test_scope is None:
+            return
+        if self._read_scope_reservation() is not None:
+            raise WorkerError("Test scope permit is already consumed; no further media or inference is allowed")
+        record = {"schema": 1, **self.test_scope, "job_id": job.job_id,
+                  "fingerprint": job.fingerprint, "consumed_at": int(time.time())}
+        temporary = None
+        try:
+            descriptor, temporary = tempfile.mkstemp(prefix=".permit-", dir=self._scope_path.parent)
+            with os.fdopen(descriptor, "wb") as output:
+                output.write(_json(record))
+                output.flush()
+                os.fsync(output.fileno())
+            # Atomic publication must not overwrite a reservation from another process.
+            os.link(temporary, self._scope_path)
+            directory = os.open(self._scope_path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except FileExistsError as exc:
+            raise WorkerError("Test scope permit is already consumed") from exc
+        except OSError as exc:
+            raise WorkerError("Cannot persist test scope reservation; no work was admitted") from exc
+        finally:
+            if temporary is not None:
+                os.unlink(temporary)
 
     def _mp4_export_url(self, url):
         """Opt-in adaptation of the evidenced controller export endpoint only.
@@ -364,14 +471,21 @@ class JobProcessor:
                 return _Job(job_id, fingerprint, operation, body, callback, kind, media, 0, future), True
         if job_id not in self._history and len(self._history.keys() | self._pending.keys()) >= self.max_jobs:
             raise WorkerError("Worker journal is full; archive reviewed entries")
+        if self._queue.full():
+            raise WorkerError("Worker queue is full")
         future = asyncio.get_running_loop().create_future()
         future.add_done_callback(lambda value: value.exception() if not value.cancelled() else None)
         job = _Job(job_id, fingerprint, operation, body, callback, kind, media,
                    time.monotonic() + budget, future)
         try:
+            self._reserve_test_scope(job)
             self._queue.put_nowait(job)
         except asyncio.QueueFull as exc:
+            future.cancel()
             raise WorkerError("Worker queue is full") from exc
+        except BaseException:
+            future.cancel()
+            raise
         self._pending[job_id] = job
         return job, False
 

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import time
 from urllib.parse import urlsplit
 
 
@@ -34,7 +35,7 @@ def defaults(state_dir: Path, mac: str) -> dict:
                     "https_port": 8080, "enable_http": False, "state_dir": str(state_dir)},
         "device": {"mac": mac, "ip": "127.0.0.1", "name": "Local AI processor",
                    "model": "UP-AI-KEY", "sysid": "0xa5f0", "firmware_version": "2.2.8",
-                   "management_username": "local-aikey",
+                   "management_username": "ui",
                    "management_password_file": str(state_dir / "management-password")},
         "controller": {"host": "", "control_port": 7442, "search_port": 7443,
                        "media_port": 7444, "ca_file": str(state_dir / "controller-ca.pem"),
@@ -95,6 +96,13 @@ def load_config(path: Path) -> dict:
     return validate_config(config, base=path.resolve().parent)
 
 
+def validate_factory_enrollment_deadline(value: int) -> int:
+    """Accept an explicit bounded deadline; expired deadlines stay inactive."""
+    if type(value) is not int or value < 0 or value > time.time() + 600:
+        raise ConfigError("device.factory_enrollment_until must be an epoch second no more than 10 minutes ahead; 0 disables it")
+    return value
+
+
 def validate_config(value: dict, *, base: Path | None = None) -> dict:
     if not isinstance(value, dict):
         raise ConfigError("Configuration must be a JSON object")
@@ -116,8 +124,20 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
             if field in options and type(options[field]) is not bool:
                 raise ConfigError(f"{section}.{field} must be a JSON boolean")
     runtime, device, controller = config["runtime"], config["device"], config["controller"]
+    if "test_scope" in config["worker"]:
+        from .worker import WorkerError, validate_test_scope_config
+        try:
+            config["worker"]["test_scope"] = validate_test_scope_config(config["worker"]["test_scope"])
+        except WorkerError as exc:
+            raise ConfigError(str(exc)) from exc
     if runtime.get("mode") not in ("device", "lab"):
         raise ConfigError("runtime.mode must be device or lab")
+    if "deployment" in runtime:
+        label = runtime["deployment"]
+        if (not isinstance(label, str) or not label.strip() or len(label) > 128
+                or not label.isprintable()):
+            raise ConfigError("runtime.deployment must be a nonempty printable string of at most 128 characters")
+        runtime["deployment"] = label.strip()
     try:
         bind = ipaddress.ip_address(runtime["bind"])
         ipaddress.ip_address(device["ip"])
@@ -139,11 +159,19 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
     for key in ("name", "management_username"):
         if not isinstance(device.get(key), str) or not device[key]:
             raise ConfigError(f"device.{key} must be nonempty")
+    factory_until = validate_factory_enrollment_deadline(device.get("factory_enrollment_until", 0))
     host = controller.get("host", "")
     if not isinstance(host, str) or any(c in host for c in "/?#@\r\n "):
         raise ConfigError("controller.host must be a hostname or IP, without scheme or path")
     if type(controller.get("verify_hostname", True)) is not bool:
         raise ConfigError("controller.verify_hostname must be a boolean")
+    control_profile = controller.get("control_profile", "ucp4")
+    if control_profile not in ("ucp4", "device-service"):
+        raise ConfigError("controller.control_profile must be ucp4 or device-service")
+    if control_profile == "device-service" or factory_until > time.time():
+        fingerprint = controller.get("expected_fingerprint")
+        if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", fingerprint.replace(":", "")):
+            raise ConfigError("Device-service control or active factory enrollment requires an explicit controller SHA-256 pin")
     if not controller.get("verify_hostname", True):
         pin = controller.get("expected_fingerprint", "").replace(":", "")
         if not re.fullmatch(r"[0-9a-fA-F]{64}", pin):
@@ -256,7 +284,7 @@ def readiness(config: dict) -> dict:
         checks["vision_configuration_valid"] = False
     return {"ready_for_device_start": all(checks.values()), "checks": checks, "errors": errors,
             "target": {"console": "UDM Pro Max", "protect": config["controller"].get("protect_version"),
-                       "deployment": "UGREEN NAS"},
+                       "deployment": config["runtime"].get("deployment", "unspecified")},
             "inspected_controller": "7.2.105", "native_compatibility": "needs_evidence",
             "vision_provider": provider,
             "search_enabled": bool(config["search"].get("enabled")),
