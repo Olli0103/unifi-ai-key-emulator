@@ -975,16 +975,22 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
                  if message["functionName"] == "EventAIPortStatus"
                  and message["payload"]["deviceID"] == cameras[0]]
     assert readiness[-1]["payload"]["isSmartDetectReady"] is False
+    assert not service._camera_engine.has_policy(cameras[0])
+    assert service._camera_engine.has_policy(cameras[1])
     assert service._inference.is_available(cameras[1])
+    closed = [message for message in sink.messages
+              if message["functionName"] == "EventSmartDetect"
+              and message["payload"]["edgeType"] == "leave"]
+    assert len(closed) == 1
+    assert closed[0]["payload"]["deviceID"] == cameras[0]
 
+    prior_messages = len(sink.messages)
     await service._handle_diagnostic_frame(sink, json.dumps({
         "functionName": "ChangeSmartDetectSettings", "messageId": 3,
         "payload": {"deviceID": cameras[0], "enableSmartDetect": [],
                     "eventStartMSec": 1000, "eventStopMSec": 3000},
     }).encode())
-    assert sink.messages[-2]["functionName"] == "EventSmartDetect"
-    assert sink.messages[-2]["payload"]["edgeType"] == "leave"
-    assert sink.messages[-2]["payload"]["deviceID"] == cameras[0]
+    assert len(sink.messages) == prior_messages + 1
     assert sink.messages[-1]["statusCode"] == 501
     assert not service._camera_engine.has_policy(cameras[0])
     assert service._camera_engine.has_policy(cameras[1])

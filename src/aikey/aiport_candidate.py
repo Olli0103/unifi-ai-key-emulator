@@ -394,6 +394,9 @@ class CandidateService:
             camera_mac, frame, generation=engine.policy_generation(camera_mac))
 
     async def _pool_camera_unavailable(self, camera_mac: str) -> None:
+        # A failed or exhausted model cannot keep an event open. Revoke only
+        # this camera's policy before announcing its unavailable status.
+        await self._revoke_pool_policy(camera_mac)
         ws = self._current_ws
         if (ws is None or not self._params_agreed
                 or not isinstance(self.ingress, AiPortIngressPool)
