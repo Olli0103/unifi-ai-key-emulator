@@ -425,17 +425,87 @@ async def test_diagnostic_observes_only_fixed_function_names(tmp_path):
         "functionName": "ChangeSmartDetectSettings", "payload": {"secret": secret}
     }).encode())
     await service._handle_diagnostic_frame(None, json.dumps({
+        "functionName": "ChangeVideoSettings", "messageId": 10,
+        "responseExpected": True, "payload": {"secret": secret}
+    }).encode())
+    await service._handle_diagnostic_frame(None, json.dumps({
+        "functionName": "ChangeIspSettings", "messageId": 11,
+        "responseExpected": True, "payload": {"secret": secret}
+    }).encode())
+    await service._handle_diagnostic_frame(None, json.dumps({
+        "functionName": secret, "responseExpected": True,
+        "payload": {"secret": secret}
+    }).encode())
+    await service._handle_diagnostic_frame(None, json.dumps({
+        "functionName": secret, "inResponseTo": 11, "payload": {"secret": secret}
+    }).encode())
+    await service._handle_diagnostic_frame(None, json.dumps({
         "functionName": secret, "payload": {"secret": secret}
     }).encode())
     await service._handle_diagnostic_frame(None, b"not-json-private-token")
     response = await service._health(None)
     health = json.loads(response.text)
     assert health["observed_function_counts"] == {
-        "ChangeSmartDetectSettings": 1}
-    assert health["unlisted_function_frames"] == 1
+        "ChangeSmartDetectSettings": 1, "ChangeVideoSettings": 1,
+        "ChangeIspSettings": 1}
+    assert health["unlisted_function_frames"] == 3
+    assert health["unlisted_envelope_counts"] == {
+        "request": 1, "response": 1, "other": 1}
     assert health["unparsed_binary_frames"] == 1
     assert secret not in response.text
     assert "not-json-private-token" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_hello_diagnostic_answers_minimal_provisioning_queries(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    for message_id, function in ((30, "ChangeVideoSettings"),
+                                 (31, "ChangeIspSettings")):
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": function, "messageId": message_id,
+            "payload": {}}).encode())
+    assert [(m["functionName"], m["inResponseTo"], m["statusCode"])
+            for m in sink.messages] == [
+                ("ChangeVideoSettings", 30, 0), ("ChangeIspSettings", 31, 0)]
+    assert sink.messages[0]["payload"] == {
+        "video": {"videoMode": "default"}, "audio": {"volume": 0}}
+    assert sink.messages[1]["payload"] == {"irLedLevel": 255}
+    assert service.provision_video_replies == 1
+    assert service.provision_isp_replies == 1
+
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "StopService", "messageId": 33,
+        "payload": {"service": "ssh"}}).encode())
+    assert sink.messages[-1]["statusCode"] == 0
+    assert sink.messages[-1]["payload"] == {}
+    assert service.ssh_stop_replies == 1
+
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "StartService", "messageId": 34,
+        "payload": {"service": "ssh"}}).encode())
+    assert sink.messages[-1]["statusCode"] == 501
+    assert sink.messages[-1]["payload"] == {"description": "ssh_unavailable"}
+    assert service.ssh_start_rejections == 1
+
+    secret = "synthetic-private-camera-setting"
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeVideoSettings", "messageId": 32,
+        "payload": {"unexpected": secret}}).encode())
+    assert sink.messages[-1]["statusCode"] == 5
+    assert sink.messages[-1]["payload"] == {"description": "unsupported_settings_change"}
+    assert secret not in json.dumps(sink.messages)
 
 
 @pytest.mark.asyncio

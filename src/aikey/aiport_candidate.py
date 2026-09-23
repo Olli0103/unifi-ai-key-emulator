@@ -37,6 +37,9 @@ _OBSERVABLE_FUNCTIONS = frozenset({
     "ubnt_avclient_hello", "ubnt_avclient_paramAgreement", "GetStreamList",
     "ubnt_avclient_timeSync", "GetSystemStats", "NetworkStatus",
     "ResetAIPortStreams", "EventSmartDetect",
+    "ChangeVideoSettings", "ChangeIspSettings",
+    "StartService", "StopService", "UpdateUsernamePassword",
+    "ChangeSoundLedSettings",
     "UiStreamControl", "OnvifStreamControl", "ChangeDeviceSettings", "GetRequest",
     "ChangeSmartDetectSettings", "ChangeAnalyticsSettings", "ChangeAudioEventsSettings",
     "ChangeEventSettings", "EventAIPortStatus",
@@ -166,10 +169,15 @@ class CandidateService:
         self.stream_grace_closures = 0
         self.stream_resets_answered = 0
         self.stream_resets_rejected = 0
+        self.provision_video_replies = 0
+        self.provision_isp_replies = 0
+        self.ssh_stop_replies = 0
+        self.ssh_start_rejections = 0
         self.last_stream_error: str | None = None
         self.last_control_command: str | None = None
         self.observed_function_counts: dict[str, int] = {}
         self.unlisted_function_frames = 0
+        self.unlisted_envelope_counts = {"request": 0, "response": 0, "other": 0}
         self.unparsed_binary_frames = 0
         self.websocket_close_codes: dict[str, int] = {}
         self.last_disconnect_origin: str | None = None
@@ -208,6 +216,10 @@ class CandidateService:
             "stream_grace_closures": self.stream_grace_closures,
             "stream_resets_answered": self.stream_resets_answered,
             "stream_resets_rejected": self.stream_resets_rejected,
+            "provision_video_replies": self.provision_video_replies,
+            "provision_isp_replies": self.provision_isp_replies,
+            "ssh_stop_replies": self.ssh_stop_replies,
+            "ssh_start_rejections": self.ssh_start_rejections,
             "stream_frames_decoded": self.ingress.frame_count if self.ingress else 0,
             "stream_frames_decoded_total": (
                 self.ingress.total_frames_decoded + self.ingress.frame_count
@@ -226,6 +238,7 @@ class CandidateService:
             "last_control_command": self.last_control_command,
             "observed_function_counts": dict(self.observed_function_counts),
             "unlisted_function_frames": self.unlisted_function_frames,
+            "unlisted_envelope_counts": dict(self.unlisted_envelope_counts),
             "unparsed_binary_frames": self.unparsed_binary_frames,
             "websocket_close_codes": dict(self.websocket_close_codes),
             "last_disconnect_origin": self.last_disconnect_origin,
@@ -323,6 +336,12 @@ class CandidateService:
                 self.observed_function_counts.get(function, 0) + 1, 1_000_000)
         elif isinstance(function, str):
             self.unlisted_function_frames = min(self.unlisted_function_frames + 1, 1_000_000)
+            in_response_to = message.get("inResponseTo")
+            kind = ("response" if type(in_response_to) is int and in_response_to > 0
+                    else "request" if message.get("responseExpected") is True
+                    else "other")
+            self.unlisted_envelope_counts[kind] = min(
+                self.unlisted_envelope_counts[kind] + 1, 1_000_000)
         else:
             self.unparsed_binary_frames = min(self.unparsed_binary_frames + 1, 1_000_000)
         if function == "ubnt_avclient_hello" and message.get("inResponseTo") == 1:
@@ -364,6 +383,42 @@ class CandidateService:
                     await self._send_stream_status(ws, streaming=False)
             await self._reply_control(ws, function, request_id, 0, {})
             self.stream_resets_answered += 1
+            return
+        if function in {"ChangeVideoSettings", "ChangeIspSettings"}:
+            self.last_control_command = function
+            request_id = message.get("messageId")
+            if not self._params_agreed or type(request_id) is not int or request_id < 0:
+                return
+            if (time.time() >= self.config.get("diagnostic_hello_until", 0)
+                    or message.get("payload") != {}):
+                await self._reply_control(ws, function, request_id, 5,
+                                          {"description": "unsupported_settings_change"})
+                return
+            if function == "ChangeVideoSettings":
+                payload = {"video": {"videoMode": "default"}, "audio": {"volume": 0}}
+                self.provision_video_replies += 1
+            else:
+                payload = {"irLedLevel": 255}
+                self.provision_isp_replies += 1
+            await self._reply_control(ws, function, request_id, 0, payload)
+            return
+        if function in {"StartService", "StopService"}:
+            self.last_control_command = function
+            request_id = message.get("messageId")
+            if not self._params_agreed or type(request_id) is not int or request_id < 0:
+                return
+            if (time.time() >= self.config.get("diagnostic_hello_until", 0)
+                    or message.get("payload") != {"service": "ssh"}):
+                await self._reply_control(ws, function, request_id, 5,
+                                          {"description": "unsupported_service_command"})
+            elif function == "StopService":
+                # This image has no SSH server, so it is already stopped.
+                await self._reply_control(ws, function, request_id, 0, {})
+                self.ssh_stop_replies += 1
+            else:
+                await self._reply_control(ws, function, request_id, 501,
+                                          {"description": "ssh_unavailable"})
+                self.ssh_start_rejections += 1
             return
         if function in {"GetStreamList", "UiStreamControl", "OnvifStreamControl"}:
             self.last_control_command = function
