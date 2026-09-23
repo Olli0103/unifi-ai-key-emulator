@@ -1,8 +1,20 @@
 # Isolated AI Port candidate
 
-This profile is for bounded protocol tests. It presents a separate AI Port identity, keeps an outbound certificate-pinned camera WebSocket to Protect and exposes an HTTPS management listener. Camera ingress is off unless a private, expiring one-camera diagnostic policy enables it. The profile has no camera credentials and does not advertise AI detection by default. Its management-token adoption handshake has passed synthetic tests; a separate existing-device reconnect was accepted by Protect 7.3.60 and survived a container restart. One legacy camera paired and supplied frames to the optional local model during a bounded test; native detection delivery remains unverified.
+This profile is for bounded protocol tests. It presents a separate AI Port identity, keeps an outbound certificate-pinned camera WebSocket to Protect and exposes an HTTPS management listener. Camera ingress is off unless a private, expiring diagnostic policy enables one camera or a bounded pool. The profile has no camera credentials and does not advertise AI detection by default. Its management-token adoption handshake has passed synthetic tests; a separate existing-device reconnect was accepted by Protect 7.3.60 and survived a container restart. One legacy camera paired and supplied frames to the optional local model during a bounded test; native detection delivery remains unverified.
 
 Protect 7.3.60 showed the separate candidate in Devices. An early legacy-camera pairing attempt displayed **Unable to Pair** while the device panel said **Connecting**. The candidate's temporary Mac listener on host port 8443 had no management requests. A later live trial proved that camera pairing uses the WebSocket stream command and can succeed without that management request. See [firmware and native discovery evidence](evidence/ai-port-firmware-contract.md).
+
+For the next controlled detection trial, start `local-aiport-event-watch` before enabling a camera stream. It uses the pinned, read-only Protect integration API and [the official event subscription](https://developer.ui.com/protect/v7.2.105/get-v1subscribeevents):
+
+```sh
+local-aiport-event-watch --controller CONSOLE_PRIVATE_IPV4 \
+  --api-key-file PRIVATE_PROTECT_API_KEY_FILE \
+  --web-trust-file PRIVATE_WEB_TRUST_JSON \
+  --web-cert-file PRIVATE_PINNED_WEB_CERT \
+  --camera-scope legacy-and-g3-g5 --seconds 120
+```
+
+The watch caps its runtime at ten minutes and discards event bodies. It counts `add` and `update` messages for the validated camera set, including smart video and person additions. A matching subscription message proves Protect announced an event for that camera during the watch. It does not identify whether the AI Port or the camera's onboard model caused it, and it does not prove recording-timeline persistence. Check the original camera timeline after an event appears. The observed Protect 7.3.60 endpoint accepted a pinned WebSocket upgrade, but no event frame arrived during a five-second no-camera probe.
 
 ## Private configuration
 

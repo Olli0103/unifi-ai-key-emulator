@@ -23,6 +23,7 @@ database = ["psycopg[binary]>=3.2,<4"]
 [project.scripts]
 local-aikey = "aikey.cli:main"
 local-aiport-plan = "aikey.aiport_deployment:main"
+local-aiport-event-watch = "aikey.aiport_event_watch:main"
 local-aiport-candidate = "aikey.aiport_candidate:main"
 local-aiport-relay = "aikey.aiport_relay:main"
 
