@@ -646,6 +646,40 @@ async def test_smart_settings_request_fails_closed_until_detector_exists(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_smart_settings_subset_is_counted_but_not_acknowledged(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    config["diagnostic_stream"] = {"camera_mac": "2A1122334455",
+                                   "source_ip": "192.168.10.1",
+                                   "ffmpeg_path": sys.executable}
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    payload = {"deviceID": "2A1122334455", "enableSmartDetect": ["person"],
+               "eventStartMSec": 1000, "eventStopMSec": 3000, "zones": {},
+               "recognitionAccuracy": {"face": 80, "licensePlate": 80}}
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 16,
+        "responseExpected": True, "payload": payload,
+    }).encode())
+    assert sink.messages[0]["statusCode"] == 501
+    health = json.loads((await service._health(None)).text)
+    assert health["smart_settings_subset_matches"] == 1
+    assert health["smart_settings_requests_rejected"] == 1
+    assert "eventStartMSec" not in json.dumps(health)
+    assert "person" not in json.dumps(health)
+    await service.stop()
+
+
+@pytest.mark.asyncio
 async def test_hello_diagnostic_answers_minimal_provisioning_queries(tmp_path):
     config = fixture_state(tmp_path)
     config["diagnostic_hello_until"] = int(time.time()) + 60
