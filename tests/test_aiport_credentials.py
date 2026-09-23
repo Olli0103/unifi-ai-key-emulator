@@ -116,7 +116,7 @@ async def test_control_rotation_acknowledges_only_after_persistence_and_login_en
             response = await client.post(manage_url, json={"username": "synthetic-user",
                                                         "password": "synthetic-password",
                                                         "mgmt": {}})
-            assert response.status == 501
+            assert response.status == 503
             health = await client.get(str(server.make_url("/healthz")))
             public = await health.text()
             assert "synthetic-password" not in public

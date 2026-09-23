@@ -9,13 +9,14 @@ import pytest
 
 from aikey.aiport_candidate import CandidateService
 from aikey.aiport_relay import BoundedRelay, RelayError
-from aikey.tls import ensure_identity_certificate
+from test_aiport_candidate import fixture_state
 
 
 @pytest.mark.asyncio
 async def test_relay_passes_tls_to_the_candidate_without_reading_http(tmp_path):
-    cert, _ = ensure_identity_certificate(tmp_path, "2A1100F0A55E")
-    candidate = CandidateService({}, tmp_path)
+    config = fixture_state(tmp_path)
+    cert = tmp_path / "device.crt"
+    candidate = CandidateService(config, tmp_path)
     upstream = TestServer(candidate.app())
     await upstream.start_server(ssl=candidate._server_context())
     relay = BoundedRelay(listen_ip="127.0.0.1", listen_port=0,
@@ -29,8 +30,8 @@ async def test_relay_passes_tls_to_the_candidate_without_reading_http(tmp_path):
                                          trust_env=False) as client:
             async with client.post(f"https://127.0.0.1:{relay.listen_port}/api/1.2/manage",
                                    json={"username": "private", "password": "private"}) as response:
-                assert response.status == 501
-                assert (await response.json())["error"] == "Adoption is not enabled on this candidate"
+                assert response.status == 503
+                assert (await response.json())["error"] == "Adoption requires rotated credentials"
         assert relay.accepted == 1
         assert candidate.manage_requests == 1
         assert candidate.last_manage_shape["recognized_fields"] == ["password", "username"]
