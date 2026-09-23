@@ -23,6 +23,7 @@ AI_PORT_MANAGEMENT_PORT = 443
 AI_PORT_CONTAINER_PORT = 8443
 AI_PORT_DISCOVERY_PORT = 10001
 AI_PORT_CONTROLLER_WS_PORT = 7442
+AI_PORT_PROTECT_RTSP_PORT = 7447
 _CAMERA_ID = re.compile(r"[0-9a-fA-F]{24}\Z")
 _CAPACITY = {
     "protect": {"HD": Fraction(1, 5), "2K": Fraction(1, 3),
@@ -121,7 +122,7 @@ def plan_ai_ports(report: dict, *, device_ips: list[str] | None = None,
             "state": "planned_only",
         })
     return {
-        "schema": "aikey-aiport-deployment-plan/1",
+        "schema": "aikey-aiport-deployment-plan/2",
         "legacy_camera_count": sum(map(len, groups.values())),
         "ai_port_instances_required": len(instances),
         "ai_port_instances_without_address": sum(item["host_ip"] is None for item in instances),
@@ -131,7 +132,11 @@ def plan_ai_ports(report: dict, *, device_ips: list[str] | None = None,
         "instances": instances,
         "adoption": "needs_evidence",
         "camera_pairing": "disabled",
-        "camera_stream_ports": "needs_evidence",
+        "camera_stream_ports": {
+            "protect_outbound_tcp": ([AI_PORT_PROTECT_RTSP_PORT]
+                                     if groups["protect"] else []),
+            "onvif_outbound_tcp": "needs_evidence" if groups["onvif"] else [],
+        },
     }
 
 
