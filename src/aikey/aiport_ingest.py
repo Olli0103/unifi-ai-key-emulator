@@ -468,6 +468,45 @@ class AiPortIngressPool:
     def reserved_points(self) -> int:
         return sum(ingress.reserved_points for ingress in self._ingresses.values())
 
+    @property
+    def frame_count(self) -> int:
+        return sum(ingress.frame_count for ingress in self._ingresses.values())
+
+    @property
+    def total_frames_decoded(self) -> int:
+        return sum(ingress.total_frames_decoded for ingress in self._ingresses.values())
+
+    @property
+    def frames_observed(self) -> int:
+        return sum(ingress.frames_observed for ingress in self._ingresses.values())
+
+    @property
+    def frames_skipped(self) -> int:
+        return sum(ingress.frames_skipped for ingress in self._ingresses.values())
+
+    @property
+    def observer_failed(self) -> bool:
+        return any(ingress.observer_failed for ingress in self._ingresses.values())
+
+    @property
+    def last_decoder_exit_code(self) -> None:
+        # A single exit code cannot identify which of several decoders failed.
+        return None
+
+    @property
+    def last_decoder_stderr_seen(self) -> bool:
+        return any(ingress.last_decoder_stderr_seen for ingress in self._ingresses.values())
+
+    @property
+    def last_decoder_error_markers(self) -> tuple[str, ...]:
+        return tuple(sorted({marker for ingress in self._ingresses.values()
+                             for marker in ingress.last_decoder_error_markers}))
+
+    @property
+    def last_decoder_error_terms(self) -> tuple[str, ...]:
+        return tuple(sorted({term for ingress in self._ingresses.values()
+                             for term in ingress.last_decoder_error_terms}))
+
     async def close(self) -> None:
         async with self._lock:
             for ingress in self._ingresses.values():

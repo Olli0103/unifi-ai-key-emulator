@@ -69,6 +69,26 @@ def test_diagnostic_hello_requires_short_lived_private_config(tmp_path):
         load_config(tmp_path / "config.json")
 
 
+def test_multi_camera_stream_policy_is_expiring_distinct_and_stream_only(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    streams = [{"camera_mac": mac, "source_ip": "192.168.10.1",
+                "ffmpeg_path": sys.executable}
+               for mac in ("2A1122334455", "2A1122334456")]
+    config["diagnostic_streams"] = streams
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert len(load_config(tmp_path / "config.json")["diagnostic_streams"]) == 2
+    config["diagnostic_detector"] = {"checkpoint_path": "/tmp/model.pth"}
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="streams only"):
+        load_config(tmp_path / "config.json")
+    del config["diagnostic_detector"]
+    config["diagnostic_streams"] = [streams[0], streams[0]]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="Duplicate multi-camera identity"):
+        load_config(tmp_path / "config.json")
+
+
 @pytest.mark.parametrize("until", [True, -1, "beyond_window"])
 def test_function_fingerprint_probe_rejects_unbounded_config(tmp_path, until):
     config = fixture_state(tmp_path)
@@ -773,6 +793,79 @@ async def test_smart_probe_signals_ready_then_records_only_shape(tmp_path):
     assert sink.messages[-1]["payload"]["isSmartDetectReady"] is False
     assert service.smart_feature_probe_events == 1
     assert json.loads((await service._health(None)).text)["smart_settings_probe_shape"] is None
+    await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_multi_camera_candidate_routes_status_without_smart_readiness(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    cameras = ("2A1122334455", "2A1122334456")
+    config["diagnostic_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1",
+         "ffmpeg_path": sys.executable} for mac in cameras]
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+    active = {}
+
+    async def control(payload):
+        mac = payload["deviceID"]
+        if payload["streaming"]:
+            active[mac] = {"deviceID": mac, "points": 5}
+        else:
+            active.pop(mac, None)
+        return {"status": "started" if payload["streaming"] else "stopped",
+                "usedPoints": 5 if payload["streaming"] else 0}
+
+    async def close():
+        active.clear()
+
+    service.ingress.control = control
+    service.ingress.list_streams = lambda: list(active.values())
+    service.ingress.close = close
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    for index, mac in enumerate(cameras, 1):
+        command = {"functionName": "UiStreamControl", "messageId": index,
+                   "responseExpected": True,
+                   "payload": {"deviceID": mac, "streaming": True,
+                               "ip": "192.168.10.1", "port": 7447,
+                               "uri": f"synthetic-{index}", "width": 3840,
+                               "height": 2160, "fps": 15}}
+        await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+        assert sink.messages[-2]["statusCode"] == 0
+        assert sink.messages[-1]["functionName"] == "EventAIPortStatus"
+        assert sink.messages[-1]["payload"]["deviceID"] == mac
+        assert sink.messages[-1]["payload"]["isSmartDetectReady"] is False
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "GetStreamList", "messageId": 3,
+        "responseExpected": True, "payload": {},
+    }).encode())
+    assert len(sink.messages[-1]["payload"]["list"]) == 2
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 5,
+        "responseExpected": True,
+        "payload": {"deviceID": cameras[0], "enableSmartDetect": ["person"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000},
+    }).encode())
+    assert sink.messages[-1]["statusCode"] == 501
+    assert service.smart_settings_probe_acks == 0
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ResetAIPortStreams", "messageId": 4,
+        "responseExpected": True, "payload": {},
+    }).encode())
+    assert not active
+    stopped = [message for message in sink.messages
+               if message.get("functionName") == "EventAIPortStatus"
+               and message["payload"]["isStreaming"] is False]
+    assert {message["payload"]["deviceID"] for message in stopped} == set(cameras)
     await service.stop()
 
 
