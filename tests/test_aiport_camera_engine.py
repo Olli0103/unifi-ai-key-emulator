@@ -74,6 +74,27 @@ def test_zone_and_reverification_are_applied_before_tracking_per_camera():
     assert second.zone_ids == ()
 
 
+def test_moving_updates_are_rate_limited_and_keep_camera_identity():
+    engine = CameraPolicyEngine([FIRST, SECOND])
+    engine.replace_policy(FIRST, policy(FIRST, zone=True))
+    engine.replace_policy(SECOND, policy(SECOND))
+    for camera in (FIRST, SECOND):
+        assert engine.observe(camera, (person(),), now=1) == ()
+        entered, = engine.observe(camera, (person(),), now=2)
+        assert entered.change.edge == "enter"
+        assert engine.observe(camera, (person(),), now=2.5) == ()
+    first, = engine.observe(FIRST, (person(0.92),), now=3)
+    assert (first.camera_mac, first.change.edge, first.zone_ids) == (
+        FIRST, "moving", (7,))
+    assert engine.observe(FIRST, (person(),), now=3.5) == ()
+    second, = engine.observe(SECOND, (person(0.93),), now=3.5)
+    assert (second.camera_mac, second.change.edge, second.zone_ids) == (
+        SECOND, "moving", ())
+    closed, = engine.replace_policy(FIRST, None)
+    assert (closed.change.edge, closed.zone_ids) == ("leave", (7,))
+    assert engine.has_policy(SECOND)
+
+
 def test_vehicle_and_animal_candidates_are_isolated_by_class_and_zone():
     engine = CameraPolicyEngine([FIRST, SECOND])
     engine.replace_policy(FIRST, policy(FIRST, zone=True, kind="vehicle"))

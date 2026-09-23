@@ -46,6 +46,7 @@ class CameraPolicyEngine:
         self._active: dict[str, tuple[TrackChange, tuple[int, ...]] | None] = {
             camera: None for camera in cameras}
         self._event_counts = {camera: 0 for camera in cameras}
+        self._last_moving = {camera: None for camera in cameras}
         self._generations = dict.fromkeys(cameras, 0)
         self._max_events = max_events_per_camera
 
@@ -72,6 +73,7 @@ class CameraPolicyEngine:
                 "leave", previous.track_id, previous.kind, previous.label,
                 previous.score, previous.box), zones),)
         self._active[camera] = None
+        self._last_moving[camera] = None
         self._trackers[camera] = TemporalTracker()
         self._policies[camera] = policy
         self._generations[camera] += 1
@@ -106,11 +108,22 @@ class CameraPolicyEngine:
                 zones = policy.zone_ids(kind, change.box)
                 if zones is not None:
                     self._active[camera] = (change, zones)
+                    self._last_moving[camera] = now
                     self._event_counts[camera] += 1
+                    result.append(CameraEventCandidate(camera, change, zones))
+            elif (change.edge == "moving" and active is not None
+                  and active[0].track_id == change.track_id
+                  and self._last_moving[camera] is not None
+                  and now - self._last_moving[camera] >= 1):
+                zones = policy.zone_ids(kind, change.box)
+                if zones == active[1]:
+                    self._active[camera] = (change, zones)
+                    self._last_moving[camera] = now
                     result.append(CameraEventCandidate(camera, change, zones))
             elif (change.edge == "leave" and active is not None
                   and active[0].track_id == change.track_id):
                 self._active[camera] = None
+                self._last_moving[camera] = None
                 result.append(CameraEventCandidate(camera, change, active[1]))
         return tuple(result)
 

@@ -374,6 +374,7 @@ class CandidateService:
         self.smart_feature_probe_events = 0
         self.smart_settings_probe_acks = 0
         self.smart_events_entered = 0
+        self.smart_events_moved = 0
         self.smart_events_left = 0
         self.synthetic_probe_claimed = 0
         self.synthetic_probe_errors = 0
@@ -383,6 +384,7 @@ class CandidateService:
         self._recorded_probe_task: asyncio.Task | None = None
         self._smart_policy: SmartPolicy | None = None
         self._event_track: TrackChange | None = None
+        self._event_last_moving_at: float | None = None
         self._event_zone_ids: tuple[int, ...] = ()
         self.last_stream_error: str | None = None
         self.last_control_command: str | None = None
@@ -488,7 +490,8 @@ class CandidateService:
             return
         active = {stream["deviceID"] for stream in self.ingress.list_streams()}
         for candidate in candidates:
-            if candidate.change.edge == "enter" and candidate.camera_mac not in active:
+            if (candidate.change.edge in {"enter", "moving"}
+                    and candidate.camera_mac not in active):
                 continue
             try:
                 payload = smart_event_payload(
@@ -501,6 +504,8 @@ class CandidateService:
             await self._send_control_event(ws, "EventSmartDetect", payload)
             if candidate.change.edge == "enter":
                 self.smart_events_entered += 1
+            elif candidate.change.edge == "moving":
+                self.smart_events_moved += 1
             else:
                 self.smart_events_left += 1
 
@@ -613,6 +618,12 @@ class CandidateService:
                     and self._event_track is None
                     and self.smart_events_entered == 0):
                 edge = "enter"
+            elif (change.edge == "moving" and self._event_track is not None
+                  and change.track_id == self._event_track.track_id
+                  and matched_zone_ids == self._event_zone_ids
+                  and self._event_last_moving_at is not None
+                  and time.monotonic() - self._event_last_moving_at >= 1):
+                edge = "moving"
             elif (change.edge == "leave" and self._event_track is not None
                   and change.track_id == self._event_track.track_id):
                 edge = "leave"
@@ -630,10 +641,16 @@ class CandidateService:
             if edge == "enter":
                 self._event_track = change
                 self._event_zone_ids = matched_zone_ids
+                self._event_last_moving_at = time.monotonic()
                 self.smart_events_entered += 1
+            elif edge == "moving":
+                self._event_track = change
+                self._event_last_moving_at = time.monotonic()
+                self.smart_events_moved += 1
             else:
                 self._event_track = None
                 self._event_zone_ids = ()
+                self._event_last_moving_at = None
                 self.smart_events_left += 1
 
     async def _revoke_single_policy(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -658,6 +675,7 @@ class CandidateService:
             self._smart_policy = None
             self._event_track = None
             self._event_zone_ids = ()
+            self._event_last_moving_at = None
             if self._tracker is not None:
                 self._tracker = TemporalTracker()
 
@@ -824,6 +842,7 @@ class CandidateService:
             "smart_feature_probe_events": self.smart_feature_probe_events,
             "smart_settings_probe_acks": self.smart_settings_probe_acks,
             "smart_events_entered": self.smart_events_entered,
+            "smart_events_moved": self.smart_events_moved,
             "smart_events_left": self.smart_events_left,
             "synthetic_probe_claimed": self.synthetic_probe_claimed,
             "synthetic_probe_errors": self.synthetic_probe_errors,
