@@ -88,6 +88,19 @@ The JSON separates no-onboard-smart cameras from optional G3–G5 enhancements a
 
 Pass a previous private plan with `--previous-plan PRIVATE_PREVIOUS_PLAN_JSON` on later runs. The planner keeps each existing slot's camera order, source and host address, then puts new eligible cameras into remaining capacity or new slots. It refuses to reshuffle an assigned camera if that camera disappears, becomes ineligible, changes source or raises a slot above capacity. This is a dry run: it does not check whether an address is bound on the host, create an instance or change a Protect pairing. Keep previous plans private because they contain camera IDs and LAN addresses. Host listener checks, safe removal and automatic apply remain open in [#45](https://github.com/Olli0103/unifi-ai-key-emulator/issues/45).
 
+After assigning a distinct private LAN address to a slot, `local-aiport-provision` can create its own persistent MAC, certificate, pinned controller trust and mode-600 base config in a new mode-700 state directory. It verifies an existing directory without rotating any identity material, and refuses incomplete or conflicting state. The plan, controller certificate and its SHA-256 pin must be supplied from private files and independently verified trust. For example:
+
+```sh
+mkdir -m 700 PRIVATE_AI_PORT_STATE_PARENT
+local-aiport-provision --plan PRIVATE_PREVIOUS_PLAN_JSON --slot SLOT_NUMBER \
+  --state-dir PRIVATE_AI_PORT_STATE_PARENT/slot-SLOT_NUMBER \
+  --controller CONSOLE_PRIVATE_IPV4 \
+  --controller-cert-file PRIVATE_PINNED_CONTROL_CERT \
+  --controller-pin VERIFIED_CONTROL_CERT_SHA256
+```
+
+Provisioning does not assign an IP, publish HTTPS 443, adopt a device or pair cameras. It leaves an interrupted, incomplete directory untouched for explicit recovery. Mac and NAS listener setup, adoption and camera reconciliation still require native qualification under [#45](https://github.com/Olli0103/unifi-ai-key-emulator/issues/45).
+
 The [isolated candidate service](../aiport-candidate.md) supplies HTTPS management, a persistent device WebSocket and opt-in, time-bounded single-camera stream intake. It still lacks a permanent host 443 publish and a production multi-camera stream service. Frame counters and a small allowlist of command names retain neither frame bodies nor credentials. The management endpoint remains relevant to fresh adoption and needs a separate diagnostic. Camera pairing waits for a decoded frame and an accepted stream-control response. [Ubiquiti's port reference](https://help.ui.com/hc/en-us/articles/218506997-Required-Ports-Reference) identifies 7447 as RTSP output; the live Flur trial decoded video through that outbound connection.
 
 An independent `AiPortIngressPool` now routes synthetic stream-control commands to up to five explicitly allowed cameras and enforces a ten-point HD/2K/4K capacity budget, including a stalled decoder's reserved points. It rejects unlisted camera IDs, source-address changes and over-capacity starts. An expiring, stream-only private permit wires this pool into the adopted candidate's stream-control, list, reset and per-camera status paths; synthetic tests pass. No multi-camera native pairing has been attempted with this code. Per-camera detector state, policy routing and native event persistence remain open.
