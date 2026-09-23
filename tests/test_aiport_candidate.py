@@ -523,6 +523,39 @@ async def test_face_database_request_fails_closed_without_private_uri_echo(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_smart_settings_request_fails_closed_until_detector_exists(tmp_path):
+    config = fixture_state(tmp_path)
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    private_policy = "synthetic-private-zone-and-recognition-policy"
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 16,
+        "responseExpected": True,
+        "payload": {"zones": {private_policy: {"objectTypes": ["person"]}},
+                    "enableSmartDetect": True},
+    }).encode())
+    assert sink.messages == [{
+        "from": "ubnt_avclient", "to": "UniFiVideo", "responseExpected": False,
+        "functionName": "ChangeSmartDetectSettings", "messageId": 2,
+        "inResponseTo": 16, "statusCode": 501,
+        "payload": {"description": "smart_detection_unavailable"},
+    }]
+    health = json.loads((await service._health(None)).text)
+    assert health["smart_settings_requests_rejected"] == 1
+    assert private_policy not in json.dumps(health)
+    assert private_policy not in json.dumps(sink.messages)
+
+
+@pytest.mark.asyncio
 async def test_hello_diagnostic_answers_minimal_provisioning_queries(tmp_path):
     config = fixture_state(tmp_path)
     config["diagnostic_hello_until"] = int(time.time()) + 60

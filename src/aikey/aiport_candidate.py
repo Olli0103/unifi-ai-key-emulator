@@ -216,6 +216,7 @@ class CandidateService:
         self.timezone_replies = 0
         self.timezone_rejections = 0
         self.face_db_requests_rejected = 0
+        self.smart_settings_requests_rejected = 0
         self.last_stream_error: str | None = None
         self.last_control_command: str | None = None
         self.observed_function_counts: dict[str, int] = {}
@@ -282,6 +283,7 @@ class CandidateService:
             "timezone_replies": self.timezone_replies,
             "timezone_rejections": self.timezone_rejections,
             "face_db_requests_rejected": self.face_db_requests_rejected,
+            "smart_settings_requests_rejected": self.smart_settings_requests_rejected,
             "stream_frames_decoded": self.ingress.frame_count if self.ingress else 0,
             "stream_frames_decoded_total": (
                 self.ingress.total_frames_decoded + self.ingress.frame_count
@@ -640,6 +642,18 @@ class CandidateService:
             await self._reply_control(ws, function, request_id, 501,
                                       {"description": "face_database_unavailable"})
             self.face_db_requests_rejected += 1
+            return
+        if function == "ChangeSmartDetectSettings":
+            self.last_control_command = function
+            request_id = message.get("messageId")
+            if not self._params_agreed or type(request_id) is not int or request_id < 0:
+                return
+            # Protect may send zones and recognition policy in this command.
+            # Acknowledge no part of it while there is no detector. Never echo
+            # or retain its camera policy or private fields.
+            await self._reply_control(ws, function, request_id, 501,
+                                      {"description": "smart_detection_unavailable"})
+            self.smart_settings_requests_rejected += 1
             return
         if function in {"GetStreamList", "UiStreamControl", "OnvifStreamControl"}:
             self.last_control_command = function
