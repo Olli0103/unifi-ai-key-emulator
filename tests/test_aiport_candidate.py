@@ -1451,6 +1451,14 @@ async def test_event_probe_drops_outside_zone_and_uncertain_person_before_tracki
     assert sink.messages[-1]["payload"]["descriptors"][0]["confidenceLevel"] == 91
     assert sink.messages[-1]["payload"]["descriptors"][0]["zones"] == [7]
     assert sink.messages[-1]["payload"]["zonesStatus"]["7"]["status"] == "enter"
+    service._event_last_moving_at -= 2
+    await service._publish_bounded_smart_changes((TrackChange(
+        "moving", 1, "person", "person", 0.93,
+        (0.21, 0.2, 0.51, 0.8)),))
+    assert service.smart_events_moved == 1
+    assert sink.messages[-1]["payload"]["edgeType"] == "moving"
+    assert sink.messages[-1]["payload"]["zonesStatus"] == {}
+    assert sink.messages[-1]["payload"]["descriptors"][0]["confidenceLevel"] == 93
     command["messageId"] = 17
     command["payload"]["enableSmartDetect"] = []
     command["payload"]["zones"] = {}

@@ -19,10 +19,10 @@ class SmartEventError(ValueError):
 def smart_event_payload(camera_mac: str, change: TrackChange, *,
                         edge: str, clock_wall_ms: int,
                         zone_ids: tuple[int, ...] = ()) -> dict:
-    """Encode one bounded object enter or leave, without recognition claims."""
+    """Encode one bounded object track edge, without recognition claims."""
     if (not isinstance(change, TrackChange)
             or change.kind not in {"person", "vehicle", "animal"}
-            or edge not in {"enter", "leave"}
+            or edge not in {"enter", "moving", "leave"}
             or type(clock_wall_ms) is not int or clock_wall_ms <= 0
             or type(change.track_id) is not int or change.track_id <= 0
             or not math.isfinite(change.score) or not 0 <= change.score <= 1
@@ -41,7 +41,7 @@ def smart_event_payload(camera_mac: str, change: TrackChange, *,
                "zonesStatus": {str(zone_id): {"status": edge,
                                               **({"level": round(change.score * 100)}
                                                  if edge == "enter" else {})}
-                               for zone_id in zone_ids},
+                               for zone_id in zone_ids if edge != "moving"},
                "trackerIDAttrMap": {}}
     if edge == "leave":
         return payload
