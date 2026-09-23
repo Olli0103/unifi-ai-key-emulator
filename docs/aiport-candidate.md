@@ -35,6 +35,16 @@ container run --detach --name local-aiport-candidate \
   local-aiport:candidate --config /state/config.json --port 8443
 ```
 
-The host's port 8443 is only a transport check. Protect's device management uses HTTPS 443 on the advertised address. Apple container 1.4.1 refused a host 443 publish on this Mac with a privileged-port error. A reviewed host forwarding method with administrator authorization, or a tested NAS network mode, is needed before the controller can reach the management service. Do not change firewall rules or weaken TLS to work around the failure. Any forward must preserve TLS bytes and allow only the console's source address.
+The host's port 8443 is only a transport check. Protect's device management uses HTTPS 443 on the advertised address. Apple container 1.4.1 refused a host 443 publish on this Mac with a privileged-port error. The optional [bounded relay](../src/aikey/aiport_relay.py) can bind host 443 after local administrator authentication, then drops to the named non-root UID/GID. It forwards raw TLS bytes to 8443 for at most ten minutes and accepts only the console's exact source IP. It does not read HTTP bodies, modify firewall rules or persist credentials. A tested NAS network mode is the alternative deployment path.
+
+For one diagnostic trial, start the candidate first and verify its `control_connected` health field. Then run the relay from a local Terminal, entering the macOS administrator password there, not in chat or a file:
+
+```sh
+sudo /opt/homebrew/bin/python3 -I /absolute/project/src/aikey/aiport_relay.py \
+  --listen-ip AI_PORT_LAN_IP --controller-ip CONSOLE_LAN_IP \
+  --drop-uid "$(id -u)" --drop-gid "$(id -g)"
+```
+
+The relay exits after ten minutes or SIGINT/SIGTERM. Its final counters contain no request content. The candidate still returns HTTP 501 to management requests, so this trial can reveal only the sanitized request shape, not achieve adoption or camera pairing. Stop the relay immediately after the single request has been checked.
 
 `GET /healthz` reports a successful WebSocket upgrade and whether the connection remains open. A successful upgrade proves only candidate discovery. A management request count or HTTP response cannot prove adoption, pairing, camera streaming or detection. The next test is to observe the controller's management request shape at the correct host port, then implement a credential-safe adoption state machine and reconnect. Keep camera pairing disabled until that works and the camera settings have a verified rollback.
