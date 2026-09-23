@@ -28,6 +28,7 @@ from aiohttp import web
 from .aiport_ingest import AiPortIngress, IngressError, executable_path, normalize_mac, private_source_ip
 from .aiport_detection import DetectionError, RFDetrNanoDetector
 from .aiport_tracking import TemporalTracker, TrackingError
+from .aiport_smart_settings import SmartSettingsError, parse_smart_settings
 from .aiport_credentials import CredentialError, CredentialStore
 from .aiport_adoption import AdoptionError, AdoptionStore, validate_management
 from .aiport_virtual_hardware import (
@@ -236,6 +237,7 @@ class CandidateService:
         self.timezone_rejections = 0
         self.face_db_requests_rejected = 0
         self.smart_settings_requests_rejected = 0
+        self.smart_settings_subset_matches = 0
         self.last_stream_error: str | None = None
         self.last_control_command: str | None = None
         self.observed_function_counts: dict[str, int] = {}
@@ -337,6 +339,7 @@ class CandidateService:
             "timezone_rejections": self.timezone_rejections,
             "face_db_requests_rejected": self.face_db_requests_rejected,
             "smart_settings_requests_rejected": self.smart_settings_requests_rejected,
+            "smart_settings_subset_matches": self.smart_settings_subset_matches,
             "stream_frames_decoded": self.ingress.frame_count if self.ingress else 0,
             "stream_frames_decoded_total": (
                 self.ingress.total_frames_decoded + self.ingress.frame_count
@@ -710,9 +713,19 @@ class CandidateService:
             request_id = message.get("messageId")
             if not self._params_agreed or type(request_id) is not int or request_id < 0:
                 return
-            # Protect may send zones and recognition policy in this command.
-            # Acknowledge no part of it while there is no detector. Never echo
-            # or retain its camera policy or private fields.
+            # Classify only the bounded full-frame subset while the one-camera
+            # diagnostic is active. This does not accept the policy or enable
+            # native events: geometry, timing and delivery are still unproven.
+            if (self.ingress is not None
+                    and time.time() < self.config.get("diagnostic_hello_until", 0)):
+                try:
+                    parse_smart_settings(message.get("payload"),
+                                         camera_mac=self.ingress.camera_mac)
+                except SmartSettingsError:
+                    pass
+                else:
+                    self.smart_settings_subset_matches += 1
+            # Never echo or retain the controller's nested camera policy.
             await self._reply_control(ws, function, request_id, 501,
                                       {"description": "smart_detection_unavailable"})
             self.smart_settings_requests_rejected += 1
