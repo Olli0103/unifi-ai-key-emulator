@@ -31,7 +31,7 @@ def test_two_unknown_resolution_protect_cameras_need_one_separate_ai_port():
     assert plan["ai_port_instances_required"] == 1
     assert plan["instances"][0]["camera_ids"] == [f"{1:024x}", f"{2:024x}"]
     assert plan["instances"][0]["resolution_unverified"] is True
-    assert plan["instances"][0]["apple_publish"] == "192.0.2.10:443:443/tcp"
+    assert plan["instances"][0]["apple_publish"] == "192.0.2.10:443:8443/tcp"
     assert plan["ai_key"] == {"host_ip": "192.0.2.11", "management_tcp": 8080}
     assert plan["host_discovery_udp"] == 10001
     assert plan["camera_pairing"] == "disabled"
@@ -110,7 +110,7 @@ def test_live_cli_fetches_inventory_before_planning(monkeypatch, tmp_path, capsy
     assert result == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["ai_port_instances_required"] == 1
-    assert plan["instances"][0]["apple_publish"] == "192.0.2.10:443:443/tcp"
+    assert plan["instances"][0]["apple_publish"] == "192.0.2.10:443:8443/tcp"
 
 
 def test_live_cli_requires_all_private_trust_files():
