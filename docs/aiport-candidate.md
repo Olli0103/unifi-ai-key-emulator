@@ -1,0 +1,40 @@
+# Isolated AI Port candidate
+
+This profile is for bounded protocol tests. It presents a separate AI Port identity, keeps an outbound certificate-pinned camera WebSocket to Protect and exposes an HTTPS management listener. It has no camera credentials, stream receiver, pairing handler, AI detection or adopted state. Its `/api/1.2/manage` route records only recognized JSON field names in memory and returns HTTP 501. Do not use Protect's Pair action as a test of detection until the native management and stream contracts are implemented.
+
+Protect 7.3.60 showed the separate candidate in Devices. A later Flur pairing attempt displayed **Unable to Pair** while the device panel said **Connecting**. This is not evidence of a paired camera. The candidate's temporary Mac listener on host port 8443 had no management requests; Protect expects the device's fixed HTTPS 443 endpoint. See [firmware and native discovery evidence](evidence/ai-port-firmware-contract.md).
+
+## Private configuration
+
+Create a separate state directory per instance with mode 700. Supply a newly generated, locally administered unicast MAC; `device.crt` and `device.key`; the independently pinned controller CA certificate; and a mode-600 `config.json` with exactly these fields:
+
+```json
+{
+  "controller_ip": "PRIVATE_CONSOLE_IPV4",
+  "device_ip": "DISTINCT_AI_PORT_LAN_IPV4",
+  "mac": "NEW_LOCAL_UNICAST_MAC_NO_COLONS",
+  "controller_pin": "VERIFIED_CONTROLLER_SHA256_HEX",
+  "firmware_version": "5.1.12"
+}
+```
+
+Keep the identity and TLS files private and persistent. Do not reuse the AI Key identity. The firmware version is a compatibility hint from the inspected official package, not a claim that this independent implementation runs that firmware.
+
+## Mac network test
+
+Build the dedicated image from source and run it as the state directory's owner. The container listens internally on unprivileged TCP 8443:
+
+```sh
+container build --platform linux/arm64 --file Dockerfile.aiport-candidate \
+  --tag local-aiport:candidate .
+container run --detach --name local-aiport-candidate \
+  --user "$(id -u):$(id -g)" --read-only \
+  --tmpfs /tmp:size=64m,mode=1777 \
+  --volume "${AIPORT_STATE}:/state" \
+  --publish "${AIPORT_LAN_IP}:8443:8443/tcp" \
+  local-aiport:candidate --config /state/config.json --port 8443
+```
+
+The host's port 8443 is only a transport check. Protect's device management uses HTTPS 443 on the advertised address. Apple container 1.4.1 refused a host 443 publish on this Mac with a privileged-port error. A reviewed host forwarding method with administrator authorization, or a tested NAS network mode, is needed before the controller can reach the management service. Do not change firewall rules or weaken TLS to work around the failure. Any forward must preserve TLS bytes and allow only the console's source address.
+
+`GET /healthz` reports a successful WebSocket upgrade and whether the connection remains open. A successful upgrade proves only candidate discovery. A management request count or HTTP response cannot prove adoption, pairing, camera streaming or detection. The next test is to observe the controller's management request shape at the correct host port, then implement a credential-safe adoption state machine and reconnect. Keep camera pairing disabled until that works and the camera settings have a verified rollback.

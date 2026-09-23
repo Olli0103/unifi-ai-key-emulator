@@ -21,6 +21,7 @@ database = ["psycopg[binary]>=3.2,<4"]
 [project.scripts]
 local-aikey = "aikey.cli:main"
 local-aiport-plan = "aikey.aiport_deployment:main"
+local-aiport-candidate = "aikey.aiport_candidate:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

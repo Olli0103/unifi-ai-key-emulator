@@ -20,6 +20,7 @@ from .camera_inventory import InventoryError, fetch_inventory
 
 AI_KEY_MANAGEMENT_PORT = 8080
 AI_PORT_MANAGEMENT_PORT = 443
+AI_PORT_CONTAINER_PORT = 8443
 AI_PORT_DISCOVERY_PORT = 10001
 AI_PORT_CONTROLLER_WS_PORT = 7442
 _CAMERA_ID = re.compile(r"[0-9a-fA-F]{24}\Z")
@@ -116,7 +117,7 @@ def plan_ai_ports(report: dict, *, device_ips: list[str] | None = None,
             "reserved_capacity": str(allocation["load"]),
             "host_ip": address,
             "management_tcp": AI_PORT_MANAGEMENT_PORT,
-            "apple_publish": (f"{address}:443:443/tcp" if address else None),
+            "apple_publish": (f"{address}:443:{AI_PORT_CONTAINER_PORT}/tcp" if address else None),
             "state": "planned_only",
         })
     return {
