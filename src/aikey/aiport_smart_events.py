@@ -36,6 +36,7 @@ def smart_event_payload(camera_mac: str, change: TrackChange, *,
         raise SmartEventError("invalid_smart_event") from exc
     payload = {"deviceID": device_id, "edgeType": edge,
                "clockWall": clock_wall_ms,
+               "displayTimeoutMSec": 1000,
                "zonesStatus": {str(zone_id): {"status": edge,
                                               **({"level": round(change.score * 100)}
                                                  if edge == "enter" else {})}
@@ -48,7 +49,6 @@ def smart_event_payload(camera_mac: str, change: TrackChange, *,
             0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
         raise SmartEventError("invalid_smart_event")
     payload.update({
-        "displayTimeoutMSec": 1000,
         "objectTypes": ["person"],
         "descriptors": [{
             "trackerID": change.track_id,
