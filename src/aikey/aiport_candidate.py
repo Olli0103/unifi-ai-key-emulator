@@ -25,6 +25,9 @@ from aiohttp import web
 
 from .aiport_ingest import AiPortIngress, IngressError, executable_path, normalize_mac, private_source_ip
 from .aiport_credentials import CredentialError, CredentialStore
+from .aiport_virtual_hardware import (
+    VirtualHardwareError, VirtualSoundLedStore, VirtualTimezoneStore,
+)
 from .device import VerifiedConnector
 
 
@@ -177,6 +180,10 @@ class CandidateService:
         self.ssh_start_rejections = 0
         self.credential_rotations = 0
         self.credential_rotations_rejected = 0
+        self.sound_led_replies = 0
+        self.sound_led_rejections = 0
+        self.timezone_replies = 0
+        self.timezone_rejections = 0
         self.last_stream_error: str | None = None
         self.last_control_command: str | None = None
         self.observed_function_counts: dict[str, int] = {}
@@ -191,6 +198,8 @@ class CandidateService:
         self._ingress_close_task: asyncio.Task | None = None
         self.started = time.monotonic()
         self.credentials = CredentialStore(self.state_dir)
+        self.virtual_sound_led = VirtualSoundLedStore(self.state_dir)
+        self.virtual_timezone = VirtualTimezoneStore(self.state_dir)
         self.sessions: dict[str, float] = {}
         self._auth_failures: dict[str, list[float]] = {}
         self._auth_lock = asyncio.Lock()
@@ -231,6 +240,10 @@ class CandidateService:
             "ssh_start_rejections": self.ssh_start_rejections,
             "credential_rotations": self.credential_rotations,
             "credential_rotations_rejected": self.credential_rotations_rejected,
+            "sound_led_replies": self.sound_led_replies,
+            "sound_led_rejections": self.sound_led_rejections,
+            "timezone_replies": self.timezone_replies,
+            "timezone_rejections": self.timezone_rejections,
             "stream_frames_decoded": self.ingress.frame_count if self.ingress else 0,
             "stream_frames_decoded_total": (
                 self.ingress.total_frames_decoded + self.ingress.frame_count
@@ -506,6 +519,48 @@ class CandidateService:
             await self._reply_control(ws, function, request_id, 0, {})
             self.credential_rotations += 1
             return
+        if function == "ChangeSoundLedSettings":
+            self.last_control_command = function
+            request_id = message.get("messageId")
+            if not self._params_agreed or type(request_id) is not int or request_id < 0:
+                return
+            if (time.time() >= self.config.get("diagnostic_hello_until", 0)
+                    or self.credentials.credential is None):
+                await self._reply_control(ws, function, request_id, 5,
+                                          {"description": "diagnostic_unavailable"})
+                self.sound_led_rejections += 1
+                return
+            try:
+                await asyncio.to_thread(self.virtual_sound_led.apply, message.get("payload"))
+            except VirtualHardwareError:
+                await self._reply_control(ws, function, request_id, 5,
+                                          {"description": "settings_rejected"})
+                self.sound_led_rejections += 1
+                return
+            await self._reply_control(ws, function, request_id, 0, {})
+            self.sound_led_replies += 1
+            return
+        if function == "ChangeDeviceSettings":
+            self.last_control_command = function
+            request_id = message.get("messageId")
+            if not self._params_agreed or type(request_id) is not int or request_id < 0:
+                return
+            if (time.time() >= self.config.get("diagnostic_hello_until", 0)
+                    or self.credentials.credential is None):
+                await self._reply_control(ws, function, request_id, 5,
+                                          {"description": "diagnostic_unavailable"})
+                self.timezone_rejections += 1
+                return
+            try:
+                await asyncio.to_thread(self.virtual_timezone.apply, message.get("payload"))
+            except VirtualHardwareError:
+                await self._reply_control(ws, function, request_id, 5,
+                                          {"description": "settings_rejected"})
+                self.timezone_rejections += 1
+                return
+            await self._reply_control(ws, function, request_id, 0, {})
+            self.timezone_replies += 1
+            return
         if function in {"GetStreamList", "UiStreamControl", "OnvifStreamControl"}:
             self.last_control_command = function
             request_id = message.get("messageId")
@@ -543,7 +598,7 @@ class CandidateService:
                                           {"description": "stream_ingest_unavailable"})
                 self.stream_controls_rejected += 1
             return
-        if function in {"ChangeDeviceSettings", "GetRequest"}:
+        if function == "GetRequest":
             self.last_control_command = function
 
     @staticmethod
