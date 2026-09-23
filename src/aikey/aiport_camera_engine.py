@@ -46,6 +46,7 @@ class CameraPolicyEngine:
         self._active: dict[str, tuple[TrackChange, tuple[int, ...]] | None] = {
             camera: None for camera in cameras}
         self._event_counts = {camera: 0 for camera in cameras}
+        self._generations = dict.fromkeys(cameras, 0)
         self._max_events = max_events_per_camera
 
     def _camera(self, camera_mac: str) -> str:
@@ -72,6 +73,7 @@ class CameraPolicyEngine:
         self._active[camera] = None
         self._trackers[camera] = TemporalTracker()
         self._policies[camera] = policy
+        self._generations[camera] += 1
         return result
 
     def observe(self, camera_mac: str, observations: tuple[ObjectObservation, ...],
@@ -112,3 +114,7 @@ class CameraPolicyEngine:
 
     def has_policy(self, camera_mac: str) -> bool:
         return self._policies[self._camera(camera_mac)] is not None
+
+    def policy_generation(self, camera_mac: str) -> int:
+        """Tag frames so a policy change cannot consume an older model result."""
+        return self._generations[self._camera(camera_mac)]
