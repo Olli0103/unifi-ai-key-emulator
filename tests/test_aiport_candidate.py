@@ -247,6 +247,121 @@ async def test_candidate_records_websocket_close_code_without_reason(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_diagnostic_stream_survives_short_control_reconnect(tmp_path):
+    config = fixture_state(tmp_path)
+    config["controller_ip"] = "127.0.0.1"
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    seen_stream_list = asyncio.Event()
+    stream_lists = []
+    connections = 0
+
+    class FakeIngress:
+        camera_mac = "2A1122334455"
+
+        def __init__(self):
+            self.active = False
+            self.closes = 0
+
+        async def control(self, payload):
+            self.active = payload["streaming"]
+            return {"status": "started" if self.active else "stopped",
+                    "usedPoints": 2 if self.active else 0}
+
+        def list_streams(self):
+            return [{"deviceID": self.camera_mac, "points": 2}] if self.active else []
+
+        async def close(self):
+            self.active = False
+            self.closes += 1
+
+    async def websocket(request):
+        nonlocal connections
+        connections += 1
+        number = connections
+        ws = web.WebSocketResponse(protocols=["secure_transfer"])
+        await ws.prepare(request)
+        async for frame in ws:
+            if frame.type != aiohttp.WSMsgType.BINARY:
+                continue
+            message = json.loads(frame.data)
+            function = message["functionName"]
+            if function == "ubnt_avclient_hello":
+                await ws.send_bytes(json.dumps({"functionName": function,
+                    "inResponseTo": message["messageId"]}).encode())
+                await ws.send_bytes(json.dumps({"functionName":
+                    "ubnt_avclient_paramAgreement", "messageId": 20}).encode())
+            elif function == "ubnt_avclient_paramAgreement":
+                if number == 1:
+                    await ws.send_bytes(json.dumps({"functionName": "UiStreamControl",
+                        "messageId": 21, "payload": {"streaming": True}}).encode())
+                else:
+                    await ws.send_bytes(json.dumps({"functionName": "GetStreamList",
+                        "messageId": 22, "payload": {}}).encode())
+            elif message.get("inResponseTo") == 21:
+                assert message["statusCode"] == 0
+            elif function == "EventAIPortStatus" and number == 1:
+                await ws.close(code=1000)
+            elif message.get("inResponseTo") == 22:
+                stream_lists.append(message["payload"]["list"])
+                seen_stream_list.set()
+                await ws.close(code=1000)
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/camera/1.0/ws", websocket)
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.load_cert_chain(tmp_path / "device.crt", tmp_path / "device.key")
+    server = TestServer(app)
+    await server.start_server(ssl=server_context)
+    service = CandidateService(config, tmp_path, control_port=server.port)
+    ingress = FakeIngress()
+    service.ingress = ingress
+    task = asyncio.create_task(service._connect_loop())
+    try:
+        await asyncio.wait_for(seen_stream_list.wait(), timeout=8)
+        assert connections >= 2
+        assert stream_lists == [[{"deviceID": ingress.camera_mac, "points": 2}]]
+        assert ingress.closes == 0
+        assert service.stream_reconnects_preserved == 1
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await service.stop()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_stream_closes_if_control_does_not_reconnect(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    service = CandidateService(config, tmp_path, disconnect_grace_seconds=0.02)
+
+    class FakeIngress:
+        def __init__(self):
+            self.active = True
+            self.closed = asyncio.Event()
+
+        def list_streams(self):
+            return [{"deviceID": "2A1122334455", "points": 2}] if self.active else []
+
+        async def close(self):
+            self.active = False
+            self.closed.set()
+
+    ingress = FakeIngress()
+    service.ingress = ingress
+    try:
+        await service._schedule_ingress_close()
+        assert ingress.active
+        await asyncio.wait_for(ingress.closed.wait(), timeout=1)
+        assert not ingress.active
+        assert service.stream_grace_closures == 1
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
 async def test_diagnostic_observes_only_fixed_function_names(tmp_path):
     config = fixture_state(tmp_path)
     service = CandidateService(config, tmp_path)
