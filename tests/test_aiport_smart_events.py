@@ -33,6 +33,17 @@ def test_leave_payload_closes_same_camera_without_new_object():
                        "trackerIDAttrMap": {}}
 
 
+def test_zone_enter_and_leave_keep_same_numeric_zone_id():
+    enter = smart_event_payload("2A1122334455", PERSON, edge="enter",
+                                clock_wall_ms=1_700_000_000_000, zone_ids=(7,))
+    assert enter["zonesStatus"] == {"7": {"status": "enter", "level": 87}}
+    assert enter["descriptors"][0]["zones"] == [7]
+    leave = smart_event_payload("2A1122334455", PERSON, edge="leave",
+                                clock_wall_ms=1_700_000_001_000, zone_ids=(7,))
+    assert leave["zonesStatus"] == {"7": {"status": "leave"}}
+    assert "descriptors" not in leave
+
+
 @pytest.mark.parametrize("track,edge,clock", [
     (TrackChange("enter", 1, "vehicle", "car", 0.9, (0.1, 0.2, 0.4, 0.5)),
      "enter", 1_700_000_000_000),

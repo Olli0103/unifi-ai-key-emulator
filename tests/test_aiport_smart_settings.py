@@ -79,6 +79,20 @@ def test_accepts_camera_bound_full_frame_policy_without_retaining_raw_payload():
     assert not hasattr(policy, "zones")
 
 
+def test_person_zone_policy_matches_only_box_fully_inside_polygon():
+    raw = full_frame_policy()
+    raw["enableSmartDetect"] = ["person"]
+    raw["zones"] = {"7": {"coord": [100, 100, 900, 100, 900, 900, 100, 900],
+                          "objectTypes": ["person"], "sensitivity": 50,
+                          "triggerLight": True, "triggerAccessTypes": []}}
+    policy = parse_smart_settings(raw, camera_mac=CAMERA)
+    assert policy.zones_configured
+    assert policy.person_zone_ids((0.2, 0.2, 0.5, 0.8)) == (7,)
+    assert policy.person_zone_ids((0.05, 0.2, 0.5, 0.8)) is None
+    raw["zones"]["7"]["coord"][:] = [0, 0, 1000, 0, 1000, 1000]
+    assert policy.person_zone_ids((0.2, 0.2, 0.5, 0.8)) == (7,)
+
+
 def test_accepts_only_explicitly_disabled_reverification_policy():
     raw = full_frame_policy()
     raw["reVerificationPolicy"] = {
@@ -142,7 +156,7 @@ def test_accepts_deprecated_read_only_auto_recognition_precision():
     ("enableSmartDetect", ["face"], "unsupported_smart_feature"),
     ("enableSmartDetect", ["person", "person"], "invalid_smart_settings"),
     ("zones", {"1": {"coord": [0, 0, 1000, 0, 1000, 1000]}},
-     "unsupported_smart_feature"),
+     "invalid_smart_zone"),
     ("excludeZones", {"2": {"coord": [0, 0, 1000, 0, 1000, 1000]}},
      "unsupported_smart_feature"),
     ("lines", {"1": {}}, "unsupported_smart_feature"),
