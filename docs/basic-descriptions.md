@@ -26,6 +26,8 @@ For a first test, enable the worker path with an explicit single-camera, single-
 
 Existing scopes without `kind` retain their on-demand-only behavior. This scope accepts no on-demand or deep-mode jobs. The reservation is durable before the first media fetch, survives restart, and cannot be reused after a failure or uncertain callback. Repeated delivery of a completed identical job returns the existing result without another inference or upload.
 
+For a paired camera-family trial, replace `test_scope` with `test_scopes`, a list of one or two objects in the same format. Every camera ID and permit ID must be distinct. Each camera has its own durable one-use reservation, so an event from one cannot consume the other's permit. Existing single-scope configurations continue to work. Supplying both fields, an empty list, or more than two scopes fails validation. This is still a bounded trial, not all-camera mode.
+
 Continuous mode is not yet deployed. Its planned global limit is 12 new jobs per rolling hour across all discovered cameras, persisted across restarts.
 
 In the examined controller, a new smart-detection event passes through native key-moment selection and a short coalescing delay. The basic dispatcher requires `recognizeAnythingSettings.enabled` and the selected camera in its camera list, or `allCameras`. It sets `postVLM` from `aiSummarySettings.enabled`. Configure only the intended camera through the normal Protect UI. These settings are controller policies, distinct from the worker's local permit.

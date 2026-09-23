@@ -42,6 +42,24 @@ def validate_test_scope_config(value):
     return dict(value)
 
 
+def configured_test_scopes(options):
+    """Validate one or two independent single-use camera permits."""
+    if "test_scope" in options and "test_scopes" in options:
+        raise WorkerError("worker.test_scope and worker.test_scopes are mutually exclusive")
+    if "test_scope" in options:
+        return (validate_test_scope_config(options["test_scope"]),)
+    if "test_scopes" not in options:
+        return ()
+    values = options["test_scopes"]
+    if not isinstance(values, list) or not 1 <= len(values) <= 2:
+        raise WorkerError("worker.test_scopes requires one or two test scopes")
+    scopes = tuple(validate_test_scope_config(value) for value in values)
+    if (len({scope["camera_id"] for scope in scopes}) != len(scopes)
+            or len({scope["permit_id"] for scope in scopes}) != len(scopes)):
+        raise WorkerError("worker.test_scopes requires distinct cameras and permits")
+    return scopes
+
+
 _CALLBACK_TASK = re.compile(r"^/internal/aiprocessors/descriptions/([A-Za-z0-9_-]+)$")
 _CALLBACK_UPLOAD = re.compile(r"^/internal/camera-upload/[A-Za-z0-9_-]+$")
 _LEGACY_CALLBACK = "/internal/aiprocessors/recognize-anything"
@@ -139,17 +157,22 @@ class JobProcessor:
             raise WorkerError("Controller media origin must be one of controller_origins")
         self.state_dir = Path(state_dir) / "worker-jobs"
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.test_scope = (validate_test_scope_config(self.options["test_scope"])
-                           if "test_scope" in self.options else None)
+        self.test_scopes = configured_test_scopes(self.options)
+        self.test_scope = self.test_scopes[0] if "test_scope" in self.options else None
+        self._scopes_by_camera = {scope["camera_id"]: scope for scope in self.test_scopes}
+        self._scope_paths = {}
         self._scope_path = None
-        if self.test_scope is not None:
+        if self.test_scopes:
             scope_dir = self.state_dir.parent / "worker-test-scopes"
             if scope_dir.is_symlink():
                 raise WorkerError("Test scope state directory must not be a symlink")
             scope_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-            permit_hash = hashlib.sha256(self.test_scope["permit_id"].encode()).hexdigest()
-            self._scope_path = scope_dir / f"{permit_hash}.json"
-            self._read_scope_reservation()
+            for scope in self.test_scopes:
+                permit_hash = hashlib.sha256(scope["permit_id"].encode()).hexdigest()
+                self._scope_paths[scope["camera_id"]] = scope_dir / f"{permit_hash}.json"
+                self._read_scope_reservation(scope)
+            if self.test_scope is not None:
+                self._scope_path = self._scope_paths[self.test_scope["camera_id"]]
         self.max_bytes = self._positive("max_media_bytes", 10 * 1024 * 1024)
         self.max_video_bytes = self._positive("max_video_bytes", 100 * 1024 * 1024)
         self.max_video_duration_ms = self._positive("max_video_duration_ms", 120000)
@@ -326,7 +349,7 @@ class JobProcessor:
         if type(timeout_ms) is not int or timeout_ms <= 0:
             raise WorkerError("timeoutMs must be positive")
         budget = min(self.timeout_s, timeout_ms / 1000)
-        if self.test_scope is not None:
+        if self.test_scopes:
             budget = min(budget, 15)
         normalized = {"operation": operation, "payload": body, "callback": callback,
                       "callbackKind": callback_kind, "media": media}
@@ -339,10 +362,12 @@ class JobProcessor:
         return job_id, fingerprint, operation, body, callback, callback_kind, media, budget
 
     def _validate_test_scope(self, operation, body, media):
-        if self.test_scope is None:
+        if not self.test_scopes:
             return
-        if (self.test_scope.get("kind", "on_demand") != "on_demand"
-                or operation != "on_demand" or body.get("cameraId") != self.test_scope["camera_id"]):
+        camera_id = body.get("cameraId")
+        scope = self._scopes_by_camera.get(camera_id) if isinstance(camera_id, str) else None
+        if (scope is None or scope.get("kind", "on_demand") != "on_demand"
+                or operation != "on_demand"):
             raise WorkerError("Test scope permits only on-demand work for its configured camera")
         if len(media) != 1 or media[0][0] != "video":
             raise WorkerError("Test scope requires one video export")
@@ -378,8 +403,7 @@ class JobProcessor:
         optional recognition metadata is retained for identity but not processed.
         """
         if (set(command) != {"command", "payload"} or command["command"] != "recognizeKeyFrames"
-                or self.test_scope is None
-                or self.test_scope.get("kind") != "recognizeKeyFrames"):
+                or not self.test_scopes):
             raise WorkerError("recognizeKeyFrames requires its explicit single-use test scope")
         body = command["payload"]
         required = {"reqUrl", "resUrl", "ramType", "camera", "event", "channel", "start", "end",
@@ -389,7 +413,9 @@ class JobProcessor:
                                           "personMeta", "faceMeta", "vehicleMeta"}):
             raise WorkerError("Unsupported recognizeKeyFrames payload fields")
         body = json.loads(_json(body))
-        if (body["camera"] != self.test_scope["camera_id"]
+        camera_id = body.get("camera")
+        scope = self._scopes_by_camera.get(camera_id) if isinstance(camera_id, str) else None
+        if (scope is None or scope.get("kind") != "recognizeKeyFrames"
                 or not isinstance(body["event"], str)
                 or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])
                 or body["ramType"] not in ("video", "videoWithRecognition") or body["postVLM"] is not True
@@ -430,8 +456,14 @@ class JobProcessor:
         return (job_id, fingerprint, "recognizeKeyFrames", body, callback, "legacy_tagging",
                 media, min(self.timeout_s, 30))
 
-    def _read_scope_reservation(self):
-        path = self._scope_path
+    def _read_scope_reservation(self, scope=None):
+        if scope is None:
+            if not self.test_scopes:
+                return None
+            if len(self.test_scopes) != 1:
+                raise WorkerError("Select a camera when reading multiple test scopes")
+            scope = self.test_scopes[0]
+        path = self._scope_paths.get(scope["camera_id"])
         if path is None:
             return None
         try:
@@ -444,9 +476,9 @@ class JobProcessor:
             record = json.loads(path.read_text())
             required = {"schema", "permit_id", "camera_id", "job_id", "fingerprint", "consumed_at"}
             if (not required <= set(record) or set(record) - required - {"kind"}
-                    or record["schema"] != 1 or record["permit_id"] != self.test_scope["permit_id"]
-                    or record["camera_id"] != self.test_scope["camera_id"]
-                    or record.get("kind", "on_demand") != self.test_scope.get("kind", "on_demand")
+                    or record["schema"] != 1 or record["permit_id"] != scope["permit_id"]
+                    or record["camera_id"] != scope["camera_id"]
+                    or record.get("kind", "on_demand") != scope.get("kind", "on_demand")
                     or any(not isinstance(record[key], str) or not re.fullmatch(r"[0-9a-f]{64}", record[key])
                            for key in ("job_id", "fingerprint"))
                     or type(record["consumed_at"]) is not int or record["consumed_at"] <= 0):
@@ -456,22 +488,27 @@ class JobProcessor:
             raise WorkerError("Invalid test scope reservation; inspect it without resetting the permit") from exc
 
     def _reserve_test_scope(self, job):
-        if self.test_scope is None:
+        if not self.test_scopes:
             return
-        if self._read_scope_reservation() is not None:
+        camera_id = job.payload.get("camera") if job.operation == "recognizeKeyFrames" else job.payload.get("cameraId")
+        scope = self._scopes_by_camera.get(camera_id)
+        if scope is None:
+            raise WorkerError("Test scope camera is not configured")
+        path = self._scope_paths[camera_id]
+        if self._read_scope_reservation(scope) is not None:
             raise WorkerError("Test scope permit is already consumed; no further media or inference is allowed")
-        record = {"schema": 1, **self.test_scope, "job_id": job.job_id,
+        record = {"schema": 1, **scope, "job_id": job.job_id,
                   "fingerprint": job.fingerprint, "consumed_at": int(time.time())}
         temporary = None
         try:
-            descriptor, temporary = tempfile.mkstemp(prefix=".permit-", dir=self._scope_path.parent)
+            descriptor, temporary = tempfile.mkstemp(prefix=".permit-", dir=path.parent)
             with os.fdopen(descriptor, "wb") as output:
                 output.write(_json(record))
                 output.flush()
                 os.fsync(output.fileno())
             # Atomic publication must not overwrite a reservation from another process.
-            os.link(temporary, self._scope_path)
-            directory = os.open(self._scope_path.parent, os.O_RDONLY)
+            os.link(temporary, path)
+            directory = os.open(path.parent, os.O_RDONLY)
             try:
                 os.fsync(directory)
             finally:
