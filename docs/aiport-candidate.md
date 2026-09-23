@@ -1,5 +1,7 @@
 # Isolated AI Port candidate
 
+For the Linux NAS multi-instance network manifest, see [AI Port NAS Compose](aiport-nas-compose.md).
+
 This profile is for bounded protocol tests. It presents a separate AI Port identity, keeps an outbound certificate-pinned camera WebSocket to Protect and exposes an HTTPS management listener. Camera ingress is off unless a private, expiring diagnostic policy enables one camera or a bounded pool. The profile has no camera credentials and does not advertise AI detection by default. Its management-token adoption handshake has passed synthetic tests; a separate existing-device reconnect was accepted by Protect 7.3.60 and survived a container restart. One legacy camera paired and supplied frames to the optional local model during a bounded test; native detection delivery remains unverified.
 
 Protect 7.3.60 showed the separate candidate in Devices. An early legacy-camera pairing attempt displayed **Unable to Pair** while the device panel said **Connecting**. The candidate's temporary Mac listener on host port 8443 had no management requests. A later live trial proved that camera pairing uses the WebSocket stream command and can succeed without that management request. See [firmware and native discovery evidence](evidence/ai-port-firmware-contract.md).
