@@ -130,9 +130,22 @@ class SmartPolicy:
     enabled_types: frozenset[str]
     event_start_ms: int
     event_stop_ms: int
+    person_reverification_ceiling: float | None
 
     def allows(self, kind: str) -> bool:
         return kind in self.enabled_types
+
+    def allows_person_score(self, score: float) -> bool:
+        """Suppress uncertain person observations needing a second stage.
+
+        A high score outside Protect's reverification range needs no second
+        stage. This deliberately drops the uncertain range; it does not claim
+        to perform reverification or reproduce Protect's AI Key behavior.
+        """
+        return (self.allows("person") and type(score) in (int, float)
+                and math.isfinite(score) and 0 <= score <= 1
+                and (self.person_reverification_ceiling is None
+                     or score > self.person_reverification_ceiling))
 
 
 def _timing(value: object) -> int:
@@ -151,27 +164,45 @@ def _disabled_reverification(value: object) -> bool:
                for kind in ("person", "vehicle", "animal"))
 
 
-def _reverification_compatible(value: object, requested: list[str]) -> bool:
-    """Require disabled reverification for every class we would emit.
+def _reverification_ceiling(value: object, requested: list[str]) -> float | None:
+    """Validate the old per-class policy and derive a person event gate.
 
-    Protect may send policies for other classes even when this camera enables
-    person only. Those classes never produce an event from this candidate.
+    Other enabled classes are tolerated only when they are not requested by
+    this camera. The candidate does not emit those classes in event mode.
     """
-    if (not isinstance(value, dict) or set(value) != _OBJECT_TYPES
-            or any(not isinstance(item, dict) or len(item) > 8
-                   or type(item.get("enable")) is not bool
-                   for item in value.values())):
-        return False
-    return all(value[kind]["enable"] is False for kind in requested)
+    if not isinstance(value, dict) or set(value) != _OBJECT_TYPES:
+        raise SmartSettingsError("unsupported_smart_feature")
+    ceiling = None
+    for kind, item in value.items():
+        if not isinstance(item, dict) or type(item.get("enable")) is not bool:
+            raise SmartSettingsError("unsupported_smart_feature")
+        if not item["enable"]:
+            if set(item) != {"enable"}:
+                raise SmartSettingsError("unsupported_smart_feature")
+            continue
+        if set(item) != {"enable", "mode", "minPresenceProbability",
+                         "maxPresenceProbability"} or item["mode"] != "custom":
+            raise SmartSettingsError("unsupported_smart_feature")
+        minimum = item["minPresenceProbability"]
+        maximum = item["maxPresenceProbability"]
+        if (type(minimum) is not int or type(maximum) is not int
+                or not 0 <= minimum <= maximum <= 100):
+            raise SmartSettingsError("unsupported_smart_feature")
+        if kind in requested:
+            if kind != "person":
+                raise SmartSettingsError("unsupported_smart_feature")
+            ceiling = maximum / 100
+    return ceiling
 
 
 def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
     """Accept only full-frame person, vehicle and animal settings.
 
-    Any configured zone, line, exclusion, tamper, PTZ, access or second-stage
-    policy is unsupported until the candidate can enforce it. The returned
-    policy contains no raw nested payload and cannot enable native events by
-    itself.
+    Any configured zone, line, exclusion, tamper, PTZ or access policy remains
+    unsupported. Enabled person reverification suppresses uncertain model
+    observations; it is not a second-stage inference implementation. The
+    returned policy contains no raw nested payload and cannot enable native
+    events by itself.
     """
     if (not isinstance(payload, dict) or not set(payload) <= _ALLOWED
             or not {"deviceID", "enableSmartDetect", "eventStartMSec",
@@ -211,9 +242,8 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
                 type(value) is dict and not value):
             raise SmartSettingsError("unsupported_smart_feature")
     reverify = payload.get("reVerificationPolicy")
-    if reverify not in (None, {}) and not _reverification_compatible(
-            reverify, requested):
-        raise SmartSettingsError("unsupported_smart_feature")
+    ceiling = (_reverification_ceiling(reverify, requested)
+               if reverify not in (None, {}) else None)
     tamper = payload.get("enableTamperDetection")
     if tamper is not None and tamper is not False:
         raise SmartSettingsError("unsupported_smart_feature")
@@ -232,4 +262,4 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
             if (type(value) not in (int, float) or not math.isfinite(value)
                     or not 0 <= value <= 100):
                 raise SmartSettingsError("invalid_smart_settings")
-    return SmartPolicy(expected, frozenset(requested), start_ms, stop_ms)
+    return SmartPolicy(expected, frozenset(requested), start_ms, stop_ms, ceiling)

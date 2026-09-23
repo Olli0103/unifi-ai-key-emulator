@@ -95,16 +95,37 @@ def test_ignores_reverification_for_detection_classes_not_requested():
     raw["reVerificationPolicy"] = {
         "person": {"enable": False},
         "vehicle": {"enable": True, "mode": "custom",
-                    "minPresenceProbability": 0.4,
-                    "maxPresenceProbability": 0.8},
+                    "minPresenceProbability": 40,
+                    "maxPresenceProbability": 80},
         "animal": {"enable": True, "mode": "custom",
-                   "minPresenceProbability": 0.4,
-                   "maxPresenceProbability": 0.8},
+                   "minPresenceProbability": 40,
+                   "maxPresenceProbability": 80},
     }
     assert parse_smart_settings(raw, camera_mac=CAMERA).allows("person")
     raw["reVerificationPolicy"]["person"]["enable"] = True
     with pytest.raises(SmartSettingsError, match="unsupported_smart_feature"):
         parse_smart_settings(raw, camera_mac=CAMERA)
+
+
+def test_person_reverification_suppresses_uncertain_confidence():
+    raw = full_frame_policy()
+    raw["enableSmartDetect"] = ["person"]
+    raw["reVerificationPolicy"] = {
+        "person": {"enable": True, "mode": "custom",
+                   "minPresenceProbability": 40,
+                   "maxPresenceProbability": 80},
+        "vehicle": {"enable": False}, "animal": {"enable": False},
+    }
+    policy = parse_smart_settings(raw, camera_mac=CAMERA)
+    assert policy.person_reverification_ceiling == 0.8
+    assert not policy.allows_person_score(0.79)
+    assert not policy.allows_person_score(0.8)
+    assert policy.allows_person_score(0.81)
+    assert not policy.allows_person_score(float("nan"))
+    for invalid in (True, 80.0, -1, 101):
+        raw["reVerificationPolicy"]["person"]["maxPresenceProbability"] = invalid
+        with pytest.raises(SmartSettingsError, match="unsupported_smart_feature"):
+            parse_smart_settings(raw, camera_mac=CAMERA)
 
 
 def test_accepts_deprecated_read_only_auto_recognition_precision():
