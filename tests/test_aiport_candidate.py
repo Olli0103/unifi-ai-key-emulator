@@ -190,6 +190,138 @@ def test_event_probe_requires_model_same_deadline_and_bounded_frames(tmp_path):
         load_config(tmp_path / "config.json")
 
 
+def native_probe_config(tmp_path):
+    config = fixture_state(tmp_path)
+    until = int(time.time()) + 90
+    config.update({
+        "diagnostic_hello_until": until,
+        "diagnostic_smart_probe_until": until,
+        "diagnostic_event_until": until,
+        "diagnostic_stream": {"camera_mac": "2A1122334455",
+                              "source_ip": "192.168.10.1", "ffmpeg_path": sys.executable},
+        "diagnostic_native_event_probe": {
+            "camera_mac": "2A1122334455", "nonce": "a" * 32,
+            "box": [0.2, 0.2, 0.5, 0.8]},
+    })
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    return config
+
+
+@pytest.mark.parametrize("mutation", ["wrong_camera", "bad_nonce", "bad_box",
+                                      "with_detector", "other_class", "no_deadline"])
+def test_native_event_probe_rejects_unsafe_configuration(tmp_path, mutation):
+    config = native_probe_config(tmp_path)
+    assert load_config(tmp_path / "config.json")["diagnostic_native_event_probe"][
+        "camera_mac"] == "2A1122334455"
+    if mutation == "wrong_camera":
+        config["diagnostic_native_event_probe"]["camera_mac"] = "2A1122334456"
+    elif mutation == "bad_nonce":
+        config["diagnostic_native_event_probe"]["nonce"] = "short"
+    elif mutation == "bad_box":
+        config["diagnostic_native_event_probe"]["box"] = [0.9, 0.2, 0.5, 0.8]
+    elif mutation == "with_detector":
+        config["diagnostic_detector"] = {"checkpoint_path": "/tmp/model.pth",
+                                         "checkpoint_sha256": "0" * 64,
+                                         "threshold": 0.5, "max_frames": 2}
+    elif mutation == "other_class":
+        config["diagnostic_smart_type"] = "vehicle"
+    else:
+        del config["diagnostic_event_until"]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError):
+        load_config(tmp_path / "config.json")
+
+
+@pytest.mark.asyncio
+async def test_native_event_probe_sends_one_test_pair_and_cannot_replay_after_restart(
+        tmp_path, monkeypatch):
+    native_probe_config(tmp_path)
+    config = load_config(tmp_path / "config.json")
+    policy = {"deviceID": "2A1122334455", "algoVersion": "beta",
+              "enableSmartDetect": ["person"], "eventStartMSec": 1000,
+              "eventStopMSec": 3000, "zones": {}, "lines": {},
+              "reVerificationPolicy": {
+                  kind: {"enable": False}
+                  for kind in ("person", "vehicle", "animal")}}
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    real_sleep = asyncio.sleep
+
+    async def no_sleep(_seconds):
+        await real_sleep(0)
+
+    monkeypatch.setattr("aikey.aiport_candidate.asyncio.sleep", no_sleep)
+    command = {"functionName": "ChangeSmartDetectSettings", "messageId": 16,
+               "responseExpected": True, "payload": policy}
+    for attempt in (1, 2):
+        service = CandidateService(config, tmp_path)
+        service._params_agreed = True
+        service.ingress.list_streams = lambda: [{"active": True}]
+        sink = Sink()
+        service._current_ws = sink
+        await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+        if attempt == 1:
+            assert [msg["functionName"] for msg in sink.messages] == [
+                "ChangeSmartDetectSettings", "EventSmartDetect", "EventSmartDetect"]
+            assert [msg["payload"]["edgeType"] for msg in sink.messages[1:]] == [
+                "enter", "leave"]
+            assert service.synthetic_probe_claimed == 1
+            assert service.smart_events_entered == service.smart_events_left == 1
+        else:
+            assert [msg["functionName"] for msg in sink.messages] == [
+                "ChangeSmartDetectSettings"]
+            assert service.synthetic_probe_claimed == 0
+        await service.stop()
+    marker = tmp_path / (".native-event-probe-" + "a" * 32)
+    assert marker.read_text() == "claimed\n"
+    assert marker.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.asyncio
+async def test_native_event_probe_needs_active_stream_and_supported_policy(tmp_path):
+    native_probe_config(tmp_path)
+    service = CandidateService(load_config(tmp_path / "config.json"), tmp_path)
+    service._params_agreed = True
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    policy = {"deviceID": "2A1122334455", "algoVersion": "beta",
+              "enableSmartDetect": ["person"], "eventStartMSec": 1000,
+              "eventStopMSec": 3000, "zones": {}, "lines": {},
+              "reVerificationPolicy": {
+                  kind: {"enable": False}
+                  for kind in ("person", "vehicle", "animal")}}
+    command = {"functionName": "ChangeSmartDetectSettings", "messageId": 16,
+               "responseExpected": True, "payload": policy}
+    service.ingress.list_streams = lambda: []
+    await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+    assert service.synthetic_probe_claimed == 0
+    assert not list(tmp_path.glob(".native-event-probe-*"))
+    service.ingress.list_streams = lambda: [{"active": True}]
+    command["messageId"] = 17
+    command["payload"]["reVerificationPolicy"]["person"] = {
+        "enable": True, "mode": "custom", "minPresenceProbability": 99,
+        "maxPresenceProbability": 100}
+    await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+    assert service.synthetic_probe_claimed == 0
+    assert not list(tmp_path.glob(".native-event-probe-*"))
+    assert not any(msg["functionName"] == "EventSmartDetect" for msg in sink.messages)
+    await service.stop()
+
+
 def test_expired_stream_diagnostic_restarts_passively(tmp_path):
     config = fixture_state(tmp_path)
     config["diagnostic_hello_until"] = int(time.time()) - 1
