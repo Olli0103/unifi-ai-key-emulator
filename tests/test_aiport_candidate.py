@@ -208,6 +208,45 @@ async def test_candidate_counts_control_frames_without_exposing_payload(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_candidate_records_websocket_close_code_without_reason(tmp_path):
+    config = fixture_state(tmp_path)
+    config["controller_ip"] = "127.0.0.1"
+    close_reason = "synthetic-private-camera-token"
+
+    async def websocket(request):
+        ws = web.WebSocketResponse(protocols=["secure_transfer"])
+        await ws.prepare(request)
+        await ws.close(code=4001, message=close_reason.encode())
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/camera/1.0/ws", websocket)
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.load_cert_chain(tmp_path / "device.crt", tmp_path / "device.key")
+    server = TestServer(app)
+    await server.start_server(ssl=server_context)
+    try:
+        service = CandidateService(config, tmp_path, control_port=server.port)
+        task = asyncio.create_task(service._connect_loop())
+        try:
+            for _ in range(100):
+                if service.websocket_close_codes:
+                    break
+                await asyncio.sleep(0.01)
+            response = await service._health(None)
+            health = json.loads(response.text)
+            assert health["websocket_close_codes"] == {"4001": 1}
+            assert health["last_disconnect_origin"] == "peer_or_transport"
+            assert close_reason not in response.text
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+    finally:
+        await server.close()
+
+
+@pytest.mark.asyncio
 async def test_diagnostic_observes_only_fixed_function_names(tmp_path):
     config = fixture_state(tmp_path)
     service = CandidateService(config, tmp_path)
