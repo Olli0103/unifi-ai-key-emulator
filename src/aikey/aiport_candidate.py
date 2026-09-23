@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import ipaddress
 import json
 import os
@@ -44,14 +45,18 @@ _ALLOWED_MGMT = frozenset(("token", "hosts", "protocol", "mode", "nvr",
                            "consoleName"))
 _OBSERVABLE_FUNCTIONS = frozenset({
     "ubnt_avclient_hello", "ubnt_avclient_paramAgreement", "GetStreamList",
-    "ubnt_avclient_timeSync", "GetSystemStats", "NetworkStatus",
+    "ubnt_avclient_timeSync", "ubnt_avclient_time", "ubnt_avclient_features",
+    "GetSystemStats", "NetworkStatus", "GetFeatures", "GetVideoSettings",
+    "GetIspSettings", "GetUiStreamPoints", "GetAvclientState",
     "ResetAIPortStreams", "EventSmartDetect",
     "ChangeVideoSettings", "ChangeIspSettings",
     "StartService", "StopService", "UpdateUsernamePassword",
-    "ChangeSoundLedSettings",
+    "ChangeSoundLedSettings", "ChangeNvrSettings",
     "UiStreamControl", "OnvifStreamControl", "ChangeDeviceSettings", "GetRequest",
     "ChangeSmartDetectSettings", "ChangeAnalyticsSettings", "ChangeAudioEventsSettings",
-    "ChangeEventSettings", "EventAIPortStatus",
+    "ChangeEventSettings", "ChangeAvclientEventSettings",
+    "UpdateFeatureFlags", "EventFeatureFlagsUpdated", "EventAIPortStatus",
+    "UpdateFaceDBRequest",
 })
 
 
@@ -89,7 +94,8 @@ def load_config(path: Path) -> dict:
         raise CandidateError("Invalid candidate configuration JSON") from exc
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
     allowed = required | {"diagnostic_hello_until", "diagnostic_stream",
-                          "diagnostic_adoption_until", "diagnostic_resume_until"}
+                          "diagnostic_adoption_until", "diagnostic_resume_until",
+                          "diagnostic_function_fingerprints_until"}
     if not isinstance(value, dict) or not required <= set(value) or not set(value) <= allowed:
         raise CandidateError("Candidate configuration fields do not match the isolated profile")
     if "diagnostic_hello_until" in value:
@@ -106,6 +112,10 @@ def load_config(path: Path) -> dict:
             raise CandidateError("Diagnostic resume must expire within ten minutes")
         if "diagnostic_adoption_until" in value:
             raise CandidateError("Adoption and existing-device resume cannot be combined")
+    if "diagnostic_function_fingerprints_until" in value:
+        until = value["diagnostic_function_fingerprints_until"]
+        if type(until) is not int or until < 0 or until > int(time.time()) + 600:
+            raise CandidateError("Function fingerprint diagnostic must expire within ten minutes")
     if "diagnostic_stream" in value:
         stream = value["diagnostic_stream"]
         if (not isinstance(stream, dict) or set(stream) != {
@@ -205,11 +215,13 @@ class CandidateService:
         self.sound_led_rejections = 0
         self.timezone_replies = 0
         self.timezone_rejections = 0
+        self.face_db_requests_rejected = 0
         self.last_stream_error: str | None = None
         self.last_control_command: str | None = None
         self.observed_function_counts: dict[str, int] = {}
         self.unlisted_function_frames = 0
         self.unlisted_envelope_counts = {"request": 0, "response": 0, "other": 0}
+        self.unlisted_function_fingerprints: dict[str, int] = {}
         self.unparsed_binary_frames = 0
         self.websocket_close_codes: dict[str, int] = {}
         self.last_disconnect_origin: str | None = None
@@ -269,6 +281,7 @@ class CandidateService:
             "sound_led_rejections": self.sound_led_rejections,
             "timezone_replies": self.timezone_replies,
             "timezone_rejections": self.timezone_rejections,
+            "face_db_requests_rejected": self.face_db_requests_rejected,
             "stream_frames_decoded": self.ingress.frame_count if self.ingress else 0,
             "stream_frames_decoded_total": (
                 self.ingress.total_frames_decoded + self.ingress.frame_count
@@ -288,6 +301,10 @@ class CandidateService:
             "observed_function_counts": dict(self.observed_function_counts),
             "unlisted_function_frames": self.unlisted_function_frames,
             "unlisted_envelope_counts": dict(self.unlisted_envelope_counts),
+            "unlisted_function_fingerprints": (
+                dict(self.unlisted_function_fingerprints)
+                if time.time() < self.config.get("diagnostic_function_fingerprints_until", 0)
+                else {}),
             "unparsed_binary_frames": self.unparsed_binary_frames,
             "websocket_close_codes": dict(self.websocket_close_codes),
             "last_disconnect_origin": self.last_disconnect_origin,
@@ -463,6 +480,15 @@ class CandidateService:
                     else "other")
             self.unlisted_envelope_counts[kind] = min(
                 self.unlisted_envelope_counts[kind] + 1, 1_000_000)
+            if (time.time() < self.config.get("diagnostic_function_fingerprints_until", 0)
+                    and len(function) <= 96):
+                fingerprint = hashlib.sha256(
+                    function.encode("utf-8", errors="surrogatepass")).hexdigest()[:16]
+                if (fingerprint in self.unlisted_function_fingerprints
+                        or len(self.unlisted_function_fingerprints) < 8):
+                    self.unlisted_function_fingerprints[fingerprint] = min(
+                        self.unlisted_function_fingerprints.get(fingerprint, 0) + 1,
+                        1_000_000)
         else:
             self.unparsed_binary_frames = min(self.unparsed_binary_frames + 1, 1_000_000)
         if function == "ubnt_avclient_hello" and message.get("inResponseTo") == 1:
@@ -603,6 +629,17 @@ class CandidateService:
                 return
             await self._reply_control(ws, function, request_id, 0, {})
             self.timezone_replies += 1
+            return
+        if function == "UpdateFaceDBRequest":
+            self.last_control_command = function
+            request_id = message.get("messageId")
+            if not self._params_agreed or type(request_id) is not int or request_id < 0:
+                return
+            # The payload can contain a private database URL. Do not fetch,
+            # persist, log, or reflect it while face recognition is unsupported.
+            await self._reply_control(ws, function, request_id, 501,
+                                      {"description": "face_database_unavailable"})
+            self.face_db_requests_rejected += 1
             return
         if function in {"GetStreamList", "UiStreamControl", "OnvifStreamControl"}:
             self.last_control_command = function

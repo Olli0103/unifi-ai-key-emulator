@@ -67,6 +67,16 @@ def test_diagnostic_hello_requires_short_lived_private_config(tmp_path):
         load_config(tmp_path / "config.json")
 
 
+@pytest.mark.parametrize("until", [True, -1, "beyond_window"])
+def test_function_fingerprint_probe_rejects_unbounded_config(tmp_path, until):
+    config = fixture_state(tmp_path)
+    config["diagnostic_function_fingerprints_until"] = (
+        int(time.time()) + 3600 if until == "beyond_window" else until)
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError):
+        load_config(tmp_path / "config.json")
+
+
 def test_stream_diagnostic_requires_expiring_exact_private_policy(tmp_path):
     config = fixture_state(tmp_path)
     config["diagnostic_hello_until"] = int(time.time()) + 60
@@ -451,9 +461,65 @@ async def test_diagnostic_observes_only_fixed_function_names(tmp_path):
     assert health["unlisted_function_frames"] == 3
     assert health["unlisted_envelope_counts"] == {
         "request": 1, "response": 1, "other": 1}
+    assert health["unlisted_function_fingerprints"] == {}
     assert health["unparsed_binary_frames"] == 1
     assert secret not in response.text
     assert "not-json-private-token" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_function_fingerprint_probe_is_private_bounded_and_expires(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_function_fingerprints_until"] = int(time.time()) + 60
+    service = CandidateService(config, tmp_path)
+    private_name = "synthetic-private-unknown-command"
+    for _ in range(2):
+        await service._handle_diagnostic_frame(None, json.dumps({
+            "functionName": private_name, "responseExpected": True,
+            "payload": {"secret": "synthetic-private-stream-url"},
+        }).encode())
+    health = json.loads((await service._health(None)).text)
+    fingerprint = hashlib.sha256(private_name.encode()).hexdigest()[:16]
+    assert health["unlisted_function_fingerprints"] == {fingerprint: 2}
+    assert private_name not in json.dumps(health)
+    assert "synthetic-private-stream-url" not in json.dumps(health)
+    await service._handle_diagnostic_frame(None, b'{"functionName":"\\ud800"}')
+    assert json.loads((await service._health(None)).text)[
+        "unlisted_function_frames"] == 3
+    config["diagnostic_function_fingerprints_until"] = 0
+    assert json.loads((await service._health(None)).text)[
+        "unlisted_function_fingerprints"] == {}
+
+
+@pytest.mark.asyncio
+async def test_face_database_request_fails_closed_without_private_uri_echo(tmp_path):
+    config = fixture_state(tmp_path)
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    private_uri = "https://192.0.2.1/internal/face-db/latest?private=secret"
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "UpdateFaceDBRequest", "messageId": 15,
+        "responseExpected": True, "payload": {"uri": private_uri},
+    }).encode())
+    assert sink.messages == [{
+        "from": "ubnt_avclient", "to": "UniFiVideo", "responseExpected": False,
+        "functionName": "UpdateFaceDBRequest", "messageId": 2,
+        "inResponseTo": 15, "statusCode": 501,
+        "payload": {"description": "face_database_unavailable"},
+    }]
+    health = json.loads((await service._health(None)).text)
+    assert health["face_db_requests_rejected"] == 1
+    assert private_uri not in json.dumps(health)
+    assert private_uri not in json.dumps(sink.messages)
 
 
 @pytest.mark.asyncio
