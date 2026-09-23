@@ -366,9 +366,13 @@ async def test_recorded_event_probe_sends_original_time_once(tmp_path, monkeypat
     class Sink:
         def __init__(self):
             self.messages = []
+            self.native_event_times = []
 
         async def send_bytes(self, raw):
-            self.messages.append(json.loads(raw))
+            message = json.loads(raw)
+            self.messages.append(message)
+            if message["functionName"] == "EventSmartDetect":
+                self.native_event_times.append(time.monotonic())
 
     command = {"functionName": "ChangeSmartDetectSettings", "messageId": 16,
                "responseExpected": True, "payload": policy}
@@ -390,6 +394,7 @@ async def test_recorded_event_probe_sends_original_time_once(tmp_path, monkeypat
                 config["diagnostic_recorded_event_probe"]["frames"][1]["captured_ms"],
                 config["diagnostic_recorded_event_probe"]["frames"][1]["captured_ms"]
                 + 2000]
+            assert sink.native_event_times[1] - sink.native_event_times[0] >= 1.8
             assert service.recorded_probe_claimed == 1
             assert service.smart_events_entered == service.smart_events_left == 1
         else:
