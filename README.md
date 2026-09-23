@@ -12,9 +12,9 @@ The inspected controller source is 7.2.105, alongside AI Key firmware 2.2.8. Pub
 
 The [roadmap](PLAN.md) covers native AI Key and AI Port behavior, automatic camera discovery, AI Port processing for legacy and ONVIF cameras, a provider/model control site, security and detection-quality checks, and the path to a maintained open-source product. Work is tracked in the [issue index](docs/planning/issues.md), with [Claude/contributor handoff instructions](docs/planning/claude-handoff.md).
 
-The repository currently has no license. Licensing, provenance and release governance are explicit product work; public source availability alone does not establish an open-source release. All-camera processing and the control site are planned, not deployed.
+The repository currently has no license. Licensing, provenance and release governance are explicit product work; public source availability alone does not establish an open-source release. Opt-in all-camera admission has synthetic tests, but it has not been deployed or native-verified. The control site is planned.
 
-A [read-only camera inventory preflight](docs/camera-inventory-preflight.md) is available for Protect 7.3.60. It reads the local integration API with a private API-key file and pinned web certificate, then writes a private eligibility report. It does not enable processing. Automatic registry refresh, all-camera admission and the control site remain planned.
+A [read-only camera inventory preflight](docs/camera-inventory-preflight.md) is available for Protect 7.3.60. It reads the local integration API with a private API-key file and pinned web certificate, then writes a private eligibility report. It does not enable processing. An opt-in continuous policy now refreshes that same inventory and gates automatic jobs by an explicit model-family allowlist and a durable 12-per-hour global limit. The live deployment still uses one-use permits; Protect-side all-camera dispatch, broader model-family validation, legacy event ingress and the control site remain open work.
 
 ## Run the local lab
 
