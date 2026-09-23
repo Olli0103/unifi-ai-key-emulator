@@ -16,6 +16,7 @@ import pytest
 
 from aikey.aiport_candidate import CandidateError, CandidateService, load_config
 from aikey.aiport_detection import ObjectObservation, RFDetrNanoDetector
+from aikey.aiport_smart_settings import SmartPolicy
 from aikey.aiport_tracking import TrackChange
 from aikey.tls import ensure_identity_certificate
 
@@ -1312,6 +1313,66 @@ async def test_event_probe_acks_person_policy_then_sends_one_real_track_pair(tmp
     assert health["smart_settings_probe_acks"] == 1
     assert health["smart_events_entered"] == 1
     assert "0.2" not in json.dumps(health)
+    await service.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command_name", ["UiStreamControl", "ResetAIPortStreams"])
+async def test_single_camera_stream_stop_closes_active_native_event(tmp_path, command_name):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 90
+    config["diagnostic_event_until"] = config["diagnostic_hello_until"]
+    config["diagnostic_stream"] = {"camera_mac": "2A1122334455",
+                                   "source_ip": "192.168.10.1",
+                                   "ffmpeg_path": sys.executable}
+    config["diagnostic_detector"] = {"checkpoint_path": "/tmp/model.pth",
+                                     "checkpoint_sha256": "0" * 64,
+                                     "threshold": 0.5, "max_frames": 8}
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+    streams = [{"deviceID": "2A1122334455", "active": True}]
+    service.ingress.list_streams = lambda: streams
+
+    async def stop_stream(_payload):
+        streams.clear()
+        return {"status": "stopped"}
+
+    async def close_stream():
+        streams.clear()
+
+    service.ingress.control = stop_stream
+    service.ingress.close = close_stream
+    service._smart_policy = SmartPolicy("2A1122334455", frozenset({"person"}),
+                                       1000, 3000, (), (), False)
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    track = TrackChange("enter", 1, "person", "person", 0.95,
+                        (0.2, 0.2, 0.5, 0.8))
+    await service._publish_bounded_smart_changes((track,))
+    assert service.smart_events_entered == 1
+    payload = ({"streaming": False, "deviceID": "2A1122334455"}
+               if command_name == "UiStreamControl" else {})
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": command_name, "messageId": 19, "payload": payload,
+    }).encode())
+    events = [message for message in sink.messages
+              if message["functionName"] == "EventSmartDetect"]
+    assert [message["payload"]["edgeType"] for message in events] == [
+        "enter", "leave"]
+    assert events[1]["payload"]["deviceID"] == "2A1122334455"
+    assert service.smart_events_left == 1
+    assert service._event_track is None
+    assert service._smart_policy is None
+    assert next(message for message in sink.messages
+                if message["functionName"] == command_name)["statusCode"] == 0
     await service.stop()
 
 

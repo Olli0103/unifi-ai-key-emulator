@@ -636,6 +636,31 @@ class CandidateService:
                 self._event_zone_ids = ()
                 self.smart_events_left += 1
 
+    async def _revoke_single_policy(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Close a bounded event before a stream or policy is withdrawn."""
+        previous = self._event_track
+        zone_ids = self._event_zone_ids
+        try:
+            if (previous is not None and self._smart_policy is not None
+                    and isinstance(self.ingress, AiPortIngress)
+                    and self._current_ws is ws and self._params_agreed
+                    and time.time() < self.config.get("diagnostic_event_until", 0)):
+                try:
+                    payload = smart_event_payload(
+                        self.ingress.camera_mac, previous, edge="leave",
+                        clock_wall_ms=int(time.time() * 1000), zone_ids=zone_ids)
+                except SmartEventError:
+                    pass
+                else:
+                    await self._send_control_event(ws, "EventSmartDetect", payload)
+                    self.smart_events_left += 1
+        finally:
+            self._smart_policy = None
+            self._event_track = None
+            self._event_zone_ids = ()
+            if self._tracker is not None:
+                self._tracker = TemporalTracker()
+
     def _claim_native_probe(self, nonce: str) -> bool:
         """Durably claim a diagnostic before writing a synthetic event."""
         try:
@@ -1094,6 +1119,8 @@ class CandidateService:
                 return
             if self.ingress is not None:
                 streams = self.ingress.list_streams()
+                if isinstance(self.ingress, AiPortIngress):
+                    await self._revoke_single_policy(ws)
                 await self.ingress.close()
                 if isinstance(self.ingress, AiPortIngressPool):
                     for stream in streams:
@@ -1250,18 +1277,8 @@ class CandidateService:
                 await self._handle_pool_smart_settings(
                     ws, request_id, message.get("payload"))
                 return
-            # Close a bounded active event before replacing its policy. A
-            # later disabled or unsupported policy revokes the prior permit.
-            if self._event_track is not None:
-                previous = self._event_track
-                await self._publish_bounded_smart_changes((TrackChange(
-                    "leave", previous.track_id, previous.kind, previous.label,
-                    previous.score, previous.box),))
-            self._smart_policy = None
-            self._event_track = None
-            self._event_zone_ids = ()
-            if self._tracker is not None:
-                self._tracker = TemporalTracker()
+            # A disabled or unsupported policy also closes any prior event.
+            await self._revoke_single_policy(ws)
             # Accept only a one-camera, expiring, single-class object policy
             # when a local detector or one-use wire probe is explicitly armed.
             parsed_policy = None
@@ -1322,6 +1339,9 @@ class CandidateService:
                     self.stream_controls_rejected += 1
                     self.last_stream_error = exc.code
                 else:
+                    if (result["status"] == "stopped"
+                            and isinstance(self.ingress, AiPortIngress)):
+                        await self._revoke_single_policy(ws)
                     await self._reply_control(ws, function, request_id, 0, result)
                     self.last_stream_error = None
                     if result["status"] == "started":
