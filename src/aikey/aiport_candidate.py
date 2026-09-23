@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import hashlib
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -50,6 +51,7 @@ from .device import VerifiedConnector
 _MAC = re.compile(r"[0-9A-Fa-f]{12}\Z")
 _PIN = re.compile(r"[0-9A-Fa-f]{64}\Z")
 _VERSION = re.compile(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\Z")
+_PROBE_NONCE = re.compile(r"[0-9a-f]{32}\Z")
 _MAX_MANAGE = 8192
 _DISCONNECT_GRACE_SECONDS = 15
 _ALLOWED_TOP_LEVEL = frozenset(("username", "password", "mgmt", "hosts", "protocol", "mode"))
@@ -113,6 +115,7 @@ def load_config(path: Path) -> dict:
                           "diagnostic_pool_detector", "diagnostic_pool_event_until",
                           "diagnostic_smart_probe_until",
                           "diagnostic_event_until",
+                          "diagnostic_native_event_probe",
                           "diagnostic_smart_type",
                           "diagnostic_adoption_until", "diagnostic_resume_until",
                           "diagnostic_function_fingerprints_until"}
@@ -212,6 +215,28 @@ def load_config(path: Path) -> dict:
             RFDetrNanoDetector(object(), threshold=detector["threshold"])
         except DetectionError as exc:
             raise CandidateError("Invalid bounded detector threshold") from exc
+    if "diagnostic_native_event_probe" in value:
+        probe = value["diagnostic_native_event_probe"]
+        if ("diagnostic_detector" in value or "diagnostic_stream" not in value
+                or "diagnostic_event_until" not in value
+                or value.get("diagnostic_smart_type", "person") != "person"
+                or not isinstance(probe, dict)
+                or set(probe) != {"camera_mac", "nonce", "box"}
+                or not isinstance(probe["nonce"], str)
+                or not _PROBE_NONCE.fullmatch(probe["nonce"])
+                or not isinstance(probe["box"], list)
+                or len(probe["box"]) != 4
+                or any(type(number) not in (int, float) or not math.isfinite(number)
+                       for number in probe["box"])):
+            raise CandidateError("Invalid one-use native event probe")
+        try:
+            probe["camera_mac"] = normalize_mac(probe["camera_mac"])
+        except IngressError as exc:
+            raise CandidateError("Invalid one-use native event probe") from exc
+        x1, y1, x2, y2 = probe["box"]
+        if (probe["camera_mac"] != value["diagnostic_stream"]["camera_mac"]
+                or not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1)):
+            raise CandidateError("Native event probe must match the bounded camera")
     if "diagnostic_smart_probe_until" in value:
         until = value["diagnostic_smart_probe_until"]
         if ("diagnostic_stream" not in value or type(until) is not int
@@ -220,10 +245,12 @@ def load_config(path: Path) -> dict:
             raise CandidateError("Smart settings probe requires a bounded camera stream")
     if "diagnostic_event_until" in value:
         until = value["diagnostic_event_until"]
-        if ("diagnostic_detector" not in value or type(until) is not int
-                or until != value.get("diagnostic_smart_probe_until")
-                or value["diagnostic_detector"]["max_frames"] < 2):
-            raise CandidateError("Smart event probe requires one bounded detector and policy")
+        if (type(until) is not int or until != value.get("diagnostic_smart_probe_until")
+                or ("diagnostic_detector" not in value
+                    and "diagnostic_native_event_probe" not in value)
+                or ("diagnostic_detector" in value
+                    and value["diagnostic_detector"]["max_frames"] < 2)):
+            raise CandidateError("Smart event probe requires a bounded source and policy")
     if "diagnostic_smart_type" in value:
         if (not isinstance(value["diagnostic_smart_type"], str)
                 or value["diagnostic_smart_type"] not in {"person", "vehicle", "animal"}
@@ -329,6 +356,8 @@ class CandidateService:
         self.smart_settings_probe_acks = 0
         self.smart_events_entered = 0
         self.smart_events_left = 0
+        self.synthetic_probe_claimed = 0
+        self.synthetic_probe_errors = 0
         self._smart_policy: SmartPolicy | None = None
         self._event_track: TrackChange | None = None
         self._event_zone_ids: tuple[int, ...] = ()
@@ -353,7 +382,8 @@ class CandidateService:
         self.detector_tracks_left = 0
         self.detector_error: str | None = None
         self._detector: RFDetrNanoDetector | None = None
-        self._tracker = TemporalTracker() if "diagnostic_detector" in config else None
+        self._tracker = (TemporalTracker() if "diagnostic_detector" in config
+                         or "diagnostic_native_event_probe" in config else None)
         self._camera_engine: CameraPolicyEngine | None = None
         self._inference: FairInference | None = None
         if "diagnostic_pool_detector" in config:
@@ -582,6 +612,69 @@ class CandidateService:
                 self._event_zone_ids = ()
                 self.smart_events_left += 1
 
+    def _claim_native_probe(self, nonce: str) -> bool:
+        """Durably claim a diagnostic before writing a synthetic event."""
+        try:
+            info = self.state_dir.lstat()
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_mode & 0o077):
+                raise CandidateError("Native event probe state must be private")
+            marker = self.state_dir / f".native-event-probe-{nonce}"
+            fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
+                         0o600)
+        except FileExistsError:
+            return False
+        except OSError as exc:
+            raise CandidateError("Native event probe state unavailable") from exc
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(b"claimed\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as exc:
+            raise CandidateError("Native event probe state unavailable") from exc
+        try:
+            directory_fd = os.open(self.state_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError as exc:
+            raise CandidateError("Native event probe state unavailable") from exc
+        return True
+
+    async def _run_native_probe(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Send one explicitly configured test enter/leave for wire validation."""
+        probe = self.config.get("diagnostic_native_event_probe")
+        policy = self._smart_policy
+        if (probe is None or policy is None or not isinstance(self.ingress, AiPortIngress)
+                or not self._params_agreed or self._current_ws is not ws
+                or self.ingress.camera_mac != probe["camera_mac"]
+                or not self.ingress.list_streams()
+                or time.time() + 4 >= self.config["diagnostic_event_until"]
+                or policy.enabled_types != frozenset({"person"})
+                or not policy.allows_score("person", 0.99)):
+            return
+        box = tuple(probe["box"])
+        if policy.zone_ids("person", box) is None:
+            return
+        try:
+            if not self._claim_native_probe(probe["nonce"]):
+                return
+            self.synthetic_probe_claimed += 1
+            track = TrackChange("enter", 1, "person", "person", 0.99, box)
+            await self._publish_bounded_smart_changes((track,))
+            if self._event_track is None:
+                return
+            await asyncio.sleep(2)
+            if (self._current_ws is ws and self._event_track is not None
+                    and self._event_track.track_id == track.track_id):
+                await self._publish_bounded_smart_changes((TrackChange(
+                    "leave", track.track_id, track.kind, track.label,
+                    track.score, track.box),))
+        except (CandidateError, OSError, aiohttp.ClientError, RuntimeError):
+            self.synthetic_probe_errors += 1
+
     def app(self) -> web.Application:
         app = web.Application(client_max_size=_MAX_MANAGE)
         app.router.add_get("/healthz", self._health)
@@ -631,6 +724,8 @@ class CandidateService:
             "smart_settings_probe_acks": self.smart_settings_probe_acks,
             "smart_events_entered": self.smart_events_entered,
             "smart_events_left": self.smart_events_left,
+            "synthetic_probe_claimed": self.synthetic_probe_claimed,
+            "synthetic_probe_errors": self.synthetic_probe_errors,
             "smart_settings_probe_shape": (self._smart_settings_probe_shape
                 if time.time() < self.config.get("diagnostic_smart_probe_until", 0)
                 else None),
@@ -1094,7 +1189,7 @@ class CandidateService:
             if self._tracker is not None:
                 self._tracker = TemporalTracker()
             # Accept only a one-camera, expiring, single-class object policy
-            # when the local detector and event probe are explicitly armed.
+            # when a local detector or one-use wire probe is explicitly armed.
             parsed_policy = None
             if (isinstance(self.ingress, AiPortIngress)
                     and time.time() < self.config.get("diagnostic_hello_until", 0)):
@@ -1117,6 +1212,8 @@ class CandidateService:
                 self._smart_policy = parsed_policy
                 await self._reply_control(ws, function, request_id, 0, {})
                 self.smart_settings_probe_acks += 1
+                if "diagnostic_native_event_probe" in self.config:
+                    await self._run_native_probe(ws)
                 return
             # Never echo or retain the controller's nested camera policy.
             await self._reply_control(ws, function, request_id, 501,
