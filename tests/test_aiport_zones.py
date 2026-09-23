@@ -2,7 +2,7 @@
 
 import pytest
 
-from aikey.aiport_zones import ZoneError, parse_person_zones
+from aikey.aiport_zones import ZoneError, parse_person_zones, parse_smart_zones
 
 
 def square(*, x1=100, y1=100, x2=900, y2=900):
@@ -33,6 +33,9 @@ def test_non_person_zone_is_valid_but_cannot_admit_person():
     other = square()
     other["objectTypes"] = ["vehicle"]
     assert parse_person_zones({"1": other}) == ()
+    zone, = parse_smart_zones({"1": other})
+    assert zone.object_types == frozenset({"vehicle"})
+    assert zone.contains_box((0.2, 0.2, 0.5, 0.8))
 
 
 @pytest.mark.parametrize("data", [

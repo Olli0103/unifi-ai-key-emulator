@@ -113,6 +113,7 @@ def load_config(path: Path) -> dict:
                           "diagnostic_pool_detector", "diagnostic_pool_event_until",
                           "diagnostic_smart_probe_until",
                           "diagnostic_event_until",
+                          "diagnostic_smart_type",
                           "diagnostic_adoption_until", "diagnostic_resume_until",
                           "diagnostic_function_fingerprints_until"}
     if not isinstance(value, dict) or not required <= set(value) or not set(value) <= allowed:
@@ -223,6 +224,12 @@ def load_config(path: Path) -> dict:
                 or until != value.get("diagnostic_smart_probe_until")
                 or value["diagnostic_detector"]["max_frames"] < 2):
             raise CandidateError("Smart event probe requires one bounded detector and policy")
+    if "diagnostic_smart_type" in value:
+        if (not isinstance(value["diagnostic_smart_type"], str)
+                or value["diagnostic_smart_type"] not in {"person", "vehicle", "animal"}
+                or not ("diagnostic_event_until" in value
+                        or "diagnostic_pool_event_until" in value)):
+            raise CandidateError("Smart type requires a bounded event diagnostic")
     value["controller_ip"] = _private_ipv4(value["controller_ip"])
     value["device_ip"] = _private_ipv4(value["device_ip"])
     mac = value["mac"]
@@ -471,7 +478,8 @@ class CandidateService:
         else:
             self.smart_settings_subset_matches += 1
         active = {stream["deviceID"] for stream in self.ingress.list_streams()}
-        if (parsed is not None and parsed.enabled_types == frozenset({"person"})
+        if (parsed is not None and parsed.enabled_types == frozenset({
+                self.config.get("diagnostic_smart_type", "person")})
                 and camera in active and self._inference is not None
                 and time.time() < self.config.get("diagnostic_pool_event_until", 0)):
             engine.replace_policy(camera, parsed)
@@ -511,14 +519,15 @@ class CandidateService:
                 smart_policy = self._smart_policy
                 if smart_policy is None:
                     return
+                kind = next(iter(smart_policy.enabled_types))
                 # A reverification policy cannot be silently bypassed. Only
-                # persons above its upper confidence bound reach the temporal
+                # objects above its upper confidence bound reach the temporal
                 # tracker; uncertain observations are dropped, not published.
                 track_observations = tuple(
                     observation for observation in observations
-                    if observation.kind == "person"
-                    and smart_policy.allows_person_score(observation.score)
-                    and smart_policy.person_zone_ids(observation.box) is not None)
+                    if observation.kind == kind
+                    and smart_policy.allows_score(kind, observation.score)
+                    and smart_policy.zone_ids(kind, observation.box) is not None)
             changes = self._tracker.update(track_observations,
                                            now=time.monotonic())
         except (DetectionError, TrackingError) as exc:
@@ -535,16 +544,17 @@ class CandidateService:
     async def _publish_bounded_smart_changes(self, changes: tuple[TrackChange, ...]) -> None:
         ws = self._current_ws
         policy = self._smart_policy
-        if (ws is None or policy is None or not policy.allows("person")
+        if (ws is None or policy is None or len(policy.enabled_types) != 1
                 or time.time() >= self.config.get("diagnostic_event_until", 0)
                 or not isinstance(self.ingress, AiPortIngress)
                 or not self.ingress.list_streams()):
             return
+        kind = next(iter(policy.enabled_types))
         for change in changes:
-            if change.kind != "person":
+            if change.kind != kind:
                 continue
-            matched_zone_ids = policy.person_zone_ids(change.box)
-            if (change.edge == "enter" and policy.allows_person_score(change.score)
+            matched_zone_ids = policy.zone_ids(kind, change.box)
+            if (change.edge == "enter" and policy.allows_score(kind, change.score)
                     and matched_zone_ids is not None
                     and self._event_track is None
                     and self.smart_events_entered == 0):
@@ -836,7 +846,8 @@ class CandidateService:
         if smart_ready:
             await self._send_control_event(
                 ws, "EventFeatureFlagsUpdated",
-                {"deviceID": camera_mac, "smartDetect": ["person"]})
+                {"deviceID": camera_mac,
+                 "smartDetect": [self.config.get("diagnostic_smart_type", "person")]})
             self.smart_feature_probe_events += 1
         await self._send_control_event(
             ws, "EventAIPortStatus",
@@ -1082,7 +1093,7 @@ class CandidateService:
             self._event_zone_ids = ()
             if self._tracker is not None:
                 self._tracker = TemporalTracker()
-            # Accept only a one-camera, expiring, full-frame person policy
+            # Accept only a one-camera, expiring, single-class object policy
             # when the local detector and event probe are explicitly armed.
             parsed_policy = None
             if (isinstance(self.ingress, AiPortIngress)
@@ -1099,7 +1110,8 @@ class CandidateService:
                 else:
                     self.smart_settings_subset_matches += 1
             if (parsed_policy is not None
-                    and parsed_policy.enabled_types == frozenset({"person"})
+                    and parsed_policy.enabled_types == frozenset({
+                        self.config.get("diagnostic_smart_type", "person")})
                     and time.time() < self.config.get("diagnostic_event_until", 0)
                     and self._tracker is not None):
                 self._smart_policy = parsed_policy
