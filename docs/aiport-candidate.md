@@ -11,10 +11,10 @@ local-aiport-event-watch --controller CONSOLE_PRIVATE_IPV4 \
   --api-key-file PRIVATE_PROTECT_API_KEY_FILE \
   --web-trust-file PRIVATE_WEB_TRUST_JSON \
   --web-cert-file PRIVATE_PINNED_WEB_CERT \
-  --camera-scope legacy-and-g3-g5 --seconds 120
+  --camera-scope legacy-and-g3-g5 --camera-name Flur --seconds 120
 ```
 
-The watch caps its runtime at ten minutes and discards event bodies. It counts `add` and `update` messages for the validated camera set, including smart video and person additions. A matching subscription message proves Protect announced an event for that camera during the watch. It does not identify whether the AI Port or the camera's onboard model caused it, and it does not prove recording-timeline persistence. Check the original camera timeline after an event appears. The observed Protect 7.3.60 endpoint accepted a pinned WebSocket upgrade, but no event frame arrived during a five-second no-camera probe.
+The watch caps its runtime at ten minutes and discards event bodies. `--camera-name` must exactly identify one currently eligible camera; omit it to watch the full selected scope. It counts `add` and `update` messages for that validated camera set, including smart video and person additions. A matching subscription message proves Protect announced an event for that camera during the watch. It does not identify whether the AI Port or the camera's onboard model caused it, and it does not prove recording-timeline persistence. Check the original camera timeline after an event appears. The observed Protect 7.3.60 endpoint accepted a pinned WebSocket upgrade, but no event frame arrived during a five-second no-camera probe.
 
 ## Private configuration
 

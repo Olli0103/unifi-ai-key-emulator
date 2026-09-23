@@ -8,10 +8,29 @@ import aiohttp
 import pytest
 
 from aikey import aiport_event_watch
-from aikey.aiport_event_watch import _event, watch_events
+from aikey.aiport_event_watch import _event, _selected_camera_ids, watch_events
+from aikey.aiport_deployment import AiPortPlanError
 
 
 CAMERA_ID = f"{1:024x}"
+OTHER_ID = f"{2:024x}"
+
+
+def test_exact_camera_watch_requires_one_eligible_current_name():
+    inventory = {"cameras": [
+        {"id": CAMERA_ID, "name": "Flur"},
+        {"id": OTHER_ID, "name": "Garage"},
+    ]}
+    plan = {"instances": [{"camera_ids": [CAMERA_ID]}]}
+    assert _selected_camera_ids(inventory, plan, "Flur") == {CAMERA_ID}
+    assert _selected_camera_ids(inventory, plan, None) == {CAMERA_ID}
+    for name in ("Garage", "flur", "Missing"):
+        with pytest.raises(AiPortPlanError, match="one eligible"):
+            _selected_camera_ids(inventory, plan, name)
+    inventory["cameras"][1]["name"] = "Flur"
+    plan["instances"][0]["camera_ids"].append(OTHER_ID)
+    with pytest.raises(AiPortPlanError, match="one eligible"):
+        _selected_camera_ids(inventory, plan, "Flur")
 
 
 def frame(*, camera=CAMERA_ID, action="add", event="smartDetectZone",
@@ -46,8 +65,10 @@ def test_event_parser_rejects_malformed_targeted_data(bad):
 async def test_watch_counts_native_subscription_events_without_retaining_payloads(monkeypatch):
     async def fake_inventory(*args, **kwargs):
         return {"schema": "aikey-camera-preflight/1", "cameras": [
-            {"id": CAMERA_ID, "model": "UVC G3 Instant", "state": "CONNECTED",
-             "processing_class": "legacy_ingress_needed"}]}
+            {"id": CAMERA_ID, "name": "Flur", "model": "UVC G3 Instant",
+             "state": "CONNECTED", "processing_class": "legacy_ingress_needed"},
+            {"id": OTHER_ID, "name": "Garage", "model": "UVC G4 Dome",
+             "state": "CONNECTED", "processing_class": "legacy_ingress_needed"}]}
 
     class FakeSocket:
         def __init__(self):
@@ -57,7 +78,7 @@ async def test_watch_counts_native_subscription_events_without_retaining_payload
                 aiohttp.WSMessage(aiohttp.WSMsgType.TEXT,
                                   frame(action="update"), ""),
                 aiohttp.WSMessage(aiohttp.WSMsgType.TEXT,
-                                  frame(camera=f"{2:024x}"), ""),
+                                  frame(camera=OTHER_ID, event_id="other-event"), ""),
             ])
 
         async def __aenter__(self):
@@ -99,13 +120,14 @@ async def test_watch_counts_native_subscription_events_without_retaining_payload
     monkeypatch.setattr(aiport_event_watch.aiohttp, "ClientSession", FakeSession)
     result = await watch_events("192.0.2.1", api_key_file=Path("key"),
                                 trust_file=Path("trust"), cert_file=Path("cert"),
-                                seconds=1)
+                                camera_name="Flur", seconds=1)
     assert result["subscription_opened"] is True
     assert result["messages_seen"] == 4
     assert result["targeted_event_adds"] == 1
     assert result["targeted_event_updates"] == 1
     assert result["targeted_smart_video_adds"] == 1
     assert result["targeted_person_adds"] == 1
+    assert result["selected_camera_count"] == 1
     assert result["timeline_persistence"] == "needs_evidence"
     assert CAMERA_ID not in json.dumps(result)
     assert "private-test-key" not in json.dumps(result)
