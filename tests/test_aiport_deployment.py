@@ -78,6 +78,46 @@ def test_no_legacy_cameras_expose_no_ai_port_listener():
         "protect_outbound_tcp": [], "onvif_outbound_tcp": []}
 
 
+def test_explicit_g3_g5_scope_plans_onboard_smart_cameras_without_g6():
+    rows = [camera(1), camera(2, model="UVC G3 Instant",
+                             processing_class="smart_event_candidate")]
+    rows += [camera(number, model="UVC G4 Bullet",
+                    processing_class="smart_event_candidate")
+             for number in range(3, 8)]
+    rows += [camera(8, model="UVC G5 Flex",
+                    processing_class="smart_event_candidate"),
+             camera(9, model="UVC G6 Instant",
+                    processing_class="smart_event_candidate"),
+             camera(10, model="UVC G4 Instant",
+                    processing_class="offline", state="DISCONNECTED")]
+    plan = plan_ai_ports(report(*rows), camera_scope="legacy-and-g3-g5",
+                         device_ips=["192.0.2.10"])
+    assert plan["camera_scope"] == "legacy-and-g3-g5"
+    assert plan["legacy_camera_count"] == 1
+    assert plan["enhancement_camera_count"] == 7
+    assert plan["selected_camera_count"] == 8
+    assert plan["ai_port_instances_required"] == 4
+    assert plan["ai_port_instances_without_address"] == 3
+    assert {camera_id for instance in plan["instances"]
+            for camera_id in instance["camera_ids"]} == {
+                f"{number:024x}" for number in range(1, 9)}
+    assert all(instance["reserved_capacity"] == "1"
+               for instance in plan["instances"])
+    assert all(instance["source_kind"] == "protect" for instance in plan["instances"])
+    assert plan["camera_pairing"] == "disabled"
+
+
+def test_g3_g5_scope_rejects_unknown_scope_and_does_not_select_similar_model():
+    rows = report(camera(1, model="UVC G50 Unknown",
+                         processing_class="smart_event_candidate"),
+                  camera(2, model="UVC G4 Bullet", source="onvif",
+                         processing_class="smart_event_candidate"))
+    assert plan_ai_ports(rows, camera_scope="legacy-and-g3-g5")[
+        "selected_camera_count"] == 0
+    with pytest.raises(AiPortPlanError, match="Unknown camera scope"):
+        plan_ai_ports(rows, camera_scope="all")
+
+
 @pytest.mark.parametrize("rows", [
     [camera(1), camera(1)],
     [camera(1, model="Unknown")],
