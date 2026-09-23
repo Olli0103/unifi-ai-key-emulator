@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import ssl
+import time
 
 import aiohttp
 from aiohttp import web
@@ -48,6 +49,18 @@ def test_candidate_requires_private_stable_identity(tmp_path):
 def test_candidate_rejects_invalid_identity_and_destination(tmp_path, field, value):
     config = fixture_state(tmp_path)
     config[field] = value
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError):
+        load_config(tmp_path / "config.json")
+
+
+def test_diagnostic_hello_requires_short_lived_private_config(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["diagnostic_hello_until"] == config[
+        "diagnostic_hello_until"]
+    config["diagnostic_hello_until"] = int(time.time()) + 601
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     with pytest.raises(CandidateError):
         load_config(tmp_path / "config.json")
@@ -158,6 +171,58 @@ async def test_candidate_counts_control_frames_without_exposing_payload(tmp_path
             public = await service._health(None)
             assert secret.decode() not in public.text
             assert "synthetic-sensitive-token" not in public.text
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+    finally:
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_bounded_hello_answers_only_parameter_agreement(tmp_path):
+    config = fixture_state(tmp_path)
+    config["controller_ip"] = "127.0.0.1"
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    negotiated = asyncio.Event()
+
+    async def websocket(request):
+        ws = web.WebSocketResponse(protocols=["secure_transfer"])
+        await ws.prepare(request)
+        async for frame in ws:
+            if frame.type != aiohttp.WSMsgType.BINARY:
+                continue
+            message = json.loads(frame.data)
+            if message["functionName"] == "ubnt_avclient_hello":
+                assert message["payload"]["fwVersion"] == "5.1.12"
+                assert message["payload"]["ip"] == config["device_ip"]
+                assert message["responseExpected"] is True
+                await ws.send_bytes(json.dumps({"functionName": "ubnt_avclient_hello",
+                    "messageId": 10, "inResponseTo": message["messageId"],
+                    "payload": {"controllerVersion": "synthetic"}}).encode())
+                await ws.send_bytes(json.dumps({"functionName": "ubnt_avclient_paramAgreement",
+                    "messageId": 11, "inResponseTo": 0, "payload": {"enableStatusCodes": True}}).encode())
+            elif message["functionName"] == "ubnt_avclient_paramAgreement":
+                assert message["inResponseTo"] == 11
+                assert message["statusCode"] == 0
+                assert message["payload"] == {}
+                negotiated.set()
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/camera/1.0/ws", websocket)
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.load_cert_chain(tmp_path / "device.crt", tmp_path / "device.key")
+    server = TestServer(app)
+    await server.start_server(ssl=server_context)
+    try:
+        service = CandidateService(config, tmp_path, control_port=server.port)
+        task = asyncio.create_task(service._connect_loop())
+        try:
+            await asyncio.wait_for(negotiated.wait(), timeout=3)
+            assert service.hello_sent == 1
+            assert service.param_agreements == 1
+            assert service.ws_binary_frames == 2
         finally:
             task.cancel()
             with pytest.raises(asyncio.CancelledError):

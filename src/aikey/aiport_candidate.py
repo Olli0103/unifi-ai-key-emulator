@@ -67,8 +67,13 @@ def load_config(path: Path) -> dict:
     except (ValueError, UnicodeError) as exc:
         raise CandidateError("Invalid candidate configuration JSON") from exc
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
-    if not isinstance(value, dict) or set(value) != required:
+    allowed = required | {"diagnostic_hello_until"}
+    if not isinstance(value, dict) or not required <= set(value) or not set(value) <= allowed:
         raise CandidateError("Candidate configuration fields do not match the isolated profile")
+    if "diagnostic_hello_until" in value:
+        until = value["diagnostic_hello_until"]
+        if type(until) is not int or until < 0 or until > int(time.time()) + 600:
+            raise CandidateError("Diagnostic hello must expire within ten minutes")
     value["controller_ip"] = _private_ipv4(value["controller_ip"])
     value["device_ip"] = _private_ipv4(value["device_ip"])
     mac = value["mac"]
@@ -124,6 +129,10 @@ class CandidateService:
         self.ws_binary_frames = 0
         self.ws_text_frames = 0
         self.ws_last_frame_bytes: int | None = None
+        self.hello_sent = 0
+        self.hello_replies = 0
+        self.param_agreements = 0
+        self.last_control_command: str | None = None
         self.started = time.monotonic()
 
     def app(self) -> web.Application:
@@ -140,6 +149,10 @@ class CandidateService:
             "ws_binary_frames": self.ws_binary_frames,
             "ws_text_frames": self.ws_text_frames,
             "ws_last_frame_bytes": self.ws_last_frame_bytes,
+            "hello_sent": self.hello_sent,
+            "hello_replies": self.hello_replies,
+            "param_agreements": self.param_agreements,
+            "last_control_command": self.last_control_command,
             "uptime_seconds": int(time.monotonic() - self.started)})
 
     async def _manage(self, request: web.Request) -> web.Response:
@@ -167,6 +180,52 @@ class CandidateService:
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(str(self.state_dir / "device.crt"), str(self.state_dir / "device.key"))
         return context
+
+    async def _send_diagnostic_hello(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        message = {"from": "ubnt_avclient", "to": "UniFiVideo",
+                   "responseExpected": True, "functionName": "ubnt_avclient_hello",
+                   "messageId": 1, "inResponseTo": 0,
+                   "payload": {"fwVersion": self.config["firmware_version"],
+                               "protocolVersion": 1,
+                               "uptime": int(time.monotonic() - self.started),
+                               "ip": self.config["device_ip"],
+                               "connectionSecurePort": 443,
+                               "features": {}}}
+        await ws.send_bytes(json.dumps(message, separators=(",", ":")).encode())
+        self.hello_sent += 1
+
+    async def _handle_diagnostic_frame(self, ws: aiohttp.ClientWebSocketResponse,
+                                       raw: bytes) -> None:
+        try:
+            message = json.loads(raw)
+        except (ValueError, UnicodeError, RecursionError):
+            return
+        if not isinstance(message, dict):
+            return
+        function = message.get("functionName")
+        if function == "ubnt_avclient_hello" and message.get("inResponseTo") == 1:
+            self.hello_replies += 1
+            return
+        if function == "ubnt_avclient_paramAgreement" and self.hello_replies:
+            request_id = message.get("messageId")
+            if type(request_id) is not int or request_id < 0:
+                return
+            response = {"from": "ubnt_avclient", "to": "UniFiVideo",
+                        "responseExpected": False,
+                        "functionName": "ubnt_avclient_paramAgreement",
+                        "messageId": 2, "inResponseTo": request_id,
+                        "statusCode": 0, "payload": {}}
+            await ws.send_bytes(json.dumps(response, separators=(",", ":")).encode())
+            self.param_agreements += 1
+            return
+        if function in {"UiStreamControl", "OnvifStreamControl", "GetStreamList",
+                        "ChangeDeviceSettings", "GetRequest"}:
+            self.last_control_command = function
+
+    @staticmethod
+    async def _expire_diagnostic(ws: aiohttp.ClientWebSocketResponse, until: int) -> None:
+        await asyncio.sleep(max(0, until - time.time()))
+        await ws.close()
 
     async def start(self, *, bind: str = "0.0.0.0", port: int = 8443):
         if self.runner is not None:
@@ -212,16 +271,31 @@ class CandidateService:
                             self.upgrades += 1
                             self.connected = True
                             self.last_result = "websocket_101"
-                            async for message in ws:
-                                if message.type == aiohttp.WSMsgType.BINARY:
-                                    self.ws_binary_frames += 1
-                                    self.ws_last_frame_bytes = len(message.data)
-                                elif message.type == aiohttp.WSMsgType.TEXT:
-                                    self.ws_text_frames += 1
-                                    self.ws_last_frame_bytes = len(message.data.encode("utf-8"))
-                                if message.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED,
-                                                    aiohttp.WSMsgType.ERROR):
-                                    break
+                            until = self.config.get("diagnostic_hello_until", 0)
+                            diagnostic = until > time.time()
+                            expiry_task = None
+                            try:
+                                if diagnostic:
+                                    await self._send_diagnostic_hello(ws)
+                                    expiry_task = asyncio.create_task(
+                                        self._expire_diagnostic(ws, until))
+                                async for message in ws:
+                                    if message.type == aiohttp.WSMsgType.BINARY:
+                                        self.ws_binary_frames += 1
+                                        self.ws_last_frame_bytes = len(message.data)
+                                        if diagnostic:
+                                            await self._handle_diagnostic_frame(ws, message.data)
+                                    elif message.type == aiohttp.WSMsgType.TEXT:
+                                        self.ws_text_frames += 1
+                                        self.ws_last_frame_bytes = len(message.data.encode("utf-8"))
+                                    if message.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED,
+                                                        aiohttp.WSMsgType.ERROR):
+                                        break
+                            finally:
+                                if expiry_task is not None:
+                                    expiry_task.cancel()
+                                    with contextlib.suppress(asyncio.CancelledError):
+                                        await expiry_task
                             self.last_result = "websocket_closed"
                 except (aiohttp.ClientError, TimeoutError, ssl.SSLError) as exc:
                     self.last_result = type(exc).__name__
