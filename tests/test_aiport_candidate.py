@@ -14,6 +14,7 @@ from aiohttp.test_utils import TestServer
 import pytest
 
 from aikey.aiport_candidate import CandidateError, CandidateService, load_config
+from aikey.aiport_detection import RFDetrNanoDetector
 from aikey.tls import ensure_identity_certificate
 
 
@@ -102,6 +103,58 @@ def test_expired_stream_diagnostic_restarts_passively(tmp_path):
     loaded = load_config(tmp_path / "config.json")
     service = CandidateService(loaded, tmp_path)
     assert service.ingress is None
+
+
+def test_detector_policy_requires_bounded_stream_and_pinned_local_weights(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    config["diagnostic_stream"] = {"camera_mac": "2A1122334455",
+                                   "source_ip": "192.168.10.1",
+                                   "ffmpeg_path": sys.executable}
+    config["diagnostic_detector"] = {"checkpoint_path": str(tmp_path / "nano.pth"),
+                                     "checkpoint_sha256": "a" * 64,
+                                     "threshold": 0.5, "max_frames": 2}
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["diagnostic_detector"] == config[
+        "diagnostic_detector"]
+    config["diagnostic_detector"]["max_frames"] = 100
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="bounded detector policy"):
+        load_config(tmp_path / "config.json")
+    config["diagnostic_detector"]["max_frames"] = 2
+    del config["diagnostic_stream"]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="bounded detector policy"):
+        load_config(tmp_path / "config.json")
+
+
+@pytest.mark.asyncio
+async def test_detector_probe_discards_objects_and_caps_model_calls(tmp_path, monkeypatch):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    config["diagnostic_stream"] = {"camera_mac": "2A1122334455",
+                                   "source_ip": "192.168.10.1",
+                                   "ffmpeg_path": sys.executable}
+    config["diagnostic_detector"] = {"checkpoint_path": str(tmp_path / "nano.pth"),
+                                     "checkpoint_sha256": "a" * 64,
+                                     "threshold": 0.5, "max_frames": 1}
+    calls = []
+
+    class Model:
+        def detect(self, frame):
+            calls.append(frame)
+            return (object(), object())
+
+    monkeypatch.setattr(RFDetrNanoDetector, "from_checkpoint", lambda *a, **k: Model())
+    service = CandidateService(config, tmp_path)
+    await service._observe_frame(b"synthetic-frame")
+    await service._observe_frame(b"another-frame")
+    assert calls == [b"synthetic-frame"]
+    health = await service._health(None)
+    assert "synthetic-frame" not in health.text
+    assert json.loads(health.text)["detector_frames_succeeded"] == 1
+    assert json.loads(health.text)["detector_objects_seen"] == 2
+    await service.stop()
 
 
 @pytest.mark.asyncio
@@ -364,6 +417,9 @@ async def test_stream_reset_rejects_unexpected_payload_without_stopping(tmp_path
     class FakeIngress:
         frame_count = 0
         total_frames_decoded = 0
+        frames_observed = 0
+        frames_skipped = 0
+        observer_failed = False
         last_decoder_exit_code = None
         last_decoder_stderr_seen = False
         last_decoder_error_markers = ()

@@ -1,5 +1,6 @@
 """AI Port stream admission and process lifecycle with synthetic frames."""
 
+import asyncio
 import json
 from pathlib import Path
 import shlex
@@ -65,6 +66,36 @@ async def test_ingress_starts_only_after_frame_and_stops_process(tmp_path):
         assert ingress.list_streams() == []
         assert ingress.latest_frame() is None
         assert ingress.total_frames_decoded == 1
+    finally:
+        await ingress.close()
+
+
+@pytest.mark.asyncio
+async def test_optional_observer_receives_frame_and_is_cancelled_on_stop(tmp_path):
+    decoder, _ = fake_decoder(tmp_path)
+    received = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def observe(frame):
+        assert frame == FRAME
+        received.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
+                           ffmpeg_path=decoder, start_timeout=2,
+                           frame_observer=observe)
+    try:
+        await ingress.control(start_payload())
+        await asyncio.wait_for(received.wait(), timeout=2)
+        assert ingress.latest_frame() == FRAME
+        await ingress.control({"streaming": False, "deviceID": CAMERA_MAC})
+        assert cancelled.is_set()
+        assert ingress.latest_frame() is None
+        assert ingress.frames_observed == 0
     finally:
         await ingress.close()
 
