@@ -181,8 +181,12 @@ async def test_candidate_stream_response_excludes_private_alias(tmp_path):
         await service._handle_diagnostic_frame(sink, json.dumps({
             "functionName": "UiStreamControl", "messageId": 40,
             "payload": start_payload()}).encode())
-        assert sink.messages[-1]["statusCode"] == 0
-        assert sink.messages[-1]["payload"] == {"status": "started", "usedPoints": 2}
+        assert sink.messages[-2]["statusCode"] == 0
+        assert sink.messages[-2]["payload"] == {"status": "started", "usedPoints": 2}
+        assert sink.messages[-1]["functionName"] == "EventAIPortStatus"
+        assert sink.messages[-1]["payload"] == {
+            "deviceID": CAMERA_MAC, "isStreaming": True,
+            "isSmartDetectReady": False, "isAudioEventReady": False}
         await service._handle_diagnostic_frame(sink, json.dumps({
             "functionName": "GetStreamList", "messageId": 41, "payload": {}}).encode())
         assert sink.messages[-1]["payload"] == {"list": [{"deviceID": CAMERA_MAC,

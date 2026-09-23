@@ -269,6 +269,49 @@ async def test_diagnostic_observes_only_fixed_function_names(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_stream_status_reports_only_verified_streaming_readiness(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+    private_alias = "synthetic-private-camera-stream-alias"
+
+    class FakeIngress:
+        camera_mac = "2A1122334455"
+
+        async def control(self, payload):
+            return {"status": "started" if payload["streaming"] else "stopped",
+                    "usedPoints": 2 if payload["streaming"] else 0}
+
+    class FakeWebSocket:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    service.ingress = FakeIngress()
+    ws = FakeWebSocket()
+    for message_id, streaming in ((10, True), (11, False)):
+        await service._handle_diagnostic_frame(ws, json.dumps({
+            "functionName": "UiStreamControl", "messageId": message_id,
+            "payload": {"streaming": streaming, "uri": private_alias},
+        }).encode())
+
+    assert [m["functionName"] for m in ws.messages] == [
+        "UiStreamControl", "EventAIPortStatus",
+        "UiStreamControl", "EventAIPortStatus"]
+    assert [m["messageId"] for m in ws.messages] == [2, 3, 4, 5]
+    assert [m["inResponseTo"] for m in ws.messages] == [10, 0, 11, 0]
+    assert [m["payload"] for m in ws.messages[1::2]] == [
+        {"deviceID": "2A1122334455", "isStreaming": streaming,
+         "isSmartDetectReady": False, "isAudioEventReady": False}
+        for streaming in (True, False)]
+    assert service.stream_status_events_sent == 2
+    assert private_alias not in json.dumps(ws.messages)
+
+
+@pytest.mark.asyncio
 async def test_bounded_hello_answers_readonly_and_rejects_stream_control(tmp_path):
     config = fixture_state(tmp_path)
     config["controller_ip"] = "127.0.0.1"
