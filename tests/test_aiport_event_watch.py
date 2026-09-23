@@ -87,6 +87,10 @@ async def test_watch_counts_native_subscription_events_without_retaining_payload
                 aiohttp.WSMessage(aiohttp.WSMsgType.TEXT,
                                   frame(action="update", omit_types=True), ""),
                 aiohttp.WSMessage(aiohttp.WSMsgType.TEXT,
+                                  frame(action="update"), ""),
+                aiohttp.WSMessage(aiohttp.WSMsgType.TEXT,
+                                  frame(action="update", event_id="unseen-event"), ""),
+                aiohttp.WSMessage(aiohttp.WSMsgType.TEXT,
                                   frame(camera=OTHER_ID, event_id="other-event"), ""),
             ])
 
@@ -131,16 +135,18 @@ async def test_watch_counts_native_subscription_events_without_retaining_payload
                                 trust_file=Path("trust"), cert_file=Path("cert"),
                                 camera_name="Flur", seconds=1)
     assert result["subscription_opened"] is True
-    assert result["messages_seen"] == 5
+    assert result["messages_seen"] == 7
     assert result["targeted_event_adds"] == 1
-    assert result["targeted_event_updates"] == 2
+    assert result["targeted_event_updates"] == 4
     assert result["targeted_smart_video_adds"] == 1
-    assert result["targeted_smart_video_updates"] == 2
+    assert result["targeted_smart_video_updates"] == 4
     assert result["targeted_person_adds"] == 0
-    assert result["targeted_person_updates"] == 1
+    assert result["targeted_person_updates"] == 3
+    assert result["targeted_events_with_person_class"] == 2
+    assert result["targeted_empty_to_person_transitions"] == 1
     assert result["smart_type_states"] == {
         "add": {"omitted": 0, "null": 0, "empty": 1, "person": 0, "other": 0},
-        "update": {"omitted": 1, "null": 0, "empty": 0, "person": 1, "other": 0},
+        "update": {"omitted": 1, "null": 0, "empty": 0, "person": 3, "other": 0},
     }
     assert result["selected_camera_count"] == 1
     assert result["timeline_persistence"] == "needs_evidence"

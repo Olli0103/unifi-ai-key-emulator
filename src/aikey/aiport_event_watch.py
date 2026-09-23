@@ -100,6 +100,8 @@ async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
               "targeted_event_adds": 0, "targeted_event_updates": 0,
               "targeted_smart_video_adds": 0, "targeted_smart_video_updates": 0,
               "targeted_person_adds": 0, "targeted_person_updates": 0,
+              "targeted_events_with_person_class": 0,
+              "targeted_empty_to_person_transitions": 0,
               "smart_type_states": {
                   action: {state: 0 for state in ("omitted", "null", "empty",
                                                    "person", "other")}
@@ -128,7 +130,10 @@ async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
                     autoclose=False) as ws:
                 result["subscription_opened"] = True
                 deadline = time.monotonic() + seconds
-                seen_ids: set[str] = set()
+                seen_ids: set[tuple[str, str]] = set()
+                explicit_smart_states: dict[tuple[str, str], str] = {}
+                person_event_ids: set[tuple[str, str]] = set()
+                transitioned_event_ids: set[tuple[str, str]] = set()
                 while True:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
@@ -155,7 +160,20 @@ async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
                         continue
                     if parsed is None:
                         continue
-                    _, action, event_id, event_type, is_person, smart_type_state = parsed
+                    camera_id, action, event_id, event_type, is_person, smart_type_state = parsed
+                    event_key = (camera_id, event_id)
+                    if event_type in _SMART_VIDEO_EVENTS:
+                        if (smart_type_state == "person"
+                                and event_key not in person_event_ids):
+                            person_event_ids.add(event_key)
+                            result["targeted_events_with_person_class"] += 1
+                        if (smart_type_state == "person"
+                                and explicit_smart_states.get(event_key) == "empty"
+                                and event_key not in transitioned_event_ids):
+                            transitioned_event_ids.add(event_key)
+                            result["targeted_empty_to_person_transitions"] += 1
+                        if smart_type_state not in {"omitted", "null"}:
+                            explicit_smart_states[event_key] = smart_type_state
                     if action == "update":
                         result["targeted_event_updates"] += 1
                         if event_type in _SMART_VIDEO_EVENTS:
@@ -163,8 +181,8 @@ async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
                             result["smart_type_states"]["update"][smart_type_state] += 1
                         if is_person:
                             result["targeted_person_updates"] += 1
-                    elif event_id not in seen_ids:
-                        seen_ids.add(event_id)
+                    elif event_key not in seen_ids:
+                        seen_ids.add(event_key)
                         result["targeted_event_adds"] += 1
                         if event_type in _SMART_VIDEO_EVENTS:
                             result["targeted_smart_video_adds"] += 1
