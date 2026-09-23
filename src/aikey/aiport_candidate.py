@@ -164,6 +164,8 @@ class CandidateService:
         self.stream_status_events_sent = 0
         self.stream_reconnects_preserved = 0
         self.stream_grace_closures = 0
+        self.stream_resets_answered = 0
+        self.stream_resets_rejected = 0
         self.last_stream_error: str | None = None
         self.last_control_command: str | None = None
         self.observed_function_counts: dict[str, int] = {}
@@ -204,6 +206,8 @@ class CandidateService:
             "stream_status_events_sent": self.stream_status_events_sent,
             "stream_reconnects_preserved": self.stream_reconnects_preserved,
             "stream_grace_closures": self.stream_grace_closures,
+            "stream_resets_answered": self.stream_resets_answered,
+            "stream_resets_rejected": self.stream_resets_rejected,
             "stream_frames_decoded": self.ingress.frame_count if self.ingress else 0,
             "stream_frames_decoded_total": (
                 self.ingress.total_frames_decoded + self.ingress.frame_count
@@ -342,6 +346,24 @@ class CandidateService:
                     await self._send_stream_status(ws, streaming=True)
                 elif had_disconnect_grace:
                     await self.ingress.close()
+            return
+        if function == "ResetAIPortStreams":
+            self.last_control_command = function
+            request_id = message.get("messageId")
+            if not self._params_agreed or type(request_id) is not int or request_id < 0:
+                return
+            if message.get("payload") != {}:
+                await self._reply_control(ws, function, request_id, 5,
+                                          {"description": "invalid_reset_command"})
+                self.stream_resets_rejected += 1
+                return
+            if self.ingress is not None:
+                was_streaming = bool(self.ingress.list_streams())
+                await self.ingress.close()
+                if was_streaming and time.time() < self.config.get("diagnostic_hello_until", 0):
+                    await self._send_stream_status(ws, streaming=False)
+            await self._reply_control(ws, function, request_id, 0, {})
+            self.stream_resets_answered += 1
             return
         if function in {"GetStreamList", "UiStreamControl", "OnvifStreamControl"}:
             self.last_control_command = function

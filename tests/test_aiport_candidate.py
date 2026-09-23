@@ -251,7 +251,7 @@ async def test_diagnostic_stream_survives_short_control_reconnect(tmp_path):
     config = fixture_state(tmp_path)
     config["controller_ip"] = "127.0.0.1"
     config["diagnostic_hello_until"] = int(time.time()) + 60
-    seen_stream_list = asyncio.Event()
+    stream_restarted = asyncio.Event()
     stream_lists = []
     connections = 0
 
@@ -278,6 +278,7 @@ async def test_diagnostic_stream_survives_short_control_reconnect(tmp_path):
         nonlocal connections
         connections += 1
         number = connections
+        restart_ack = False
         ws = web.WebSocketResponse(protocols=["secure_transfer"])
         await ws.prepare(request)
         async for frame in ws:
@@ -301,10 +302,20 @@ async def test_diagnostic_stream_survives_short_control_reconnect(tmp_path):
                 assert message["statusCode"] == 0
             elif function == "EventAIPortStatus" and number == 1:
                 await ws.close(code=1000)
+            elif function == "EventAIPortStatus" and number == 2 and restart_ack:
+                stream_restarted.set()
+                await ws.close(code=1000)
             elif message.get("inResponseTo") == 22:
                 stream_lists.append(message["payload"]["list"])
-                seen_stream_list.set()
-                await ws.close(code=1000)
+                await ws.send_bytes(json.dumps({"functionName": "ResetAIPortStreams",
+                    "messageId": 23, "payload": {}}).encode())
+            elif message.get("inResponseTo") == 23:
+                assert message["statusCode"] == 0
+                await ws.send_bytes(json.dumps({"functionName": "UiStreamControl",
+                    "messageId": 24, "payload": {"streaming": True}}).encode())
+            elif message.get("inResponseTo") == 24:
+                assert message["statusCode"] == 0
+                restart_ack = True
         return ws
 
     app = web.Application()
@@ -318,17 +329,61 @@ async def test_diagnostic_stream_survives_short_control_reconnect(tmp_path):
     service.ingress = ingress
     task = asyncio.create_task(service._connect_loop())
     try:
-        await asyncio.wait_for(seen_stream_list.wait(), timeout=8)
+        await asyncio.wait_for(stream_restarted.wait(), timeout=8)
         assert connections >= 2
         assert stream_lists == [[{"deviceID": ingress.camera_mac, "points": 2}]]
-        assert ingress.closes == 0
+        assert ingress.closes == 1
         assert service.stream_reconnects_preserved == 1
+        assert service.stream_resets_answered == 1
+        assert service.stream_controls_started == 2
     finally:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
         await service.stop()
         await server.close()
+
+
+@pytest.mark.asyncio
+async def test_stream_reset_rejects_unexpected_payload_without_stopping(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+
+    class FakeIngress:
+        frame_count = 0
+        total_frames_decoded = 0
+        last_decoder_exit_code = None
+        last_decoder_stderr_seen = False
+        last_decoder_error_markers = ()
+        last_decoder_error_terms = ()
+
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    ingress = FakeIngress()
+    service.ingress = ingress
+    sink = Sink()
+    private_value = "synthetic-private-stream-alias"
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ResetAIPortStreams", "messageId": 23,
+        "payload": {"unexpected": private_value}}).encode())
+    assert not ingress.closed
+    assert sink.messages[-1]["statusCode"] == 5
+    assert sink.messages[-1]["payload"] == {"description": "invalid_reset_command"}
+    assert service.stream_resets_rejected == 1
+    assert private_value not in (await service._health(None)).text
 
 
 @pytest.mark.asyncio
