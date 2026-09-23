@@ -2,7 +2,52 @@
 
 import pytest
 
-from aikey.aiport_smart_settings import SmartSettingsError, parse_smart_settings
+from aikey.aiport_smart_settings import (
+    SmartSettingsError, parse_motion_probe, parse_smart_settings,
+    summarize_smart_request,
+)
+
+
+def test_probe_shape_omits_camera_and_nested_policy_contents():
+    private_name = "private-bedroom-zone"
+    payload = {"deviceID": "2A1122334455", "algoVersion": "beta",
+               "enableSmartDetect": ["person", "face"],
+               "eventStartMSec": 100, "eventStopMSec": 200,
+               "zones": {private_name: {"points": [[123, 456]]}},
+               "lines": {}, "reVerificationPolicy": {"secret": private_name},
+               private_name: "not-a-protocol-field"}
+    shape = summarize_smart_request(payload, camera_mac="2A:11:22:33:44:55")
+    assert shape["camera_matches"] is True
+    assert shape["zones_count"] == 1
+    assert shape["lines_count"] == 0
+    assert shape["enabled_count"] == 2
+    assert shape["unknown_fields"] == 1
+    assert shape["reVerificationPolicy_configured"] is True
+    assert private_name not in str(shape)
+    assert "2A1122334455" not in str(shape)
+
+
+def test_probe_shape_handles_non_object_without_retaining_it():
+    assert summarize_smart_request(["private"], camera_mac="2A1122334455") == {
+        "object": False}
+
+
+def test_motion_probe_accepts_only_bound_old_envelope():
+    payload = {"algoVersion": "beta", "deviceID": "2A1122334455",
+               "enable": True, "eventMaxDurationMSec": 600_000,
+               "bgmodel": "default", "lingerEventStartMSec": 1000,
+               "lingerEventStopMSec": 3000,
+               "zones": {"private-zone-name": {"private-coordinates": [3, 4]}}}
+    assert parse_motion_probe(payload, camera_mac="2A:11:22:33:44:55") == 1
+    with pytest.raises(SmartSettingsError):
+        parse_motion_probe({**payload, "deviceID": "2A1122334456"},
+                           camera_mac="2A1122334455")
+    with pytest.raises(SmartSettingsError):
+        parse_motion_probe({**payload, "eventMaxDurationMSec": True},
+                           camera_mac="2A1122334455")
+    with pytest.raises(SmartSettingsError):
+        parse_motion_probe({**payload, "unknown": "private"},
+                           camera_mac="2A1122334455")
 
 
 CAMERA = "2A1122334455"
@@ -32,6 +77,43 @@ def test_accepts_camera_bound_full_frame_policy_without_retaining_raw_payload():
     raw["enableSmartDetect"].append("animal")
     assert not policy.allows("animal")
     assert not hasattr(policy, "zones")
+
+
+def test_accepts_only_explicitly_disabled_reverification_policy():
+    raw = full_frame_policy()
+    raw["reVerificationPolicy"] = {
+        kind: {"enable": False} for kind in ("person", "vehicle", "animal")}
+    assert parse_smart_settings(raw, camera_mac=CAMERA).allows("person")
+    raw["reVerificationPolicy"]["person"]["enable"] = 0
+    with pytest.raises(SmartSettingsError, match="unsupported_smart_feature"):
+        parse_smart_settings(raw, camera_mac=CAMERA)
+
+
+def test_ignores_reverification_for_detection_classes_not_requested():
+    raw = full_frame_policy()
+    raw["enableSmartDetect"] = ["person"]
+    raw["reVerificationPolicy"] = {
+        "person": {"enable": False},
+        "vehicle": {"enable": True, "mode": "custom",
+                    "minPresenceProbability": 0.4,
+                    "maxPresenceProbability": 0.8},
+        "animal": {"enable": True, "mode": "custom",
+                   "minPresenceProbability": 0.4,
+                   "maxPresenceProbability": 0.8},
+    }
+    assert parse_smart_settings(raw, camera_mac=CAMERA).allows("person")
+    raw["reVerificationPolicy"]["person"]["enable"] = True
+    with pytest.raises(SmartSettingsError, match="unsupported_smart_feature"):
+        parse_smart_settings(raw, camera_mac=CAMERA)
+
+
+def test_accepts_deprecated_read_only_auto_recognition_precision():
+    raw = full_frame_policy()
+    raw["recognitionAccuracy"] = {"face": "auto", "licensePlate": "auto"}
+    assert parse_smart_settings(raw, camera_mac=CAMERA).allows("person")
+    raw["recognitionAccuracy"]["face"] = "high"
+    with pytest.raises(SmartSettingsError, match="invalid_smart_settings"):
+        parse_smart_settings(raw, camera_mac=CAMERA)
 
 
 @pytest.mark.parametrize("field,value,error", [
