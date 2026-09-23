@@ -749,7 +749,7 @@ class CandidateService:
             if (not isinstance(self.ingress, AiPortIngress)
                     or self._current_ws is not ws or not self._params_agreed
                     or not self.ingress.list_streams()
-                    or time.time() + 5 >= self.config["diagnostic_event_until"]
+                    or time.time() + 8 >= self.config["diagnostic_event_until"]
                     or policy.enabled_types != frozenset({"person"})):
                 return
             probe = parse_recorded_probe(
@@ -758,30 +758,47 @@ class CandidateService:
             if (self.recorded_probe_claimed
                     or os.path.lexists(self.state_dir / f".native-event-probe-{probe.nonce}")):
                 return
-            change = await asyncio.to_thread(infer_recorded_person, probe)
+            track = await asyncio.to_thread(infer_recorded_person, probe)
+            frame_gap = (probe.frames[1].captured_ms
+                         - probe.frames[0].captured_ms) / 1000
             if (self._current_ws is not ws or self._smart_policy is not policy
                     or not self.ingress.list_streams()
-                    or time.time() + 3 >= self.config["diagnostic_event_until"]
-                    or not policy.allows_score("person", change.score)):
+                    or time.time() + frame_gap + 3
+                    >= self.config["diagnostic_event_until"]
+                    or not policy.allows_score("person", track.enter.score)
+                    or not policy.allows_score("person", track.moving.score)):
                 return
-            zone_ids = policy.zone_ids("person", change.box)
-            if zone_ids is None:
+            zone_ids = policy.zone_ids("person", track.enter.box)
+            if (zone_ids is None
+                    or zone_ids != policy.zone_ids("person", track.moving.box)):
                 return
             self.recorded_probe_qualified += 1
             if not self._claim_native_probe(probe.nonce):
                 return
             self.recorded_probe_claimed += 1
             enter = smart_event_payload(
-                probe.camera_mac, change, edge="enter",
+                probe.camera_mac, track.enter, edge="enter",
+                clock_wall_ms=probe.frames[0].captured_ms, zone_ids=zone_ids)
+            moving = smart_event_payload(
+                probe.camera_mac, track.moving, edge="moving",
                 clock_wall_ms=probe.frames[1].captured_ms, zone_ids=zone_ids)
             leave = smart_event_payload(
-                probe.camera_mac, change, edge="leave",
+                probe.camera_mac, track.moving, edge="leave",
                 clock_wall_ms=probe.frames[1].captured_ms + 2000,
                 zone_ids=zone_ids)
             await self._send_control_event(ws, "EventSmartDetect", enter)
             self.smart_events_entered += 1
-            # Preserve the captured two-second edge spacing so Protect can
-            # process the enter and its track before the leave arrives.
+            # Each descriptor comes from its own recorded model observation.
+            # Deliver the track updates at the same spacing as the frames.
+            await asyncio.sleep(frame_gap)
+            if (self._current_ws is not ws
+                    or self._smart_policy is not policy
+                    or not self.ingress.list_streams()
+                    or time.time() + 2 >= self.config["diagnostic_event_until"]):
+                self.recorded_probe_errors += 1
+                return
+            await self._send_control_event(ws, "EventSmartDetect", moving)
+            self.smart_events_moved += 1
             await asyncio.sleep(2)
             if (self._current_ws is ws and self._smart_policy is policy
                     and self.ingress.list_streams()

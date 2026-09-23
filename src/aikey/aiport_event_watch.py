@@ -134,7 +134,10 @@ async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
                     if remaining <= 0:
                         break
                     try:
-                        message = await ws.receive(timeout=remaining)
+                        # Bound the whole read even if a WebSocket backend
+                        # ignores its own receive timeout.
+                        message = await asyncio.wait_for(
+                            ws.receive(timeout=remaining), timeout=remaining)
                     except asyncio.TimeoutError:
                         break
                     if message.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE,

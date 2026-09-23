@@ -154,3 +154,55 @@ async def test_watch_rejects_unbounded_duration_before_network():
         await watch_events("192.0.2.1", api_key_file=Path("key"),
                            trust_file=Path("trust"), cert_file=Path("cert"),
                            seconds=601)
+
+
+@pytest.mark.asyncio
+async def test_watch_deadline_cancels_a_stalled_websocket_read(monkeypatch):
+    async def fake_inventory(*args, **kwargs):
+        return {"schema": "aikey-camera-preflight/1", "cameras": [
+            {"id": CAMERA_ID, "name": "Flur", "model": "UVC G3 Instant",
+             "state": "CONNECTED", "processing_class": "legacy_ingress_needed"}]}
+
+    read_cancelled = False
+
+    class FakeSocket:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def receive(self, *, timeout):
+            nonlocal read_cancelled
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                read_cancelled = True
+                raise
+
+    class FakeSession:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        def ws_connect(self, *args, **kwargs):
+            return FakeSocket()
+
+    monkeypatch.setattr(aiport_event_watch, "fetch_inventory", fake_inventory)
+    monkeypatch.setattr(aiport_event_watch, "_read_private", lambda *args: b"private-test-key")
+    monkeypatch.setattr(aiport_event_watch, "_trusted_web", lambda *args: (object(), b"pin"))
+    monkeypatch.setattr(aiport_event_watch, "PinnedWebConnector", lambda *args: object())
+    monkeypatch.setattr(aiport_event_watch.aiohttp, "ClientSession", FakeSession)
+    started = asyncio.get_running_loop().time()
+    result = await watch_events("192.0.2.1", api_key_file=Path("key"),
+                                trust_file=Path("trust"), cert_file=Path("cert"),
+                                camera_name="Flur", seconds=1)
+    assert asyncio.get_running_loop().time() - started < 2
+    assert read_cancelled is True
+    assert result["subscription_opened"] is True
+    assert result["messages_seen"] == 0
