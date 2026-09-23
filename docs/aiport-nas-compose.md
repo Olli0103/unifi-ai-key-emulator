@@ -1,16 +1,16 @@
 # Multi-instance AI Port network plan for a Linux NAS
 
-`local-aiport-nas-compose` turns an **addressed** AI Port capacity plan and already-provisioned private slot identities into a reviewable Docker Compose JSON file. It is a deployment input, not a pairing or feature-parity claim. The current candidate stays passive unless a separate expiring diagnostic is armed; it does not continuously process every camera.
+`local-aiport-nas-compose` turns an AI Port capacity plan and already-provisioned private slot identities into a reviewable Docker Compose JSON file. Every selected NAS slot must have a reserved address; later, unselected slots may remain unaddressed. It is a deployment input, not a pairing or feature-parity claim. The current candidate stays passive unless a separate expiring diagnostic is armed; it does not continuously process every camera.
 
 Protect expects each AI Port identity at HTTPS port 443 on its own LAN address. The number of instances follows camera resolution and source capacity, not one port per camera. A Linux macvlan network can assign each container a distinct IP and MAC on the NAS LAN. Docker's [macvlan documentation](https://docs.docker.com/engine/network/drivers/macvlan/) requires a real parent interface and warns that the NAS host cannot directly reach its macvlan containers without an additional network path. This mode has **not** been tested on the UGREEN NAS.
 
 Before generating a manifest, confirm the NAS has Docker Engine/Compose with macvlan support, identify the physical parent interface and subnet/gateway, and reserve each AI Port IP outside DHCP or through the router. Do not treat an unanswered ping as proof an address is free. The existing AI Key IP, NAS IP, gateway, controller IP, and camera IPs cannot be reused. On the current lab plan, five AI Port instances are required for the selected G3–G5/legacy scope, while only the existing Mac candidate's first address is assigned. Four additional reserved addresses are `needs_evidence`.
 
-Create a fresh, saved `local-aiport-plan` result with all instance addresses. Preserve the prior plan when adding slots so that an adopted identity does not silently move. Provision each NAS slot with `local-aiport-provision` in a private, persistent directory owned by the intended non-root container UID/GID. The generator verifies the stored MAC, device certificate, controller pin, fixed IP, and file ownership; it will not create or rotate identities. An already-running Mac slot can be excluded while later slots are prepared for the NAS:
+Create a fresh, saved `local-aiport-plan` result with an address for every slot selected in this NAS manifest. Other planned slots can wait for their reservations. Preserve the prior plan when adding slots so that an adopted identity does not silently move. Provision each selected NAS slot with `local-aiport-provision` in a private, persistent directory owned by the intended non-root container UID/GID. The generator verifies the stored MAC, device certificate, controller pin, fixed IP, and file ownership; it will not create or rotate identities. An already-running Mac slot can be excluded while later slots are prepared for the NAS:
 
 ```sh
 local-aiport-nas-compose \
-  --plan PRIVATE_ADDRESSED_PLAN_JSON \
+  --plan PRIVATE_PLAN_WITH_SELECTED_SLOTS_ADDRESSED \
   --slot-state 2=/private/nas/aiport/slot-2 \
   --slot-state 3=/private/nas/aiport/slot-3 \
   --slot-state 4=/private/nas/aiport/slot-4 \
@@ -30,7 +30,7 @@ Example dry run for slot 2 (add `--apply` only after checking the output and LAN
 
 ```sh
 local-aiport-nas-reconcile \
-  --plan PRIVATE_ADDRESSED_PLAN_JSON --compose /private/nas/aiport/compose.json \
+  --plan PRIVATE_PLAN_WITH_SELECTED_SLOTS_ADDRESSED --compose /private/nas/aiport/compose.json \
   --slot-state 2=/private/nas/aiport/slot-2 \
   --controller-ip PROTECT_IPV4 --controller-pin VERIFIED_SHA256_PIN \
   --nas-ip NAS_IPV4 --subnet LAN_CIDR --gateway LAN_GATEWAY_IPV4 \

@@ -67,6 +67,23 @@ def test_existing_mac_slot_can_be_excluded_during_nas_migration(tmp_path):
     assert compose["services"]["aiport_slot_2"]["networks"]["aiport_lan"]["ipv4_address"] == "192.168.10.136"
 
 
+def test_selected_slot_can_start_before_other_planned_slots_have_addresses(tmp_path):
+    plan, states, options = fixture(tmp_path)
+    plan["instances"][1]["host_ip"] = None
+    plan["instances"][1]["apple_publish"] = None
+    plan["ai_port_instances_without_address"] = 1
+    compose = build_nas_compose(plan, {1: states[1]}, **options)
+    assert set(compose["services"]) == {"aiport_slot_1"}
+    assert compose["services"]["aiport_slot_1"]["networks"]["aiport_lan"]["ipv4_address"] == "192.168.10.135"
+
+
+def test_unselected_but_addressed_slot_still_cannot_conflict(tmp_path):
+    plan, states, options = fixture(tmp_path)
+    plan["instances"][1]["host_ip"] = "192.168.10.135"
+    with pytest.raises(NasComposeError, match="distinct and reserved"):
+        build_nas_compose(plan, {1: states[1]}, **options)
+
+
 @pytest.mark.parametrize("change", [
     "unaddressed", "nas_conflict", "controller_conflict", "wrong_pin",
     "public_state", "missing_state", "wrong_owner", "wrong_subnet", "root_user",

@@ -10,9 +10,9 @@ from aikey.aiport_nas_reconcile import ReconcileError, reconcile, verify_inputs
 from test_aiport_nas_compose import fixture
 
 
-def inputs(tmp_path):
+def inputs(tmp_path, selected_slot=2):
     plan, states, options = fixture(tmp_path)
-    selected = {2: states[2]}
+    selected = {selected_slot: states[selected_slot]}
     manifest = build_nas_compose(plan, selected, **options)
     report = {"schema": "aikey-camera-preflight/1", "source": "local_protect_integration_api",
               "protect_version": "7.3.60", "processing_enabled": False,
@@ -34,6 +34,18 @@ def test_fresh_inventory_and_exact_manifest_are_required(tmp_path):
     report["cameras"].pop()
     with pytest.raises(ReconcileError, match="inventory"):
         verify_inputs(plan, manifest, report, states, options)
+
+
+def test_fresh_inventory_permits_selected_slot_with_unaddressed_future_slot(tmp_path):
+    plan, selected, options, _, report = inputs(tmp_path, selected_slot=1)
+    plan["instances"][1]["host_ip"] = None
+    plan["instances"][1]["apple_publish"] = None
+    plan["ai_port_instances_without_address"] = 1
+    manifest = build_nas_compose(plan, selected, **options)
+    assert verify_inputs(plan, manifest, report, selected, options) == ["aiport_slot_1"]
+    plan["ai_port_instances_without_address"] = 0
+    with pytest.raises(ReconcileError, match="inventory"):
+        verify_inputs(plan, manifest, report, selected, options)
 
 
 @pytest.mark.parametrize("mutation", ["host_port", "extra_service", "changed_ip"])

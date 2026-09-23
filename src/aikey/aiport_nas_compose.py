@@ -102,7 +102,10 @@ def build_nas_compose(plan: dict, state_dirs: dict[int, Path], *,
                 or not isinstance(item.get("camera_ids"), list)
                 or not item["camera_ids"]):
             raise NasComposeError("Invalid AI Port plan slot")
-        address = _lan_ip(item.get("host_ip"), network)
+        raw_address = item.get("host_ip")
+        if raw_address is None and index not in state_dirs:
+            continue
+        address = _lan_ip(raw_address, network)
         if address in seen_ips or address in {gateway, nas_ip, controller_ip, key_ip}:
             raise NasComposeError("AI Port LAN addresses must be distinct and reserved")
         seen_ips.add(address)
