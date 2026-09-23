@@ -208,6 +208,28 @@ async def test_candidate_counts_control_frames_without_exposing_payload(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_diagnostic_observes_only_fixed_function_names(tmp_path):
+    config = fixture_state(tmp_path)
+    service = CandidateService(config, tmp_path)
+    secret = "synthetic-private-camera-stream-alias"
+    await service._handle_diagnostic_frame(None, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "payload": {"secret": secret}
+    }).encode())
+    await service._handle_diagnostic_frame(None, json.dumps({
+        "functionName": secret, "payload": {"secret": secret}
+    }).encode())
+    await service._handle_diagnostic_frame(None, b"not-json-private-token")
+    response = await service._health(None)
+    health = json.loads(response.text)
+    assert health["observed_function_counts"] == {
+        "ChangeSmartDetectSettings": 1}
+    assert health["unlisted_function_frames"] == 1
+    assert health["unparsed_binary_frames"] == 1
+    assert secret not in response.text
+    assert "not-json-private-token" not in response.text
+
+
+@pytest.mark.asyncio
 async def test_bounded_hello_answers_readonly_and_rejects_stream_control(tmp_path):
     config = fixture_state(tmp_path)
     config["controller_ip"] = "127.0.0.1"
