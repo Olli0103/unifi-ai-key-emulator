@@ -150,3 +150,8 @@ class AdoptionStore:
         if self.pending_token is None:
             raise AdoptionError("No pending token")
         self._save({**self.binding, "phase": "adopted"})
+
+    def resume_existing(self) -> None:
+        if self.adopted or self.pending_token is not None:
+            raise AdoptionError("Cannot resume an active adoption")
+        self._save({**self.binding, "phase": "adopted"})

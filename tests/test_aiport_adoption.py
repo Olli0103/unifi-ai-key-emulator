@@ -12,8 +12,8 @@ from aiohttp.test_utils import TestServer
 import pytest
 
 from aikey.aiport_adoption import AdoptionError, AdoptionStore, validate_management
-from aikey.aiport_candidate import CandidateService
-from test_aiport_candidate import fixture_state
+from aikey.aiport_candidate import CandidateError, CandidateService, load_config
+from test_aiport_candidate import fixture_state, private_file
 from test_aiport_credentials import synthetic_digest
 
 
@@ -85,6 +85,92 @@ def test_failed_state_write_keeps_candidate_unadopted(tmp_path, monkeypatch):
         store.begin("synthetic-token-123456", int(time.time()) + 60)
     assert not store.adopted
     assert store.pending_token is None
+
+
+def test_resume_existing_requires_separate_short_window(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_resume_until"] = int(time.time()) + 60
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["diagnostic_resume_until"] == config[
+        "diagnostic_resume_until"]
+    config["diagnostic_adoption_until"] = int(time.time()) + 60
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError):
+        load_config(tmp_path / "config.json")
+
+
+@pytest.mark.asyncio
+async def test_existing_cert_reconnect_confirms_local_state_without_camera_access(tmp_path):
+    config = fixture_state(tmp_path)
+    config["controller_ip"] = "127.0.0.1"
+    config["diagnostic_resume_until"] = int(time.time()) + 60
+    accepted = asyncio.Event()
+
+    async def websocket(request):
+        assert request.headers["Adopted"] == "true"
+        assert "token" not in request.query
+        ws = web.WebSocketResponse(protocols=["secure_transfer"])
+        await ws.prepare(request)
+        accepted.set()
+        async for _ in ws:
+            pass
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/camera/1.0/ws", websocket)
+    controller = TestServer(app)
+    await controller.start_server(ssl=CandidateService(config, tmp_path)._server_context())
+    service = CandidateService(config, tmp_path, control_port=controller.port)
+    task = asyncio.create_task(service._connect_loop())
+    try:
+        await asyncio.wait_for(accepted.wait(), 3)
+        for _ in range(100):
+            if service.adoption.adopted:
+                break
+            await asyncio.sleep(0.01)
+        assert service.adoption.adopted
+        assert AdoptionStore(tmp_path, config["controller_ip"],
+                             config["controller_pin"], controller.port).adopted
+        assert service.ingress is None
+        assert b"token" not in (tmp_path / "aiport-adoption.json").read_bytes()
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await controller.close()
+
+
+@pytest.mark.asyncio
+async def test_rejected_existing_cert_reconnect_stays_unadopted(tmp_path):
+    config = fixture_state(tmp_path)
+    config["controller_ip"] = "127.0.0.1"
+    config["diagnostic_resume_until"] = int(time.time()) + 60
+    rejected = asyncio.Event()
+
+    async def websocket(request):
+        rejected.set()
+        return web.Response(status=403)
+
+    app = web.Application()
+    app.router.add_get("/camera/1.0/ws", websocket)
+    controller = TestServer(app)
+    await controller.start_server(ssl=CandidateService(config, tmp_path)._server_context())
+    service = CandidateService(config, tmp_path, control_port=controller.port)
+    task = asyncio.create_task(service._connect_loop())
+    try:
+        await asyncio.wait_for(rejected.wait(), 3)
+        for _ in range(100):
+            if service.last_result == "WSServerHandshakeError":
+                break
+            await asyncio.sleep(0.01)
+        assert service.last_result == "WSServerHandshakeError"
+        assert not service.adoption.adopted
+        assert not (tmp_path / "aiport-adoption.json").exists()
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await controller.close()
 
 
 @pytest.mark.asyncio

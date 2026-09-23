@@ -89,7 +89,7 @@ def load_config(path: Path) -> dict:
         raise CandidateError("Invalid candidate configuration JSON") from exc
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
     allowed = required | {"diagnostic_hello_until", "diagnostic_stream",
-                          "diagnostic_adoption_until"}
+                          "diagnostic_adoption_until", "diagnostic_resume_until"}
     if not isinstance(value, dict) or not required <= set(value) or not set(value) <= allowed:
         raise CandidateError("Candidate configuration fields do not match the isolated profile")
     if "diagnostic_hello_until" in value:
@@ -100,6 +100,12 @@ def load_config(path: Path) -> dict:
         until = value["diagnostic_adoption_until"]
         if type(until) is not int or until < 0 or until > int(time.time()) + 600:
             raise CandidateError("Diagnostic adoption must expire within ten minutes")
+    if "diagnostic_resume_until" in value:
+        until = value["diagnostic_resume_until"]
+        if type(until) is not int or until < 0 or until > int(time.time()) + 600:
+            raise CandidateError("Diagnostic resume must expire within ten minutes")
+        if "diagnostic_adoption_until" in value:
+            raise CandidateError("Adoption and existing-device resume cannot be combined")
     if "diagnostic_stream" in value:
         stream = value["diagnostic_stream"]
         if (not isinstance(stream, dict) or set(stream) != {
@@ -709,9 +715,11 @@ class CandidateService:
             while True:
                 pending_token = self.adoption.pending_token
                 adopted = self.adoption.adopted
+                resume_existing = (not adopted and pending_token is None
+                                   and time.time() < self.config.get("diagnostic_resume_until", 0))
                 headers = {"Camera-MAC": self.config["mac"], "Camera-IP": self.config["device_ip"],
                            "Camera-Model": "0xa5f1", "Camera-Firmware": self.config["firmware_version"],
-                           "Adopted": "true" if adopted or pending_token else "false"}
+                           "Adopted": "true" if adopted or pending_token or resume_existing else "false"}
                 url = (f"wss://{self.config['controller_ip']}:{self.control_port}/camera/1.0/ws")
                 if pending_token:
                     url += f"?token={quote(pending_token, safe='')}"
@@ -727,6 +735,11 @@ class CandidateService:
                         else:
                             if pending_token:
                                 self.adoption.confirm()
+                            elif resume_existing:
+                                if time.time() >= self.config["diagnostic_resume_until"]:
+                                    await ws.close()
+                                    continue
+                                self.adoption.resume_existing()
                             self.upgrades += 1
                             self.connected = True
                             self._current_ws = ws
