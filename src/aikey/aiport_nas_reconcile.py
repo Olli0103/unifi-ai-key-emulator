@@ -137,6 +137,12 @@ def _inspect(run: Callable[[list[str], int], str], row: dict, service: dict) -> 
     try:
         image = json.loads(run(["docker", "inspect", "--format",
                                 "{{json .Config.Image}}", container_id], 15))
+        user = json.loads(run(["docker", "inspect", "--format",
+                               "{{json .Config.User}}", container_id], 15))
+        host = json.loads(run(["docker", "inspect", "--format",
+                               "{{json .HostConfig}}", container_id], 15))
+        mounts = json.loads(run(["docker", "inspect", "--format",
+                                 "{{json .Mounts}}", container_id], 15))
         networks = json.loads(run(["docker", "inspect", "--format",
                                    "{{json .NetworkSettings.Networks}}", container_id], 15))
         selected = service["networks"]["aiport_lan"]
@@ -144,6 +150,20 @@ def _inspect(run: Callable[[list[str], int], str], row: dict, service: dict) -> 
         raise ReconcileError("Docker container identity or network cannot be verified") from exc
     if image != service["image"] or not isinstance(networks, dict) or len(networks) != 1:
         raise ReconcileError("Docker container image or network differs from the manifest")
+    expected_volume = service["volumes"][0]
+    if (user != service["user"] or not isinstance(host, dict)
+            or host.get("ReadonlyRootfs") is not True
+            or host.get("Privileged") is not False
+            or host.get("CapAdd") not in (None, [])
+            or host.get("CapDrop") != service["cap_drop"]
+            or host.get("SecurityOpt") != service["security_opt"]
+            or not isinstance(mounts, list) or len(mounts) != 1
+            or not isinstance(mounts[0], dict)
+            or mounts[0].get("Type") != "bind"
+            or mounts[0].get("Source") != expected_volume["source"]
+            or mounts[0].get("Destination") != expected_volume["target"]
+            or mounts[0].get("RW") is not True):
+        raise ReconcileError("Docker container user, isolation or state mount differs from the manifest")
     actual = next(iter(networks.values()))
     if (not isinstance(actual, dict)
             or actual.get("IPAddress") != selected["ipv4_address"]
