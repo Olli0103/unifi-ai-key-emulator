@@ -88,7 +88,8 @@ async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
               "selected_camera_count": len(camera_ids), "subscription_opened": False,
               "messages_seen": 0, "invalid_messages": 0,
               "targeted_event_adds": 0, "targeted_event_updates": 0,
-              "targeted_smart_video_adds": 0, "targeted_person_adds": 0,
+              "targeted_smart_video_adds": 0, "targeted_smart_video_updates": 0,
+              "targeted_person_adds": 0, "targeted_person_updates": 0,
               "attribution_to_ai_port": "needs_evidence",
               "timeline_persistence": "needs_evidence"}
     if not camera_ids:
@@ -140,6 +141,10 @@ async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
                     _, action, event_id, event_type, is_person = parsed
                     if action == "update":
                         result["targeted_event_updates"] += 1
+                        if event_type in _SMART_VIDEO_EVENTS:
+                            result["targeted_smart_video_updates"] += 1
+                        if is_person:
+                            result["targeted_person_updates"] += 1
                     elif event_id not in seen_ids:
                         seen_ids.add(event_id)
                         result["targeted_event_adds"] += 1
