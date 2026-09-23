@@ -25,6 +25,8 @@ AI_PORT_DISCOVERY_PORT = 10001
 AI_PORT_CONTROLLER_WS_PORT = 7442
 AI_PORT_PROTECT_RTSP_PORT = 7447
 _CAMERA_ID = re.compile(r"[0-9a-fA-F]{24}\Z")
+_G3_G5_MODEL = re.compile(r"UVC G[345](?:\s|\Z)")
+_SCOPES = frozenset({"legacy-only", "legacy-and-g3-g5"})
 _CAPACITY = {
     "protect": {"HD": Fraction(1, 5), "2K": Fraction(1, 3),
                 "4K": Fraction(1, 2), None: Fraction(1, 2)},
@@ -48,13 +50,16 @@ def _ip(value: str) -> str:
     return str(address)
 
 
-def _eligible(report: dict) -> dict[str, list[tuple[str, str | None, Fraction]]]:
+def _eligible(report: dict, camera_scope: str) -> tuple[
+        dict[str, list[tuple[str, str | None, Fraction]]], int, int]:
     if (not isinstance(report, dict) or report.get("schema") != "aikey-camera-preflight/1"
             or not isinstance(report.get("cameras"), list)
             or len(report["cameras"]) > 256):
         raise AiPortPlanError("A complete camera preflight v1 report is required")
     groups: dict[str, list[tuple[str, str | None, Fraction]]] = {"protect": [], "onvif": []}
     seen = set()
+    legacy_count = 0
+    enhancement_count = 0
     for row in report["cameras"]:
         if not isinstance(row, dict):
             raise AiPortPlanError("Invalid camera row")
@@ -65,10 +70,16 @@ def _eligible(report: dict) -> dict[str, list[tuple[str, str | None, Fraction]]]
         processing_class = row.get("processing_class")
         if processing_class not in {"legacy_ingress_needed", "smart_event_candidate", "offline"}:
             raise AiPortPlanError("Unknown camera processing class")
-        if processing_class != "legacy_ingress_needed":
+        is_legacy = processing_class == "legacy_ingress_needed"
+        is_enhancement = (camera_scope == "legacy-and-g3-g5"
+                          and processing_class == "smart_event_candidate"
+                          and row.get("source_kind") in (None, "protect")
+                          and isinstance(row.get("model"), str)
+                          and _G3_G5_MODEL.match(row["model"]) is not None)
+        if not (is_legacy or is_enhancement):
             continue
         if row.get("state") != "CONNECTED":
-            raise AiPortPlanError("Legacy candidate is not connected")
+            raise AiPortPlanError("Selected camera is not connected")
         source = row.get("source_kind")
         if source is None and isinstance(row.get("model"), str) and row["model"].startswith("UVC "):
             source = "protect"
@@ -78,17 +89,22 @@ def _eligible(report: dict) -> dict[str, list[tuple[str, str | None, Fraction]]]
         if resolution not in _CAPACITY[source]:
             raise AiPortPlanError("Camera resolution must be HD, 2K, 4K or unknown")
         groups[source].append((camera_id, resolution, _CAPACITY[source][resolution]))
-    return groups
+        legacy_count += int(is_legacy)
+        enhancement_count += int(is_enhancement)
+    return groups, legacy_count, enhancement_count
 
 
 def plan_ai_ports(report: dict, *, device_ips: list[str] | None = None,
-                  ai_key_ip: str | None = None) -> dict:
+                  ai_key_ip: str | None = None,
+                  camera_scope: str = "legacy-only") -> dict:
     """Size independent AI Port instances without pairing or opening ports.
 
     Each instance gets a different host IP because the management listener is
     fixed to 443. A single host UDP 10001 responder may cover all identities.
     """
-    groups = _eligible(report)
+    if camera_scope not in _SCOPES:
+        raise AiPortPlanError("Unknown camera scope")
+    groups, legacy_count, enhancement_count = _eligible(report, camera_scope)
     addresses = [_ip(value) for value in (device_ips or [])]
     if len(set(addresses)) != len(addresses):
         raise AiPortPlanError("AI Port addresses must be distinct")
@@ -123,7 +139,10 @@ def plan_ai_ports(report: dict, *, device_ips: list[str] | None = None,
         })
     return {
         "schema": "aikey-aiport-deployment-plan/2",
-        "legacy_camera_count": sum(map(len, groups.values())),
+        "camera_scope": camera_scope,
+        "legacy_camera_count": legacy_count,
+        "enhancement_camera_count": enhancement_count,
+        "selected_camera_count": legacy_count + enhancement_count,
         "ai_port_instances_required": len(instances),
         "ai_port_instances_without_address": sum(item["host_ip"] is None for item in instances),
         "ai_key": {"host_ip": key_address, "management_tcp": AI_KEY_MANAGEMENT_PORT},
@@ -150,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--web-cert-file", type=Path)
     parser.add_argument("--ai-port-ip", action="append", default=[])
     parser.add_argument("--ai-key-ip")
+    parser.add_argument("--camera-scope", choices=sorted(_SCOPES),
+                        default="legacy-only")
     args = parser.parse_args(argv)
     if args.controller:
         if not all((args.api_key_file, args.web_trust_file, args.web_cert_file)):
@@ -163,7 +184,9 @@ def main(argv: list[str] | None = None) -> int:
                                                   cert_file=args.web_cert_file))
         else:
             report = json.loads(args.inventory.read_text())
-        plan = plan_ai_ports(report, device_ips=args.ai_port_ip, ai_key_ip=args.ai_key_ip)
+        plan = plan_ai_ports(report, device_ips=args.ai_port_ip,
+                             ai_key_ip=args.ai_key_ip,
+                             camera_scope=args.camera_scope)
     except (OSError, json.JSONDecodeError, AiPortPlanError, InventoryError) as exc:
         parser.error(str(exc))
     print(json.dumps(plan, indent=2))

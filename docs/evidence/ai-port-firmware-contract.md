@@ -59,7 +59,7 @@ A second bounded pairing used a G5 camera with a person visible in Protect. Prot
 
 ## Capacity and container listeners
 
-[Ubiquiti's AI Port FAQ](https://help.ui.com/hc/en-us/articles/28315005177239-Protect-AI-Port-FAQs) gives per-device limits by source and resolution and forbids mixing ONVIF and Protect cameras on one AI Port. The independently written `aikey.aiport_deployment` planner reads the existing private camera preflight, groups connected legacy cameras by source, and reserves capacity using those published limits. If the inventory lacks resolution, it reserves 4K capacity until the stream dimensions are verified. It never auto-pairs a camera.
+[Ubiquiti's AI Port FAQ](https://help.ui.com/hc/en-us/articles/28315005177239-Protect-AI-Port-FAQs) gives per-device limits by source and resolution and forbids mixing ONVIF and Protect cameras on one AI Port. The independently written `aikey.aiport_deployment` planner reads the existing private camera preflight, groups connected cameras by source, and reserves capacity using those published limits. Its default scope selects connected cameras without onboard smart detection. An explicit `legacy-and-g3-g5` scope also plans connected Protect G3–G5 cameras that already report smart detection, for optional AI Port enhancement. It excludes offline cameras and G6 cameras with onboard smart detection. If the inventory lacks resolution, it reserves 4K capacity until the stream dimensions are verified. It never auto-pairs a camera.
 
 Every planned AI Port needs its own identity, persistent state and reachable host IP. HTTPS 443 is a **fixed listener per AI Port instance**, not a new TCP port for each camera. The existing AI Key keeps its own HTTPS 8080 listener. A host-side UDP 10001 responder can cover multiple identities if discovery proves necessary, since Apple container's published UDP port does not deliver the LAN multicast sender reliably. The observed outbound controller WebSocket uses TCP 7442, and the tested Protect-camera stream uses outbound RTSP on TCP 7447. Plan schema v2 reports TCP 7447 only for Protect legacy cameras; ONVIF stream ports and any additional listeners remain `needs_evidence`. The planner does not claim a complete publish list before those are verified.
 
@@ -67,6 +67,7 @@ Run the read-only planner with an inventory from `local-aikey inventory`:
 
 ```sh
 local-aiport-plan --inventory PRIVATE_CAMERA_PREFLIGHT_JSON \
+  --camera-scope legacy-and-g3-g5 \
   --ai-key-ip AI_KEY_LAN_IP --ai-port-ip FIRST_AI_PORT_LAN_IP
 ```
 
@@ -77,9 +78,10 @@ local-aiport-plan --controller CONSOLE_PRIVATE_IPV4 \
   --api-key-file PRIVATE_PROTECT_API_KEY_FILE \
   --web-trust-file PRIVATE_WEB_TRUST_JSON \
   --web-cert-file PRIVATE_PINNED_WEB_CERT \
+  --camera-scope legacy-and-g3-g5 \
   --ai-key-ip AI_KEY_LAN_IP --ai-port-ip FIRST_AI_PORT_LAN_IP
 ```
 
-The JSON names the number of instances and Apple container TCP publish bindings. Unassigned instances have no binding, so a deployment controller must refuse to start them until it has distinct, conflict-checked IPs. A container cannot add host-published ports to itself after startup; a host deployment controller must refresh inventory and create or reconcile the required instances. The current planner and unadopted candidate are not yet a functional AI Port profile or an automatic container launcher.
+The JSON separates no-onboard-smart cameras from optional G3–G5 enhancements and names the number of instances and Apple container TCP publish bindings. Unassigned instances have no binding, so a deployment controller must refuse to start them until it has distinct, conflict-checked IPs. A container cannot add host-published ports to itself after startup; a host deployment controller must refresh inventory and create or reconcile the required instances. The current planner and single-camera candidate are not yet a functional multi-camera AI Port profile or an automatic container launcher.
 
 The [isolated candidate service](../aiport-candidate.md) supplies HTTPS management, a persistent device WebSocket and opt-in, time-bounded single-camera stream intake. It still lacks a permanent host 443 publish and a production multi-camera stream service. Frame counters and a small allowlist of command names retain neither frame bodies nor credentials. The management endpoint remains relevant to fresh adoption and needs a separate diagnostic. Camera pairing waits for a decoded frame and an accepted stream-control response. [Ubiquiti's port reference](https://help.ui.com/hc/en-us/articles/218506997-Required-Ports-Reference) identifies 7447 as RTSP output; the live Flur trial decoded video through that outbound connection.
