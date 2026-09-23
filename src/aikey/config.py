@@ -135,10 +135,14 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
         duration = config["worker"]["max_video_duration_ms"]
         if type(duration) is not int or duration <= 0:
             raise ConfigError("worker.max_video_duration_ms must be a positive integer")
-    if "test_scope" in config["worker"]:
-        from .worker import WorkerError, validate_test_scope_config
+    if "test_scope" in config["worker"] or "test_scopes" in config["worker"]:
+        from .worker import WorkerError, configured_test_scopes
         try:
-            config["worker"]["test_scope"] = validate_test_scope_config(config["worker"]["test_scope"])
+            scopes = configured_test_scopes(config["worker"])
+            if "test_scope" in config["worker"]:
+                config["worker"]["test_scope"] = scopes[0]
+            else:
+                config["worker"]["test_scopes"] = list(scopes)
         except WorkerError as exc:
             raise ConfigError(str(exc)) from exc
     if runtime.get("mode") not in ("device", "lab"):

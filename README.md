@@ -4,7 +4,7 @@ An independent experimental AI processor for UniFi Protect. The implemented prof
 
 The local build has device management/adoption, UCP4 control, UDP discovery, a bounded vision worker, version-specific description callbacks and an E5 query responder. Vision providers are configurable: OpenAI Responses, native Ollama and OpenAI-compatible APIs. Search embeddings are configured separately. No vendor firmware or model weights are bundled.
 
-**Status: native adoption, control and a persisted automatic event caption verified.** The ARM64 image built and ran under Apple container 1.4.1. Protect 7.3.56 displayed the processor online; local checks confirmed adopted state, control time synchronization, management-password rotation, disabled factory authentication and reconnect after a planned restart. On Protect 7.3.60, both an on-demand description and one automatic G5 Flex event completed through OpenAI. The automatic event's saved caption remained available after a full Protect page reload. This was a single-event trial; continuous operation, search and NAS deployment have not been verified.
+**Status: native adoption, control and automatic event captions verified on two camera families.** The ARM64 image built and ran under Apple container 1.4.1. Protect 7.3.56 displayed the processor online; local checks confirmed adopted state, control time synchronization, management-password rotation, disabled factory authentication and reconnect after a planned restart. On Protect 7.3.60, an on-demand description and one automatic event each on G5 Flex and G4 Instant completed through OpenAI. Both automatic captions remained visible in Protect after a full page reload. These were separate one-use trials; continuous operation, search and NAS deployment have not been verified.
 
 The inspected controller source is 7.2.105, alongside AI Key firmware 2.2.8. Public metadata did not return a 7.3.56 package during inspection. The live results above establish those specific behaviors, not full protocol or feature compatibility. The [bounded automatic-description path](docs/basic-descriptions.md) has separate persistence acceptance checks.
 
@@ -68,7 +68,7 @@ That command makes a TLS handshake to the configured controller, sends no HTTP c
 | --- | --- | --- |
 | Management/control | HTTPS info/adoption, stable identity, UCP4, time sync, credential rotation and reconnect observed on 7.3.56 | Additional controller commands and longer recovery testing |
 | Discovery | Read-only v1 queries, exact controller allowlist, optional Linux multicast and macOS host companion; native candidate and address observed | Other network layouts and NAS discovery |
-| Descriptions | Bounded queue, configurable vision provider, image/MP4 input; native on-demand and one persisted automatic caption verified | Continuous operation and longer recovery testing |
+| Descriptions | Bounded queue, configurable vision provider, image/MP4 input; native on-demand and two automatic captions on distinct camera families verified | Continuous operation and longer recovery testing |
 | Search | Matched E5 document/query adapter, 384 dimensions, model guard, query socket | Matching actual controller profile and retrieval quality |
 | Search database | PostgreSQL/pgvector preparation and credential rotation hook | Docker execution, controller migrations and restart recovery |
 

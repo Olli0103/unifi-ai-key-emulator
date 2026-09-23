@@ -4,7 +4,7 @@ The worker accepts one native `recognizeKeyFrames` video command within an expli
 
 The command and persistence contract below come from Protect 7.2.105 source. Native acceptance and durable display on another Protect version must be verified separately. Loopback tests prove the emulator's request handling and callback format, not Protect's database writes.
 
-Protect 7.3.60 has completed both the separate native on-demand route and one automatic G5 Flex event. For the automatic event, the worker generated a real OpenAI caption and Protect accepted its full RAM callback. An exact-event GET returned `metadata.ramState: "done"` and the saved `metadata.ramDescription`, including after a full Safari page reload. The native event summary panel then displayed the stored caption. This verifies storage and display for that one event. Continuous processing, search and recovery after a controller restart remain separate checks.
+Protect 7.3.60 has completed a separate native on-demand route and two automatic events on different camera families. For the G5 Flex event, the worker generated a real OpenAI caption and Protect accepted its full RAM callback. An exact-event GET returned `metadata.ramState: "done"` and the saved `metadata.ramDescription`. The native event summary panel displayed that caption after a full Safari reload. A later G4 Instant event also completed through the full RAM callback with HTTP 200. Its native event panel displayed text that matched the worker result exactly, and the text remained after a full Safari reload. An exact-event GET was not run for the G4 Instant event. Both trials used separate, consumed one-use permits. Continuous processing, search, simultaneous jobs and recovery after a controller restart remain separate checks.
 
 ## Scope and trigger
 
@@ -25,6 +25,8 @@ For a first test, enable the worker path with an explicit single-camera, single-
 ```
 
 Existing scopes without `kind` retain their on-demand-only behavior. This scope accepts no on-demand or deep-mode jobs. The reservation is durable before the first media fetch, survives restart, and cannot be reused after a failure or uncertain callback. Repeated delivery of a completed identical job returns the existing result without another inference or upload.
+
+For a paired camera-family trial, replace `test_scope` with `test_scopes`, a list of one or two objects in the same format. Every camera ID and permit ID must be distinct. Each camera has its own durable one-use reservation, so an event from one cannot consume the other's permit. Existing single-scope configurations continue to work. Supplying both fields, an empty list, or more than two scopes fails validation. This is still a bounded trial, not all-camera mode.
 
 Continuous mode is not yet deployed. Its planned global limit is 12 new jobs per rolling hour across all discovered cameras, persisted across restarts.
 

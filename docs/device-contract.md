@@ -2,7 +2,7 @@
 
 This implementation covers a bounded AI Key management, control, and discovery profile. It was written independently from static observations of AI Key firmware 2.2.8 and Protect 7.2.105. Live checks with Protect 7.3.56 on a UDM Pro Max confirmed native discovery/adoption, an online control connection, matching time synchronization, management-password rotation and reconnect after a planned restart. The emulator ran in a built Linux ARM64 image under Apple container 1.4.1.
 
-The matching 7.3.56 controller package was unavailable during inspection. Static source conclusions and live checks therefore have different version scopes. Native camera descriptions, description persistence, search and database interoperability remain unverified; the Mac test had search and PostgreSQL disabled. Full legacy-camera enhancement, face/plate recognition and audio are not implemented. NAS deployment remains untested.
+The matching 7.3.56 controller package was unavailable during inspection. Static source conclusions and live checks therefore have different version scopes. Later Protect 7.3.60 trials verified one native on-demand description and automatic captions on G5 Flex and G4 Instant after a full page reload; see [bounded automatic event descriptions](basic-descriptions.md). Search and database interoperability remain unverified; the Mac test had search and PostgreSQL disabled. Full legacy-camera enhancement, face/plate recognition and audio are not implemented. NAS deployment remains untested.
 
 No vendor executable or script is imported or run. The module never dispatches shell commands, changes the host clock, creates operating-system users, or edits a controller database.
 

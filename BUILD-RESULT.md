@@ -2,7 +2,7 @@
 
 Built on 22 September 2026 for the target platform: UDM Pro Max, Protect 7.3.56, and eventual UGREEN NAS deployment.
 
-The result is a runnable experimental implementation with source, tests, a Python package, Docker files and NAS instructions. Native on-demand analysis and one persisted automatic event caption are verified on Protect 7.3.60. Continuous operation and native search remain unverified. The automated local tests use fixtures; the separate live checks below contacted the authorized controller and provider.
+The result is a runnable experimental implementation with source, tests, a Python package, Docker files and NAS instructions. Native on-demand analysis and automatic captions on G5 Flex and G4 Instant are verified on Protect 7.3.60 after a full page reload. Continuous operation and native search remain unverified. The automated local tests use fixtures; the separate live checks below contacted the authorized controller and provider.
 
 ## Observed checks
 

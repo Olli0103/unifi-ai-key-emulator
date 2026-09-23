@@ -316,8 +316,9 @@ class DeviceService:
 
     @property
     def status(self) -> dict:
-        scope = self.config.get("worker", {}).get("test_scope")
-        basic_enabled = isinstance(scope, dict) and scope.get("kind") == "recognizeKeyFrames"
+        from .worker import configured_test_scopes
+        basic_enabled = any(scope.get("kind") == "recognizeKeyFrames"
+                            for scope in configured_test_scopes(self.config.get("worker", {})))
         return {"adopted": bool(self._state.get("adopted")), "connected": self._ws is not None and not self._ws.closed,
                 "connections": self._connections, "last_error": self._last_error,
                 "last_close_code": self._last_close_code,
@@ -444,10 +445,12 @@ class DeviceService:
         if isinstance(summary, dict) and summary.get("enabled") is True:
             worker = self.config.get("worker", {})
             inference = self.config.get("inference", {})
-            scope = worker.get("test_scope")
-            scope_supported = scope is None or (
-                isinstance(scope, dict) and scope.get("kind", "on_demand") in
-                ("on_demand", "recognizeKeyFrames"))
+            from .worker import WorkerError, configured_test_scopes
+            try:
+                configured_test_scopes(worker)
+                scope_supported = True
+            except WorkerError:
+                scope_supported = False
             decoder = worker.get("ffmpeg_path")
             configured = (isinstance(inference.get("model"), str) and bool(inference["model"])
                           and worker.get("callback_mode", "enabled") == "enabled"
@@ -803,14 +806,14 @@ class DeviceService:
 
     def _record_recognize_shape(self, body: dict) -> tuple[str, ...]:
         """Retain only fixed field names and categories, never request values."""
-        scope = self.config.get("worker", {}).get("test_scope")
-        target = scope.get("camera_id") if isinstance(scope, dict) else None
+        from .worker import configured_test_scopes
+        targets = {scope["camera_id"] for scope in configured_test_scopes(self.config.get("worker", {}))}
         matches = []
         for field in ("camera", "cameraId"):
             _increment(self._recognize_diagnostics[f"{field}_shape_counts"], _field_shape(body, field))
             value = body.get(field)
-            if isinstance(value, str) and isinstance(target, str):
-                outcome = "matches" if value == target else "different"
+            if isinstance(value, str) and targets:
+                outcome = "matches" if value in targets else "different"
             else:
                 outcome = "not_comparable"
             _increment(self._recognize_diagnostics[f"{field}_match_counts"], outcome)
@@ -908,13 +911,14 @@ class DeviceService:
                 self._active_admissions -= 1
             return body
         if action == "recognizeKeyFrames":
-            from .worker import WorkerError
+            from .worker import WorkerError, configured_test_scopes
             phases = self._recognize_diagnostics["phase_counts"]
-            scope = self.config.get("worker", {}).get("test_scope", {})
-            if not isinstance(scope, dict) or scope.get("kind") != "recognizeKeyFrames":
+            scopes = configured_test_scopes(self.config.get("worker", {}))
+            active = {scope["camera_id"] for scope in scopes if scope.get("kind") == "recognizeKeyFrames"}
+            if not active:
                 _increment(phases, "scope_disabled")
                 raise CommandFailure(95, "recognizeKeyFrames is outside the configured single-use scope")
-            if not isinstance(body.get("camera"), str) or body["camera"] != scope.get("camera_id"):
+            if not isinstance(body.get("camera"), str) or body["camera"] not in active:
                 _increment(phases, "camera_mismatch")
                 raise CommandFailure(95, "recognizeKeyFrames is outside the configured single-use scope")
             self._active_admissions += 1
