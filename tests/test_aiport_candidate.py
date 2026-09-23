@@ -837,7 +837,7 @@ async def test_event_probe_acks_person_policy_then_sends_one_real_track_pair(tmp
 
 
 @pytest.mark.asyncio
-async def test_event_probe_drops_uncertain_person_before_tracking(tmp_path):
+async def test_event_probe_drops_outside_zone_and_uncertain_person_before_tracking(tmp_path):
     config = fixture_state(tmp_path)
     config["diagnostic_hello_until"] = int(time.time()) + 90
     config["diagnostic_smart_probe_until"] = config["diagnostic_hello_until"]
@@ -866,6 +866,10 @@ async def test_event_probe_drops_uncertain_person_before_tracking(tmp_path):
                "payload": {"deviceID": "2A1122334455", "algoVersion": "beta",
                            "enableSmartDetect": ["person"],
                            "eventStartMSec": 1000, "eventStopMSec": 3000,
+                           "zones": {"7": {
+                               "coord": [100, 100, 900, 100, 900, 900, 100, 900],
+                               "objectTypes": ["person"], "sensitivity": 50,
+                               "triggerLight": True, "triggerAccessTypes": []}},
                            "reVerificationPolicy": {
                                "person": {"enable": True, "mode": "custom",
                                           "minPresenceProbability": 40,
@@ -877,11 +881,14 @@ async def test_event_probe_drops_uncertain_person_before_tracking(tmp_path):
 
     class Detector:
         def __init__(self):
-            self.scores = iter((0.6, 0.9, 0.91))
+            self.observations = iter(((0.95, (0.01, 0.2, 0.5, 0.8)),
+                                      (0.6, (0.2, 0.2, 0.5, 0.8)),
+                                      (0.9, (0.2, 0.2, 0.5, 0.8)),
+                                      (0.91, (0.2, 0.2, 0.5, 0.8))))
 
         def detect(self, _frame):
-            return (ObjectObservation("person", "person", next(self.scores),
-                                      (0.2, 0.2, 0.5, 0.8)),)
+            score, box = next(self.observations)
+            return (ObjectObservation("person", "person", score, box),)
 
     service._detector = Detector()
     await service._observe_frame(b"ignored by fake detector")
@@ -890,11 +897,24 @@ async def test_event_probe_drops_uncertain_person_before_tracking(tmp_path):
     await service._observe_frame(b"ignored by fake detector")
     assert service.detector_tracks_entered == 0
     await service._observe_frame(b"ignored by fake detector")
-    assert service.detector_objects_seen == 3
+    assert service.detector_tracks_entered == 0
+    await service._observe_frame(b"ignored by fake detector")
+    assert service.detector_objects_seen == 4
     assert service.detector_tracks_entered == 1
     assert service.smart_events_entered == 1
     assert sink.messages[-1]["functionName"] == "EventSmartDetect"
     assert sink.messages[-1]["payload"]["descriptors"][0]["confidenceLevel"] == 91
+    assert sink.messages[-1]["payload"]["descriptors"][0]["zones"] == [7]
+    assert sink.messages[-1]["payload"]["zonesStatus"]["7"]["status"] == "enter"
+    command["messageId"] = 17
+    command["payload"]["enableSmartDetect"] = []
+    await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+    assert sink.messages[-2]["functionName"] == "EventSmartDetect"
+    assert sink.messages[-2]["payload"]["zonesStatus"] == {
+        "7": {"status": "leave"}}
+    assert sink.messages[-1]["statusCode"] == 501
+    assert service.smart_events_left == 1
+    assert service._event_track is None
     await service.stop()
 
 

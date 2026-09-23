@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import math
 
 from .aiport_ingest import IngressError, normalize_mac
+from .aiport_zones import PersonZone, ZoneError, parse_person_zones
 
 
 _OBJECT_TYPES = frozenset({"person", "vehicle", "animal"})
@@ -131,6 +132,8 @@ class SmartPolicy:
     event_start_ms: int
     event_stop_ms: int
     person_reverification_ceiling: float | None
+    person_zones: tuple[PersonZone, ...]
+    zones_configured: bool
 
     def allows(self, kind: str) -> bool:
         return kind in self.enabled_types
@@ -146,6 +149,14 @@ class SmartPolicy:
                 and math.isfinite(score) and 0 <= score <= 1
                 and (self.person_reverification_ceiling is None
                      or score > self.person_reverification_ceiling))
+
+    def person_zone_ids(self, box: tuple[float, float, float, float]) -> tuple[int, ...] | None:
+        """Return matching zone IDs, or deny the box if zones are configured."""
+        if not self.zones_configured:
+            return ()
+        matches = tuple(zone.zone_id for zone in self.person_zones
+                        if zone.contains_box(box))
+        return matches or None
 
 
 def _timing(value: object) -> int:
@@ -196,13 +207,12 @@ def _reverification_ceiling(value: object, requested: list[str]) -> float | None
 
 
 def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
-    """Accept only full-frame person, vehicle and animal settings.
+    """Accept a bounded person-zone subset or full-frame object settings.
 
-    Any configured zone, line, exclusion, tamper, PTZ or access policy remains
-    unsupported. Enabled person reverification suppresses uncertain model
+    Secondary-lens zones, lines, exclusions, tamper, PTZ and access triggers
+    remain unsupported. Enabled person reverification suppresses uncertain
     observations; it is not a second-stage inference implementation. The
-    returned policy contains no raw nested payload and cannot enable native
-    events by itself.
+    returned policy cannot enable native events by itself.
     """
     if (not isinstance(payload, dict) or not set(payload) <= _ALLOWED
             or not {"deviceID", "enableSmartDetect", "eventStartMSec",
@@ -230,7 +240,12 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
     start_ms = _timing(payload["eventStartMSec"])
     stop_ms = _timing(payload["eventStopMSec"])
 
-    for name in _REGION_MAPS:
+    raw_zones = payload.get("zones", {})
+    try:
+        person_zones = parse_person_zones(raw_zones)
+    except ZoneError as exc:
+        raise SmartSettingsError(str(exc)) from exc
+    for name in _REGION_MAPS - {"zones"}:
         value = payload.get(name, {})
         if not isinstance(value, dict):
             raise SmartSettingsError("invalid_smart_settings")
@@ -262,4 +277,5 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
             if (type(value) not in (int, float) or not math.isfinite(value)
                     or not 0 <= value <= 100):
                 raise SmartSettingsError("invalid_smart_settings")
-    return SmartPolicy(expected, frozenset(requested), start_ms, stop_ms, ceiling)
+    return SmartPolicy(expected, frozenset(requested), start_ms, stop_ms,
+                       ceiling, person_zones, bool(raw_zones))

@@ -17,20 +17,29 @@ class SmartEventError(ValueError):
 
 
 def smart_event_payload(camera_mac: str, change: TrackChange, *,
-                        edge: str, clock_wall_ms: int) -> dict:
+                        edge: str, clock_wall_ms: int,
+                        zone_ids: tuple[int, ...] = ()) -> dict:
     """Encode one person enter or leave, without claiming recognition support."""
     if (not isinstance(change, TrackChange) or change.kind != "person"
             or edge not in {"enter", "leave"}
             or type(clock_wall_ms) is not int or clock_wall_ms <= 0
             or type(change.track_id) is not int or change.track_id <= 0
-            or not math.isfinite(change.score) or not 0 <= change.score <= 1):
+            or not math.isfinite(change.score) or not 0 <= change.score <= 1
+            or not isinstance(zone_ids, tuple) or len(zone_ids) > 32
+            or any(type(zone_id) is not int or not 1 <= zone_id <= 4_294_967_295
+                   for zone_id in zone_ids)
+            or len(set(zone_ids)) != len(zone_ids)):
         raise SmartEventError("invalid_smart_event")
     try:
         device_id = normalize_mac(camera_mac)
     except ValueError as exc:
         raise SmartEventError("invalid_smart_event") from exc
     payload = {"deviceID": device_id, "edgeType": edge,
-               "clockWall": clock_wall_ms, "zonesStatus": {},
+               "clockWall": clock_wall_ms,
+               "zonesStatus": {str(zone_id): {"status": edge,
+                                              **({"level": round(change.score * 100)}
+                                                 if edge == "enter" else {})}
+                               for zone_id in zone_ids},
                "trackerIDAttrMap": {}}
     if edge == "leave":
         return payload
@@ -47,7 +56,7 @@ def smart_event_payload(camera_mac: str, change: TrackChange, *,
             "confidenceLevel": round(change.score * 100),
             "coord": [round(x1 * 1000), round(y1 * 1000),
                       round((x2 - x1) * 1000), round((y2 - y1) * 1000)],
-            "objectType": "person", "zones": [], "lines": [],
+            "objectType": "person", "zones": list(zone_ids), "lines": [],
             "stationary": False, "attributes": {}, "coord3d": [],
         }],
     })

@@ -269,6 +269,7 @@ class CandidateService:
         self.smart_events_left = 0
         self._smart_policy: SmartPolicy | None = None
         self._event_track: TrackChange | None = None
+        self._event_zone_ids: tuple[int, ...] = ()
         self.last_stream_error: str | None = None
         self.last_control_command: str | None = None
         self.observed_function_counts: dict[str, int] = {}
@@ -334,7 +335,8 @@ class CandidateService:
                 track_observations = tuple(
                     observation for observation in observations
                     if observation.kind == "person"
-                    and smart_policy.allows_person_score(observation.score))
+                    and smart_policy.allows_person_score(observation.score)
+                    and smart_policy.person_zone_ids(observation.box) is not None)
             changes = self._tracker.update(track_observations,
                                            now=time.monotonic())
         except (DetectionError, TrackingError) as exc:
@@ -358,7 +360,9 @@ class CandidateService:
         for change in changes:
             if change.kind != "person":
                 continue
+            matched_zone_ids = policy.person_zone_ids(change.box)
             if (change.edge == "enter" and policy.allows_person_score(change.score)
+                    and matched_zone_ids is not None
                     and self._event_track is None
                     and self.smart_events_entered == 0):
                 edge = "enter"
@@ -370,7 +374,9 @@ class CandidateService:
             try:
                 payload = smart_event_payload(
                     self.ingress.camera_mac, change, edge=edge,
-                    clock_wall_ms=int(time.time() * 1000))
+                    clock_wall_ms=int(time.time() * 1000),
+                    zone_ids=(matched_zone_ids if edge == "enter"
+                              else self._event_zone_ids))
             except SmartEventError:
                 continue
             event = {"from": "ubnt_avclient", "to": "UniFiVideo",
@@ -381,9 +387,11 @@ class CandidateService:
             self._next_message_id += 1
             if edge == "enter":
                 self._event_track = change
+                self._event_zone_ids = matched_zone_ids
                 self.smart_events_entered += 1
             else:
                 self._event_track = None
+                self._event_zone_ids = ()
                 self.smart_events_left += 1
 
     def app(self) -> web.Application:
@@ -853,9 +861,18 @@ class CandidateService:
             request_id = message.get("messageId")
             if not self._params_agreed or type(request_id) is not int or request_id < 0:
                 return
-            # A later disabled or unsupported policy immediately revokes the
-            # prior permit. No raw policy survives this request handler.
+            # Close a bounded active event before replacing its policy. A
+            # later disabled or unsupported policy revokes the prior permit.
+            if self._event_track is not None:
+                previous = self._event_track
+                await self._publish_bounded_smart_changes((TrackChange(
+                    "leave", previous.track_id, previous.kind, previous.label,
+                    previous.score, previous.box),))
             self._smart_policy = None
+            self._event_track = None
+            self._event_zone_ids = ()
+            if self._tracker is not None:
+                self._tracker = TemporalTracker()
             # Accept only a one-camera, expiring, full-frame person policy
             # when the local detector and event probe are explicitly armed.
             parsed_policy = None
