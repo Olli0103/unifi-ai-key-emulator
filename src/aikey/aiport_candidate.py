@@ -121,6 +121,9 @@ class CandidateService:
         self.last_result: str | None = None
         self.manage_requests = 0
         self.last_manage_shape: dict | None = None
+        self.ws_binary_frames = 0
+        self.ws_text_frames = 0
+        self.ws_last_frame_bytes: int | None = None
         self.started = time.monotonic()
 
     def app(self) -> web.Application:
@@ -134,6 +137,9 @@ class CandidateService:
             "control_connected": self.connected, "websocket_upgrades": self.upgrades,
             "last_result": self.last_result, "manage_requests": self.manage_requests,
             "last_manage_shape": self.last_manage_shape,
+            "ws_binary_frames": self.ws_binary_frames,
+            "ws_text_frames": self.ws_text_frames,
+            "ws_last_frame_bytes": self.ws_last_frame_bytes,
             "uptime_seconds": int(time.monotonic() - self.started)})
 
     async def _manage(self, request: web.Request) -> web.Response:
@@ -207,6 +213,12 @@ class CandidateService:
                             self.connected = True
                             self.last_result = "websocket_101"
                             async for message in ws:
+                                if message.type == aiohttp.WSMsgType.BINARY:
+                                    self.ws_binary_frames += 1
+                                    self.ws_last_frame_bytes = len(message.data)
+                                elif message.type == aiohttp.WSMsgType.TEXT:
+                                    self.ws_text_frames += 1
+                                    self.ws_last_frame_bytes = len(message.data.encode("utf-8"))
                                 if message.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED,
                                                     aiohttp.WSMsgType.ERROR):
                                     break

@@ -119,3 +119,48 @@ async def test_candidate_uses_pinned_secure_transfer_websocket(tmp_path, server_
                 await task
     finally:
         await server.close()
+
+
+@pytest.mark.asyncio
+async def test_candidate_counts_control_frames_without_exposing_payload(tmp_path):
+    config = fixture_state(tmp_path)
+    config["controller_ip"] = "127.0.0.1"
+    secret = b"synthetic-sensitive-stream-url"
+    sent = asyncio.Event()
+
+    async def websocket(request):
+        ws = web.WebSocketResponse(protocols=["secure_transfer"])
+        await ws.prepare(request)
+        await ws.send_bytes(secret)
+        await ws.send_str("synthetic-sensitive-token")
+        sent.set()
+        await asyncio.sleep(1)
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/camera/1.0/ws", websocket)
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.load_cert_chain(tmp_path / "device.crt", tmp_path / "device.key")
+    server = TestServer(app)
+    await server.start_server(ssl=server_context)
+    try:
+        service = CandidateService(config, tmp_path, control_port=server.port)
+        task = asyncio.create_task(service._connect_loop())
+        try:
+            await asyncio.wait_for(sent.wait(), timeout=3)
+            for _ in range(50):
+                if service.ws_binary_frames == 1 and service.ws_text_frames == 1:
+                    break
+                await asyncio.sleep(0.01)
+            assert service.ws_binary_frames == 1
+            assert service.ws_text_frames == 1
+            assert service.ws_last_frame_bytes == len("synthetic-sensitive-token")
+            public = await service._health(None)
+            assert secret.decode() not in public.text
+            assert "synthetic-sensitive-token" not in public.text
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+    finally:
+        await server.close()
