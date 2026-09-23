@@ -73,10 +73,7 @@ def verify_inputs(plan: dict, manifest: dict, report: dict,
     if not isinstance(plan, dict) or not isinstance(plan.get("instances"), list):
         raise ReconcileError("A complete AI Port plan is required")
     try:
-        addresses = [item["host_ip"] for item in plan["instances"]]
-        if any(not isinstance(address, str) for address in addresses):
-            raise ReconcileError("Every planned AI Port slot needs a reserved address")
-        rebuilt = plan_ai_ports(report, device_ips=addresses,
+        rebuilt = plan_ai_ports(report,
                                 ai_key_ip=plan["ai_key"]["host_ip"],
                                 camera_scope=plan["camera_scope"], previous_plan=plan)
         if rebuilt != plan:
