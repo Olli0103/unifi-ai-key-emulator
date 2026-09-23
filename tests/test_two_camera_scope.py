@@ -43,7 +43,7 @@ def two_scopes(worker):
     "invalid",
     [
         [],
-        [{"kind": "recognizeKeyFrames", "camera_id": "one", "permit_id": "one"}] * 3,
+        [{"kind": "recognizeKeyFrames", "camera_id": "one", "permit_id": "one"}] * 4,
         [{"camera_id": "same", "permit_id": "one"}, {"camera_id": "same", "permit_id": "two"}],
         [{"camera_id": "one", "permit_id": "same"}, {"camera_id": "two", "permit_id": "same"}],
     ],
@@ -129,6 +129,31 @@ async def test_description_only_scope_leaves_native_tag_fields_out(services, tmp
         assert worker._read_scope_reservation(first) is None
         with pytest.raises(WorkerError, match="consumed"):
             await worker.submit(second_camera(command("another-event"), second["camera_id"]))
+        assert len(services.requests) == len(services.callbacks) == 1
+    finally:
+        await worker.stop()
+
+
+async def test_third_legacy_camera_probe_has_its_own_permit(services, tmp_path, monkeypatch):
+    config = options(services)
+    two_scopes(config["worker"])
+    config["worker"]["test_scopes"].append({
+        "kind": "recognizeKeyFrames", "camera_id": "legacy-camera", "permit_id": "legacy-once"})
+
+    async def decode(*args, **kwargs):
+        return PNG
+
+    worker = JobProcessor(config, tmp_path)
+    monkeypatch.setattr(worker, "_video_frame", decode)
+    try:
+        result = await worker.handle(second_camera(command("legacy-event"), "legacy-camera"))
+        assert result["callback"] == "http_accepted"
+        assert result["result"]["keyMomentsTags"] == []
+        assert worker._read_scope_reservation(config["worker"]["test_scopes"][2]) is not None
+        assert worker._read_scope_reservation(config["worker"]["test_scopes"][0]) is None
+        assert worker._read_scope_reservation(config["worker"]["test_scopes"][1]) is None
+        with pytest.raises(WorkerError, match="consumed"):
+            await worker.submit(second_camera(command("next-event"), "legacy-camera"))
         assert len(services.requests) == len(services.callbacks) == 1
     finally:
         await worker.stop()

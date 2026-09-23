@@ -50,7 +50,7 @@ def validate_test_scope_config(value):
 
 
 def configured_test_scopes(options):
-    """Validate one or two independent single-use camera permits."""
+    """Validate at most three independent single-use camera permits."""
     if "test_scope" in options and "test_scopes" in options:
         raise WorkerError("worker.test_scope and worker.test_scopes are mutually exclusive")
     if "test_scope" in options:
@@ -58,8 +58,8 @@ def configured_test_scopes(options):
     if "test_scopes" not in options:
         return ()
     values = options["test_scopes"]
-    if not isinstance(values, list) or not 1 <= len(values) <= 2:
-        raise WorkerError("worker.test_scopes requires one or two test scopes")
+    if not isinstance(values, list) or not 1 <= len(values) <= 3:
+        raise WorkerError("worker.test_scopes requires one to three test scopes")
     scopes = tuple(validate_test_scope_config(value) for value in values)
     if (len({scope["camera_id"] for scope in scopes}) != len(scopes)
             or len({scope["permit_id"] for scope in scopes}) != len(scopes)):
