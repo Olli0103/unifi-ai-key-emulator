@@ -1,6 +1,7 @@
 """The isolated AI Port candidate keeps camera access behind an expiring permit."""
 
 import asyncio
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -965,6 +966,10 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
         await service._inference.join()
     events = [message for message in sink.messages
               if message["functionName"] == "EventSmartDetect"]
+    for event in events:
+        envelope_time = datetime.fromisoformat(event["timeStamp"].replace("Z", "+00:00"))
+        assert envelope_time.tzinfo == timezone.utc
+        assert abs(envelope_time.timestamp() * 1000 - event["payload"]["clockWall"]) < 1
     assert [(event["payload"]["deviceID"],
              event["payload"]["descriptors"][0]["zones"])
             for event in events] == [(cameras[0], [1]), (cameras[1], [2])]

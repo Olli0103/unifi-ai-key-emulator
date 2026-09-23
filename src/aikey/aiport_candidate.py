@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+from datetime import datetime, timezone
 import hashlib
 import ipaddress
 import json
@@ -804,6 +805,12 @@ class CandidateService:
                      "responseExpected": False, "functionName": function,
                      "messageId": self._next_message_id, "inResponseTo": 0,
                      "payload": payload}
+            if function == "EventSmartDetect":
+                # Protect reads this envelope field when routing a smart
+                # detection; keep it aligned with the payload's clockWall.
+                event["timeStamp"] = datetime.fromtimestamp(
+                    payload["clockWall"] / 1000, timezone.utc
+                ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
             await ws.send_bytes(json.dumps(event, separators=(",", ":")).encode())
             self._next_message_id += 1
 
