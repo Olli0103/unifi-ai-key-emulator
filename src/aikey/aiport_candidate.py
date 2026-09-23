@@ -323,7 +323,20 @@ class CandidateService:
                     policy["checkpoint_sha256"], threshold=policy["threshold"])
             observations = await asyncio.to_thread(self._detector.detect, frame)
             assert self._tracker is not None
-            changes = self._tracker.update(observations, now=time.monotonic())
+            track_observations = observations
+            if "diagnostic_event_until" in self.config:
+                smart_policy = self._smart_policy
+                if smart_policy is None:
+                    return
+                # A reverification policy cannot be silently bypassed. Only
+                # persons above its upper confidence bound reach the temporal
+                # tracker; uncertain observations are dropped, not published.
+                track_observations = tuple(
+                    observation for observation in observations
+                    if observation.kind == "person"
+                    and smart_policy.allows_person_score(observation.score))
+            changes = self._tracker.update(track_observations,
+                                           now=time.monotonic())
         except (DetectionError, TrackingError) as exc:
             self.detector_error = str(exc)
             raise
@@ -345,7 +358,8 @@ class CandidateService:
         for change in changes:
             if change.kind != "person":
                 continue
-            if (change.edge == "enter" and self._event_track is None
+            if (change.edge == "enter" and policy.allows_person_score(change.score)
+                    and self._event_track is None
                     and self.smart_events_entered == 0):
                 edge = "enter"
             elif (change.edge == "leave" and self._event_track is not None
