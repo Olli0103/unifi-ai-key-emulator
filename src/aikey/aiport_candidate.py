@@ -762,7 +762,12 @@ class CandidateService:
                 zone_ids=zone_ids)
             await self._send_control_event(ws, "EventSmartDetect", enter)
             self.smart_events_entered += 1
-            if self._current_ws is ws:
+            # Preserve the captured two-second edge spacing so Protect can
+            # process the enter and its track before the leave arrives.
+            await asyncio.sleep(2)
+            if (self._current_ws is ws and self._smart_policy is policy
+                    and self.ingress.list_streams()
+                    and time.time() < self.config["diagnostic_event_until"]):
                 await self._send_control_event(ws, "EventSmartDetect", leave)
                 self.smart_events_left += 1
             else:
