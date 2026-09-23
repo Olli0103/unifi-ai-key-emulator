@@ -969,6 +969,13 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
              event["payload"]["descriptors"][0]["zones"])
             for event in events] == [(cameras[0], [1]), (cameras[1], [2])]
     assert len({message["messageId"] for message in sink.messages}) == len(sink.messages)
+    await service._observe_pool_frame(cameras[0], b"private-pool-frame")
+    await service._inference.join()
+    readiness = [message for message in sink.messages
+                 if message["functionName"] == "EventAIPortStatus"
+                 and message["payload"]["deviceID"] == cameras[0]]
+    assert readiness[-1]["payload"]["isSmartDetectReady"] is False
+    assert service._inference.is_available(cameras[1])
 
     await service._handle_diagnostic_frame(sink, json.dumps({
         "functionName": "ChangeSmartDetectSettings", "messageId": 3,
@@ -1001,7 +1008,7 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
                and message["payload"]["edgeType"] == "leave"
                for message in sink.messages)
     health = json.loads((await service._health(None)).text)
-    assert health["pool_inference"]["successes"] == 4
+    assert health["pool_inference"]["successes"] == 5
     assert health["smart_events_entered"] == 2
     assert "private-pool-frame" not in json.dumps(health)
     await service.stop()

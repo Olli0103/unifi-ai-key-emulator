@@ -31,11 +31,13 @@ class FairInference:
     def __init__(self, camera_macs: list[str], *,
                  load_detector: Callable[[], Detector],
                  on_result: Callable[[str, tuple[ObjectObservation, ...], int], Awaitable[None]],
+                 on_unavailable: Callable[[str], Awaitable[None]] | None = None,
                  max_frames_per_camera: int):
         if (not isinstance(camera_macs, list) or not 1 <= len(camera_macs) <= 5
                 or type(max_frames_per_camera) is not int
                 or not 1 <= max_frames_per_camera <= 120
-                or not callable(load_detector) or not callable(on_result)):
+                or not callable(load_detector) or not callable(on_result)
+                or on_unavailable is not None and not callable(on_unavailable)):
             raise IngressError("invalid_inference_policy")
         cameras = tuple(normalize_mac(camera) for camera in camera_macs)
         if len(set(cameras)) != len(cameras):
@@ -44,6 +46,7 @@ class FairInference:
         self._allowed = frozenset(cameras)
         self._load_detector = load_detector
         self._on_result = on_result
+        self._on_unavailable = on_unavailable
         self._max_frames = max_frames_per_camera
         self._model: Detector | None = None
         self._pending: dict[str, tuple[bytes, int]] = {}
@@ -99,6 +102,8 @@ class FairInference:
                     except Exception:
                         self._global_failure = True
                         self._pending.clear()
+                        for unavailable_camera in self._cameras:
+                            await self._notify_unavailable(unavailable_camera)
                         return
                 result = await asyncio.to_thread(self._model.detect, frame)
                 if not isinstance(result, tuple) or len(result) > 100:
@@ -116,10 +121,21 @@ class FairInference:
                 self._disabled.add(camera)
                 self._pending.pop(camera, None)
                 self.failed_cameras += 1
+                await self._notify_unavailable(camera)
             else:
                 self._successes[camera] += 1
                 if self._attempts[camera] >= self._max_frames:
                     self._pending.pop(camera, None)
+                    await self._notify_unavailable(camera)
+
+    async def _notify_unavailable(self, camera: str) -> None:
+        if self._on_unavailable is not None and not self._closed:
+            try:
+                await self._on_unavailable(camera)
+            except Exception:
+                # A status transport failure must not expose payloads or
+                # make another camera's inference unavailable.
+                pass
 
     async def join(self) -> None:
         """Wait for the currently queued diagnostic work to finish."""
@@ -133,6 +149,15 @@ class FairInference:
         if camera not in self._allowed:
             raise IngressError("camera_not_authorized")
         self._pending.pop(camera, None)
+
+    def is_available(self, camera_mac: str) -> bool:
+        """Whether this camera can still receive a model call in this permit."""
+        camera = normalize_mac(camera_mac)
+        if camera not in self._allowed:
+            raise IngressError("camera_not_authorized")
+        return (not self._closed and not self._global_failure
+                and camera not in self._disabled
+                and self._attempts[camera] < self._max_frames)
 
     async def close(self) -> None:
         self._closed = True
