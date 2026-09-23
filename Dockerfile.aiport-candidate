@@ -8,6 +8,8 @@ COPY pyproject.toml /app/
 COPY requirements-runtime.lock /app/
 COPY src /app/src
 RUN pip install -r requirements-runtime.lock && pip install --no-deps .
+ARG ENABLE_LOCAL_DETECTOR=0
+RUN if [ "$ENABLE_LOCAL_DETECTOR" = "1" ]; then pip install --no-cache-dir '.[detector]'; fi
 USER 10001:10001
 ENTRYPOINT ["local-aiport-candidate"]
 CMD ["--config", "/state/config.json"]

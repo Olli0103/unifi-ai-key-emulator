@@ -14,8 +14,10 @@ Repository = "https://github.com/Olli0103/unifi-ai-key-emulator"
 Issues = "https://github.com/Olli0103/unifi-ai-key-emulator/issues"
 
 [project.optional-dependencies]
-dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "ruff==0.16.8", "build==1.6.1"]
+dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "ruff==0.16.8", "build==1.6.1",
+       "numpy>=2,<3", "pillow>=11,<13"]
 models = ["sentence-transformers>=5,<6"]
+detector = ["rfdetr==1.9.1"]
 database = ["psycopg[binary]>=3.2,<4"]
 
 [project.scripts]

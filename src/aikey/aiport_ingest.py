@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import time
+from typing import Awaitable, Callable
 
 
 _MAC = re.compile(r"(?:[0-9A-Fa-f]{12}|(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\Z")
@@ -155,7 +156,8 @@ def _stream_spec(payload: object, *, camera_mac: str, source_ip: str) -> StreamS
 
 
 class _Session:
-    def __init__(self, spec: StreamSpec, ffmpeg_path: str):
+    def __init__(self, spec: StreamSpec, ffmpeg_path: str,
+                 frame_observer: Callable[[bytes], Awaitable[None]] | None = None):
         self.spec = spec
         self.ffmpeg_path = ffmpeg_path
         self.process: asyncio.subprocess.Process | None = None
@@ -171,6 +173,12 @@ class _Session:
         self.latest_frame: bytes | None = None
         self.last_frame_at = 0.0
         self.failure: str | None = None
+        self.frame_observer = frame_observer
+        self.observer_task: asyncio.Task | None = None
+        self._observer_frames: asyncio.Queue[bytes] = asyncio.Queue(maxsize=1)
+        self.frames_observed = 0
+        self.frames_skipped = 0
+        self.observer_failed = False
 
     @property
     def healthy(self) -> bool:
@@ -194,6 +202,9 @@ class _Session:
         )
         self.reader = asyncio.create_task(self._read_frames(), name="aiport-rtsp-frames")
         self.stderr_reader = asyncio.create_task(self._drain_stderr(), name="aiport-rtsp-stderr")
+        if self.frame_observer is not None:
+            self.observer_task = asyncio.create_task(
+                self._observe_frames(), name="aiport-frame-observer")
         try:
             await asyncio.wait_for(self.first_frame.wait(), timeout=timeout)
         except TimeoutError as exc:
@@ -236,12 +247,35 @@ class _Session:
                 self.frame_count += 1
                 self.last_frame_at = time.monotonic()
                 self.first_frame.set()
+                if self.frame_observer is not None and not self.observer_failed:
+                    try:
+                        self._observer_frames.put_nowait(frame)
+                    except asyncio.QueueFull:
+                        self.frames_skipped += 1
         except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
             self.failure = "stream_ended"
         except asyncio.CancelledError:
             raise
         finally:
             self.first_frame.set()
+
+    async def _observe_frames(self) -> None:
+        assert self.frame_observer is not None
+        try:
+            while True:
+                frame = await self._observer_frames.get()
+                try:
+                    await self.frame_observer(frame)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # A model error must never stop stream-control responses or
+                    # publish a partial detection. No private output is logged.
+                    self.observer_failed = True
+                    return
+                self.frames_observed += 1
+        except asyncio.CancelledError:
+            raise
 
     async def close(self) -> None:
         process = self.process
@@ -264,8 +298,12 @@ class _Session:
         if self.stderr_reader is not None:
             self.stderr_reader.cancel()
             await asyncio.gather(self.stderr_reader, return_exceptions=True)
+        if self.observer_task is not None:
+            self.observer_task.cancel()
+            await asyncio.gather(self.observer_task, return_exceptions=True)
         self.reader = None
         self.stderr_reader = None
+        self.observer_task = None
         self.process = None
         self.latest_frame = None
         self._stderr.clear()
@@ -275,13 +313,15 @@ class AiPortIngress:
     """Start only an allowed RTSP stream and confirm a decoded frame first."""
 
     def __init__(self, *, camera_mac: str, source_ip: str, ffmpeg_path: str,
-                 start_timeout: float = 7):
+                 start_timeout: float = 7,
+                 frame_observer: Callable[[bytes], Awaitable[None]] | None = None):
         self.camera_mac = normalize_mac(camera_mac)
         self.source_ip = private_source_ip(source_ip)
         self.ffmpeg_path = executable_path(ffmpeg_path)
         if not 0 < start_timeout < 10:
             raise IngressError("invalid_start_timeout")
         self.start_timeout = start_timeout
+        self.frame_observer = frame_observer
         self._session: _Session | None = None
         self._lock = asyncio.Lock()
         self.total_frames_decoded = 0
@@ -289,6 +329,9 @@ class AiPortIngress:
         self.last_decoder_stderr_seen = False
         self.last_decoder_error_markers: tuple[str, ...] = ()
         self.last_decoder_error_terms: tuple[str, ...] = ()
+        self.total_frames_observed = 0
+        self.total_frames_skipped = 0
+        self.observer_failures = 0
 
     async def control(self, payload: object) -> dict:
         if not isinstance(payload, dict) or "streaming" not in payload:
@@ -307,7 +350,7 @@ class AiPortIngress:
                 if self._session.spec == spec and self._session.healthy:
                     return {"status": "started", "usedPoints": spec.points}
                 await self._close_locked()
-            session = _Session(spec, self.ffmpeg_path)
+            session = _Session(spec, self.ffmpeg_path, self.frame_observer)
             try:
                 await session.start(self.start_timeout)
             except (OSError, IngressError) as exc:
@@ -340,10 +383,27 @@ class AiPortIngress:
     def frame_count(self) -> int:
         return self._session.frame_count if self._session is not None else 0
 
+    @property
+    def frames_observed(self) -> int:
+        return (self.total_frames_observed +
+                (self._session.frames_observed if self._session else 0))
+
+    @property
+    def frames_skipped(self) -> int:
+        return (self.total_frames_skipped +
+                (self._session.frames_skipped if self._session else 0))
+
+    @property
+    def observer_failed(self) -> bool:
+        return self.observer_failures > 0 or bool(self._session and self._session.observer_failed)
+
     async def _close_locked(self) -> None:
         if self._session is not None:
             await self._session.close()
             self.total_frames_decoded += self._session.frame_count
+            self.total_frames_observed += self._session.frames_observed
+            self.total_frames_skipped += self._session.frames_skipped
+            self.observer_failures += int(self._session.observer_failed)
             self._session = None
 
     async def close(self) -> None:

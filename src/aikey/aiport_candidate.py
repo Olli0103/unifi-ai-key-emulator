@@ -26,6 +26,7 @@ import aiohttp
 from aiohttp import web
 
 from .aiport_ingest import AiPortIngress, IngressError, executable_path, normalize_mac, private_source_ip
+from .aiport_detection import DetectionError, RFDetrNanoDetector
 from .aiport_credentials import CredentialError, CredentialStore
 from .aiport_adoption import AdoptionError, AdoptionStore, validate_management
 from .aiport_virtual_hardware import (
@@ -94,6 +95,7 @@ def load_config(path: Path) -> dict:
         raise CandidateError("Invalid candidate configuration JSON") from exc
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
     allowed = required | {"diagnostic_hello_until", "diagnostic_stream",
+                          "diagnostic_detector",
                           "diagnostic_adoption_until", "diagnostic_resume_until",
                           "diagnostic_function_fingerprints_until"}
     if not isinstance(value, dict) or not required <= set(value) or not set(value) <= allowed:
@@ -128,6 +130,22 @@ def load_config(path: Path) -> dict:
             stream["ffmpeg_path"] = executable_path(stream["ffmpeg_path"])
         except IngressError as exc:
             raise CandidateError("Invalid stream diagnostic policy") from exc
+    if "diagnostic_detector" in value:
+        detector = value["diagnostic_detector"]
+        if ("diagnostic_stream" not in value or not isinstance(detector, dict)
+                or set(detector) != {"checkpoint_path", "checkpoint_sha256",
+                                     "threshold", "max_frames"}
+                or not isinstance(detector["checkpoint_path"], str)
+                or not Path(detector["checkpoint_path"]).is_absolute()
+                or not isinstance(detector["checkpoint_sha256"], str)
+                or not _PIN.fullmatch(detector["checkpoint_sha256"])
+                or type(detector["max_frames"]) is not int
+                or not 1 <= detector["max_frames"] <= 3):
+            raise CandidateError("Invalid bounded detector policy")
+        try:
+            RFDetrNanoDetector(object(), threshold=detector["threshold"])
+        except DetectionError as exc:
+            raise CandidateError("Invalid bounded detector threshold") from exc
     value["controller_ip"] = _private_ipv4(value["controller_ip"])
     value["device_ip"] = _private_ipv4(value["device_ip"])
     mac = value["mac"]
@@ -231,6 +249,11 @@ class CandidateService:
         self._params_agreed = False
         self._ingress_close_task: asyncio.Task | None = None
         self.started = time.monotonic()
+        self.detector_frames_attempted = 0
+        self.detector_frames_succeeded = 0
+        self.detector_objects_seen = 0
+        self.detector_error: str | None = None
+        self._detector: RFDetrNanoDetector | None = None
         self.credentials = CredentialStore(self.state_dir)
         self.virtual_sound_led = VirtualSoundLedStore(self.state_dir)
         self.virtual_timezone = VirtualTimezoneStore(self.state_dir)
@@ -240,9 +263,31 @@ class CandidateService:
         self.adoption = AdoptionStore(self.state_dir, config["controller_ip"],
                                      config["controller_pin"], control_port)
         self._current_ws: aiohttp.ClientWebSocketResponse | None = None
-        self.ingress = (AiPortIngress(**config["diagnostic_stream"])
+        self.ingress = (AiPortIngress(
+                            **config["diagnostic_stream"],
+                            frame_observer=(self._observe_frame
+                                            if "diagnostic_detector" in config else None))
                         if "diagnostic_stream" in config
                         and config["diagnostic_hello_until"] > time.time() else None)
+
+    async def _observe_frame(self, frame: bytes) -> None:
+        policy = self.config["diagnostic_detector"]
+        if (time.time() >= self.config["diagnostic_hello_until"]
+                or self.detector_frames_attempted >= policy["max_frames"]):
+            return
+        self.detector_frames_attempted += 1
+        try:
+            if self._detector is None:
+                self._detector = await asyncio.to_thread(
+                    RFDetrNanoDetector.from_checkpoint, policy["checkpoint_path"],
+                    policy["checkpoint_sha256"], threshold=policy["threshold"])
+            observations = await asyncio.to_thread(self._detector.detect, frame)
+        except DetectionError as exc:
+            self.detector_error = str(exc)
+            raise
+        if time.time() < self.config["diagnostic_hello_until"]:
+            self.detector_frames_succeeded += 1
+            self.detector_objects_seen += len(observations)
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=_MAX_MANAGE)
@@ -288,6 +333,13 @@ class CandidateService:
             "stream_frames_decoded_total": (
                 self.ingress.total_frames_decoded + self.ingress.frame_count
                 if self.ingress else 0),
+            "stream_frames_observed": self.ingress.frames_observed if self.ingress else 0,
+            "stream_frames_skipped": self.ingress.frames_skipped if self.ingress else 0,
+            "stream_observer_failed": self.ingress.observer_failed if self.ingress else False,
+            "detector_frames_attempted": self.detector_frames_attempted,
+            "detector_frames_succeeded": self.detector_frames_succeeded,
+            "detector_objects_seen": self.detector_objects_seen,
+            "detector_error": self.detector_error,
             "last_stream_error": self.last_stream_error,
             "last_decoder_exit_code": (self.ingress.last_decoder_exit_code
                                        if self.ingress else None),
@@ -713,11 +765,15 @@ class CandidateService:
         delay = min(self.disconnect_grace_seconds, max(0, until - time.time()))
         if delay <= 0 or not self.ingress.list_streams():
             await self.ingress.close()
+            if time.time() >= until:
+                self._detector = None
             return
 
         async def close_after_grace() -> None:
             await asyncio.sleep(delay)
             await self.ingress.close()
+            if time.time() >= until:
+                self._detector = None
             self.stream_grace_closures += 1
 
         self._ingress_close_task = asyncio.create_task(close_after_grace())
@@ -747,6 +803,7 @@ class CandidateService:
                 await ingress_close_task
         if self.ingress is not None:
             await self.ingress.close()
+        self._detector = None
         if self.runner is not None:
             await self.runner.cleanup()
             self.runner = None
