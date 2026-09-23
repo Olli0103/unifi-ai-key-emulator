@@ -362,7 +362,10 @@ async def test_recorded_event_probe_sends_original_time_once(tmp_path, monkeypat
     monkeypatch.setattr("aikey.aiport_candidate.infer_recorded_person", infer)
     policy = {"deviceID": "2A1122334455", "algoVersion": "beta",
               "enableSmartDetect": ["person"], "eventStartMSec": 1000,
-              "eventStopMSec": 3000, "zones": {}, "lines": {},
+              "eventStopMSec": 3000,
+              "zones": {"7": {"coord": [100, 100, 900, 100, 900, 900,
+                                      100, 900], "objectTypes": ["person"],
+                              "triggerAccessTypes": []}}, "lines": {},
               "reVerificationPolicy": {
                   kind: {"enable": False}
                   for kind in ("person", "vehicle", "animal")}}
@@ -394,6 +397,9 @@ async def test_recorded_event_probe_sends_original_time_once(tmp_path, monkeypat
         if attempt == 1:
             assert [event["payload"]["edgeType"] for event in events] == [
                 "enter", "moving", "leave"]
+            assert events[0]["payload"]["descriptors"][0]["zones"] == [7]
+            assert events[0]["payload"]["zonesStatus"] == {
+                "7": {"status": "enter", "level": 94}}
             assert [event["payload"]["clockWall"] for event in events] == [
                 config["diagnostic_recorded_event_probe"]["frames"][0]["captured_ms"],
                 config["diagnostic_recorded_event_probe"]["frames"][1]["captured_ms"],
@@ -411,6 +417,51 @@ async def test_recorded_event_probe_sends_original_time_once(tmp_path, monkeypat
     marker = tmp_path / (".native-event-probe-" + "b" * 32)
     assert marker.stat().st_mode & 0o777 == 0o600
     assert len(model_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_recorded_event_probe_does_not_claim_without_person_zone(
+        tmp_path, monkeypatch):
+    recorded_probe_config(tmp_path)
+    from aikey.aiport_recorded_probe import RecordedPersonTrack
+
+    monkeypatch.setattr(
+        "aikey.aiport_candidate.infer_recorded_person",
+        lambda _probe: RecordedPersonTrack(
+            TrackChange("enter", 1, "person", "person", 0.94,
+                        (0.2, 0.2, 0.5, 0.8)),
+            TrackChange("moving", 1, "person", "person", 0.95,
+                        (0.21, 0.2, 0.51, 0.8))))
+    policy = {"deviceID": "2A1122334455", "algoVersion": "beta",
+              "enableSmartDetect": ["person"], "eventStartMSec": 1000,
+              "eventStopMSec": 3000, "zones": {}, "lines": {},
+              "reVerificationPolicy": {
+                  kind: {"enable": False}
+                  for kind in ("person", "vehicle", "animal")}}
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    service = CandidateService(load_config(tmp_path / "config.json"), tmp_path)
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"active": True}]
+    sink = Sink()
+    service._current_ws = sink
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 16,
+        "responseExpected": True, "payload": policy}).encode())
+    assert service._recorded_probe_task is not None
+    await service._recorded_probe_task
+    assert not any(message["functionName"] == "EventSmartDetect"
+                   for message in sink.messages)
+    assert service.recorded_probe_claimed == 0
+    assert service.recorded_probe_qualified == 0
+    assert not list(tmp_path.glob(".native-event-probe-*"))
+    await service.stop()
 
 
 @pytest.mark.parametrize("mutation", ["other_camera", "with_synthetic", "no_deadline",

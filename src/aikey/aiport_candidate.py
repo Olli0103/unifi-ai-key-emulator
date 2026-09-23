@@ -769,7 +769,9 @@ class CandidateService:
                     or not policy.allows_score("person", track.moving.score)):
                 return
             zone_ids = policy.zone_ids("person", track.enter.box)
-            if (zone_ids is None
+            # A recorded Person probe must match a validated Person zone before
+            # it claims the one-use permit or publishes an event.
+            if (not zone_ids
                     or zone_ids != policy.zone_ids("person", track.moving.box)):
                 return
             self.recorded_probe_qualified += 1
