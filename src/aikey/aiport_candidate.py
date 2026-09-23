@@ -36,6 +36,9 @@ from .aiport_camera_engine import CameraEventCandidate, CameraPolicyEngine
 from .aiport_inference import FairInference
 from .aiport_tracking import TemporalTracker, TrackChange, TrackingError
 from .aiport_smart_events import SmartEventError, smart_event_payload
+from .aiport_recorded_probe import (
+    RecordedProbeError, infer_recorded_person, parse_recorded_probe,
+)
 from .aiport_smart_settings import (
     SmartPolicy, SmartSettingsError, parse_motion_probe, parse_smart_settings,
     summarize_smart_request,
@@ -116,6 +119,7 @@ def load_config(path: Path) -> dict:
                           "diagnostic_smart_probe_until",
                           "diagnostic_event_until",
                           "diagnostic_native_event_probe",
+                          "diagnostic_recorded_event_probe",
                           "diagnostic_smart_type",
                           "diagnostic_adoption_until", "diagnostic_resume_until",
                           "diagnostic_function_fingerprints_until"}
@@ -237,6 +241,20 @@ def load_config(path: Path) -> dict:
         if (probe["camera_mac"] != value["diagnostic_stream"]["camera_mac"]
                 or not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1)):
             raise CandidateError("Native event probe must match the bounded camera")
+    if "diagnostic_recorded_event_probe" in value:
+        if ("diagnostic_detector" in value
+                or "diagnostic_native_event_probe" in value
+                or "diagnostic_stream" not in value
+                or "diagnostic_event_until" not in value
+                or value.get("diagnostic_smart_type", "person") != "person"):
+            raise CandidateError("Recorded event probe requires one bounded person stream")
+        try:
+            parse_recorded_probe(
+                value["diagnostic_recorded_event_probe"],
+                state_dir=path.parent,
+                camera_mac=value["diagnostic_stream"]["camera_mac"])
+        except RecordedProbeError as exc:
+            raise CandidateError(str(exc)) from exc
     if "diagnostic_smart_probe_until" in value:
         until = value["diagnostic_smart_probe_until"]
         if ("diagnostic_stream" not in value or type(until) is not int
@@ -247,7 +265,8 @@ def load_config(path: Path) -> dict:
         until = value["diagnostic_event_until"]
         if (type(until) is not int or until != value.get("diagnostic_smart_probe_until")
                 or ("diagnostic_detector" not in value
-                    and "diagnostic_native_event_probe" not in value)
+                    and "diagnostic_native_event_probe" not in value
+                    and "diagnostic_recorded_event_probe" not in value)
                 or ("diagnostic_detector" in value
                     and value["diagnostic_detector"]["max_frames"] < 2)):
             raise CandidateError("Smart event probe requires a bounded source and policy")
@@ -358,6 +377,10 @@ class CandidateService:
         self.smart_events_left = 0
         self.synthetic_probe_claimed = 0
         self.synthetic_probe_errors = 0
+        self.recorded_probe_claimed = 0
+        self.recorded_probe_errors = 0
+        self.recorded_probe_qualified = 0
+        self._recorded_probe_task: asyncio.Task | None = None
         self._smart_policy: SmartPolicy | None = None
         self._event_track: TrackChange | None = None
         self._event_zone_ids: tuple[int, ...] = ()
@@ -383,7 +406,8 @@ class CandidateService:
         self.detector_error: str | None = None
         self._detector: RFDetrNanoDetector | None = None
         self._tracker = (TemporalTracker() if "diagnostic_detector" in config
-                         or "diagnostic_native_event_probe" in config else None)
+                         or "diagnostic_native_event_probe" in config
+                         or "diagnostic_recorded_event_probe" in config else None)
         self._camera_engine: CameraPolicyEngine | None = None
         self._inference: FairInference | None = None
         if "diagnostic_pool_detector" in config:
@@ -675,6 +699,53 @@ class CandidateService:
         except (CandidateError, OSError, aiohttp.ClientError, RuntimeError):
             self.synthetic_probe_errors += 1
 
+    async def _run_recorded_probe(self, ws: aiohttp.ClientWebSocketResponse,
+                                  policy: SmartPolicy) -> None:
+        """Send one model-confirmed historical person event with its capture time."""
+        try:
+            if (not isinstance(self.ingress, AiPortIngress)
+                    or self._current_ws is not ws or not self._params_agreed
+                    or not self.ingress.list_streams()
+                    or time.time() + 5 >= self.config["diagnostic_event_until"]
+                    or policy.enabled_types != frozenset({"person"})):
+                return
+            probe = parse_recorded_probe(
+                self.config["diagnostic_recorded_event_probe"],
+                state_dir=self.state_dir, camera_mac=self.ingress.camera_mac)
+            if (self.recorded_probe_claimed
+                    or os.path.lexists(self.state_dir / f".native-event-probe-{probe.nonce}")):
+                return
+            change = await asyncio.to_thread(infer_recorded_person, probe)
+            if (self._current_ws is not ws or self._smart_policy is not policy
+                    or not self.ingress.list_streams()
+                    or time.time() + 3 >= self.config["diagnostic_event_until"]
+                    or not policy.allows_score("person", change.score)):
+                return
+            zone_ids = policy.zone_ids("person", change.box)
+            if zone_ids is None:
+                return
+            self.recorded_probe_qualified += 1
+            if not self._claim_native_probe(probe.nonce):
+                return
+            self.recorded_probe_claimed += 1
+            enter = smart_event_payload(
+                probe.camera_mac, change, edge="enter",
+                clock_wall_ms=probe.frames[1].captured_ms, zone_ids=zone_ids)
+            leave = smart_event_payload(
+                probe.camera_mac, change, edge="leave",
+                clock_wall_ms=probe.frames[1].captured_ms + 2000,
+                zone_ids=zone_ids)
+            await self._send_control_event(ws, "EventSmartDetect", enter)
+            self.smart_events_entered += 1
+            if self._current_ws is ws:
+                await self._send_control_event(ws, "EventSmartDetect", leave)
+                self.smart_events_left += 1
+            else:
+                self.recorded_probe_errors += 1
+        except (CandidateError, RecordedProbeError, DetectionError, TrackingError,
+                SmartEventError, OSError, aiohttp.ClientError, RuntimeError):
+            self.recorded_probe_errors += 1
+
     def app(self) -> web.Application:
         app = web.Application(client_max_size=_MAX_MANAGE)
         app.router.add_get("/healthz", self._health)
@@ -726,6 +797,9 @@ class CandidateService:
             "smart_events_left": self.smart_events_left,
             "synthetic_probe_claimed": self.synthetic_probe_claimed,
             "synthetic_probe_errors": self.synthetic_probe_errors,
+            "recorded_probe_qualified": self.recorded_probe_qualified,
+            "recorded_probe_claimed": self.recorded_probe_claimed,
+            "recorded_probe_errors": self.recorded_probe_errors,
             "smart_settings_probe_shape": (self._smart_settings_probe_shape
                 if time.time() < self.config.get("diagnostic_smart_probe_until", 0)
                 else None),
@@ -1214,6 +1288,11 @@ class CandidateService:
                 self.smart_settings_probe_acks += 1
                 if "diagnostic_native_event_probe" in self.config:
                     await self._run_native_probe(ws)
+                if ("diagnostic_recorded_event_probe" in self.config
+                        and (self._recorded_probe_task is None
+                             or self._recorded_probe_task.done())):
+                    self._recorded_probe_task = asyncio.create_task(
+                        self._run_recorded_probe(ws, parsed_policy))
                 return
             # Never echo or retain the controller's nested camera policy.
             await self._reply_control(ws, function, request_id, 501,
@@ -1316,6 +1395,11 @@ class CandidateService:
             raise
 
     async def stop(self):
+        if self._recorded_probe_task is not None:
+            self._recorded_probe_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._recorded_probe_task
+            self._recorded_probe_task = None
         if self.task is not None:
             self.task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
