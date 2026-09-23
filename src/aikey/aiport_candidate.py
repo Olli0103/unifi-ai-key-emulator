@@ -78,8 +78,8 @@ def load_config(path: Path) -> dict:
         stream = value["diagnostic_stream"]
         if (not isinstance(stream, dict) or set(stream) != {
                 "camera_mac", "source_ip", "ffmpeg_path"}
-                or value.get("diagnostic_hello_until", 0) <= time.time()):
-            raise CandidateError("Stream diagnostic requires an active bounded hello")
+                or "diagnostic_hello_until" not in value):
+            raise CandidateError("Stream diagnostic requires a bounded hello")
         try:
             stream["camera_mac"] = normalize_mac(stream["camera_mac"])
             stream["source_ip"] = private_source_ip(stream["source_ip"])
@@ -155,7 +155,8 @@ class CandidateService:
         self._params_agreed = False
         self.started = time.monotonic()
         self.ingress = (AiPortIngress(**config["diagnostic_stream"])
-                        if "diagnostic_stream" in config else None)
+                        if "diagnostic_stream" in config
+                        and config["diagnostic_hello_until"] > time.time() else None)
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=_MAX_MANAGE)

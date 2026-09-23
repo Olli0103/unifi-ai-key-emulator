@@ -51,7 +51,7 @@ The relay exits after ten minutes or SIGINT/SIGTERM. Its final counters contain 
 
 For a controlled hello experiment, a private config may include `diagnostic_hello_until`, a Unix timestamp no more than ten minutes ahead. This is off by default. During the window, the candidate sends a minimal `ubnt_avclient_hello`, answers parameter agreement and the read-only `GetStreamList` request with an empty list, and explicitly rejects `UiStreamControl` and `OnvifStreamControl` unless the separate one-camera stream diagnostic below is configured. It records only allowlisted command names and counters, never payloads, and closes the WebSocket at expiry. A reconnect after expiry is passive. An empty stream list and explicit refusal must not be presented as camera pairing support.
 
-An opt-in stream diagnostic can now add `diagnostic_stream` to that same private config. It requires an active `diagnostic_hello_until`, one exact camera MAC, one exact private IPv4 stream source, and an absolute executable path to `ffmpeg` inside the container. The default image includes `/usr/bin/ffmpeg`. This is an operator-controlled one-camera test, not automatic pairing or a detection service:
+An opt-in stream diagnostic can now add `diagnostic_stream` to that same private config. It requires `diagnostic_hello_until`, one exact camera MAC, one exact private IPv4 stream source, and an absolute executable path to `ffmpeg` inside the container. The default image includes `/usr/bin/ffmpeg`. Once the timestamp expires, a restart comes up passive. This is an operator-controlled one-camera test, not automatic pairing or a detection service:
 
 ```json
 {

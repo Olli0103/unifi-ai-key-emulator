@@ -82,6 +82,18 @@ def test_stream_diagnostic_requires_expiring_exact_private_policy(tmp_path):
         load_config(tmp_path / "config.json")
 
 
+def test_expired_stream_diagnostic_restarts_passively(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) - 1
+    config["diagnostic_stream"] = {"camera_mac": "2A1122334455",
+                                   "source_ip": "192.168.10.1",
+                                   "ffmpeg_path": sys.executable}
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    loaded = load_config(tmp_path / "config.json")
+    service = CandidateService(loaded, tmp_path)
+    assert service.ingress is None
+
+
 @pytest.mark.asyncio
 async def test_https_manage_rejects_adoption_and_keeps_only_field_shape(tmp_path):
     config = fixture_state(tmp_path)
