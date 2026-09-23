@@ -54,25 +54,27 @@
    "id": "live-protect-7.3.60",
    "kind": "live",
    "protect_version": "7.3.60",
-   "date": "2026-09-22",
+   "date": "2026-09-22 to 2026-09-23",
    "console": "UDM Pro Max",
-   "camera_family": "G5 Flex (one camera)",
+   "camera_family": "G5 Flex and G4 Instant (one event each)",
    "vision_provider": "OpenAI Responses; the exact model identifier is not in the public records",
    "operator": "integration owner",
    "observed": [
     "one scoped on-demand description: Protect dispatched the clip, the worker called back, Protect returned the description with HTTP 200",
     "Protect accepted the MP4 variant of the AI processor video export for that on-demand job",
-    "one automatic recognizeKeyFrames event with a full RAM callback; exact-event GET returned metadata.ramState done and metadata.ramDescription, still present after a full page reload and shown in the native event summary panel",
+    "one automatic G5 Flex recognizeKeyFrames event with a full RAM callback; exact-event GET returned metadata.ramState done and metadata.ramDescription, still present after a full page reload and shown in the native event summary panel",
+    "one automatic G4 Instant event with a full RAM callback accepted with HTTP 200; its native event panel caption exactly matched the worker result and remained after a full Safari reload",
     "reconnect after an emulator restart without processing another event"
    ],
    "not_observed": [
     "fresh adoption on 7.3.60",
-    "continuous or multi-camera processing",
+    "continuous all-camera processing or simultaneous jobs across cameras",
+    "exact-event GET for the G4 Instant event",
     "search, database, deep mode or /describe tasks",
     "persistence across a controller restart",
     "the advertised featureFlags during the trial"
    ],
-   "limits": "Single-use permits for one on-demand job and one automatic event, both consumed. Not continuous operation.",
+   "limits": "Separate single-use permits for one on-demand job and two automatic events, all consumed. The two automatic events used different camera families. A third G4 Bullet permit remained unused during this trial. Not continuous operation.",
    "records": [
     "BUILD-RESULT.md",
     "docs/basic-descriptions.md",
@@ -855,7 +857,7 @@
   {
    "id": "control.recognize_key_frames",
    "area": "control",
-   "title": "recognizeKeyFrames video caption command within an explicit single-camera, single-use scope",
+   "title": "recognizeKeyFrames video caption command within explicit one-use camera scopes",
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
@@ -869,7 +871,8 @@
     "tests/test_basic_descriptions.py::test_real_http_caption_and_full_ram_envelope_once_across_restart",
     "tests/test_basic_descriptions.py::test_native_video_metadata_and_longer_timeline_use_bounded_frames",
     "tests/test_basic_descriptions.py::test_device_admits_explicit_wrapper_and_sanitizes_bounded_diagnostics",
-    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect",
+    "tests/test_two_camera_scope.py::test_each_camera_spends_only_its_own_permit_and_replays_after_restart"
    ],
    "implementation": [
     "src/aikey/device.py",
@@ -878,10 +881,9 @@
    "activation": "experimental_opt_in",
    "missing_evidence": [
     "Continuous and all-camera operation (issue #12)",
-    "A second camera family",
     "Persistence after a controller restart"
    ],
-   "notes": "One G5 Flex event. Out-of-scope camera returns errorCode 95 before the worker is called."
+   "notes": "One G5 Flex and one G4 Instant event with native captions after page reload. Each used a separate one-use permit; this does not establish continuous operation. Out-of-scope camera returns errorCode 95 before the worker is called."
   },
   {
    "id": "control.recognize_key_frames.other_variants",
@@ -1198,10 +1200,10 @@
    "activation": "default",
    "missing_evidence": [
     "Persistence after a controller restart",
-    "More than one event",
+    "Repeated or simultaneous jobs under continuous operation",
     "Effect on events that already carry native tags"
    ],
-   "notes": "Persistence verified by an exact-event GET (ramState done, ramDescription) and a full page reload, not by HTTP 200."
+   "notes": "G5 Flex persistence verified by exact-event GET (ramState done, ramDescription) and native panel after full page reload. G4 Instant native panel showed the exact worker caption after full page reload; no exact-event GET was run for it. Persistence was verified in the UI, not by HTTP 200 alone."
   },
   {
    "id": "callback.ram_description_only",
@@ -1743,8 +1745,8 @@
     "BUILD-RESULT.md",
     "docs/basic-descriptions.md"
    ],
-   "statement": "docs/device-contract.md says native camera descriptions and description persistence remain unverified; BUILD-RESULT.md and docs/basic-descriptions.md record one verified on-demand description and one persisted automatic caption on 7.3.60.",
-   "resolution": "Manifest follows the later live records. device-contract.md is outside this issue's boundary; update proposed in the PR."
+   "statement": "Earlier docs/device-contract.md text said native camera descriptions and persistence were unverified; later Protect 7.3.60 trials recorded one on-demand description and two automatic captions on distinct camera families after page reload.",
+   "resolution": "The device contract now separates the earlier adoption evidence from the later caption acceptance record."
   },
   {
    "id": "C3",
@@ -1864,8 +1866,13 @@
    {
     "source": "live-protect-7.3.60",
     "activation": "worker.test_scope (recognizeKeyFrames)",
-    "state": "single-use permit for one G5 Flex camera, consumed"
-   },
+   "state": "single-use permit for one G5 Flex camera, consumed"
+  },
+  {
+   "source": "live-protect-7.3.60",
+   "activation": "worker.test_scopes (recognizeKeyFrames)",
+   "state": "separate single-use G4 Instant permit consumed; separate G4 Bullet permit remained unused"
+  },
    {
     "source": "live-protect-7.3.60",
     "activation": "worker.request_mp4_exports",
@@ -1945,7 +1952,7 @@
     "control.recognize_key_frames",
     "callback.ram_full_event_tagging"
    ],
-   "procedure": "Repeat the persisted-caption check after a controller restart and on a second camera family, each with a new reviewed permit."
+   "procedure": "Repeat the persisted-caption check after a controller restart with a new reviewed permit. The second camera-family check passed on G4 Instant by native panel and full page reload; an exact-event GET remains open for that family."
   },
   {
    "id": "N7",

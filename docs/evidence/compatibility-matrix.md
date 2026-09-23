@@ -45,7 +45,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `control.request_ai.on_demand_inference`: RequestAI :7968/on_demand_inference, admitted before inference | native-verified | not_observed | native-verified | Protect 7.2.105, AI Key 2.2.8 | experimental_opt_in |
 | `control.request_ai.describe`: RequestAI :7968/describe session task with image or video inputs | fixture-tested | not_observed | not_observed | Protect 7.2.105 | default |
 | `control.request_ai.unknown_target`: RequestAI with an unimplemented or malformed targetUri | fixture-tested | not_observed | not_observed | Protect 7.2.105, AI Key 2.2.8 | default |
-| `control.recognize_key_frames`: recognizeKeyFrames video caption command within an explicit single-camera, single-use scope | native-verified | not_observed | native-verified | Protect 7.2.105, AI Key 2.2.8 | experimental_opt_in |
+| `control.recognize_key_frames`: recognizeKeyFrames video caption command within explicit one-use camera scopes | native-verified | not_observed | native-verified | Protect 7.2.105, AI Key 2.2.8 | experimental_opt_in |
 | `control.recognize_key_frames.other_variants`: recognizeKeyFrames image, multipleImages, audio and retroactive variants | unsupported | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
 | `control.host_management`: reboot, factoryReset, firmware install, SSH management, support upload and hardware statistics | unsupported | — | — | AI Key 2.2.8 | default |
 | `control.ai_settings_commands`: changeAiInferAgentSettings, changeDescribePrompts, networkStatus and sshService | unsupported | — | — | — | default |
@@ -130,7 +130,6 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `control.request_ai.describe`: promptProfile session-v1 behavior is not reproduced
 - `control.request_ai.unknown_target`: Protect's retry treatment of errorCode 95 versus 5 for RequestAI
 - `control.recognize_key_frames`: Continuous and all-camera operation (issue #12)
-- `control.recognize_key_frames`: A second camera family
 - `control.recognize_key_frames`: Persistence after a controller restart
 - `control.recognize_key_frames.other_variants`: Which variants 7.3.60 sends in normal operation
 - `control.ai_settings_commands`: These names appear in the device diagnostic allowlist, but no public record states their source or when Protect sends them
@@ -141,7 +140,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `media.video_export_mp4`: The public record confirms MP4 for the on-demand job; the automatic event's export format is not recorded
 - `media.images_and_snapshots`: Any live image or snapshot job
 - `callback.ram_full_event_tagging`: Persistence after a controller restart
-- `callback.ram_full_event_tagging`: More than one event
+- `callback.ram_full_event_tagging`: Repeated or simultaneous jobs under continuous operation
 - `callback.ram_full_event_tagging`: Effect on events that already carry native tags
 - `callback.ram_description_only`: Live receiver behavior for either profile
 - `callback.ram_description_only`: Description-only updates existing rows only; no initial insert
@@ -180,7 +179,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 ## Contradictions and stale records
 
 - **C1** (target_version): Several records name Protect 7.3.56 as the target, while issue #2, PLAN.md and the caption trial use 7.3.60. No controller package for either 7.3.56 or 7.3.60 was inspected; static evidence is from 7.2.105. Resolution: Manifest records results per version. Neither live version is a static reference.
-- **C2** (stale_record): docs/device-contract.md says native camera descriptions and description persistence remain unverified; BUILD-RESULT.md and docs/basic-descriptions.md record one verified on-demand description and one persisted automatic caption on 7.3.60. Resolution: Manifest follows the later live records. device-contract.md is outside this issue's boundary; update proposed in the PR.
+- **C2** (stale_record): Earlier docs/device-contract.md text said native camera descriptions and persistence were unverified; later Protect 7.3.60 trials recorded one on-demand description and two automatic captions on distinct camera families after page reload. Resolution: The device contract now separates the earlier adoption evidence from the later caption acceptance record.
 - **C3** (stale_record): adoption-evidence.md says acceptance by an unmodified running controller remains needs_evidence; native adoption was later observed on 7.3.56. Resolution: The static record is dated and version-scoped; the live 7.3.56 source supersedes it for adoption only.
 - **C4** (version_scope): worker-contract.md says MP4 export adaptation has not been tested against 7.3.56; README.md says 7.3.60 accepted it for the on-demand job. Resolution: Both can be true. Recorded as native-verified on 7.3.60 only.
 - **C5** (static_contract): AI Key 2.2.8's description-only sender omits cameraId; the Protect 7.2.105 description-only schema requires it. Resolution: Kept as two explicit callback profiles. Runtime rejection by the middleware was never exercised.
@@ -200,6 +199,7 @@ Every live trial must record each experimental activation below that was in effe
 - `live-protect-7.3.56`: `controller.control_profile`: device-service.
 - `live-protect-7.3.60`: `worker.test_scope (on_demand)`: single-use permit for one camera, consumed.
 - `live-protect-7.3.60`: `worker.test_scope (recognizeKeyFrames)`: single-use permit for one G5 Flex camera, consumed.
+- `live-protect-7.3.60`: `worker.test_scopes (recognizeKeyFrames)`: separate single-use G4 Instant permit consumed; separate G4 Bullet permit remained unused.
 - `live-protect-7.3.60`: `worker.request_mp4_exports`: enabled for the on-demand job.
 - `live-protect-7.3.60`: `device.feature_flags.supportAiSummary`: not in public records (needs_evidence).
 - `live-protect-7.3.60`: `Protect recognizeAnythingSettings / aiSummarySettings for the test camera`: not in public records (needs_evidence).
@@ -213,6 +213,6 @@ Every live trial must record each experimental activation below that was in effe
 - **N3** (`lifecycle.controller_upgrade`): Record adoption state before and after an in-place Protect upgrade; confirm reconnect without re-adoption.
 - **N4** (`adoption.management_adopt`, `adoption.time_sync_confirmation`, `lifecycle.credential_rotation`): Fresh adoption of a separately identified test processor on 7.3.60, including rotation and planned restart.
 - **N5** (`lifecycle.protocol_violation_close`, `control.request_ai.unknown_target`): Only if a malformed or unsupported command occurs naturally: record the close or error code and whether Protect retries. Do not inject traffic into the production controller.
-- **N6** (`control.recognize_key_frames`, `callback.ram_full_event_tagging`): Repeat the persisted-caption check after a controller restart and on a second camera family, each with a new reviewed permit.
+- **N6** (`control.recognize_key_frames`, `callback.ram_full_event_tagging`): Repeat the persisted-caption check after a controller restart with a new reviewed permit. The second camera-family check passed on G4 Instant by native panel and full page reload; an exact-event GET remains open for that family.
 - **N7** (`control.request_ai.describe`, `search.e5_nl_parse`, `search.native_retrieval`): Issue #10: determine whether 7.3.60 dispatches /describe and which search path it uses, before any search trial.
 - **N8** (`lifecycle.abnormal_closure_backoff`): Interrupt the network path briefly and record reconnect timing and adoption state.

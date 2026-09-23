@@ -9,9 +9,9 @@ Tracking issue: [AI Key and AI Port parity and open-source product roadmap](http
 
 ## Current evidence
 
-As of 22 September 2026, the Apple container deployment has native adoption, control, credential rotation, disabled factory login and reconnect evidence. Protect 7.3.60 on a UDM Pro Max accepted one automatic G5 Flex event caption from a configured OpenAI model, persisted it and displayed it after a full page reload. The earlier adoption test used Protect 7.3.56. See [build results](BUILD-RESULT.md) and [description acceptance](docs/basic-descriptions.md).
+As of 23 September 2026, the Apple container deployment has native adoption, control, credential rotation, disabled factory login and reconnect evidence. Protect 7.3.60 on a UDM Pro Max accepted one automatic caption each on G5 Flex and G4 Instant from a configured OpenAI model. Both appeared in the native event panel after a full page reload. The earlier adoption test used Protect 7.3.56. These one-use trials do not establish continuous operation. See [build results](BUILD-RESULT.md) and [description acceptance](docs/basic-descriptions.md).
 
-That single-event permit is consumed. Continuous processing and automatic all-camera discovery are not deployed. No AI Port profile has been adopted or verified. Native search, structured recognition, speech, legacy detection and NAS operation remain unverified or unimplemented. The existing E5 query adapter and database preparation are not proof of native retrieval. Static research on Protect 7.2.105 and AI Key 2.2.8 is version-specific evidence, not proof of every 7.3.60 contract.
+The tested event permits are consumed; a separate G4 Bullet permit remains unused. Continuous processing and automatic all-camera discovery are not deployed. No AI Port profile has been adopted or verified. Native search, structured recognition, speech, legacy detection and NAS operation remain unverified or unimplemented. The existing E5 query adapter and database preparation are not proof of native retrieval. Static research on Protect 7.2.105 and AI Key 2.2.8 is version-specific evidence, not proof of every 7.3.60 contract.
 
 The repository is public but has no license at the time this plan is written. An open-source license and distribution review are part of the product work below.
 
