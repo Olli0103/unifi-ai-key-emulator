@@ -790,6 +790,7 @@ async def test_stream_reset_rejects_unexpected_payload_without_stopping(tmp_path
 
     class FakeIngress:
         frame_count = 0
+        streams_with_decoded_frames = 0
         total_frames_decoded = 0
         frames_observed = 0
         frames_skipped = 0
@@ -801,6 +802,9 @@ async def test_stream_reset_rejects_unexpected_payload_without_stopping(tmp_path
 
         def __init__(self):
             self.closed = False
+
+        def list_streams(self):
+            return []
 
         async def close(self):
             self.closed = True
@@ -1113,6 +1117,10 @@ async def test_multi_camera_candidate_routes_status_without_smart_readiness(tmp_
         assert sink.messages[-1]["functionName"] == "EventAIPortStatus"
         assert sink.messages[-1]["payload"]["deviceID"] == mac
         assert sink.messages[-1]["payload"]["isSmartDetectReady"] is False
+    health = json.loads((await service._health(None)).text)
+    assert health["active_streams"] == 2
+    assert health["streams_with_decoded_frames"] == 0
+    assert all(mac not in json.dumps(health) for mac in cameras)
     await service._handle_diagnostic_frame(sink, json.dumps({
         "functionName": "GetStreamList", "messageId": 3,
         "responseExpected": True, "payload": {},

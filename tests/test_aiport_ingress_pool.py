@@ -26,6 +26,7 @@ class FakeIngress:
         self.camera_mac = camera_mac
         self.source_ip = source_ip
         self.reserved_points = 0
+        self.frame_count = 0
         self.report_healthy = True
         self.observer = frame_observer
 
@@ -42,6 +43,10 @@ class FakeIngress:
         return ([{"deviceID": self.camera_mac, "points": self.reserved_points}]
                 if self.reserved_points and self.report_healthy else [])
 
+    @property
+    def streams_with_decoded_frames(self):
+        return int(bool(self.list_streams()) and self.frame_count > 0)
+
     async def close(self):
         self.reserved_points = 0
 
@@ -54,10 +59,16 @@ async def test_pool_routes_only_allowlisted_cameras_and_reserves_stalled_capacit
     assert (await pool.control(command(2)))["usedPoints"] == 5
     assert pool.reserved_points == 10
     assert len(pool.list_streams()) == 2
+    assert pool.streams_with_decoded_frames == 0
+    pool._ingresses[policy(1)["camera_mac"]].frame_count = 7
+    assert pool.streams_with_decoded_frames == 1
+    pool._ingresses[policy(2)["camera_mac"]].frame_count = 3
+    assert pool.streams_with_decoded_frames == 2
     with pytest.raises(IngressError, match="stream_capacity_exceeded"):
         await pool.control(command(3))
     pool._ingresses[policy(1)["camera_mac"]].report_healthy = False
     assert len(pool.list_streams()) == 1
+    assert pool.streams_with_decoded_frames == 1
     with pytest.raises(IngressError, match="stream_capacity_exceeded"):
         await pool.control(command(3))
     await pool.control(command(1, streaming=False))

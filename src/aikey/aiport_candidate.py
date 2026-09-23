@@ -870,6 +870,9 @@ class CandidateService:
                 if time.time() < self.config.get("diagnostic_smart_probe_until", 0)
                 else None),
             "stream_frames_decoded": self.ingress.frame_count if self.ingress else 0,
+            "active_streams": len(self.ingress.list_streams()) if self.ingress else 0,
+            "streams_with_decoded_frames": (
+                self.ingress.streams_with_decoded_frames if self.ingress else 0),
             "stream_frames_decoded_total": (
                 self.ingress.total_frames_decoded + self.ingress.frame_count
                 if self.ingress else 0),

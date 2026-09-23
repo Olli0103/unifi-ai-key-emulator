@@ -389,6 +389,11 @@ class AiPortIngress:
         return self._session.frame_count if self._session is not None else 0
 
     @property
+    def streams_with_decoded_frames(self) -> int:
+        """Count only a currently healthy stream that decoded a frame."""
+        return int(bool(self.list_streams()) and self.frame_count > 0)
+
+    @property
     def frames_observed(self) -> int:
         return (self.total_frames_observed +
                 (self._session.frames_observed if self._session else 0))
@@ -471,6 +476,11 @@ class AiPortIngressPool:
     @property
     def frame_count(self) -> int:
         return sum(ingress.frame_count for ingress in self._ingresses.values())
+
+    @property
+    def streams_with_decoded_frames(self) -> int:
+        return sum(ingress.streams_with_decoded_frames
+                   for ingress in self._ingresses.values())
 
     @property
     def total_frames_decoded(self) -> int:
