@@ -184,6 +184,10 @@ class CandidateService:
                 self.ingress.total_frames_decoded + self.ingress.frame_count
                 if self.ingress else 0),
             "last_stream_error": self.last_stream_error,
+            "last_decoder_exit_code": (self.ingress.last_decoder_exit_code
+                                       if self.ingress else None),
+            "last_decoder_stderr_seen": (self.ingress.last_decoder_stderr_seen
+                                         if self.ingress else False),
             "stream_ingest_enabled": (self.ingress is not None
                                       and time.time() < self.config.get("diagnostic_hello_until", 0)),
             "last_control_command": self.last_control_command,

@@ -17,7 +17,8 @@ SOURCE_IP = "192.168.10.1"
 FRAME = b"\xff\xd8synthetic-frame\xff\xd9"
 
 
-def fake_decoder(tmp_path: Path, *, emit_frame: bool = True) -> tuple[str, Path]:
+def fake_decoder(tmp_path: Path, *, emit_frame: bool = True,
+                 stderr_text: str | None = None) -> tuple[str, Path]:
     executable = tmp_path / "synthetic-decoder"
     script = tmp_path / "synthetic-decoder.py"
     args_file = tmp_path / "decoder-args.json"
@@ -25,7 +26,10 @@ def fake_decoder(tmp_path: Path, *, emit_frame: bool = True) -> tuple[str, Path]
     output += f"Path({str(args_file)!r}).write_text(json.dumps(sys.argv[1:]))\n"
     if emit_frame:
         output += f"sys.stdout.buffer.write({FRAME!r})\nsys.stdout.buffer.flush()\n"
-    output += "time.sleep(30)\n"
+    if stderr_text is not None:
+        output += f"sys.stderr.write({stderr_text!r})\nsys.stderr.flush()\n"
+    else:
+        output += "time.sleep(30)\n"
     script.write_text(output)
     executable.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
                           + shlex.quote(str(script)) + ' "$@"\n')
@@ -88,6 +92,28 @@ async def test_ingress_never_reports_started_without_a_frame(tmp_path):
                            ffmpeg_path=decoder, start_timeout=0.1)
     with pytest.raises(IngressError, match="stream_start_timeout"):
         await ingress.control(start_payload())
+    assert ingress.list_streams() == []
+    await ingress.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stderr_text,code", [
+    ("[rtsp] method DESCRIBE failed: 401 Unauthorized", "rtsp_access_denied"),
+    ("[rtsp] method DESCRIBE failed: 404 Not Found", "rtsp_stream_not_found"),
+    ("Connection refused", "rtsp_connect_failed"),
+    ("Failed to open private-alias-123", "stream_ended"),
+])
+async def test_decoder_failure_is_classified_without_exposing_private_output(
+        tmp_path, stderr_text, code):
+    decoder, _ = fake_decoder(tmp_path, emit_frame=False, stderr_text=stderr_text)
+    ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
+                           ffmpeg_path=decoder, start_timeout=2)
+    with pytest.raises(IngressError) as failure:
+        await ingress.control(start_payload())
+    assert failure.value.code == code
+    assert "private-alias-123" not in str(failure.value)
+    assert ingress.last_decoder_exit_code == 0
+    assert ingress.last_decoder_stderr_seen
     assert ingress.list_streams() == []
     await ingress.close()
 
