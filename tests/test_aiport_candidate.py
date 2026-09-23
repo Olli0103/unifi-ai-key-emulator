@@ -14,7 +14,7 @@ from aiohttp.test_utils import TestServer
 import pytest
 
 from aikey.aiport_candidate import CandidateError, CandidateService, load_config
-from aikey.aiport_detection import RFDetrNanoDetector
+from aikey.aiport_detection import ObjectObservation, RFDetrNanoDetector
 from aikey.tls import ensure_identity_certificate
 
 
@@ -143,7 +143,10 @@ async def test_detector_probe_discards_objects_and_caps_model_calls(tmp_path, mo
     class Model:
         def detect(self, frame):
             calls.append(frame)
-            return (object(), object())
+            return (ObjectObservation("person", "person", 0.9,
+                                      (0.1, 0.1, 0.4, 0.8)),
+                    ObjectObservation("animal", "dog", 0.8,
+                                      (0.6, 0.2, 0.9, 0.7)))
 
     monkeypatch.setattr(RFDetrNanoDetector, "from_checkpoint", lambda *a, **k: Model())
     service = CandidateService(config, tmp_path)
@@ -154,6 +157,37 @@ async def test_detector_probe_discards_objects_and_caps_model_calls(tmp_path, mo
     assert "synthetic-frame" not in health.text
     assert json.loads(health.text)["detector_frames_succeeded"] == 1
     assert json.loads(health.text)["detector_objects_seen"] == 2
+    assert json.loads(health.text)["detector_tracks_entered"] == 0
+    await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_detector_probe_counts_tracks_without_exposing_objects(tmp_path, monkeypatch):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    config["diagnostic_stream"] = {"camera_mac": "2A1122334455",
+                                   "source_ip": "192.168.10.1",
+                                   "ffmpeg_path": sys.executable}
+    config["diagnostic_detector"] = {"checkpoint_path": str(tmp_path / "nano.pth"),
+                                     "checkpoint_sha256": "a" * 64,
+                                     "threshold": 0.5, "max_frames": 3}
+
+    class Model:
+        def detect(self, frame):
+            return (ObjectObservation("person", "person", 0.9,
+                                      (0.1, 0.1, 0.4, 0.8)),)
+
+    monkeypatch.setattr(RFDetrNanoDetector, "from_checkpoint", lambda *a, **k: Model())
+    service = CandidateService(config, tmp_path)
+    await service._observe_frame(b"private-frame-1")
+    await service._observe_frame(b"private-frame-2")
+    await service._observe_frame(b"private-frame-3")
+    health = (await service._health(None)).text
+    assert json.loads(health)["detector_frames_succeeded"] == 3
+    assert json.loads(health)["detector_tracks_entered"] == 1
+    assert "private-frame" not in health
+    assert "person" not in health
+    assert "0.1" not in health
     await service.stop()
 
 
