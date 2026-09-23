@@ -1,6 +1,6 @@
 # Isolated AI Port candidate
 
-This profile is for bounded protocol tests. It presents a separate AI Port identity, keeps an outbound certificate-pinned camera WebSocket to Protect and exposes an HTTPS management listener. It has no camera credentials, stream receiver, pairing handler, AI detection or adopted state. Its `/api/1.2/manage` route records only recognized JSON field names in memory and returns HTTP 501. Do not use Protect's Pair action as a test of detection until the native management and stream contracts are implemented.
+This profile is for bounded protocol tests. It presents a separate AI Port identity, keeps an outbound certificate-pinned camera WebSocket to Protect and exposes an HTTPS management listener. Camera ingress is off unless a private, expiring one-camera diagnostic policy enables it. The profile has no camera credentials, AI detection or adopted state. Its `/api/1.2/manage` route records only recognized JSON field names in memory and returns HTTP 501. Camera pairing and detection remain unverified.
 
 Protect 7.3.60 showed the separate candidate in Devices. A later Flur pairing attempt displayed **Unable to Pair** while the device panel said **Connecting**. This is not evidence of a paired camera. The candidate's temporary Mac listener on host port 8443 had no management requests; Protect expects the device's fixed HTTPS 443 endpoint. See [firmware and native discovery evidence](evidence/ai-port-firmware-contract.md).
 
@@ -45,8 +45,23 @@ sudo /opt/homebrew/bin/python3 -I /absolute/project/src/aikey/aiport_relay.py \
   --drop-uid "$(id -u)" --drop-gid "$(id -g)"
 ```
 
-The relay exits after ten minutes or SIGINT/SIGTERM. Its final counters contain no request content. The candidate still returns HTTP 501 to management requests, so this trial can reveal only the sanitized request shape, not achieve adoption or camera pairing. Stop the relay immediately after the single request has been checked.
+The relay exits after ten minutes or SIGINT/SIGTERM. Its final counters contain no request content. The candidate still returns HTTP 501 to management requests, so this trial can reveal only the sanitized management request shape. Camera stream control uses the separate WebSocket path described below. Stop the relay immediately after the single management request has been checked.
 
 `GET /healthz` reports a successful WebSocket upgrade, whether the connection remains open, and counts of binary and text application frames with only the last frame length. It never reports frame content. A successful upgrade proves only candidate discovery; a frame count only proves transport activity. A management request count or HTTP response cannot prove adoption, pairing, camera streaming or detection. Static Protect 7.2.105 code routes camera pairing through a WebSocket stream-control request, while the management endpoint is used for adoption. Test those flows separately and keep camera pairing disabled until the wire contract and camera rollback are verified.
 
-For a controlled hello experiment, a private config may include `diagnostic_hello_until`, a Unix timestamp no more than ten minutes ahead. This is off by default. During the window, the candidate sends a minimal `ubnt_avclient_hello`, answers parameter agreement and the read-only `GetStreamList` request with an empty list, and explicitly rejects `UiStreamControl` and `OnvifStreamControl` while no ingest pipeline exists. It records only allowlisted command names and counters, never payloads, and closes the WebSocket at expiry. A reconnect after expiry is passive. An empty stream list and explicit refusal must not be presented as camera pairing support.
+For a controlled hello experiment, a private config may include `diagnostic_hello_until`, a Unix timestamp no more than ten minutes ahead. This is off by default. During the window, the candidate sends a minimal `ubnt_avclient_hello`, answers parameter agreement and the read-only `GetStreamList` request with an empty list, and explicitly rejects `UiStreamControl` and `OnvifStreamControl` unless the separate one-camera stream diagnostic below is configured. It records only allowlisted command names and counters, never payloads, and closes the WebSocket at expiry. A reconnect after expiry is passive. An empty stream list and explicit refusal must not be presented as camera pairing support.
+
+An opt-in stream diagnostic can now add `diagnostic_stream` to that same private config. It requires an active `diagnostic_hello_until`, one exact camera MAC, one exact private IPv4 stream source, and an absolute executable path to `ffmpeg` inside the container. The default image includes `/usr/bin/ffmpeg`. This is an operator-controlled one-camera test, not automatic pairing or a detection service:
+
+```json
+{
+  "diagnostic_hello_until": 1790000000,
+  "diagnostic_stream": {
+    "camera_mac": "2A1122334455",
+    "source_ip": "PRIVATE_PROTECT_STREAM_SOURCE_IPV4",
+    "ffmpeg_path": "/usr/bin/ffmpeg"
+  }
+}
+```
+
+The timestamp above is a placeholder, not a usable activation. The stream receiver accepts only the configured camera and source, TCP 7447 and a simple RTSP alias. It reports `started` only after decoding a bounded JPEG frame, keeps frames in memory, and stops the decoder when the control connection closes or the diagnostic expires. It does not run a model, emit a smart event, or retain video. The native 7.3.60 pairing and RTSP behavior of this new path are still `needs_evidence`; do not leave a camera paired after a diagnostic until detection delivery and settings rollback are verified.
