@@ -50,8 +50,12 @@ def test_two_matching_private_frames_confirm_one_person(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "aikey.aiport_recorded_probe.RFDetrNanoDetector.from_checkpoint",
         lambda *_args, **_kwargs: StubDetector())
-    event = infer_recorded_person(probe)
-    assert (event.edge, event.kind, event.score) == ("enter", "person", 0.95)
+    track = infer_recorded_person(probe)
+    assert (track.enter.edge, track.enter.kind, track.enter.score) == (
+        "enter", "person", 0.95)
+    assert track.moving.edge == "moving"
+    assert track.enter.track_id == track.moving.track_id
+    assert track.enter.box != track.moving.box
     assert probe.frames[1].captured_ms - probe.frames[0].captured_ms == 2000
 
 
@@ -117,6 +121,25 @@ def test_recorded_probe_requires_same_person_across_frames(tmp_path, monkeypatch
                                           (0.2, 0.2, 0.4, 0.7)),)
             return (ObjectObservation("person", "person", 0.95,
                                       (0.6, 0.2, 0.8, 0.7)),)
+
+    monkeypatch.setattr(
+        "aikey.aiport_recorded_probe.RFDetrNanoDetector.from_checkpoint",
+        lambda *_args, **_kwargs: StubDetector())
+    with pytest.raises(RecordedProbeError, match="recorded_person_unconfirmed"):
+        infer_recorded_person(probe)
+
+
+def test_recorded_probe_rejects_ambiguous_person_frame(tmp_path, monkeypatch):
+    probe = parse(fixture_probe(tmp_path), tmp_path)
+
+    class StubDetector:
+        def detect(self, frame):
+            first = ObjectObservation("person", "person", 0.95,
+                                      (0.2, 0.2, 0.4, 0.7))
+            if frame.endswith(b"0"):
+                return (first, ObjectObservation("person", "person", 0.9,
+                                                 (0.6, 0.2, 0.8, 0.7)))
+            return (first,)
 
     monkeypatch.setattr(
         "aikey.aiport_recorded_probe.RFDetrNanoDetector.from_checkpoint",

@@ -352,8 +352,12 @@ async def test_recorded_event_probe_sends_original_time_once(tmp_path, monkeypat
 
     def infer(_probe):
         model_calls.append(True)
-        return TrackChange("enter", 1, "person", "person", 0.95,
-                           (0.2, 0.2, 0.5, 0.8))
+        from aikey.aiport_recorded_probe import RecordedPersonTrack
+        return RecordedPersonTrack(
+            TrackChange("enter", 1, "person", "person", 0.94,
+                        (0.2, 0.2, 0.5, 0.8)),
+            TrackChange("moving", 1, "person", "person", 0.95,
+                        (0.21, 0.2, 0.51, 0.8)))
 
     monkeypatch.setattr("aikey.aiport_candidate.infer_recorded_person", infer)
     policy = {"deviceID": "2A1122334455", "algoVersion": "beta",
@@ -389,14 +393,17 @@ async def test_recorded_event_probe_sends_original_time_once(tmp_path, monkeypat
                   if message["functionName"] == "EventSmartDetect"]
         if attempt == 1:
             assert [event["payload"]["edgeType"] for event in events] == [
-                "enter", "leave"]
+                "enter", "moving", "leave"]
             assert [event["payload"]["clockWall"] for event in events] == [
+                config["diagnostic_recorded_event_probe"]["frames"][0]["captured_ms"],
                 config["diagnostic_recorded_event_probe"]["frames"][1]["captured_ms"],
                 config["diagnostic_recorded_event_probe"]["frames"][1]["captured_ms"]
                 + 2000]
             assert sink.native_event_times[1] - sink.native_event_times[0] >= 1.8
+            assert sink.native_event_times[2] - sink.native_event_times[1] >= 1.8
             assert service.recorded_probe_claimed == 1
             assert service.smart_events_entered == service.smart_events_left == 1
+            assert service.smart_events_moved == 1
         else:
             assert events == []
             assert service.recorded_probe_claimed == 0

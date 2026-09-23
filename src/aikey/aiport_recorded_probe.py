@@ -16,7 +16,7 @@ import re
 import stat
 import time
 
-from .aiport_detection import DetectionError, RFDetrNanoDetector
+from .aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
 from .aiport_ingest import IngressError, normalize_mac
 from .aiport_tracking import TemporalTracker, TrackChange
 
@@ -46,6 +46,12 @@ class RecordedProbe:
     checkpoint_path: str
     checkpoint_sha256: str
     threshold: float
+
+
+@dataclass(frozen=True)
+class RecordedPersonTrack:
+    enter: TrackChange
+    moving: TrackChange
 
 
 def parse_recorded_probe(raw: object, *, state_dir: Path,
@@ -128,20 +134,30 @@ def _read_frame(frame: RecordedFrame) -> bytes:
     return data
 
 
-def infer_recorded_person(probe: RecordedProbe) -> TrackChange:
-    """Return one confirmed person enter or fail closed; never retain frames."""
+def infer_recorded_person(probe: RecordedProbe) -> RecordedPersonTrack:
+    """Return two observed positions of one confirmed person or fail closed."""
     first, second = (_read_frame(frame) for frame in probe.frames)
     detector = RFDetrNanoDetector.from_checkpoint(
         probe.checkpoint_path, probe.checkpoint_sha256,
         threshold=probe.threshold)
     tracker = TemporalTracker()
     changes = []
+    people_by_frame: list[ObjectObservation] = []
     for frame, meta in zip((first, second), probe.frames, strict=True):
         observations = detector.detect(frame)
         people = tuple(item for item in observations if item.kind == "person")
+        if len(people) != 1:
+            raise RecordedProbeError("recorded_person_unconfirmed")
+        people_by_frame.append(people[0])
         changes.extend(tracker.update(people, now=meta.captured_ms / 1000))
     enter = [change for change in changes if change.edge == "enter"
              and change.kind == "person"]
     if len(enter) != 1 or not math.isfinite(enter[0].score):
         raise RecordedProbeError("recorded_person_unconfirmed")
-    return enter[0]
+    first_person, second_person = people_by_frame
+    track_id = enter[0].track_id
+    return RecordedPersonTrack(
+        TrackChange("enter", track_id, "person", first_person.label,
+                    first_person.score, first_person.box),
+        TrackChange("moving", track_id, "person", second_person.label,
+                    second_person.score, second_person.box))
