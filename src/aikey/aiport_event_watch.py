@@ -38,7 +38,7 @@ def _selected_camera_ids(inventory: dict, plan: dict,
     return matching
 
 
-def _event(raw: str, camera_ids: set[str]) -> tuple[str, str, str, str, bool] | None:
+def _event(raw: str, camera_ids: set[str]) -> tuple[str, str, str, str, bool, str] | None:
     """Return only the fields needed to count a targeted camera event."""
     if len(raw.encode("utf-8")) > _MAX_FRAME_BYTES:
         raise ValueError("Event frame is too large")
@@ -65,9 +65,19 @@ def _event(raw: str, camera_ids: set[str]) -> tuple[str, str, str, str, bool] | 
                                     or any(not isinstance(value, str) or len(value) > 64
                                            for value in smart_types)):
         raise ValueError("Invalid targeted smart types")
+    if "smartDetectTypes" not in item:
+        smart_type_state = "omitted"
+    elif smart_types is None:
+        smart_type_state = "null"
+    elif not smart_types:
+        smart_type_state = "empty"
+    elif "person" in smart_types:
+        smart_type_state = "person"
+    else:
+        smart_type_state = "other"
     return (camera_id, message["type"], event_id, event_type,
             event_type in _SMART_VIDEO_EVENTS
-            and isinstance(smart_types, list) and "person" in smart_types)
+            and smart_type_state == "person", smart_type_state)
 
 
 async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
@@ -90,6 +100,10 @@ async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
               "targeted_event_adds": 0, "targeted_event_updates": 0,
               "targeted_smart_video_adds": 0, "targeted_smart_video_updates": 0,
               "targeted_person_adds": 0, "targeted_person_updates": 0,
+              "smart_type_states": {
+                  action: {state: 0 for state in ("omitted", "null", "empty",
+                                                   "person", "other")}
+                  for action in ("add", "update")},
               "attribution_to_ai_port": "needs_evidence",
               "timeline_persistence": "needs_evidence"}
     if not camera_ids:
@@ -138,11 +152,12 @@ async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
                         continue
                     if parsed is None:
                         continue
-                    _, action, event_id, event_type, is_person = parsed
+                    _, action, event_id, event_type, is_person, smart_type_state = parsed
                     if action == "update":
                         result["targeted_event_updates"] += 1
                         if event_type in _SMART_VIDEO_EVENTS:
                             result["targeted_smart_video_updates"] += 1
+                            result["smart_type_states"]["update"][smart_type_state] += 1
                         if is_person:
                             result["targeted_person_updates"] += 1
                     elif event_id not in seen_ids:
@@ -150,6 +165,7 @@ async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
                         result["targeted_event_adds"] += 1
                         if event_type in _SMART_VIDEO_EVENTS:
                             result["targeted_smart_video_adds"] += 1
+                            result["smart_type_states"]["add"][smart_type_state] += 1
                         if is_person:
                             result["targeted_person_adds"] += 1
         except (aiohttp.ClientError, TimeoutError, UnicodeError) as exc:

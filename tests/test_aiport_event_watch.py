@@ -34,19 +34,26 @@ def test_exact_camera_watch_requires_one_eligible_current_name():
 
 
 def frame(*, camera=CAMERA_ID, action="add", event="smartDetectZone",
-          event_id="event-one", types=None):
-    return json.dumps({"type": action, "item": {
+          event_id="event-one", types=None, omit_types=False, null_types=False):
+    item = {
         "id": event_id, "modelKey": "event", "device": camera,
-        "type": event, "smartDetectTypes": ["person"] if types is None else types,
-    }})
+        "type": event,
+    }
+    if not omit_types:
+        item["smartDetectTypes"] = (None if null_types else
+                                    ["person"] if types is None else types)
+    return json.dumps({"type": action, "item": item})
 
 
 def test_event_parser_accepts_only_targeted_camera_events():
     assert _event(frame(), {CAMERA_ID}) == (
-        CAMERA_ID, "add", "event-one", "smartDetectZone", True)
+        CAMERA_ID, "add", "event-one", "smartDetectZone", True, "person")
     assert _event(frame(camera=f"{2:024x}"), {CAMERA_ID}) is None
-    assert _event(frame(event="motion"), {CAMERA_ID})[-1] is False
-    assert _event(frame(types=["vehicle"]), {CAMERA_ID})[-1] is False
+    assert _event(frame(event="motion"), {CAMERA_ID})[-2] is False
+    assert _event(frame(types=["vehicle"]), {CAMERA_ID})[-2:] == (False, "other")
+    assert _event(frame(types=[]), {CAMERA_ID})[-2:] == (False, "empty")
+    assert _event(frame(omit_types=True), {CAMERA_ID})[-2:] == (False, "omitted")
+    assert _event(frame(null_types=True), {CAMERA_ID})[-2:] == (False, "null")
     assert _event(json.dumps({"type": "delete", "item": {}}), {CAMERA_ID}) is None
 
 
@@ -77,6 +84,8 @@ async def test_watch_counts_native_subscription_events_without_retaining_payload
                 aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, frame(types=[]), ""),
                 aiohttp.WSMessage(aiohttp.WSMsgType.TEXT,
                                   frame(action="update"), ""),
+                aiohttp.WSMessage(aiohttp.WSMsgType.TEXT,
+                                  frame(action="update", omit_types=True), ""),
                 aiohttp.WSMessage(aiohttp.WSMsgType.TEXT,
                                   frame(camera=OTHER_ID, event_id="other-event"), ""),
             ])
@@ -122,13 +131,17 @@ async def test_watch_counts_native_subscription_events_without_retaining_payload
                                 trust_file=Path("trust"), cert_file=Path("cert"),
                                 camera_name="Flur", seconds=1)
     assert result["subscription_opened"] is True
-    assert result["messages_seen"] == 4
+    assert result["messages_seen"] == 5
     assert result["targeted_event_adds"] == 1
-    assert result["targeted_event_updates"] == 1
+    assert result["targeted_event_updates"] == 2
     assert result["targeted_smart_video_adds"] == 1
-    assert result["targeted_smart_video_updates"] == 1
+    assert result["targeted_smart_video_updates"] == 2
     assert result["targeted_person_adds"] == 0
     assert result["targeted_person_updates"] == 1
+    assert result["smart_type_states"] == {
+        "add": {"omitted": 0, "null": 0, "empty": 1, "person": 0, "other": 0},
+        "update": {"omitted": 1, "null": 0, "empty": 0, "person": 1, "other": 0},
+    }
     assert result["selected_camera_count"] == 1
     assert result["timeline_persistence"] == "needs_evidence"
     assert CAMERA_ID not in json.dumps(result)
