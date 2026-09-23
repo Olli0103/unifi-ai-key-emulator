@@ -25,6 +25,19 @@ _MAX_FRAME_BYTES = 256 * 1024
 _MAX_MESSAGES = 1000
 
 
+def _selected_camera_ids(inventory: dict, plan: dict,
+                         camera_name: str | None) -> set[str]:
+    camera_ids = {camera_id for instance in plan["instances"]
+                  for camera_id in instance["camera_ids"]}
+    if camera_name is None:
+        return camera_ids
+    matching = {camera["id"] for camera in inventory["cameras"]
+                if camera.get("name") == camera_name and camera["id"] in camera_ids}
+    if len(matching) != 1:
+        raise AiPortPlanError("Camera name must identify one eligible connected camera")
+    return matching
+
+
 def _event(raw: str, camera_ids: set[str]) -> tuple[str, str, str, str, bool] | None:
     """Return only the fields needed to count a targeted camera event."""
     if len(raw.encode("utf-8")) > _MAX_FRAME_BYTES:
@@ -59,15 +72,18 @@ def _event(raw: str, camera_ids: set[str]) -> tuple[str, str, str, str, bool] | 
 
 async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
                        cert_file: Path, camera_scope: str = "legacy-only",
-                       seconds: int = 60) -> dict:
+                       camera_name: str | None = None, seconds: int = 60) -> dict:
     """Watch a validated camera set for at most ten minutes without storing bodies."""
     if type(seconds) is not int or not 1 <= seconds <= 600:
         raise AiPortPlanError("Event watch must last 1 to 600 seconds")
+    if (camera_name is not None and (not isinstance(camera_name, str)
+            or not 1 <= len(camera_name) <= 128
+            or any(ord(char) < 32 for char in camera_name))):
+        raise AiPortPlanError("Camera name must be an exact, nonempty display name")
     inventory = await fetch_inventory(host, api_key_file=api_key_file,
                                       trust_file=trust_file, cert_file=cert_file)
     plan = plan_ai_ports(inventory, camera_scope=camera_scope)
-    camera_ids = {camera_id for instance in plan["instances"]
-                  for camera_id in instance["camera_ids"]}
+    camera_ids = _selected_camera_ids(inventory, plan, camera_name)
     result = {"schema": "aikey-aiport-event-watch/1", "camera_scope": camera_scope,
               "selected_camera_count": len(camera_ids), "subscription_opened": False,
               "messages_seen": 0, "invalid_messages": 0,
@@ -144,13 +160,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--web-cert-file", type=Path, required=True)
     parser.add_argument("--camera-scope", choices=("legacy-only", "legacy-and-g3-g5"),
                         default="legacy-only")
+    parser.add_argument("--camera-name", help="Exact eligible Protect camera name to watch")
     parser.add_argument("--seconds", type=int, default=60)
     args = parser.parse_args(argv)
     try:
         report = asyncio.run(watch_events(
             args.controller, api_key_file=args.api_key_file,
             trust_file=args.web_trust_file, cert_file=args.web_cert_file,
-            camera_scope=args.camera_scope, seconds=args.seconds))
+            camera_scope=args.camera_scope, camera_name=args.camera_name,
+            seconds=args.seconds))
     except (AiPortPlanError, InventoryError, OSError) as exc:
         parser.error(str(exc))
     print(json.dumps(report, indent=2))
