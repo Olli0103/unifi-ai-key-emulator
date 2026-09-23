@@ -8,6 +8,7 @@ source address. Frames stay in memory and this module sends no detections.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 import ipaddress
 import math
@@ -20,6 +21,7 @@ import time
 _MAC = re.compile(r"(?:[0-9A-Fa-f]{12}|(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\Z")
 _ALIAS = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _MAX_FRAME = 1024 * 1024
+_MAX_DECODER_DIAGNOSTIC = 8192
 
 
 class IngressError(ValueError):
@@ -28,6 +30,22 @@ class IngressError(ValueError):
     def __init__(self, code: str):
         super().__init__(code)
         self.code = code
+
+
+def _decoder_failure(stderr: bytes) -> str:
+    """Reduce private FFmpeg output to a fixed, non-secret failure code."""
+    output = stderr.lower()
+    if b"401 unauthorized" in output or b"403 forbidden" in output:
+        return "rtsp_access_denied"
+    if b"404 not found" in output:
+        return "rtsp_stream_not_found"
+    if b"connection refused" in output or b"network is unreachable" in output:
+        return "rtsp_connect_failed"
+    if b"400 bad request" in output or b"protocol not found" in output:
+        return "rtsp_protocol_rejected"
+    if b"invalid data found" in output:
+        return "rtsp_invalid_data"
+    return "stream_ended"
 
 
 def normalize_mac(value: object) -> str:
@@ -101,6 +119,10 @@ class _Session:
         self.ffmpeg_path = ffmpeg_path
         self.process: asyncio.subprocess.Process | None = None
         self.reader: asyncio.Task | None = None
+        self.stderr_reader: asyncio.Task | None = None
+        self._stderr = bytearray()
+        self.stderr_seen = False
+        self.exit_code: int | None = None
         self.first_frame = asyncio.Event()
         self.frame_count = 0
         self.latest_frame: bytes | None = None
@@ -115,7 +137,8 @@ class _Session:
 
     async def start(self, timeout: float) -> None:
         # The alias and destination have already passed exact policy checks.
-        # stderr is discarded because ffmpeg may print the private stream URL.
+        # FFmpeg may print the private alias. Drain stderr without logging it,
+        # retaining only a short in-memory excerpt for fixed-code classification.
         self.process = await asyncio.create_subprocess_exec(
             self.ffmpeg_path, "-hide_banner", "-nostdin", "-loglevel", "error",
             "-rtsp_transport", "tcp", "-rw_timeout", "5000000", "-i", self.spec.url,
@@ -123,10 +146,11 @@ class _Session:
             "-vf", "fps=1,scale=320:-2", "-threads", "1", "-f", "image2pipe",
             "-vcodec", "mjpeg", "-q:v", "5", "pipe:1",
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL, limit=_MAX_FRAME + 2,
+            stderr=asyncio.subprocess.PIPE, limit=_MAX_FRAME + 2,
             env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
         )
         self.reader = asyncio.create_task(self._read_frames(), name="aiport-rtsp-frames")
+        self.stderr_reader = asyncio.create_task(self._drain_stderr(), name="aiport-rtsp-stderr")
         try:
             await asyncio.wait_for(self.first_frame.wait(), timeout=timeout)
         except TimeoutError as exc:
@@ -134,8 +158,26 @@ class _Session:
             raise IngressError("stream_start_timeout") from exc
         if not self.healthy:
             reason = self.failure or "stream_unavailable"
+            if reason == "stream_ended" and self.process is not None:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self.process.wait(), timeout=0.5)
+                if self.stderr_reader is not None:
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(self.stderr_reader, timeout=0.5)
+                reason = _decoder_failure(bytes(self._stderr))
+            if self.process is not None:
+                self.exit_code = self.process.returncode
             await self.close()
             raise IngressError(reason)
+        self._stderr.clear()
+
+    async def _drain_stderr(self) -> None:
+        assert self.process is not None and self.process.stderr is not None
+        while chunk := await self.process.stderr.read(4096):
+            self.stderr_seen = True
+            remaining = _MAX_DECODER_DIAGNOSTIC - len(self._stderr)
+            if self.frame_count == 0 and remaining > 0:
+                self._stderr.extend(chunk[:remaining])
 
     async def _read_frames(self) -> None:
         assert self.process is not None and self.process.stdout is not None
@@ -174,9 +216,14 @@ class _Session:
         if self.reader is not None:
             self.reader.cancel()
             await asyncio.gather(self.reader, return_exceptions=True)
+        if self.stderr_reader is not None:
+            self.stderr_reader.cancel()
+            await asyncio.gather(self.stderr_reader, return_exceptions=True)
         self.reader = None
+        self.stderr_reader = None
         self.process = None
         self.latest_frame = None
+        self._stderr.clear()
 
 
 class AiPortIngress:
@@ -193,6 +240,8 @@ class AiPortIngress:
         self._session: _Session | None = None
         self._lock = asyncio.Lock()
         self.total_frames_decoded = 0
+        self.last_decoder_exit_code: int | None = None
+        self.last_decoder_stderr_seen = False
 
     async def control(self, payload: object) -> dict:
         if not isinstance(payload, dict) or "streaming" not in payload:
@@ -215,6 +264,8 @@ class AiPortIngress:
             try:
                 await session.start(self.start_timeout)
             except (OSError, IngressError) as exc:
+                self.last_decoder_exit_code = session.exit_code
+                self.last_decoder_stderr_seen = session.stderr_seen
                 await session.close()
                 if isinstance(exc, IngressError):
                     raise
