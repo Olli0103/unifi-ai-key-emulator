@@ -180,11 +180,12 @@ async def test_candidate_counts_control_frames_without_exposing_payload(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_bounded_hello_answers_only_parameter_agreement(tmp_path):
+async def test_bounded_hello_answers_readonly_and_rejects_stream_control(tmp_path):
     config = fixture_state(tmp_path)
     config["controller_ip"] = "127.0.0.1"
     config["diagnostic_hello_until"] = int(time.time()) + 60
     negotiated = asyncio.Event()
+    reply_ids = []
 
     async def websocket(request):
         ws = web.WebSocketResponse(protocols=["secure_transfer"])
@@ -203,9 +204,25 @@ async def test_bounded_hello_answers_only_parameter_agreement(tmp_path):
                 await ws.send_bytes(json.dumps({"functionName": "ubnt_avclient_paramAgreement",
                     "messageId": 11, "inResponseTo": 0, "payload": {"enableStatusCodes": True}}).encode())
             elif message["functionName"] == "ubnt_avclient_paramAgreement":
+                reply_ids.append(message["messageId"])
                 assert message["inResponseTo"] == 11
                 assert message["statusCode"] == 0
                 assert message["payload"] == {}
+                await ws.send_bytes(json.dumps({"functionName": "GetStreamList",
+                    "messageId": 12, "inResponseTo": 0, "payload": {}}).encode())
+                await ws.send_bytes(json.dumps({"functionName": "UiStreamControl",
+                    "messageId": 13, "inResponseTo": 0,
+                    "payload": {"uri": "synthetic-private-camera-stream"}}).encode())
+            elif message["inResponseTo"] == 12:
+                reply_ids.append(message["messageId"])
+                assert message["functionName"] == "GetStreamList"
+                assert message["statusCode"] == 0
+                assert message["payload"] == {"list": []}
+            elif message["inResponseTo"] == 13:
+                reply_ids.append(message["messageId"])
+                assert message["functionName"] == "UiStreamControl"
+                assert message["statusCode"] != 0
+                assert "synthetic-private-camera-stream" not in json.dumps(message)
                 negotiated.set()
         return ws
 
@@ -222,7 +239,12 @@ async def test_bounded_hello_answers_only_parameter_agreement(tmp_path):
             await asyncio.wait_for(negotiated.wait(), timeout=3)
             assert service.hello_sent == 1
             assert service.param_agreements == 1
-            assert service.ws_binary_frames == 2
+            assert service.ws_binary_frames == 4
+            assert service.stream_lists_answered == 1
+            assert service.stream_controls_rejected == 1
+            assert reply_ids == [2, 3, 4]
+            public = await service._health(None)
+            assert "synthetic-private-camera-stream" not in public.text
         finally:
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
