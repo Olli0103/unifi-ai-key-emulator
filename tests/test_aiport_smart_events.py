@@ -29,7 +29,8 @@ def test_leave_payload_closes_same_camera_without_new_object():
     payload = smart_event_payload("2A1122334455", PERSON,
                                   edge="leave", clock_wall_ms=1_700_000_001_000)
     assert payload == {"deviceID": "2A1122334455", "edgeType": "leave",
-                       "clockWall": 1_700_000_001_000, "zonesStatus": {},
+                       "clockWall": 1_700_000_001_000,
+                       "displayTimeoutMSec": 1000, "zonesStatus": {},
                        "trackerIDAttrMap": {}}
 
 
@@ -41,6 +42,7 @@ def test_zone_enter_and_leave_keep_same_numeric_zone_id():
     leave = smart_event_payload("2A1122334455", PERSON, edge="leave",
                                 clock_wall_ms=1_700_000_001_000, zone_ids=(7,))
     assert leave["zonesStatus"] == {"7": {"status": "leave"}}
+    assert leave["displayTimeoutMSec"] == 1000
     assert "descriptors" not in leave
 
 
