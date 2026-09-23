@@ -34,14 +34,18 @@ class WorkerError(RuntimeError):
 def validate_test_scope_config(value):
     """The opt-in scope has one camera and one explicit, single-use permit."""
     if (not isinstance(value, dict) or not {"permit_id", "camera_id"} <= set(value)
-            or set(value) - {"permit_id", "camera_id", "kind"}):
-        raise WorkerError("worker.test_scope requires permit_id, camera_id and optional kind")
+            or set(value) - {"permit_id", "camera_id", "kind", "callback_profile"}):
+        raise WorkerError("worker.test_scope requires permit_id, camera_id and optional kind/profile")
     if any(not isinstance(value[key], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value[key])
            for key in ("permit_id", "camera_id")):
         raise WorkerError("Test scope permit_id and camera_id must be nonempty identifiers")
     if (not isinstance(value.get("kind", "on_demand"), str)
             or value.get("kind", "on_demand") not in {"on_demand", "recognizeKeyFrames"}):
         raise WorkerError("Test scope kind must be on_demand or recognizeKeyFrames")
+    profile = value.get("callback_profile", "full")
+    if (type(profile) is not str or profile not in {"full", "description_only"}
+            or (profile != "full" and value.get("kind") != "recognizeKeyFrames")):
+        raise WorkerError("Description-only callback requires a recognizeKeyFrames test scope")
     return dict(value)
 
 
@@ -579,11 +583,14 @@ class JobProcessor:
         if len(pairs) != len(expected) or dict(pairs) != expected:
             raise WorkerError("recognizeKeyFrames export must exactly match the command camera and interval")
         media = [("video", self._mp4_export_url(original_media))]
+        callback_kind = ("legacy_description" if scope is not None
+                         and scope.get("callback_profile", "full") == "description_only"
+                         else "legacy_tagging")
         normalized = {"operation": "recognizeKeyFrames", "payload": body,
-                      "callback": callback, "callbackKind": "legacy_tagging", "media": media}
+                      "callback": callback, "callbackKind": callback_kind, "media": media}
         fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
         job_id = hashlib.sha256(f"recognizeKeyFrames:{body['camera']}:{body['event']}".encode()).hexdigest()
-        return (job_id, fingerprint, "recognizeKeyFrames", body, callback, "legacy_tagging",
+        return (job_id, fingerprint, "recognizeKeyFrames", body, callback, callback_kind,
                 media, min(self.timeout_s, 30))
 
     def _read_scope_reservation(self, scope=None):
@@ -605,10 +612,11 @@ class JobProcessor:
                 raise ValueError
             record = json.loads(path.read_text())
             required = {"schema", "permit_id", "camera_id", "job_id", "fingerprint", "consumed_at"}
-            if (not required <= set(record) or set(record) - required - {"kind"}
+            if (not required <= set(record) or set(record) - required - {"kind", "callback_profile"}
                     or record["schema"] != 1 or record["permit_id"] != scope["permit_id"]
                     or record["camera_id"] != scope["camera_id"]
                     or record.get("kind", "on_demand") != scope.get("kind", "on_demand")
+                    or record.get("callback_profile", "full") != scope.get("callback_profile", "full")
                     or any(not isinstance(record[key], str) or not re.fullmatch(r"[0-9a-f]{64}", record[key])
                            for key in ("job_id", "fingerprint"))
                     or type(record["consumed_at"]) is not int or record["consumed_at"] <= 0):
@@ -925,6 +933,9 @@ class JobProcessor:
                        "inferTxtMs": round((inferred - prepared) * 1000),
                        "preProcessMs": round((prepared - started) * 1000),
                        "timeElapsedMs": round((inferred - started) * 1000)}
+        elif job.callback_kind == "legacy_description":
+            payload = {"cameraId": job.payload["camera"], "eventId": job.payload["event"],
+                       "description": description, "status": "success"}
         elif job.callback_kind == "legacy":
             payload = {"eventId": job.payload["event"], "status": "success", "description": description}
             if self.options["legacy_profile"] == "protect-7.2.105":
@@ -949,7 +960,7 @@ class JobProcessor:
     async def _post_callback(self, job, payload):
         self._record(job, "callback_sending")
         try:
-            if job.callback_kind in {"legacy", "legacy_tagging"}:
+            if job.callback_kind in {"legacy", "legacy_tagging", "legacy_description"}:
                 form = aiohttp.FormData()
                 form.add_field("ram", _json(payload), filename="description.json", content_type="application/json")
                 kwargs = {"data": form}

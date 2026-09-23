@@ -105,6 +105,49 @@ async def test_each_camera_spends_only_its_own_permit_and_replays_after_restart(
         await restarted.stop()
 
 
+async def test_description_only_scope_leaves_native_tag_fields_out(services, tmp_path, monkeypatch):
+    config = options(services)
+    two_scopes(config["worker"])
+    config["worker"]["test_scopes"][1]["callback_profile"] = "description_only"
+    first = config["worker"]["test_scopes"][0]
+    second = config["worker"]["test_scopes"][1]
+
+    async def decode(*args, **kwargs):
+        return PNG
+
+    worker = JobProcessor(config, tmp_path)
+    monkeypatch.setattr(worker, "_video_frame", decode)
+    try:
+        result = await worker.handle(second_camera(command("g6-event"), second["camera_id"]))
+        assert result["callback"] == "http_accepted"
+        assert result["result"] == {
+            "cameraId": second["camera_id"], "eventId": "g6-event",
+            "description": result["result"]["description"], "status": "success",
+        }
+        assert services.callbacks[0]["payload"]["payload"] == result["result"]
+        assert worker._read_scope_reservation(second)["callback_profile"] == "description_only"
+        assert worker._read_scope_reservation(first) is None
+        with pytest.raises(WorkerError, match="consumed"):
+            await worker.submit(second_camera(command("another-event"), second["camera_id"]))
+        assert len(services.requests) == len(services.callbacks) == 1
+    finally:
+        await worker.stop()
+
+
+@pytest.mark.parametrize("scope", [
+    {"camera_id": "one", "permit_id": "one", "callback_profile": "description_only"},
+    {"camera_id": "one", "permit_id": "one", "kind": "on_demand",
+     "callback_profile": "description_only"},
+    {"camera_id": "one", "permit_id": "one", "kind": "recognizeKeyFrames",
+     "callback_profile": "unknown"},
+])
+def test_description_only_profile_is_explicit_and_bounded(tmp_path, scope):
+    config = defaults(tmp_path / "state", "020000000001")
+    config["worker"]["test_scope"] = scope
+    with pytest.raises(ConfigError, match="Description-only"):
+        validate_config(config)
+
+
 async def test_device_gate_accepts_both_cameras_and_rejects_third(tmp_path):
     config = device_config()
     two_scopes(config["worker"])
