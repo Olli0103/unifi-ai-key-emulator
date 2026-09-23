@@ -6,6 +6,7 @@ The implementation is independently written from observed contracts. These recor
 - [Controller callbacks and saving](controller-evidence.md)
 - [Search and storage](search-evidence.md)
 - [AI Key compatibility matrix](compatibility-matrix.md), generated from the versioned [compatibility manifest](compatibility-manifest.json)
+- [AI Port controller contract](ai-port-controller-contract.md) and [AI Port firmware/discovery evidence](ai-port-firmware-contract.md)
 
 ## Compatibility manifest
 
