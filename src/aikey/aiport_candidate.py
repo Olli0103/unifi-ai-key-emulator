@@ -27,8 +27,12 @@ from aiohttp import web
 
 from .aiport_ingest import AiPortIngress, IngressError, executable_path, normalize_mac, private_source_ip
 from .aiport_detection import DetectionError, RFDetrNanoDetector
-from .aiport_tracking import TemporalTracker, TrackingError
-from .aiport_smart_settings import SmartSettingsError, parse_smart_settings
+from .aiport_tracking import TemporalTracker, TrackChange, TrackingError
+from .aiport_smart_events import SmartEventError, smart_event_payload
+from .aiport_smart_settings import (
+    SmartPolicy, SmartSettingsError, parse_motion_probe, parse_smart_settings,
+    summarize_smart_request,
+)
 from .aiport_credentials import CredentialError, CredentialStore
 from .aiport_adoption import AdoptionError, AdoptionStore, validate_management
 from .aiport_virtual_hardware import (
@@ -56,7 +60,8 @@ _OBSERVABLE_FUNCTIONS = frozenset({
     "StartService", "StopService", "UpdateUsernamePassword",
     "ChangeSoundLedSettings", "ChangeNvrSettings",
     "UiStreamControl", "OnvifStreamControl", "ChangeDeviceSettings", "GetRequest",
-    "ChangeSmartDetectSettings", "ChangeAnalyticsSettings", "ChangeAudioEventsSettings",
+    "ChangeSmartDetectSettings", "ChangeSmartMotionSettings",
+    "ChangeAnalyticsSettings", "ChangeAudioEventsSettings",
     "ChangeEventSettings", "ChangeAvclientEventSettings",
     "UpdateFeatureFlags", "EventFeatureFlagsUpdated", "EventAIPortStatus",
     "UpdateFaceDBRequest",
@@ -98,6 +103,8 @@ def load_config(path: Path) -> dict:
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
     allowed = required | {"diagnostic_hello_until", "diagnostic_stream",
                           "diagnostic_detector",
+                          "diagnostic_smart_probe_until",
+                          "diagnostic_event_until",
                           "diagnostic_adoption_until", "diagnostic_resume_until",
                           "diagnostic_function_fingerprints_until"}
     if not isinstance(value, dict) or not required <= set(value) or not set(value) <= allowed:
@@ -142,12 +149,25 @@ def load_config(path: Path) -> dict:
                 or not isinstance(detector["checkpoint_sha256"], str)
                 or not _PIN.fullmatch(detector["checkpoint_sha256"])
                 or type(detector["max_frames"]) is not int
-                or not 1 <= detector["max_frames"] <= 3):
+                or not 1 <= detector["max_frames"] <= (
+                    120 if "diagnostic_event_until" in value else 3)):
             raise CandidateError("Invalid bounded detector policy")
         try:
             RFDetrNanoDetector(object(), threshold=detector["threshold"])
         except DetectionError as exc:
             raise CandidateError("Invalid bounded detector threshold") from exc
+    if "diagnostic_smart_probe_until" in value:
+        until = value["diagnostic_smart_probe_until"]
+        if ("diagnostic_stream" not in value or type(until) is not int
+                or until <= int(time.time()) or until > int(time.time()) + 600
+                or until != value["diagnostic_hello_until"]):
+            raise CandidateError("Smart settings probe requires a bounded camera stream")
+    if "diagnostic_event_until" in value:
+        until = value["diagnostic_event_until"]
+        if ("diagnostic_detector" not in value or type(until) is not int
+                or until != value.get("diagnostic_smart_probe_until")
+                or value["diagnostic_detector"]["max_frames"] < 2):
+            raise CandidateError("Smart event probe requires one bounded detector and policy")
     value["controller_ip"] = _private_ipv4(value["controller_ip"])
     value["device_ip"] = _private_ipv4(value["device_ip"])
     mac = value["mac"]
@@ -238,6 +258,17 @@ class CandidateService:
         self.face_db_requests_rejected = 0
         self.smart_settings_requests_rejected = 0
         self.smart_settings_subset_matches = 0
+        self.smart_settings_probe_requests = 0
+        self._smart_settings_probe_shape: dict[str, int | bool] | None = None
+        self.smart_motion_probe_requests = 0
+        self.smart_motion_probe_acks = 0
+        self.smart_motion_probe_zones = 0
+        self.smart_feature_probe_events = 0
+        self.smart_settings_probe_acks = 0
+        self.smart_events_entered = 0
+        self.smart_events_left = 0
+        self._smart_policy: SmartPolicy | None = None
+        self._event_track: TrackChange | None = None
         self.last_stream_error: str | None = None
         self.last_control_command: str | None = None
         self.observed_function_counts: dict[str, int] = {}
@@ -281,6 +312,9 @@ class CandidateService:
         if (time.time() >= self.config["diagnostic_hello_until"]
                 or self.detector_frames_attempted >= policy["max_frames"]):
             return
+        if ("diagnostic_event_until" in self.config
+                and self._smart_policy is None):
+            return
         self.detector_frames_attempted += 1
         try:
             if self._detector is None:
@@ -298,6 +332,45 @@ class CandidateService:
             self.detector_objects_seen += len(observations)
             self.detector_tracks_entered += sum(change.edge == "enter" for change in changes)
             self.detector_tracks_left += sum(change.edge == "leave" for change in changes)
+            if time.time() < self.config.get("diagnostic_event_until", 0):
+                await self._publish_bounded_smart_changes(changes)
+
+    async def _publish_bounded_smart_changes(self, changes: tuple[TrackChange, ...]) -> None:
+        ws = self._current_ws
+        policy = self._smart_policy
+        if (ws is None or policy is None or not policy.allows("person")
+                or time.time() >= self.config.get("diagnostic_event_until", 0)
+                or self.ingress is None or not self.ingress.list_streams()):
+            return
+        for change in changes:
+            if change.kind != "person":
+                continue
+            if (change.edge == "enter" and self._event_track is None
+                    and self.smart_events_entered == 0):
+                edge = "enter"
+            elif (change.edge == "leave" and self._event_track is not None
+                  and change.track_id == self._event_track.track_id):
+                edge = "leave"
+            else:
+                continue
+            try:
+                payload = smart_event_payload(
+                    self.ingress.camera_mac, change, edge=edge,
+                    clock_wall_ms=int(time.time() * 1000))
+            except SmartEventError:
+                continue
+            event = {"from": "ubnt_avclient", "to": "UniFiVideo",
+                     "responseExpected": False, "functionName": "EventSmartDetect",
+                     "messageId": self._next_message_id, "inResponseTo": 0,
+                     "payload": payload}
+            await ws.send_bytes(json.dumps(event, separators=(",", ":")).encode())
+            self._next_message_id += 1
+            if edge == "enter":
+                self._event_track = change
+                self.smart_events_entered += 1
+            else:
+                self._event_track = None
+                self.smart_events_left += 1
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=_MAX_MANAGE)
@@ -340,6 +413,17 @@ class CandidateService:
             "face_db_requests_rejected": self.face_db_requests_rejected,
             "smart_settings_requests_rejected": self.smart_settings_requests_rejected,
             "smart_settings_subset_matches": self.smart_settings_subset_matches,
+            "smart_settings_probe_requests": self.smart_settings_probe_requests,
+            "smart_motion_probe_requests": self.smart_motion_probe_requests,
+            "smart_motion_probe_acks": self.smart_motion_probe_acks,
+            "smart_motion_probe_zones": self.smart_motion_probe_zones,
+            "smart_feature_probe_events": self.smart_feature_probe_events,
+            "smart_settings_probe_acks": self.smart_settings_probe_acks,
+            "smart_events_entered": self.smart_events_entered,
+            "smart_events_left": self.smart_events_left,
+            "smart_settings_probe_shape": (self._smart_settings_probe_shape
+                if time.time() < self.config.get("diagnostic_smart_probe_until", 0)
+                else None),
             "stream_frames_decoded": self.ingress.frame_count if self.ingress else 0,
             "stream_frames_decoded_total": (
                 self.ingress.total_frames_decoded + self.ingress.frame_count
@@ -514,12 +598,30 @@ class CandidateService:
     async def _send_stream_status(self, ws: aiohttp.ClientWebSocketResponse,
                                   *, streaming: bool) -> None:
         assert self.ingress is not None
+        # Only an expiring, single-camera probe may announce a temporary
+        # capability. The controller otherwise has no reason to send smart
+        # settings for a legacy camera with hasSmartDetect=false. Unpairing
+        # restores the camera's original flags in Protect.
+        if (streaming and time.time()
+                < self.config.get("diagnostic_smart_probe_until", 0)):
+            feature_event = {
+                "from": "ubnt_avclient", "to": "UniFiVideo",
+                "responseExpected": False,
+                "functionName": "EventFeatureFlagsUpdated",
+                "messageId": self._next_message_id, "inResponseTo": 0,
+                "payload": {"deviceID": self.ingress.camera_mac,
+                            "smartDetect": ["person"]},
+            }
+            await ws.send_bytes(json.dumps(feature_event, separators=(",", ":")).encode())
+            self._next_message_id += 1
+            self.smart_feature_probe_events += 1
         event = {"from": "ubnt_avclient", "to": "UniFiVideo",
                  "responseExpected": False, "functionName": "EventAIPortStatus",
                  "messageId": self._next_message_id, "inResponseTo": 0,
                  "payload": {"deviceID": self.ingress.camera_mac,
                              "isStreaming": streaming,
-                             "isSmartDetectReady": False,
+                             "isSmartDetectReady": (streaming and time.time()
+                                 < self.config.get("diagnostic_smart_probe_until", 0)),
                              "isAudioEventReady": False}}
         await ws.send_bytes(json.dumps(event, separators=(",", ":")).encode())
         self._next_message_id += 1
@@ -708,23 +810,62 @@ class CandidateService:
                                       {"description": "face_database_unavailable"})
             self.face_db_requests_rejected += 1
             return
+        if function == "ChangeSmartMotionSettings":
+            self.last_control_command = function
+            request_id = message.get("messageId")
+            if not self._params_agreed or type(request_id) is not int or request_id < 0:
+                return
+            self.smart_motion_probe_requests += 1
+            if (self.ingress is None or time.time() >= self.config.get(
+                    "diagnostic_smart_probe_until", 0)):
+                await self._reply_control(ws, function, request_id, 501,
+                                          {"description": "smart_motion_unavailable"})
+                return
+            try:
+                zone_count = parse_motion_probe(message.get("payload"),
+                                                camera_mac=self.ingress.camera_mac)
+            except SmartSettingsError:
+                await self._reply_control(ws, function, request_id, 5,
+                                          {"description": "invalid_motion_probe"})
+                return
+            # A probe-only acknowledgement lets Protect reveal its next
+            # command. It does not enable or claim enhanced motion detection.
+            await self._reply_control(ws, function, request_id, 0, {})
+            self.smart_motion_probe_acks += 1
+            self.smart_motion_probe_zones = zone_count
+            return
         if function == "ChangeSmartDetectSettings":
             self.last_control_command = function
             request_id = message.get("messageId")
             if not self._params_agreed or type(request_id) is not int or request_id < 0:
                 return
-            # Classify only the bounded full-frame subset while the one-camera
-            # diagnostic is active. This does not accept the policy or enable
-            # native events: geometry, timing and delivery are still unproven.
+            # A later disabled or unsupported policy immediately revokes the
+            # prior permit. No raw policy survives this request handler.
+            self._smart_policy = None
+            # Accept only a one-camera, expiring, full-frame person policy
+            # when the local detector and event probe are explicitly armed.
+            parsed_policy = None
             if (self.ingress is not None
                     and time.time() < self.config.get("diagnostic_hello_until", 0)):
+                if time.time() < self.config.get("diagnostic_smart_probe_until", 0):
+                    self._smart_settings_probe_shape = summarize_smart_request(
+                        message.get("payload"), camera_mac=self.ingress.camera_mac)
+                    self.smart_settings_probe_requests += 1
                 try:
-                    parse_smart_settings(message.get("payload"),
-                                         camera_mac=self.ingress.camera_mac)
+                    parsed_policy = parse_smart_settings(
+                        message.get("payload"), camera_mac=self.ingress.camera_mac)
                 except SmartSettingsError:
                     pass
                 else:
                     self.smart_settings_subset_matches += 1
+            if (parsed_policy is not None
+                    and parsed_policy.enabled_types == frozenset({"person"})
+                    and time.time() < self.config.get("diagnostic_event_until", 0)
+                    and self._tracker is not None):
+                self._smart_policy = parsed_policy
+                await self._reply_control(ws, function, request_id, 0, {})
+                self.smart_settings_probe_acks += 1
+                return
             # Never echo or retain the controller's nested camera policy.
             await self._reply_control(ws, function, request_id, 501,
                                       {"description": "smart_detection_unavailable"})

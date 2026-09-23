@@ -15,6 +15,7 @@ import pytest
 
 from aikey.aiport_candidate import CandidateError, CandidateService, load_config
 from aikey.aiport_detection import ObjectObservation, RFDetrNanoDetector
+from aikey.aiport_tracking import TrackChange
 from aikey.tls import ensure_identity_certificate
 
 
@@ -90,6 +91,56 @@ def test_stream_diagnostic_requires_expiring_exact_private_policy(tmp_path):
     del config["diagnostic_hello_until"]
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     with pytest.raises(CandidateError):
+        load_config(tmp_path / "config.json")
+
+
+def test_smart_probe_requires_same_camera_stream_and_expiry(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 90
+    config["diagnostic_stream"] = {"camera_mac": "2A1122334455",
+                                   "source_ip": "192.168.10.1",
+                                   "ffmpeg_path": sys.executable}
+    config["diagnostic_smart_probe_until"] = config["diagnostic_hello_until"]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["diagnostic_smart_probe_until"] == (
+        config["diagnostic_smart_probe_until"])
+    config["diagnostic_smart_probe_until"] = config["diagnostic_hello_until"] - 1
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="Smart settings probe"):
+        load_config(tmp_path / "config.json")
+    config["diagnostic_smart_probe_until"] = True
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="Smart settings probe"):
+        load_config(tmp_path / "config.json")
+    config["diagnostic_smart_probe_until"] = int(time.time()) + 60
+    del config["diagnostic_stream"]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="Smart settings probe"):
+        load_config(tmp_path / "config.json")
+
+
+def test_event_probe_requires_model_same_deadline_and_bounded_frames(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 90
+    config["diagnostic_smart_probe_until"] = config["diagnostic_hello_until"]
+    config["diagnostic_event_until"] = config["diagnostic_hello_until"]
+    config["diagnostic_stream"] = {"camera_mac": "2A1122334455",
+                                   "source_ip": "192.168.10.1",
+                                   "ffmpeg_path": sys.executable}
+    config["diagnostic_detector"] = {"checkpoint_path": "/tmp/model.pth",
+                                     "checkpoint_sha256": "0" * 64,
+                                     "threshold": 0.5, "max_frames": 120}
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["diagnostic_event_until"] == (
+        config["diagnostic_event_until"])
+    config["diagnostic_detector"]["max_frames"] = 121
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError):
+        load_config(tmp_path / "config.json")
+    config["diagnostic_detector"]["max_frames"] = 2
+    config["diagnostic_event_until"] -= 1
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="Smart event probe"):
         load_config(tmp_path / "config.json")
 
 
@@ -676,6 +727,158 @@ async def test_smart_settings_subset_is_counted_but_not_acknowledged(tmp_path):
     assert health["smart_settings_requests_rejected"] == 1
     assert "eventStartMSec" not in json.dumps(health)
     assert "person" not in json.dumps(health)
+    await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_smart_probe_signals_ready_then_records_only_shape(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 90
+    config["diagnostic_stream"] = {"camera_mac": "2A1122334455",
+                                   "source_ip": "192.168.10.1",
+                                   "ffmpeg_path": sys.executable}
+    config["diagnostic_smart_probe_until"] = config["diagnostic_hello_until"]
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    await service._send_stream_status(sink, streaming=True)
+    assert sink.messages[-2]["functionName"] == "EventFeatureFlagsUpdated"
+    assert sink.messages[-2]["payload"] == {
+        "deviceID": "2A1122334455", "smartDetect": ["person"]}
+    assert sink.messages[-1]["payload"]["isSmartDetectReady"] is True
+    assert service.smart_feature_probe_events == 1
+    private_name = "private-front-door-zone"
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 16,
+        "responseExpected": True,
+        "payload": {"deviceID": "2A1122334455", "enableSmartDetect": ["person"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000,
+                    "zones": {private_name: {"points": [[123, 456]]}}},
+    }).encode())
+    assert sink.messages[-1]["statusCode"] == 501
+    health = json.loads((await service._health(None)).text)
+    assert health["smart_settings_probe_requests"] == 1
+    assert health["smart_settings_probe_shape"]["zones_count"] == 1
+    assert private_name not in json.dumps(health)
+    config["diagnostic_smart_probe_until"] = int(time.time()) - 1
+    await service._send_stream_status(sink, streaming=True)
+    assert sink.messages[-1]["payload"]["isSmartDetectReady"] is False
+    assert service.smart_feature_probe_events == 1
+    assert json.loads((await service._health(None)).text)["smart_settings_probe_shape"] is None
+    await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_event_probe_acks_person_policy_then_sends_one_real_track_pair(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 90
+    config["diagnostic_smart_probe_until"] = config["diagnostic_hello_until"]
+    config["diagnostic_event_until"] = config["diagnostic_hello_until"]
+    config["diagnostic_stream"] = {"camera_mac": "2A1122334455",
+                                   "source_ip": "192.168.10.1",
+                                   "ffmpeg_path": sys.executable}
+    config["diagnostic_detector"] = {"checkpoint_path": "/tmp/model.pth",
+                                     "checkpoint_sha256": "0" * 64,
+                                     "threshold": 0.5, "max_frames": 8}
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"active": True}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    payload = {"deviceID": "2A1122334455", "algoVersion": "beta",
+               "enableSmartDetect": ["person"], "eventStartMSec": 1000,
+               "eventStopMSec": 3000, "zones": {}, "lines": {},
+               "reVerificationPolicy": {
+                   kind: {"enable": False}
+                   for kind in ("person", "vehicle", "animal")}}
+    command = {"functionName": "ChangeSmartDetectSettings", "messageId": 16,
+               "responseExpected": True, "payload": payload}
+    await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+    assert sink.messages[-1]["statusCode"] == 0
+    track = TrackChange("enter", 1, "person", "person", 0.88,
+                        (0.2, 0.2, 0.5, 0.8))
+    await service._publish_bounded_smart_changes((track,))
+    await service._publish_bounded_smart_changes((track,))
+    assert service.smart_events_entered == 1
+    assert sink.messages[-1]["functionName"] == "EventSmartDetect"
+    assert sink.messages[-1]["payload"]["descriptors"][0]["objectType"] == "person"
+    await service._publish_bounded_smart_changes((
+        TrackChange("leave", track.track_id, track.kind, track.label,
+                    track.score, track.box),))
+    assert service.smart_events_left == 1
+    assert sink.messages[-1]["payload"]["edgeType"] == "leave"
+    command["messageId"] = 17
+    command["payload"] = {**payload, "enableSmartDetect": []}
+    await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+    assert sink.messages[-1]["statusCode"] == 501
+    await service._publish_bounded_smart_changes((track,))
+    assert service.smart_events_entered == 1
+    health = json.loads((await service._health(None)).text)
+    assert health["smart_settings_probe_acks"] == 1
+    assert health["smart_events_entered"] == 1
+    assert "0.2" not in json.dumps(health)
+    await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_motion_probe_acks_only_one_camera_during_permit(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    config["diagnostic_smart_probe_until"] = config["diagnostic_hello_until"]
+    config["diagnostic_stream"] = {"camera_mac": "2A1122334455",
+                                   "source_ip": "192.168.10.1",
+                                   "ffmpeg_path": sys.executable}
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    payload = {"algoVersion": "beta", "deviceID": "2A1122334455",
+               "enable": True, "eventMaxDurationMSec": 600_000,
+               "bgmodel": "default", "lingerEventStartMSec": 1000,
+               "lingerEventStopMSec": 3000,
+               "zones": {"private-zone": {"points": [[1, 2]]}}}
+    command = {"functionName": "ChangeSmartMotionSettings", "messageId": 16,
+               "responseExpected": True, "payload": payload}
+    await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+    assert sink.messages[-1]["statusCode"] == 0
+    health = json.loads((await service._health(None)).text)
+    assert health["smart_motion_probe_requests"] == 1
+    assert health["smart_motion_probe_acks"] == 1
+    assert health["smart_motion_probe_zones"] == 1
+    assert "private-zone" not in json.dumps(health)
+    command["messageId"] = 17
+    command["payload"] = {**payload, "deviceID": "2A1122334456"}
+    await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+    assert sink.messages[-1]["statusCode"] == 5
+    config["diagnostic_smart_probe_until"] = int(time.time()) - 1
+    command["messageId"] = 18
+    command["payload"] = payload
+    await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+    assert sink.messages[-1]["statusCode"] == 501
+    assert service.smart_motion_probe_acks == 1
     await service.stop()
 
 
