@@ -1,4 +1,4 @@
-"""The isolated AI Port candidate stays unadopted and never stores credentials."""
+"""The isolated AI Port candidate keeps camera access behind an expiring permit."""
 
 import asyncio
 import hashlib
@@ -106,7 +106,7 @@ async def test_https_manage_rejects_adoption_and_keeps_only_field_shape(tmp_path
                 "username": "sensitive-user", "password": "sensitive-password",
                 "mgmt": {"token": "sensitive-token", "hosts": ["controller"]},
             })
-            assert response.status == 501
+            assert response.status == 503
             assert service.manage_requests == 1
             shape = service.last_manage_shape
             assert shape["recognized_fields"] == ["mgmt", "password", "username"]
@@ -114,7 +114,7 @@ async def test_https_manage_rejects_adoption_and_keeps_only_field_shape(tmp_path
             health = await client.get(str(server.make_url("/healthz")))
             public = await health.text()
             assert "sensitive-" not in public
-            assert (await response.json())["error"] == "Adoption is not enabled on this candidate"
+            assert (await response.json())["error"] == "Adoption requires rotated credentials"
     finally:
         await server.close()
 

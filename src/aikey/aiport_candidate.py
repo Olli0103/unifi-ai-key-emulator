@@ -1,7 +1,7 @@
-"""Isolated, unadopted AI Port candidate for native interface discovery.
+"""Isolated AI Port candidate for native interface discovery.
 
 Camera ingress requires an expiring, one-camera private diagnostic policy.
-The management listener rejects adoption and keeps credentials private.
+Adoption is time-bounded and requires the rotated management credential.
 """
 
 from __future__ import annotations
@@ -19,12 +19,14 @@ import signal
 import ssl
 import stat
 import time
+from urllib.parse import quote
 
 import aiohttp
 from aiohttp import web
 
 from .aiport_ingest import AiPortIngress, IngressError, executable_path, normalize_mac, private_source_ip
 from .aiport_credentials import CredentialError, CredentialStore
+from .aiport_adoption import AdoptionError, AdoptionStore, validate_management
 from .aiport_virtual_hardware import (
     VirtualHardwareError, VirtualSoundLedStore, VirtualTimezoneStore,
 )
@@ -37,7 +39,9 @@ _VERSION = re.compile(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\Z")
 _MAX_MANAGE = 8192
 _DISCONNECT_GRACE_SECONDS = 15
 _ALLOWED_TOP_LEVEL = frozenset(("username", "password", "mgmt", "hosts", "protocol", "mode"))
-_ALLOWED_MGMT = frozenset(("token", "hosts", "protocol", "mode", "nvr"))
+_ALLOWED_MGMT = frozenset(("token", "hosts", "protocol", "mode", "nvr",
+                           "username", "password", "controller", "consoleId",
+                           "consoleName"))
 _OBSERVABLE_FUNCTIONS = frozenset({
     "ubnt_avclient_hello", "ubnt_avclient_paramAgreement", "GetStreamList",
     "ubnt_avclient_timeSync", "GetSystemStats", "NetworkStatus",
@@ -84,13 +88,18 @@ def load_config(path: Path) -> dict:
     except (ValueError, UnicodeError) as exc:
         raise CandidateError("Invalid candidate configuration JSON") from exc
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
-    allowed = required | {"diagnostic_hello_until", "diagnostic_stream"}
+    allowed = required | {"diagnostic_hello_until", "diagnostic_stream",
+                          "diagnostic_adoption_until"}
     if not isinstance(value, dict) or not required <= set(value) or not set(value) <= allowed:
         raise CandidateError("Candidate configuration fields do not match the isolated profile")
     if "diagnostic_hello_until" in value:
         until = value["diagnostic_hello_until"]
         if type(until) is not int or until < 0 or until > int(time.time()) + 600:
             raise CandidateError("Diagnostic hello must expire within ten minutes")
+    if "diagnostic_adoption_until" in value:
+        until = value["diagnostic_adoption_until"]
+        if type(until) is not int or until < 0 or until > int(time.time()) + 600:
+            raise CandidateError("Diagnostic adoption must expire within ten minutes")
     if "diagnostic_stream" in value:
         stream = value["diagnostic_stream"]
         if (not isinstance(stream, dict) or set(stream) != {
@@ -122,18 +131,9 @@ def load_config(path: Path) -> dict:
 
 
 def _object_shape(raw: bytes) -> dict:
-    def unique_pairs(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError("duplicate key")
-            result[key] = value
-        return result
     try:
-        body = json.loads(raw, object_pairs_hook=unique_pairs)
+        body = _strict_json_object(raw)
     except (ValueError, UnicodeError, RecursionError):
-        return {"valid_json_object": False}
-    if not isinstance(body, dict):
         return {"valid_json_object": False}
     mgmt = body.get("mgmt")
     return {"valid_json_object": True,
@@ -141,6 +141,21 @@ def _object_shape(raw: bytes) -> dict:
             "other_field_count": len(set(body) - _ALLOWED_TOP_LEVEL),
             "mgmt_recognized_fields": sorted(set(mgmt) & _ALLOWED_MGMT) if isinstance(mgmt, dict) else [],
             "mgmt_other_field_count": len(set(mgmt) - _ALLOWED_MGMT) if isinstance(mgmt, dict) else 0}
+
+
+def _strict_json_object(raw: bytes) -> dict:
+    def unique_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate key")
+            result[key] = value
+        return result
+
+    body = json.loads(raw, object_pairs_hook=unique_pairs)
+    if not isinstance(body, dict):
+        raise ValueError("JSON object required")
+    return body
 
 
 class CandidateService:
@@ -203,6 +218,9 @@ class CandidateService:
         self.sessions: dict[str, float] = {}
         self._auth_failures: dict[str, list[float]] = {}
         self._auth_lock = asyncio.Lock()
+        self.adoption = AdoptionStore(self.state_dir, config["controller_ip"],
+                                     config["controller_pin"], control_port)
+        self._current_ws: aiohttp.ClientWebSocketResponse | None = None
         self.ingress = (AiPortIngress(**config["diagnostic_stream"])
                         if "diagnostic_stream" in config
                         and config["diagnostic_hello_until"] > time.time() else None)
@@ -215,7 +233,8 @@ class CandidateService:
         return app
 
     async def _health(self, request: web.Request) -> web.Response:
-        return web.json_response({"service": "aiport-candidate", "adopted": False,
+        return web.json_response({"service": "aiport-candidate", "adopted": self.adoption.adopted,
+            "adoption_pending": self.adoption.pending_token is not None,
             "control_connected": self.connected, "websocket_upgrades": self.upgrades,
             "last_result": self.last_result, "manage_requests": self.manage_requests,
             "last_manage_shape": self.last_manage_shape,
@@ -279,6 +298,9 @@ class CandidateService:
         self.last_disconnect_origin = (
             "diagnostic_expiry" if diagnostic_expired else "peer_or_transport")
 
+    def _control_enabled(self) -> bool:
+        return self.adoption.adopted or time.time() < self.config.get("diagnostic_hello_until", 0)
+
     async def _manage(self, request: web.Request) -> web.Response:
         self.manage_requests += 1
         if not request.secure:
@@ -290,15 +312,30 @@ class CandidateService:
         except web.HTTPRequestEntityTooLarge:
             return web.json_response({"error": "Request too large"}, status=413)
         self.last_manage_shape = _object_shape(raw)
-        if self.credentials.credential is not None:
-            try:
-                body = json.loads(raw)
-            except (ValueError, UnicodeError, RecursionError):
-                body = None
-            if (not isinstance(body, dict) or not await self._verify_management(
-                    request, body.get("username"), body.get("password"))):
-                return web.json_response({"error": "Unauthorized"}, status=401)
-        return web.json_response({"error": "Adoption is not enabled on this candidate"}, status=501)
+        if self.credentials.credential is None:
+            return web.json_response({"error": "Adoption requires rotated credentials"}, status=503)
+        try:
+            body = _strict_json_object(raw)
+        except (ValueError, UnicodeError, RecursionError):
+            body = None
+        if (not isinstance(body, dict) or not await self._verify_management(
+                request, body.get("username"), body.get("password"))):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+        if self.adoption.adopted:
+            return web.json_response({"error": "Already adopted"}, status=409)
+        until = self.config.get("diagnostic_adoption_until", 0)
+        if until <= time.time():
+            return web.json_response({"error": "Adoption window closed"}, status=503)
+        try:
+            token = validate_management(body.get("mgmt"), self.config["controller_ip"],
+                                        self.control_port, body.get("username"),
+                                        body.get("password"))
+            self.adoption.begin(token, until)
+        except AdoptionError:
+            return web.json_response({"error": "Invalid or unavailable adoption"}, status=400)
+        if self._current_ws is not None:
+            await self._current_ws.close()
+        return web.json_response({})
 
     async def _login(self, request: web.Request) -> web.Response:
         if not request.secure:
@@ -467,7 +504,7 @@ class CandidateService:
             request_id = message.get("messageId")
             if not self._params_agreed or type(request_id) is not int or request_id < 0:
                 return
-            if (time.time() >= self.config.get("diagnostic_hello_until", 0)
+            if (not self._control_enabled()
                     or message.get("payload") != {}):
                 await self._reply_control(ws, function, request_id, 5,
                                           {"description": "unsupported_settings_change"})
@@ -485,7 +522,7 @@ class CandidateService:
             request_id = message.get("messageId")
             if not self._params_agreed or type(request_id) is not int or request_id < 0:
                 return
-            if (time.time() >= self.config.get("diagnostic_hello_until", 0)
+            if (not self._control_enabled()
                     or message.get("payload") != {"service": "ssh"}):
                 await self._reply_control(ws, function, request_id, 5,
                                           {"description": "unsupported_service_command"})
@@ -503,7 +540,7 @@ class CandidateService:
             request_id = message.get("messageId")
             if not self._params_agreed or type(request_id) is not int or request_id < 0:
                 return
-            if time.time() >= self.config.get("diagnostic_hello_until", 0):
+            if not self._control_enabled():
                 await self._reply_control(ws, function, request_id, 5,
                                           {"description": "diagnostic_expired"})
                 self.credential_rotations_rejected += 1
@@ -524,7 +561,7 @@ class CandidateService:
             request_id = message.get("messageId")
             if not self._params_agreed or type(request_id) is not int or request_id < 0:
                 return
-            if (time.time() >= self.config.get("diagnostic_hello_until", 0)
+            if (not self._control_enabled()
                     or self.credentials.credential is None):
                 await self._reply_control(ws, function, request_id, 5,
                                           {"description": "diagnostic_unavailable"})
@@ -545,7 +582,7 @@ class CandidateService:
             request_id = message.get("messageId")
             if not self._params_agreed or type(request_id) is not int or request_id < 0:
                 return
-            if (time.time() >= self.config.get("diagnostic_hello_until", 0)
+            if (not self._control_enabled()
                     or self.credentials.credential is None):
                 await self._reply_control(ws, function, request_id, 5,
                                           {"description": "diagnostic_unavailable"})
@@ -660,15 +697,27 @@ class CandidateService:
     async def _connect_loop(self):
         connector = VerifiedConnector(ssl_context=self._client_context(),
                                       expected_fingerprint=self.config["controller_pin"])
+        trace = aiohttp.TraceConfig()
+
+        async def reject_redirect(session, trace_context, params):
+            raise aiohttp.ClientError("Control WebSocket redirect refused")
+
+        trace.on_request_redirect.append(reject_redirect)
         timeout = aiohttp.ClientTimeout(total=None, connect=10, sock_connect=10)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=False) as session:
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout,
+                                         trust_env=False, trace_configs=[trace]) as session:
             while True:
+                pending_token = self.adoption.pending_token
+                adopted = self.adoption.adopted
                 headers = {"Camera-MAC": self.config["mac"], "Camera-IP": self.config["device_ip"],
                            "Camera-Model": "0xa5f1", "Camera-Firmware": self.config["firmware_version"],
-                           "Adopted": "false"}
+                           "Adopted": "true" if adopted or pending_token else "false"}
+                url = (f"wss://{self.config['controller_ip']}:{self.control_port}/camera/1.0/ws")
+                if pending_token:
+                    url += f"?token={quote(pending_token, safe='')}"
                 try:
                     async with session.ws_connect(
-                        f"wss://{self.config['controller_ip']}:{self.control_port}/camera/1.0/ws",
+                        url,
                         protocols=["secure_transfer"], headers=headers,
                         heartbeat=30, max_msg_size=64 * 1024,
                     ) as ws:
@@ -676,22 +725,27 @@ class CandidateService:
                             self.last_result = "websocket_protocol_mismatch"
                             await ws.close()
                         else:
+                            if pending_token:
+                                self.adoption.confirm()
                             self.upgrades += 1
                             self.connected = True
+                            self._current_ws = ws
                             self.last_result = "websocket_101"
                             until = self.config.get("diagnostic_hello_until", 0)
                             diagnostic = until > time.time()
+                            active_control = diagnostic or self.adoption.adopted
                             expiry_task = None
                             try:
-                                if diagnostic:
+                                if active_control:
                                     await self._send_diagnostic_hello(ws)
+                                if diagnostic:
                                     expiry_task = asyncio.create_task(
                                         self._expire_diagnostic(ws, until))
                                 async for message in ws:
                                     if message.type == aiohttp.WSMsgType.BINARY:
                                         self.ws_binary_frames += 1
                                         self.ws_last_frame_bytes = len(message.data)
-                                        if diagnostic:
+                                        if active_control:
                                             await self._handle_diagnostic_frame(ws, message.data)
                                     elif message.type == aiohttp.WSMsgType.TEXT:
                                         self.ws_text_frames += 1
@@ -700,6 +754,7 @@ class CandidateService:
                                                         aiohttp.WSMsgType.ERROR):
                                         break
                             finally:
+                                self._current_ws = None
                                 diagnostic_expired = (
                                     expiry_task is not None and expiry_task.done()
                                     and not expiry_task.cancelled())

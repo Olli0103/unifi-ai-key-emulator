@@ -10,6 +10,7 @@ import pytest
 
 from aikey.aiport_candidate import CandidateService
 from aikey.aiport_ingest import AiPortIngress, IngressError
+from test_aiport_candidate import fixture_state
 
 
 CAMERA_MAC = "2A1122334455"
@@ -156,11 +157,10 @@ async def test_success_clears_previous_decoder_error(tmp_path):
 @pytest.mark.asyncio
 async def test_candidate_stream_response_excludes_private_alias(tmp_path):
     decoder, _ = fake_decoder(tmp_path)
-    config = {"controller_ip": SOURCE_IP, "device_ip": "192.168.10.20",
-              "mac": "2A9988776655", "firmware_version": "5.1.12",
-              "diagnostic_hello_until": int(time.time()) + 60,
-              "diagnostic_stream": {"camera_mac": CAMERA_MAC, "source_ip": SOURCE_IP,
-                                    "ffmpeg_path": decoder}}
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    config["diagnostic_stream"] = {"camera_mac": CAMERA_MAC, "source_ip": SOURCE_IP,
+                                   "ffmpeg_path": decoder}
     service = CandidateService(config, tmp_path)
     service.param_agreements = 1
 
@@ -209,9 +209,8 @@ async def test_candidate_stream_response_excludes_private_alias(tmp_path):
 
 @pytest.mark.asyncio
 async def test_new_websocket_requires_fresh_parameter_agreement(tmp_path):
-    config = {"controller_ip": SOURCE_IP, "device_ip": "192.168.10.20",
-              "mac": "2A9988776655", "firmware_version": "5.1.12",
-              "diagnostic_hello_until": int(time.time()) + 60}
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
     service = CandidateService(config, tmp_path)
 
     class Sink:
