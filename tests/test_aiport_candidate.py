@@ -23,10 +23,10 @@ def private_file(path: Path, content: bytes):
 
 
 def fixture_state(tmp_path):
-    cert, _ = ensure_identity_certificate(tmp_path, "2A9D75736D4E")
+    cert, _ = ensure_identity_certificate(tmp_path, "2A1100F0A55E")
     private_file(tmp_path / "controller-ca.pem", cert.read_bytes())
     config = {"controller_ip": "192.168.10.1", "device_ip": "192.168.10.20",
-              "mac": "2A9D75736D4E", "controller_pin": hashlib.sha256(ssl.PEM_cert_to_DER_cert(
+              "mac": "2A1100F0A55E", "controller_pin": hashlib.sha256(ssl.PEM_cert_to_DER_cert(
                   cert.read_text())).hexdigest(), "firmware_version": "5.1.12"}
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     return config

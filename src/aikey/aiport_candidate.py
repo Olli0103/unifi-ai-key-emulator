@@ -188,6 +188,10 @@ class CandidateService:
                                        if self.ingress else None),
             "last_decoder_stderr_seen": (self.ingress.last_decoder_stderr_seen
                                          if self.ingress else False),
+            "last_decoder_error_markers": (list(self.ingress.last_decoder_error_markers)
+                                           if self.ingress else []),
+            "last_decoder_error_terms": (list(self.ingress.last_decoder_error_terms)
+                                         if self.ingress else []),
             "stream_ingest_enabled": (self.ingress is not None
                                       and time.time() < self.config.get("diagnostic_hello_until", 0)),
             "last_control_command": self.last_control_command,
