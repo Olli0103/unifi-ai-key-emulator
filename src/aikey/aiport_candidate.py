@@ -358,6 +358,7 @@ class CandidateService:
                     detector["checkpoint_path"], detector["checkpoint_sha256"],
                     threshold=detector["threshold"]),
                 on_result=self._observe_pool_result,
+                on_unavailable=self._pool_camera_unavailable,
                 max_frames_per_camera=detector["max_frames_per_camera"])
         self.credentials = CredentialStore(self.state_dir)
         self.virtual_sound_led = VirtualSoundLedStore(self.state_dir)
@@ -391,6 +392,16 @@ class CandidateService:
             return
         await inference.observe(
             camera_mac, frame, generation=engine.policy_generation(camera_mac))
+
+    async def _pool_camera_unavailable(self, camera_mac: str) -> None:
+        ws = self._current_ws
+        if (ws is None or not self._params_agreed
+                or not isinstance(self.ingress, AiPortIngressPool)
+                or time.time() >= self.config.get("diagnostic_pool_event_until", 0)):
+            return
+        if any(stream["deviceID"] == camera_mac
+               for stream in self.ingress.list_streams()):
+            await self._send_stream_status(ws, streaming=True, camera_mac=camera_mac)
 
     async def _observe_pool_result(self, camera_mac: str,
                                    observations: tuple[ObjectObservation, ...],
@@ -809,6 +820,9 @@ class CandidateService:
             self.config.get("diagnostic_pool_event_until", 0)
             if isinstance(self.ingress, AiPortIngressPool)
             else self.config.get("diagnostic_smart_probe_until", 0)))
+        if smart_ready and isinstance(self.ingress, AiPortIngressPool):
+            smart_ready = (self._inference is not None
+                           and self._inference.is_available(camera_mac))
         if smart_ready:
             await self._send_control_event(
                 ws, "EventFeatureFlagsUpdated",

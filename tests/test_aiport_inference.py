@@ -65,18 +65,26 @@ async def test_round_robin_coalesces_busy_camera_and_keeps_results_separate():
 @pytest.mark.asyncio
 async def test_one_inference_failure_disables_only_that_camera():
     results = []
+    unavailable = []
 
     async def on_result(camera, observations, generation):
         results.append(camera)
 
+    async def on_unavailable(camera):
+        unavailable.append(camera)
+
     scheduler = FairInference([FIRST, SECOND], load_detector=Detector,
-                              on_result=on_result, max_frames_per_camera=2)
+                              on_result=on_result, on_unavailable=on_unavailable,
+                              max_frames_per_camera=2)
     await scheduler.observe(FIRST, b"bad!", generation=1)
     await scheduler.join()
     await scheduler.observe(FIRST, b"later", generation=1)
     await scheduler.observe(SECOND, b"okay", generation=1)
     await scheduler.join()
     assert results == [SECOND]
+    assert unavailable == [FIRST]
+    assert not scheduler.is_available(FIRST)
+    assert scheduler.is_available(SECOND)
     assert scheduler.snapshot()["failed_cameras"] == 1
     assert scheduler.snapshot()["dropped_frames"] == 1
     await scheduler.close()
@@ -85,6 +93,7 @@ async def test_one_inference_failure_disables_only_that_camera():
 @pytest.mark.asyncio
 async def test_loader_failure_stops_all_inference_without_exposing_exception():
     loads = 0
+    unavailable = []
 
     def loader():
         nonlocal loads
@@ -94,12 +103,18 @@ async def test_loader_failure_stops_all_inference_without_exposing_exception():
     async def on_result(camera, observations, generation):
         raise AssertionError("must not receive a result")
 
+    async def on_unavailable(camera):
+        unavailable.append(camera)
+
     scheduler = FairInference([FIRST], load_detector=loader,
-                              on_result=on_result, max_frames_per_camera=1)
+                              on_result=on_result, on_unavailable=on_unavailable,
+                              max_frames_per_camera=1)
     await scheduler.observe(FIRST, b"frame", generation=1)
     await scheduler.join()
     await scheduler.observe(FIRST, b"later", generation=1)
     assert loads == 1
+    assert unavailable == [FIRST]
+    assert not scheduler.is_available(FIRST)
     assert scheduler.snapshot()["model_load_failed"] is True
     await scheduler.close()
 
@@ -115,4 +130,25 @@ async def test_unlisted_camera_and_unbounded_frame_are_rejected():
         await scheduler.observe(SECOND, b"frame", generation=1)
     with pytest.raises(IngressError, match="invalid_decoded_frame"):
         await scheduler.observe(FIRST, b"x" * (1024 * 1024 + 1), generation=1)
+    await scheduler.close()
+
+
+@pytest.mark.asyncio
+async def test_camera_reports_unavailable_when_its_frame_quota_is_consumed():
+    unavailable = []
+
+    async def on_result(camera, observations, generation):
+        pass
+
+    async def on_unavailable(camera):
+        unavailable.append(camera)
+
+    scheduler = FairInference([FIRST, SECOND], load_detector=Detector,
+                              on_result=on_result, on_unavailable=on_unavailable,
+                              max_frames_per_camera=1)
+    await scheduler.observe(FIRST, b"frame", generation=1)
+    await scheduler.join()
+    assert unavailable == [FIRST]
+    assert not scheduler.is_available(FIRST)
+    assert scheduler.is_available(SECOND)
     await scheduler.close()
