@@ -15,6 +15,8 @@ All entries are planned work. Follow issue dependencies and acceptance checks.
 | [#6 Define and prove a native AI Port compatibility contract](https://github.com/Olli0103/unifi-ai-key-emulator/issues/6) | [#2](https://github.com/Olli0103/unifi-ai-key-emulator/issues/2) |
 | [#10 Verify which native basic and deep search contracts Protect actually uses](https://github.com/Olli0103/unifi-ai-key-emulator/issues/10) | [#2](https://github.com/Olli0103/unifi-ai-key-emulator/issues/2) |
 
+The [initial AI Port controller contract](../evidence/ai-port-controller-contract.md) records static Protect 7.2.105 evidence and the still-open native 7.3.60 acceptance checks for #6.
+
 ## 1. All-camera foundation and control site
 
 | Issue | Prerequisites |
