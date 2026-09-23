@@ -1,7 +1,7 @@
 """Isolated, unadopted AI Port candidate for native interface discovery.
 
 Camera ingress requires an expiring, one-camera private diagnostic policy.
-The management listener rejects adoption after recording only request shape.
+The management listener rejects adoption and keeps credentials private.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import signal
 import ssl
 import stat
@@ -23,6 +24,7 @@ import aiohttp
 from aiohttp import web
 
 from .aiport_ingest import AiPortIngress, IngressError, executable_path, normalize_mac, private_source_ip
+from .aiport_credentials import CredentialError, CredentialStore
 from .device import VerifiedConnector
 
 
@@ -173,6 +175,8 @@ class CandidateService:
         self.provision_isp_replies = 0
         self.ssh_stop_replies = 0
         self.ssh_start_rejections = 0
+        self.credential_rotations = 0
+        self.credential_rotations_rejected = 0
         self.last_stream_error: str | None = None
         self.last_control_command: str | None = None
         self.observed_function_counts: dict[str, int] = {}
@@ -186,6 +190,10 @@ class CandidateService:
         self._params_agreed = False
         self._ingress_close_task: asyncio.Task | None = None
         self.started = time.monotonic()
+        self.credentials = CredentialStore(self.state_dir)
+        self.sessions: dict[str, float] = {}
+        self._auth_failures: dict[str, list[float]] = {}
+        self._auth_lock = asyncio.Lock()
         self.ingress = (AiPortIngress(**config["diagnostic_stream"])
                         if "diagnostic_stream" in config
                         and config["diagnostic_hello_until"] > time.time() else None)
@@ -193,6 +201,7 @@ class CandidateService:
     def app(self) -> web.Application:
         app = web.Application(client_max_size=_MAX_MANAGE)
         app.router.add_get("/healthz", self._health)
+        app.router.add_post("/api/1.2/login", self._login)
         app.router.add_post("/api/1.2/manage", self._manage)
         return app
 
@@ -220,6 +229,8 @@ class CandidateService:
             "provision_isp_replies": self.provision_isp_replies,
             "ssh_stop_replies": self.ssh_stop_replies,
             "ssh_start_rejections": self.ssh_start_rejections,
+            "credential_rotations": self.credential_rotations,
+            "credential_rotations_rejected": self.credential_rotations_rejected,
             "stream_frames_decoded": self.ingress.frame_count if self.ingress else 0,
             "stream_frames_decoded_total": (
                 self.ingress.total_frames_decoded + self.ingress.frame_count
@@ -266,7 +277,61 @@ class CandidateService:
         except web.HTTPRequestEntityTooLarge:
             return web.json_response({"error": "Request too large"}, status=413)
         self.last_manage_shape = _object_shape(raw)
+        if self.credentials.credential is not None:
+            try:
+                body = json.loads(raw)
+            except (ValueError, UnicodeError, RecursionError):
+                body = None
+            if (not isinstance(body, dict) or not await self._verify_management(
+                    request, body.get("username"), body.get("password"))):
+                return web.json_response({"error": "Unauthorized"}, status=401)
         return web.json_response({"error": "Adoption is not enabled on this candidate"}, status=501)
+
+    async def _login(self, request: web.Request) -> web.Response:
+        if not request.secure:
+            return web.json_response({"error": "HTTPS required"}, status=400)
+        if request.content_type != "application/json":
+            return web.json_response({"error": "JSON required"}, status=415)
+        try:
+            body = await request.json()
+        except (ValueError, UnicodeError, web.HTTPRequestEntityTooLarge):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+        if (not isinstance(body, dict) or not await self._verify_management(
+                request, body.get("username"), body.get("password"))):
+            return web.json_response({"error": "Unauthorized"}, status=401)
+        token = secrets.token_urlsafe(32)
+        self.sessions = {key: expiry for key, expiry in self.sessions.items()
+                         if expiry > time.monotonic()}
+        if len(self.sessions) >= 256:
+            self.sessions.pop(next(iter(self.sessions)))
+        self.sessions[token] = time.monotonic() + 600
+        response = web.json_response({})
+        response.set_cookie("AISESSION", token, secure=True, httponly=True,
+                            samesite="Strict", max_age=600)
+        return response
+
+    async def _verify_management(self, request: web.Request,
+                                 username: object, password: object) -> bool:
+        peer = request.remote or "unknown"
+        async with self._auth_lock:
+            now = time.monotonic()
+            if len(self._auth_failures) >= 256:
+                self._auth_failures = {
+                    source: [at for at in attempts if now - at < 60]
+                    for source, attempts in self._auth_failures.items()
+                    if any(now - at < 60 for at in attempts)
+                }
+            failures = [at for at in self._auth_failures.get(peer, []) if now - at < 60]
+            if len(failures) >= 10 or (peer not in self._auth_failures
+                                       and len(self._auth_failures) >= 256):
+                return False
+            valid = await asyncio.to_thread(self.credentials.verify, username, password)
+            if valid:
+                self._auth_failures.pop(peer, None)
+            else:
+                failures.append(now)
+                self._auth_failures[peer] = failures
+            return valid
 
     def _client_context(self) -> ssl.SSLContext:
         context = ssl.create_default_context(cafile=str(self.state_dir / "controller-ca.pem"))
@@ -419,6 +484,27 @@ class CandidateService:
                 await self._reply_control(ws, function, request_id, 501,
                                           {"description": "ssh_unavailable"})
                 self.ssh_start_rejections += 1
+            return
+        if function == "UpdateUsernamePassword":
+            self.last_control_command = function
+            request_id = message.get("messageId")
+            if not self._params_agreed or type(request_id) is not int or request_id < 0:
+                return
+            if time.time() >= self.config.get("diagnostic_hello_until", 0):
+                await self._reply_control(ws, function, request_id, 5,
+                                          {"description": "diagnostic_expired"})
+                self.credential_rotations_rejected += 1
+                return
+            try:
+                await asyncio.to_thread(self.credentials.rotate, message.get("payload"))
+            except CredentialError:
+                await self._reply_control(ws, function, request_id, 5,
+                                          {"description": "credential_rotation_rejected"})
+                self.credential_rotations_rejected += 1
+                return
+            self.sessions.clear()
+            await self._reply_control(ws, function, request_id, 0, {})
+            self.credential_rotations += 1
             return
         if function in {"GetStreamList", "UiStreamControl", "OnvifStreamControl"}:
             self.last_control_command = function
