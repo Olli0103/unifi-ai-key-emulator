@@ -322,6 +322,99 @@ async def test_native_event_probe_needs_active_stream_and_supported_policy(tmp_p
     await service.stop()
 
 
+def recorded_probe_config(tmp_path):
+    config = native_probe_config(tmp_path)
+    del config["diagnostic_native_event_probe"]
+    frame_dir = tmp_path / "recorded-probe"
+    frame_dir.mkdir(mode=0o700)
+    captured = int(time.time() * 1000) - 3_600_000
+    frames = []
+    for index, timestamp in enumerate((captured, captured + 2000)):
+        frame = frame_dir / f"frame-{index}.jpg"
+        private_file(frame, f"recorded-frame-{index}".encode())
+        frames.append({"path": str(frame),
+                       "sha256": hashlib.sha256(frame.read_bytes()).hexdigest(),
+                       "captured_ms": timestamp})
+    config["diagnostic_recorded_event_probe"] = {
+        "camera_mac": "2A1122334455", "nonce": "b" * 32,
+        "frames": frames, "checkpoint_path": "/models/nano.pth",
+        "checkpoint_sha256": "c" * 64, "threshold": 0.5}
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    return config
+
+
+@pytest.mark.asyncio
+async def test_recorded_event_probe_sends_original_time_once(tmp_path, monkeypatch):
+    config = recorded_probe_config(tmp_path)
+    loaded = load_config(tmp_path / "config.json")
+    monkeypatch.setattr("aikey.aiport_candidate.infer_recorded_person",
+                        lambda _probe: TrackChange(
+                            "enter", 1, "person", "person", 0.95,
+                            (0.2, 0.2, 0.5, 0.8)))
+    policy = {"deviceID": "2A1122334455", "algoVersion": "beta",
+              "enableSmartDetect": ["person"], "eventStartMSec": 1000,
+              "eventStopMSec": 3000, "zones": {}, "lines": {},
+              "reVerificationPolicy": {
+                  kind: {"enable": False}
+                  for kind in ("person", "vehicle", "animal")}}
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    command = {"functionName": "ChangeSmartDetectSettings", "messageId": 16,
+               "responseExpected": True, "payload": policy}
+    for attempt in (1, 2):
+        service = CandidateService(loaded, tmp_path)
+        service._params_agreed = True
+        service.ingress.list_streams = lambda: [{"active": True}]
+        sink = Sink()
+        service._current_ws = sink
+        await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+        assert service._recorded_probe_task is not None
+        await service._recorded_probe_task
+        events = [message for message in sink.messages
+                  if message["functionName"] == "EventSmartDetect"]
+        if attempt == 1:
+            assert [event["payload"]["edgeType"] for event in events] == [
+                "enter", "leave"]
+            assert [event["payload"]["clockWall"] for event in events] == [
+                config["diagnostic_recorded_event_probe"]["frames"][1]["captured_ms"],
+                config["diagnostic_recorded_event_probe"]["frames"][1]["captured_ms"]
+                + 2000]
+            assert service.recorded_probe_claimed == 1
+            assert service.smart_events_entered == service.smart_events_left == 1
+        else:
+            assert events == []
+            assert service.recorded_probe_claimed == 0
+        await service.stop()
+    marker = tmp_path / (".native-event-probe-" + "b" * 32)
+    assert marker.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("mutation", ["other_camera", "with_synthetic", "no_deadline",
+                                      "other_class"])
+def test_recorded_event_probe_rejects_unsafe_configuration(tmp_path, mutation):
+    config = recorded_probe_config(tmp_path)
+    assert load_config(tmp_path / "config.json")["diagnostic_recorded_event_probe"]
+    if mutation == "other_camera":
+        config["diagnostic_recorded_event_probe"]["camera_mac"] = "2A1122334456"
+    elif mutation == "with_synthetic":
+        config["diagnostic_native_event_probe"] = {
+            "camera_mac": "2A1122334455", "nonce": "a" * 32,
+            "box": [0.2, 0.2, 0.5, 0.8]}
+    elif mutation == "no_deadline":
+        del config["diagnostic_event_until"]
+    else:
+        config["diagnostic_smart_type"] = "vehicle"
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError):
+        load_config(tmp_path / "config.json")
+
+
 def test_expired_stream_diagnostic_restarts_passively(tmp_path):
     config = fixture_state(tmp_path)
     config["diagnostic_hello_until"] = int(time.time()) - 1
