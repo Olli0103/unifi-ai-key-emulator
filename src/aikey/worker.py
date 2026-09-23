@@ -11,10 +11,12 @@ from dataclasses import dataclass
 import hashlib
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import re
 import ssl
+import stat
 import tempfile
 import time
 from urllib.parse import parse_qs, parse_qsl, urljoin, urlsplit, urlunsplit
@@ -167,6 +169,9 @@ class JobProcessor:
             raise WorkerError("Continuous mode requires a camera registry")
         self.camera_registry = camera_registry
         self.caption_budget = CaptionBudget(state_dir) if self.continuous else None
+        self.archive_dir = Path(state_dir) / "worker-archive"
+        if self.continuous:
+            self._private_archive_dir(self.archive_dir)
         self.test_scope = self.test_scopes[0] if "test_scope" in self.options else None
         self._scopes_by_camera = {scope["camera_id"]: scope for scope in self.test_scopes}
         self._scope_paths = {}
@@ -200,6 +205,7 @@ class JobProcessor:
         self._stopping = False
         self._start_lock = asyncio.Lock()
         self._load_history()
+        self._rollover_history()
         mac = config.get("device", {}).get("mac", "").replace(":", "").replace("-", "").upper()
         if not re.fullmatch(r"[0-9A-F]{12}", mac):
             raise WorkerError("A configured device MAC is required")
@@ -231,15 +237,127 @@ class JobProcessor:
             raise WorkerError("Worker journal exceeds max_ledger_entries; archive reviewed entries")
         for path in paths:
             try:
-                if path.stat().st_size > 65536:
+                meta = path.lstat()
+                if not stat.S_ISREG(meta.st_mode) or meta.st_size > 65536:
                     raise ValueError
                 record = json.loads(path.read_text())
-                if record.get("jobId") != path.stem or record.get("state") not in {
-                    "callback_sending", "callback_uncertain", "completed", "failed"}:
+                if (not re.fullmatch(r"[0-9a-f]{64}", path.stem)
+                        or record.get("jobId") != path.stem or record.get("state") not in {
+                    "callback_sending", "callback_uncertain", "completed", "failed"} or (
+                    not isinstance(record.get("fingerprint"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", record["fingerprint"])
+                    or type(record.get("updatedAt")) not in {int, float}
+                    or not math.isfinite(record["updatedAt"])
+                    or record["updatedAt"] <= 0)):
                     raise ValueError
                 self._history[path.stem] = record
             except (OSError, ValueError, AttributeError) as exc:
                 raise WorkerError("Invalid worker journal; inspect it before continuing") from exc
+
+    @staticmethod
+    def _private_archive_dir(path):
+        try:
+            path.mkdir(mode=0o700, exist_ok=True)
+            meta = path.lstat()
+            if (not stat.S_ISDIR(meta.st_mode) or stat.S_ISLNK(meta.st_mode)
+                    or meta.st_uid != os.geteuid() or meta.st_mode & 0o077):
+                raise ValueError
+        except (OSError, ValueError) as exc:
+            raise WorkerError("Worker archive directory is unsafe") from exc
+
+    def _archive_path(self, job_id):
+        if not re.fullmatch(r"[0-9a-f]{64}", job_id):
+            raise WorkerError("Invalid archived job identifier")
+        if self.archive_dir.exists() or self.archive_dir.is_symlink():
+            self._private_archive_dir(self.archive_dir)
+        bucket = self.archive_dir / job_id[:2]
+        if bucket.exists() or bucket.is_symlink():
+            self._private_archive_dir(bucket)
+        return bucket / f"{job_id}.json"
+
+    def _archived_record(self, job_id):
+        path = self._archive_path(job_id)
+        if not path.exists() and not path.is_symlink():
+            return None
+        try:
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(fd, "rb") as handle:
+                meta = os.fstat(handle.fileno())
+                if not stat.S_ISREG(meta.st_mode) or meta.st_size > 65536:
+                    raise ValueError
+                raw = handle.read(65537)
+            if len(raw) > 65536:
+                raise ValueError
+            record = json.loads(raw)
+            if (not isinstance(record, dict)
+                    or set(record) != {"schema", "jobId", "fingerprint", "state", "updatedAt"}
+                    or record["schema"] != 1 or record["jobId"] != job_id
+                    or record["state"] not in {"completed", "failed"}
+                    or not isinstance(record.get("fingerprint"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", record["fingerprint"])
+                    or type(record["updatedAt"]) not in {int, float}
+                    or not math.isfinite(record["updatedAt"])
+                    or not 0 < record["updatedAt"] < time.time() + 300):
+                raise ValueError
+            return record
+        except (OSError, ValueError, AttributeError, TypeError) as exc:
+            raise WorkerError("Invalid archived worker result; inspect before continuing") from exc
+
+    def _archive_terminal(self, job_id):
+        source = self.state_dir / f"{job_id}.json"
+        target = self._archive_path(job_id)
+        self._private_archive_dir(target.parent)
+        record = self._history[job_id]
+        if record.get("state") not in {"completed", "failed"}:
+            raise WorkerError("Only terminal worker records may be archived")
+        tombstone = {"schema": 1, "jobId": job_id, "fingerprint": record["fingerprint"],
+                     "state": record["state"], "updatedAt": record["updatedAt"]}
+        temporary = None
+        try:
+            if source.is_symlink() or not source.is_file():
+                raise OSError("Active journal record changed")
+            if source.stat().st_size > 65536 or json.loads(source.read_bytes()) != record:
+                raise OSError("Active journal record changed")
+            fd, temporary = tempfile.mkstemp(prefix=".archive-", dir=target.parent)
+            with os.fdopen(fd, "wb") as output:
+                output.write(_json(tombstone))
+                output.flush()
+                os.fsync(output.fileno())
+            try:
+                os.link(temporary, target)
+            except FileExistsError:
+                archived = self._archived_record(job_id)
+                if archived != tombstone:
+                    raise OSError("Archived journal differs from active record") from None
+            bucket = os.open(target.parent, os.O_RDONLY)
+            try:
+                os.fsync(bucket)
+            finally:
+                os.close(bucket)
+            source.unlink()
+            directory = os.open(self.state_dir, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except (OSError, ValueError, TypeError) as exc:
+            raise WorkerError("Worker archive outcome is uncertain; no new work admitted") from exc
+        finally:
+            if temporary is not None:
+                os.unlink(temporary)
+        self._history.pop(job_id)
+
+    def _rollover_history(self):
+        if not self.continuous:
+            return
+        cutoff = time.time() - 24 * 3600
+        candidates = sorted((record["updatedAt"], job_id)
+                            for job_id, record in self._history.items()
+                            if record.get("state") in {"completed", "failed"}
+                            and type(record.get("updatedAt")) in {int, float}
+                            and 0 < record["updatedAt"] < cutoff)
+        for _, job_id in candidates:
+            self._archive_terminal(job_id)
 
     def _record(self, job, state, **extra):
         record = {"jobId": job.job_id, "fingerprint": job.fingerprint,
@@ -576,22 +694,25 @@ class JobProcessor:
             if fingerprint != job.fingerprint:
                 raise WorkerError("Task identity reused with different input")
             return job, True
-        previous = self._history.get(job_id)
+        previous = self._history.get(job_id) or self._archived_record(job_id)
         if previous:
             if previous["fingerprint"] != fingerprint:
                 raise WorkerError("Task identity reused with different input")
             if previous["state"] in {"callback_sending", "callback_uncertain"}:
                 raise WorkerError("Callback outcome is uncertain; review journal before retrying")
-            if self.continuous and previous["state"] == "failed":
+            if previous["state"] == "failed" and (self.continuous or "schema" in previous):
                 raise WorkerError("Failed automatic job cannot be replayed")
             if previous["state"] == "completed":
                 future = asyncio.get_running_loop().create_future()
-                if previous["result"].get("status") == "failed":
+                if "schema" in previous:
+                    future.set_result({"status": "archived", "callback": "already_completed"})
+                elif previous["result"].get("status") == "failed":
                     future.set_exception(WorkerError(previous["result"]["result"]["error"]))
                     future.add_done_callback(lambda value: value.exception())
                 else:
                     future.set_result(previous["result"])
                 return _Job(job_id, fingerprint, operation, body, callback, kind, media, 0, future), True
+        self._rollover_history()
         if job_id not in self._history and len(self._history.keys() | self._pending.keys()) >= self.max_jobs:
             raise WorkerError("Worker journal is full; archive reviewed entries")
         if self._queue.full():
@@ -635,7 +756,7 @@ class JobProcessor:
     def get_status(self, job_id):
         if job_id in self._pending:
             return {"jobId": job_id, "state": "pending"}
-        record = self._history.get(job_id)
+        record = self._history.get(job_id) or self._archived_record(job_id)
         return {key: value for key, value in record.items() if key != "fingerprint"} if record else None
 
     def status(self):
