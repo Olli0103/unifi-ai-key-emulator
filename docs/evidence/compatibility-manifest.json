@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-23.1",
+ "manifest_version": "ai-key/2026-09-23.2",
  "processor_profile": "ai-key",
  "base_commit": "54160ce",
  "emulated_identity": {
@@ -915,9 +915,35 @@
    "missing_evidence": [
     "Native Protect dispatch and persistence under continuous admission",
     "Preservation of existing native recognition tags on additional model families",
-    "Fair scheduling and bounded worker-journal rollover"
+    "Fair scheduling and a multi-day live endurance run"
    ],
    "notes": "Not deployed. Only connected smart-event cameras in the explicit model-family allowlist can be admitted while the pinned 7.3.60 inventory is fresh. Twelve new paid attempts per rolling hour are reserved before media or inference; uncertain attempts are not refunded. Protect-side camera policies are separate."
+  },
+  {
+   "id": "worker.private_journal_rollover",
+   "area": "worker",
+   "title": "Private terminal-job tombstones keep duplicate protection while bounding the active journal",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [],
+   "tests": [
+    "tests/test_worker_rollover.py::test_old_terminal_result_moves_to_private_archive_and_replays_after_restart",
+    "tests/test_worker_rollover.py::test_archive_failure_blocks_new_budget_charge_and_media",
+    "tests/test_worker_rollover.py::test_corrupt_archive_blocks_matching_duplicate_without_new_paid_call",
+    "tests/test_worker_rollover.py::test_uncertain_record_is_never_archived_for_capacity"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "experimental_opt_in",
+   "missing_evidence": [
+    "Multi-day live endurance and disk-full recovery",
+    "Operator retention and backup policy for private tombstones"
+   ],
+   "notes": "Continuous mode moves terminal records older than 24 hours to private hash-only tombstones at startup or the next admission. It retains callback-uncertain records in the active journal. A corrupt entry blocks its matching duplicate and a failed move rejects new work; an archived duplicate never fetches media or calls the provider."
   },
   {
    "id": "control.recognize_key_frames.other_variants",
@@ -2007,9 +2033,10 @@
   {
    "id": "N9",
    "features": [
-    "control.continuous_caption_admission"
+    "control.continuous_caption_admission",
+    "worker.private_journal_rollover"
    ],
-   "procedure": "In an isolated, reviewed rollout, confirm fresh model-family inventory, Protect-side dispatch, persistence, budget exhaustion, additions/removals and reconnect. Keep richer native-AI models excluded until tag preservation is verified."
+   "procedure": "In an isolated, reviewed rollout, confirm fresh model-family inventory, Protect-side dispatch, persistence, budget exhaustion, additions/removals, reconnect and journal rollover. Keep richer native-AI models excluded until tag preservation is verified."
   }
  ]
 }
