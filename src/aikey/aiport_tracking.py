@@ -44,7 +44,8 @@ class _Track:
                            self.observation.box)
 
 
-def _check_observation(value: object) -> None:
+def validate_observation(value: object) -> None:
+    """Reject malformed model output before policy filters can discard it."""
     if not isinstance(value, ObjectObservation) or value.kind not in _KINDS:
         raise TrackingError("invalid_tracking_observation")
     if (not isinstance(value.label, str) or not 1 <= len(value.label) <= 32
@@ -113,7 +114,7 @@ class TemporalTracker:
         if len(observations) > _MAX_OBSERVATIONS_PER_FRAME:
             raise TrackingError("tracking_capacity_exceeded")
         for observation in observations:
-            _check_observation(observation)
+            validate_observation(observation)
 
         changes = []
         for track_id, track in tuple(self._tracks.items()):
