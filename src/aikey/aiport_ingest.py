@@ -380,6 +380,11 @@ class AiPortIngress:
         return session.latest_frame if session is not None and session.healthy else None
 
     @property
+    def reserved_points(self) -> int:
+        """Count a decoder against capacity even if its frames have stalled."""
+        return self._session.spec.points if self._session is not None else 0
+
+    @property
     def frame_count(self) -> int:
         return self._session.frame_count if self._session is not None else 0
 
@@ -409,3 +414,61 @@ class AiPortIngress:
     async def close(self) -> None:
         async with self._lock:
             await self._close_locked()
+
+
+class AiPortIngressPool:
+    """Route bounded camera streams without exceeding one AI Port budget.
+
+    This manager does not authorize cameras on its own. Every camera and RTSP
+    source must appear in the explicit operator policy passed at construction.
+    A device has ten capacity points: HD costs two, 2K three, and 4K five.
+    """
+
+    def __init__(self, policies: list[dict[str, str]], *,
+                 frame_observer_factory: Callable[
+                     [str], Callable[[bytes], Awaitable[None]] | None] | None = None):
+        if not isinstance(policies, list) or not 1 <= len(policies) <= 5:
+            raise IngressError("invalid_camera_pool")
+        self._ingresses: dict[str, AiPortIngress] = {}
+        for policy in policies:
+            if not isinstance(policy, dict) or set(policy) != {
+                    "camera_mac", "source_ip", "ffmpeg_path"}:
+                raise IngressError("invalid_camera_pool")
+            camera_mac = normalize_mac(policy["camera_mac"])
+            if camera_mac in self._ingresses:
+                raise IngressError("duplicate_camera")
+            observer = (frame_observer_factory(camera_mac)
+                        if frame_observer_factory is not None else None)
+            self._ingresses[camera_mac] = AiPortIngress(
+                camera_mac=camera_mac, source_ip=policy["source_ip"],
+                ffmpeg_path=policy["ffmpeg_path"], frame_observer=observer)
+        self._lock = asyncio.Lock()
+
+    async def control(self, payload: object) -> dict:
+        if not isinstance(payload, dict):
+            raise IngressError("invalid_stream_command")
+        camera_mac = normalize_mac(payload.get("deviceID"))
+        ingress = self._ingresses.get(camera_mac)
+        if ingress is None:
+            raise IngressError("camera_not_authorized")
+        async with self._lock:
+            if payload.get("streaming") is True:
+                spec = _stream_spec(payload, camera_mac=camera_mac,
+                                    source_ip=ingress.source_ip)
+                used = sum(item.reserved_points for item in self._ingresses.values())
+                if used - ingress.reserved_points + spec.points > 10:
+                    raise IngressError("stream_capacity_exceeded")
+            return await ingress.control(payload)
+
+    def list_streams(self) -> list[dict]:
+        return [stream for _, ingress in sorted(self._ingresses.items())
+                for stream in ingress.list_streams()]
+
+    @property
+    def reserved_points(self) -> int:
+        return sum(ingress.reserved_points for ingress in self._ingresses.values())
+
+    async def close(self) -> None:
+        async with self._lock:
+            for ingress in self._ingresses.values():
+                await ingress.close()
