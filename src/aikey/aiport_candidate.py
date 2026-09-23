@@ -32,6 +32,12 @@ _VERSION = re.compile(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\Z")
 _MAX_MANAGE = 8192
 _ALLOWED_TOP_LEVEL = frozenset(("username", "password", "mgmt", "hosts", "protocol", "mode"))
 _ALLOWED_MGMT = frozenset(("token", "hosts", "protocol", "mode", "nvr"))
+_OBSERVABLE_FUNCTIONS = frozenset({
+    "ubnt_avclient_hello", "ubnt_avclient_paramAgreement", "GetStreamList",
+    "UiStreamControl", "OnvifStreamControl", "ChangeDeviceSettings", "GetRequest",
+    "ChangeSmartDetectSettings", "ChangeAnalyticsSettings", "ChangeAudioEventsSettings",
+    "ChangeEventSettings", "EventAIPortStatus",
+})
 
 
 class CandidateError(ValueError):
@@ -150,6 +156,9 @@ class CandidateService:
         self.stream_controls_rejected = 0
         self.last_stream_error: str | None = None
         self.last_control_command: str | None = None
+        self.observed_function_counts: dict[str, int] = {}
+        self.unlisted_function_frames = 0
+        self.unparsed_binary_frames = 0
         self._next_message_id = 2
         self._hello_agreed = False
         self._params_agreed = False
@@ -195,6 +204,9 @@ class CandidateService:
             "stream_ingest_enabled": (self.ingress is not None
                                       and time.time() < self.config.get("diagnostic_hello_until", 0)),
             "last_control_command": self.last_control_command,
+            "observed_function_counts": dict(self.observed_function_counts),
+            "unlisted_function_frames": self.unlisted_function_frames,
+            "unparsed_binary_frames": self.unparsed_binary_frames,
             "uptime_seconds": int(time.monotonic() - self.started)})
 
     async def _manage(self, request: web.Request) -> web.Response:
@@ -253,10 +265,19 @@ class CandidateService:
         try:
             message = json.loads(raw)
         except (ValueError, UnicodeError, RecursionError):
+            self.unparsed_binary_frames = min(self.unparsed_binary_frames + 1, 1_000_000)
             return
         if not isinstance(message, dict):
+            self.unparsed_binary_frames = min(self.unparsed_binary_frames + 1, 1_000_000)
             return
         function = message.get("functionName")
+        if isinstance(function, str) and function in _OBSERVABLE_FUNCTIONS:
+            self.observed_function_counts[function] = min(
+                self.observed_function_counts.get(function, 0) + 1, 1_000_000)
+        elif isinstance(function, str):
+            self.unlisted_function_frames = min(self.unlisted_function_frames + 1, 1_000_000)
+        else:
+            self.unparsed_binary_frames = min(self.unparsed_binary_frames + 1, 1_000_000)
         if function == "ubnt_avclient_hello" and message.get("inResponseTo") == 1:
             self.hello_replies += 1
             self._hello_agreed = True
