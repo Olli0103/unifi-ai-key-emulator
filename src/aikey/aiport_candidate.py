@@ -159,6 +159,8 @@ class CandidateService:
         self.observed_function_counts: dict[str, int] = {}
         self.unlisted_function_frames = 0
         self.unparsed_binary_frames = 0
+        self.websocket_close_codes: dict[str, int] = {}
+        self.last_disconnect_origin: str | None = None
         self._next_message_id = 2
         self._hello_agreed = False
         self._params_agreed = False
@@ -207,7 +209,20 @@ class CandidateService:
             "observed_function_counts": dict(self.observed_function_counts),
             "unlisted_function_frames": self.unlisted_function_frames,
             "unparsed_binary_frames": self.unparsed_binary_frames,
+            "websocket_close_codes": dict(self.websocket_close_codes),
+            "last_disconnect_origin": self.last_disconnect_origin,
             "uptime_seconds": int(time.monotonic() - self.started)})
+
+    def _record_close(self, code: int | None, *, diagnostic_expired: bool) -> None:
+        # WebSocket close reasons can contain private device data. Retain only
+        # bounded numeric codes and whether our own diagnostic timer fired.
+        key = str(code) if type(code) is int and 1000 <= code <= 4999 else "unknown"
+        if key not in self.websocket_close_codes and len(self.websocket_close_codes) >= 16:
+            key = "other"
+        self.websocket_close_codes[key] = min(
+            self.websocket_close_codes.get(key, 0) + 1, 1_000_000)
+        self.last_disconnect_origin = (
+            "diagnostic_expiry" if diagnostic_expired else "peer_or_transport")
 
     async def _manage(self, request: web.Request) -> web.Response:
         self.manage_requests += 1
@@ -399,12 +414,17 @@ class CandidateService:
                                                         aiohttp.WSMsgType.ERROR):
                                         break
                             finally:
+                                diagnostic_expired = (
+                                    expiry_task is not None and expiry_task.done()
+                                    and not expiry_task.cancelled())
                                 if expiry_task is not None:
                                     expiry_task.cancel()
                                     with contextlib.suppress(asyncio.CancelledError):
                                         await expiry_task
                                 if self.ingress is not None:
                                     await self.ingress.close()
+                                self._record_close(ws.close_code,
+                                                   diagnostic_expired=diagnostic_expired)
                             self.last_result = "websocket_closed"
                 except (aiohttp.ClientError, TimeoutError, ssl.SSLError) as exc:
                     self.last_result = type(exc).__name__
