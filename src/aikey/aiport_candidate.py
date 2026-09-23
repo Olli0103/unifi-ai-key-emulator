@@ -712,6 +712,9 @@ class CandidateService:
             probe = parse_recorded_probe(
                 self.config["diagnostic_recorded_event_probe"],
                 state_dir=self.state_dir, camera_mac=self.ingress.camera_mac)
+            if (self.recorded_probe_claimed
+                    or os.path.lexists(self.state_dir / f".native-event-probe-{probe.nonce}")):
+                return
             change = await asyncio.to_thread(infer_recorded_person, probe)
             if (self._current_ws is not ws or self._smart_policy is not policy
                     or not self.ingress.list_streams()

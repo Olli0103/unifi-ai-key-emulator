@@ -347,10 +347,14 @@ def recorded_probe_config(tmp_path):
 async def test_recorded_event_probe_sends_original_time_once(tmp_path, monkeypatch):
     config = recorded_probe_config(tmp_path)
     loaded = load_config(tmp_path / "config.json")
-    monkeypatch.setattr("aikey.aiport_candidate.infer_recorded_person",
-                        lambda _probe: TrackChange(
-                            "enter", 1, "person", "person", 0.95,
-                            (0.2, 0.2, 0.5, 0.8)))
+    model_calls = []
+
+    def infer(_probe):
+        model_calls.append(True)
+        return TrackChange("enter", 1, "person", "person", 0.95,
+                           (0.2, 0.2, 0.5, 0.8))
+
+    monkeypatch.setattr("aikey.aiport_candidate.infer_recorded_person", infer)
     policy = {"deviceID": "2A1122334455", "algoVersion": "beta",
               "enableSmartDetect": ["person"], "eventStartMSec": 1000,
               "eventStopMSec": 3000, "zones": {}, "lines": {},
@@ -393,6 +397,7 @@ async def test_recorded_event_probe_sends_original_time_once(tmp_path, monkeypat
         await service.stop()
     marker = tmp_path / (".native-event-probe-" + "b" * 32)
     assert marker.stat().st_mode & 0o777 == 0o600
+    assert len(model_calls) == 1
 
 
 @pytest.mark.parametrize("mutation", ["other_camera", "with_synthetic", "no_deadline",
