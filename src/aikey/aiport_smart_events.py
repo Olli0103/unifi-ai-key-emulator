@@ -19,8 +19,9 @@ class SmartEventError(ValueError):
 def smart_event_payload(camera_mac: str, change: TrackChange, *,
                         edge: str, clock_wall_ms: int,
                         zone_ids: tuple[int, ...] = ()) -> dict:
-    """Encode one person enter or leave, without claiming recognition support."""
-    if (not isinstance(change, TrackChange) or change.kind != "person"
+    """Encode one bounded object enter or leave, without recognition claims."""
+    if (not isinstance(change, TrackChange)
+            or change.kind not in {"person", "vehicle", "animal"}
             or edge not in {"enter", "leave"}
             or type(clock_wall_ms) is not int or clock_wall_ms <= 0
             or type(change.track_id) is not int or change.track_id <= 0
@@ -49,14 +50,16 @@ def smart_event_payload(camera_mac: str, change: TrackChange, *,
             0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
         raise SmartEventError("invalid_smart_event")
     payload.update({
-        "objectTypes": ["person"],
+        "objectTypes": [change.kind],
         "descriptors": [{
             "trackerID": change.track_id,
-            "name": "person",
+            # The controller interprets a vehicle name as a license plate.
+            # An object detector cannot supply one.
+            "name": "" if change.kind == "vehicle" else change.kind,
             "confidenceLevel": round(change.score * 100),
             "coord": [round(x1 * 1000), round(y1 * 1000),
                       round((x2 - x1) * 1000), round((y2 - y1) * 1000)],
-            "objectType": "person", "zones": list(zone_ids), "lines": [],
+            "objectType": change.kind, "zones": list(zone_ids), "lines": [],
             "stationary": False, "attributes": {}, "coord3d": [],
         }],
     })

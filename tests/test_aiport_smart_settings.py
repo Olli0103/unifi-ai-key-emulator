@@ -93,6 +93,19 @@ def test_person_zone_policy_matches_only_box_fully_inside_polygon():
     assert policy.person_zone_ids((0.2, 0.2, 0.5, 0.8)) == (7,)
 
 
+def test_zone_only_person_policy_is_scoped_to_that_zone():
+    raw = full_frame_policy()
+    raw["enableSmartDetect"] = []
+    raw["zones"] = {"7": {"coord": [100, 100, 900, 100, 900, 900, 100, 900],
+                          "objectTypes": ["person"], "triggerAccessTypes": []}}
+    policy = parse_smart_settings(raw, camera_mac=CAMERA)
+    assert policy.enabled_types == frozenset({"person"})
+    assert policy.person_zone_ids((0.2, 0.2, 0.5, 0.8)) == (7,)
+    assert policy.person_zone_ids((0.05, 0.2, 0.5, 0.8)) is None
+    raw["zones"] = {}
+    assert parse_smart_settings(raw, camera_mac=CAMERA).enabled_types == frozenset()
+
+
 def test_accepts_only_explicitly_disabled_reverification_policy():
     raw = full_frame_policy()
     raw["reVerificationPolicy"] = {
@@ -140,6 +153,25 @@ def test_person_reverification_suppresses_uncertain_confidence():
         raw["reVerificationPolicy"]["person"]["maxPresenceProbability"] = invalid
         with pytest.raises(SmartSettingsError, match="unsupported_smart_feature"):
             parse_smart_settings(raw, camera_mac=CAMERA)
+
+
+def test_vehicle_zone_and_reverification_gate_do_not_admit_other_classes():
+    raw = full_frame_policy()
+    raw["enableSmartDetect"] = ["vehicle"]
+    raw["zones"] = {"9": {"coord": [100, 100, 900, 100, 900, 900, 100, 900],
+                          "objectTypes": ["vehicle"], "triggerAccessTypes": []}}
+    raw["reVerificationPolicy"] = {
+        "person": {"enable": False},
+        "vehicle": {"enable": True, "mode": "custom",
+                    "minPresenceProbability": 40, "maxPresenceProbability": 80},
+        "animal": {"enable": False},
+    }
+    policy = parse_smart_settings(raw, camera_mac=CAMERA)
+    assert not policy.allows_score("vehicle", 0.8)
+    assert policy.allows_score("vehicle", 0.81)
+    assert policy.zone_ids("vehicle", (0.2, 0.2, 0.5, 0.8)) == (9,)
+    assert policy.zone_ids("vehicle", (0.05, 0.2, 0.5, 0.8)) is None
+    assert policy.zone_ids("person", (0.2, 0.2, 0.5, 0.8)) is None
 
 
 def test_accepts_deprecated_read_only_auto_recognition_precision():

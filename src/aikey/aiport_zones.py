@@ -1,4 +1,4 @@
-"""Bounded, independent smart-zone geometry for AI Port person candidates.
+"""Bounded, independent smart-zone geometry for AI Port object candidates.
 
 Coordinates and field names follow the observed controller interface. The
 predicate deliberately requires the entire detection box inside a simple
@@ -15,6 +15,7 @@ import re
 _ZONE_ID = re.compile(r"[1-9][0-9]{0,9}\Z")
 _OBJECT_TYPES = frozenset({"person", "vehicle", "animal", "package",
                            "face", "licensePlate"})
+_SUPPORTED_TYPES = frozenset({"person", "vehicle", "animal"})
 _MAX_ZONES = 32
 _MAX_VERTICES = 32
 _EPSILON = 1e-9
@@ -25,9 +26,10 @@ class ZoneError(ValueError):
 
 
 @dataclass(frozen=True)
-class PersonZone:
+class SmartZone:
     zone_id: int
     points: tuple[tuple[float, float], ...]
+    object_types: frozenset[str]
 
     def contains_box(self, box: tuple[float, float, float, float]) -> bool:
         if (not isinstance(box, tuple) or len(box) != 4
@@ -106,8 +108,8 @@ def _simple_polygon(points: tuple[tuple[float, float], ...]) -> bool:
     return True
 
 
-def parse_person_zones(value: object) -> tuple[PersonZone, ...]:
-    """Validate configured primary-lens zones; keep only person polygons."""
+def parse_smart_zones(value: object) -> tuple[SmartZone, ...]:
+    """Validate primary-lens zones and retain supported object classes."""
     if not isinstance(value, dict) or len(value) > _MAX_ZONES:
         raise ZoneError("invalid_smart_zone")
     zones = []
@@ -142,6 +144,13 @@ def parse_person_zones(value: object) -> tuple[PersonZone, ...]:
                        for index in range(0, len(coords), 2))
         if not _simple_polygon(points):
             raise ZoneError("invalid_smart_zone")
-        if "person" in object_types:
-            zones.append(PersonZone(int(raw_id), points))
+        supported = frozenset(object_types) & _SUPPORTED_TYPES
+        if supported:
+            zones.append(SmartZone(int(raw_id), points, supported))
     return tuple(sorted(zones, key=lambda zone: zone.zone_id))
+
+
+def parse_person_zones(value: object) -> tuple[SmartZone, ...]:
+    """Keep the person-only view used by older callers and tests."""
+    return tuple(zone for zone in parse_smart_zones(value)
+                 if "person" in zone.object_types)

@@ -15,21 +15,21 @@ INSIDE = (0.2, 0.2, 0.5, 0.8)
 OUTSIDE = (0.05, 0.2, 0.5, 0.8)
 
 
-def policy(camera, *, zone=False, reverify=False):
+def policy(camera, *, zone=False, reverify=False, kind="person"):
     payload = {"deviceID": camera, "algoVersion": "beta",
-               "enableSmartDetect": ["person"],
+               "enableSmartDetect": [kind],
                "eventStartMSec": 1000, "eventStopMSec": 3000}
     if zone:
         payload["zones"] = {"7": {
             "coord": [100, 100, 900, 100, 900, 900, 100, 900],
-            "objectTypes": ["person"], "sensitivity": 50,
+            "objectTypes": [kind], "sensitivity": 50,
             "triggerLight": True, "triggerAccessTypes": []}}
     if reverify:
         payload["reVerificationPolicy"] = {
-            "person": {"enable": True, "mode": "custom",
-                       "minPresenceProbability": 40,
-                       "maxPresenceProbability": 80},
-            "vehicle": {"enable": False}, "animal": {"enable": False}}
+            name: ({"enable": True, "mode": "custom",
+                    "minPresenceProbability": 40, "maxPresenceProbability": 80}
+                   if name == kind else {"enable": False})
+            for name in ("person", "vehicle", "animal")}
     return parse_smart_settings(payload, camera_mac=camera)
 
 
@@ -72,6 +72,23 @@ def test_zone_and_reverification_are_applied_before_tracking_per_camera():
     second, = engine.observe(SECOND, (person(0.7),), now=2)
     assert second.camera_mac == SECOND
     assert second.zone_ids == ()
+
+
+def test_vehicle_and_animal_candidates_are_isolated_by_class_and_zone():
+    engine = CameraPolicyEngine([FIRST, SECOND])
+    engine.replace_policy(FIRST, policy(FIRST, zone=True, kind="vehicle"))
+    engine.replace_policy(SECOND, policy(SECOND, kind="animal"))
+    vehicle = ObjectObservation("vehicle", "car", 0.9, INSIDE)
+    animal = ObjectObservation("animal", "dog", 0.9, INSIDE)
+    assert engine.observe(FIRST, (animal, vehicle), now=1) == ()
+    assert engine.observe(SECOND, (vehicle, animal), now=1) == ()
+    first, = engine.observe(FIRST, (animal, vehicle), now=2)
+    second, = engine.observe(SECOND, (vehicle, animal), now=2)
+    assert (first.change.kind, first.zone_ids) == ("vehicle", (7,))
+    assert (second.change.kind, second.zone_ids) == ("animal", ())
+    closed, = engine.replace_policy(FIRST, None)
+    assert closed.change.kind == "vehicle"
+    assert engine.has_policy(SECOND)
 
 
 def test_unknown_camera_or_cross_camera_policy_is_rejected():

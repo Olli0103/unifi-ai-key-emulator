@@ -1157,6 +1157,7 @@ async def test_event_probe_drops_outside_zone_and_uncertain_person_before_tracki
     assert sink.messages[-1]["payload"]["zonesStatus"]["7"]["status"] == "enter"
     command["messageId"] = 17
     command["payload"]["enableSmartDetect"] = []
+    command["payload"]["zones"] = {}
     await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
     assert sink.messages[-2]["functionName"] == "EventSmartDetect"
     assert sink.messages[-2]["payload"]["zonesStatus"] == {

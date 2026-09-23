@@ -61,7 +61,8 @@ class CameraPolicyEngine:
         camera = self._camera(camera_mac)
         if (policy is not None and (not isinstance(policy, SmartPolicy)
                 or policy.camera_mac != camera
-                or policy.enabled_types != frozenset({"person"}))):
+                or len(policy.enabled_types) != 1
+                or not policy.enabled_types <= {"person", "vehicle", "animal"})):
             raise IngressError("invalid_camera_policy")
         active = self._active[camera]
         result = ()
@@ -89,19 +90,20 @@ class CameraPolicyEngine:
         policy = self._policies[camera]
         if policy is None:
             return ()
+        kind = next(iter(policy.enabled_types))
         selected = tuple(value for value in observations
-                         if value.kind == "person"
-                         and policy.allows_person_score(value.score)
-                         and policy.person_zone_ids(value.box) is not None)
+                         if value.kind == kind
+                         and policy.allows_score(kind, value.score)
+                         and policy.zone_ids(kind, value.box) is not None)
         changes = self._trackers[camera].update(selected, now=now)
         result = []
         for change in changes:
-            if change.kind != "person":
+            if change.kind != kind:
                 continue
             active = self._active[camera]
             if (change.edge == "enter" and active is None
                     and self._event_counts[camera] < self._max_events):
-                zones = policy.person_zone_ids(change.box)
+                zones = policy.zone_ids(kind, change.box)
                 if zones is not None:
                     self._active[camera] = (change, zones)
                     self._event_counts[camera] += 1

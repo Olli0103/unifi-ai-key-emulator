@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import math
 
 from .aiport_ingest import IngressError, normalize_mac
-from .aiport_zones import PersonZone, ZoneError, parse_person_zones
+from .aiport_zones import SmartZone, ZoneError, parse_smart_zones
 
 
 _OBJECT_TYPES = frozenset({"person", "vehicle", "animal"})
@@ -131,32 +131,45 @@ class SmartPolicy:
     enabled_types: frozenset[str]
     event_start_ms: int
     event_stop_ms: int
-    person_reverification_ceiling: float | None
-    person_zones: tuple[PersonZone, ...]
+    reverification_ceilings: tuple[tuple[str, float], ...]
+    smart_zones: tuple[SmartZone, ...]
     zones_configured: bool
 
     def allows(self, kind: str) -> bool:
         return kind in self.enabled_types
 
-    def allows_person_score(self, score: float) -> bool:
-        """Suppress uncertain person observations needing a second stage.
+    def allows_score(self, kind: str, score: float) -> bool:
+        """Suppress uncertain observations needing a second stage.
 
         A high score outside Protect's reverification range needs no second
         stage. This deliberately drops the uncertain range; it does not claim
         to perform reverification or reproduce Protect's AI Key behavior.
         """
-        return (self.allows("person") and type(score) in (int, float)
+        ceiling = dict(self.reverification_ceilings).get(kind)
+        return (self.allows(kind) and type(score) in (int, float)
                 and math.isfinite(score) and 0 <= score <= 1
-                and (self.person_reverification_ceiling is None
-                     or score > self.person_reverification_ceiling))
+                and (ceiling is None or score > ceiling))
 
-    def person_zone_ids(self, box: tuple[float, float, float, float]) -> tuple[int, ...] | None:
+    def zone_ids(self, kind: str,
+                 box: tuple[float, float, float, float]) -> tuple[int, ...] | None:
         """Return matching zone IDs, or deny the box if zones are configured."""
+        if not self.allows(kind):
+            return None
         if not self.zones_configured:
             return ()
-        matches = tuple(zone.zone_id for zone in self.person_zones
-                        if zone.contains_box(box))
+        matches = tuple(zone.zone_id for zone in self.smart_zones
+                        if kind in zone.object_types and zone.contains_box(box))
         return matches or None
+
+    @property
+    def person_reverification_ceiling(self) -> float | None:
+        return dict(self.reverification_ceilings).get("person")
+
+    def allows_person_score(self, score: float) -> bool:
+        return self.allows_score("person", score)
+
+    def person_zone_ids(self, box: tuple[float, float, float, float]) -> tuple[int, ...] | None:
+        return self.zone_ids("person", box)
 
 
 def _timing(value: object) -> int:
@@ -175,15 +188,16 @@ def _disabled_reverification(value: object) -> bool:
                for kind in ("person", "vehicle", "animal"))
 
 
-def _reverification_ceiling(value: object, requested: list[str]) -> float | None:
-    """Validate the old per-class policy and derive a person event gate.
+def _reverification_ceilings(value: object, requested: list[str]
+                             ) -> tuple[tuple[str, float], ...]:
+    """Validate the old per-class policy and derive conservative event gates.
 
-    Other enabled classes are tolerated only when they are not requested by
-    this camera. The candidate does not emit those classes in event mode.
+    Enabled reverification drops uncertain observations for each requested
+    class; it does not perform a second inference pass.
     """
     if not isinstance(value, dict) or set(value) != _OBJECT_TYPES:
         raise SmartSettingsError("unsupported_smart_feature")
-    ceiling = None
+    ceilings = []
     for kind, item in value.items():
         if not isinstance(item, dict) or type(item.get("enable")) is not bool:
             raise SmartSettingsError("unsupported_smart_feature")
@@ -200,17 +214,15 @@ def _reverification_ceiling(value: object, requested: list[str]) -> float | None
                 or not 0 <= minimum <= maximum <= 100):
             raise SmartSettingsError("unsupported_smart_feature")
         if kind in requested:
-            if kind != "person":
-                raise SmartSettingsError("unsupported_smart_feature")
-            ceiling = maximum / 100
-    return ceiling
+            ceilings.append((kind, maximum / 100))
+    return tuple(sorted(ceilings))
 
 
 def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
-    """Accept a bounded person-zone subset or full-frame object settings.
+    """Accept bounded primary zones or full-frame object settings.
 
     Secondary-lens zones, lines, exclusions, tamper, PTZ and access triggers
-    remain unsupported. Enabled person reverification suppresses uncertain
+    remain unsupported. Enabled reverification suppresses uncertain
     observations; it is not a second-stage inference implementation. The
     returned policy cannot enable native events by itself.
     """
@@ -242,9 +254,17 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
 
     raw_zones = payload.get("zones", {})
     try:
-        person_zones = parse_person_zones(raw_zones)
+        smart_zones = parse_smart_zones(raw_zones)
     except ZoneError as exc:
         raise SmartSettingsError(str(exc)) from exc
+    # Protect 7.3.60 can send an empty top-level list for a legacy camera
+    # while a Detection Zone carries the requested class. Only derive a
+    # single supported class from validated primary-lens zones; never turn
+    # an empty policy with no usable zone into full-frame detection.
+    if not requested and smart_zones:
+        zone_types = set().union(*(zone.object_types for zone in smart_zones))
+        if len(zone_types) == 1:
+            requested = list(zone_types)
     for name in _REGION_MAPS - {"zones"}:
         value = payload.get(name, {})
         if not isinstance(value, dict):
@@ -257,8 +277,8 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
                 type(value) is dict and not value):
             raise SmartSettingsError("unsupported_smart_feature")
     reverify = payload.get("reVerificationPolicy")
-    ceiling = (_reverification_ceiling(reverify, requested)
-               if reverify not in (None, {}) else None)
+    ceilings = (_reverification_ceilings(reverify, requested)
+                if reverify not in (None, {}) else ())
     tamper = payload.get("enableTamperDetection")
     if tamper is not None and tamper is not False:
         raise SmartSettingsError("unsupported_smart_feature")
@@ -278,4 +298,4 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
                     or not 0 <= value <= 100):
                 raise SmartSettingsError("invalid_smart_settings")
     return SmartPolicy(expected, frozenset(requested), start_ms, stop_ms,
-                       ceiling, person_zones, bool(raw_zones))
+                       ceilings, smart_zones, bool(raw_zones))
