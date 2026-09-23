@@ -30,10 +30,13 @@ _MAC = re.compile(r"[0-9A-Fa-f]{12}\Z")
 _PIN = re.compile(r"[0-9A-Fa-f]{64}\Z")
 _VERSION = re.compile(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\Z")
 _MAX_MANAGE = 8192
+_DISCONNECT_GRACE_SECONDS = 15
 _ALLOWED_TOP_LEVEL = frozenset(("username", "password", "mgmt", "hosts", "protocol", "mode"))
 _ALLOWED_MGMT = frozenset(("token", "hosts", "protocol", "mode", "nvr"))
 _OBSERVABLE_FUNCTIONS = frozenset({
     "ubnt_avclient_hello", "ubnt_avclient_paramAgreement", "GetStreamList",
+    "ubnt_avclient_timeSync", "GetSystemStats", "NetworkStatus",
+    "ResetAIPortStreams", "EventSmartDetect",
     "UiStreamControl", "OnvifStreamControl", "ChangeDeviceSettings", "GetRequest",
     "ChangeSmartDetectSettings", "ChangeAnalyticsSettings", "ChangeAudioEventsSettings",
     "ChangeEventSettings", "EventAIPortStatus",
@@ -133,10 +136,14 @@ def _object_shape(raw: bytes) -> dict:
 
 
 class CandidateService:
-    def __init__(self, config: dict, state_dir: Path, *, control_port: int = 7442):
+    def __init__(self, config: dict, state_dir: Path, *, control_port: int = 7442,
+                 disconnect_grace_seconds: float = _DISCONNECT_GRACE_SECONDS):
+        if not 0 < disconnect_grace_seconds <= _DISCONNECT_GRACE_SECONDS:
+            raise CandidateError("Invalid diagnostic disconnect grace")
         self.config = config
         self.state_dir = Path(state_dir)
         self.control_port = control_port
+        self.disconnect_grace_seconds = disconnect_grace_seconds
         self.runner: web.AppRunner | None = None
         self.task: asyncio.Task | None = None
         self.connected = False
@@ -155,6 +162,10 @@ class CandidateService:
         self.stream_controls_stopped = 0
         self.stream_controls_rejected = 0
         self.stream_status_events_sent = 0
+        self.stream_reconnects_preserved = 0
+        self.stream_grace_closures = 0
+        self.stream_resets_answered = 0
+        self.stream_resets_rejected = 0
         self.last_stream_error: str | None = None
         self.last_control_command: str | None = None
         self.observed_function_counts: dict[str, int] = {}
@@ -165,6 +176,7 @@ class CandidateService:
         self._next_message_id = 2
         self._hello_agreed = False
         self._params_agreed = False
+        self._ingress_close_task: asyncio.Task | None = None
         self.started = time.monotonic()
         self.ingress = (AiPortIngress(**config["diagnostic_stream"])
                         if "diagnostic_stream" in config
@@ -192,6 +204,10 @@ class CandidateService:
             "stream_controls_stopped": self.stream_controls_stopped,
             "stream_controls_rejected": self.stream_controls_rejected,
             "stream_status_events_sent": self.stream_status_events_sent,
+            "stream_reconnects_preserved": self.stream_reconnects_preserved,
+            "stream_grace_closures": self.stream_grace_closures,
+            "stream_resets_answered": self.stream_resets_answered,
+            "stream_resets_rejected": self.stream_resets_rejected,
             "stream_frames_decoded": self.ingress.frame_count if self.ingress else 0,
             "stream_frames_decoded_total": (
                 self.ingress.total_frames_decoded + self.ingress.frame_count
@@ -320,6 +336,34 @@ class CandidateService:
             await self._reply_control(ws, function, request_id, 0, {})
             self.param_agreements += 1
             self._params_agreed = True
+            if self.ingress is not None:
+                streams = self.ingress.list_streams()
+                had_disconnect_grace = self._ingress_close_task is not None
+                if had_disconnect_grace:
+                    self._cancel_ingress_close()
+                if streams:
+                    self.stream_reconnects_preserved += 1
+                    await self._send_stream_status(ws, streaming=True)
+                elif had_disconnect_grace:
+                    await self.ingress.close()
+            return
+        if function == "ResetAIPortStreams":
+            self.last_control_command = function
+            request_id = message.get("messageId")
+            if not self._params_agreed or type(request_id) is not int or request_id < 0:
+                return
+            if message.get("payload") != {}:
+                await self._reply_control(ws, function, request_id, 5,
+                                          {"description": "invalid_reset_command"})
+                self.stream_resets_rejected += 1
+                return
+            if self.ingress is not None:
+                was_streaming = bool(self.ingress.list_streams())
+                await self.ingress.close()
+                if was_streaming and time.time() < self.config.get("diagnostic_hello_until", 0):
+                    await self._send_stream_status(ws, streaming=False)
+            await self._reply_control(ws, function, request_id, 0, {})
+            self.stream_resets_answered += 1
             return
         if function in {"GetStreamList", "UiStreamControl", "OnvifStreamControl"}:
             self.last_control_command = function
@@ -366,6 +410,28 @@ class CandidateService:
         await asyncio.sleep(max(0, until - time.time()))
         await ws.close()
 
+    def _cancel_ingress_close(self) -> None:
+        if self._ingress_close_task is not None:
+            self._ingress_close_task.cancel()
+            self._ingress_close_task = None
+
+    async def _schedule_ingress_close(self) -> None:
+        if self.ingress is None:
+            return
+        self._cancel_ingress_close()
+        until = self.config.get("diagnostic_hello_until", 0)
+        delay = min(self.disconnect_grace_seconds, max(0, until - time.time()))
+        if delay <= 0 or not self.ingress.list_streams():
+            await self.ingress.close()
+            return
+
+        async def close_after_grace() -> None:
+            await asyncio.sleep(delay)
+            await self.ingress.close()
+            self.stream_grace_closures += 1
+
+        self._ingress_close_task = asyncio.create_task(close_after_grace())
+
     async def start(self, *, bind: str = "0.0.0.0", port: int = 8443):
         if self.runner is not None:
             return
@@ -384,6 +450,11 @@ class CandidateService:
             with contextlib.suppress(asyncio.CancelledError):
                 await self.task
             self.task = None
+        ingress_close_task = self._ingress_close_task
+        self._cancel_ingress_close()
+        if ingress_close_task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await ingress_close_task
         if self.ingress is not None:
             await self.ingress.close()
         if self.runner is not None:
@@ -441,7 +512,7 @@ class CandidateService:
                                     with contextlib.suppress(asyncio.CancelledError):
                                         await expiry_task
                                 if self.ingress is not None:
-                                    await self.ingress.close()
+                                    await self._schedule_ingress_close()
                                 self._record_close(ws.close_code,
                                                    diagnostic_expired=diagnostic_expired)
                             self.last_result = "websocket_closed"
