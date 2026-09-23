@@ -28,6 +28,7 @@ local-aiport-provision = "aikey.aiport_instance_state:main"
 local-aiport-candidate = "aikey.aiport_candidate:main"
 local-aiport-relay = "aikey.aiport_relay:main"
 local-aiport-host-relay = "aikey.aiport_host_relay:main"
+local-aiport-nas-compose = "aikey.aiport_nas_compose:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
