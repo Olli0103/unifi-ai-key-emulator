@@ -29,6 +29,7 @@ local-aiport-candidate = "aikey.aiport_candidate:main"
 local-aiport-relay = "aikey.aiport_relay:main"
 local-aiport-host-relay = "aikey.aiport_host_relay:main"
 local-aiport-nas-compose = "aikey.aiport_nas_compose:main"
+local-aiport-nas-reconcile = "aikey.aiport_nas_reconcile:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
