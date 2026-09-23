@@ -1,6 +1,6 @@
 """Isolated AI Port candidate for native interface discovery.
 
-Camera ingress requires an expiring, one-camera private diagnostic policy.
+Camera ingress requires an expiring, explicitly scoped private diagnostic.
 Adoption is time-bounded and requires the rotated management credential.
 """
 
@@ -25,7 +25,10 @@ from urllib.parse import quote
 import aiohttp
 from aiohttp import web
 
-from .aiport_ingest import AiPortIngress, IngressError, executable_path, normalize_mac, private_source_ip
+from .aiport_ingest import (
+    AiPortIngress, AiPortIngressPool, IngressError, executable_path,
+    normalize_mac, private_source_ip,
+)
 from .aiport_detection import DetectionError, RFDetrNanoDetector
 from .aiport_tracking import TemporalTracker, TrackChange, TrackingError
 from .aiport_smart_events import SmartEventError, smart_event_payload
@@ -102,6 +105,7 @@ def load_config(path: Path) -> dict:
         raise CandidateError("Invalid candidate configuration JSON") from exc
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
     allowed = required | {"diagnostic_hello_until", "diagnostic_stream",
+                          "diagnostic_streams",
                           "diagnostic_detector",
                           "diagnostic_smart_probe_until",
                           "diagnostic_event_until",
@@ -139,6 +143,29 @@ def load_config(path: Path) -> dict:
             stream["ffmpeg_path"] = executable_path(stream["ffmpeg_path"])
         except IngressError as exc:
             raise CandidateError("Invalid stream diagnostic policy") from exc
+    if "diagnostic_streams" in value:
+        streams = value["diagnostic_streams"]
+        if ("diagnostic_stream" in value or "diagnostic_hello_until" not in value
+                or not isinstance(streams, list) or not 2 <= len(streams) <= 5
+                or "diagnostic_detector" in value
+                or "diagnostic_smart_probe_until" in value
+                or "diagnostic_event_until" in value):
+            raise CandidateError("Multi-camera diagnostic accepts streams only")
+        seen = set()
+        for stream in streams:
+            if not isinstance(stream, dict) or set(stream) != {
+                    "camera_mac", "source_ip", "ffmpeg_path"}:
+                raise CandidateError("Invalid multi-camera stream policy")
+            try:
+                camera_mac = normalize_mac(stream["camera_mac"])
+                stream["source_ip"] = private_source_ip(stream["source_ip"])
+                stream["ffmpeg_path"] = executable_path(stream["ffmpeg_path"])
+            except IngressError as exc:
+                raise CandidateError("Invalid multi-camera stream policy") from exc
+            if camera_mac in seen:
+                raise CandidateError("Duplicate multi-camera identity")
+            seen.add(camera_mac)
+            stream["camera_mac"] = camera_mac
     if "diagnostic_detector" in value:
         detector = value["diagnostic_detector"]
         if ("diagnostic_stream" not in value or not isinstance(detector, dict)
@@ -301,12 +328,15 @@ class CandidateService:
         self.adoption = AdoptionStore(self.state_dir, config["controller_ip"],
                                      config["controller_pin"], control_port)
         self._current_ws: aiohttp.ClientWebSocketResponse | None = None
-        self.ingress = (AiPortIngress(
-                            **config["diagnostic_stream"],
-                            frame_observer=(self._observe_frame
-                                            if "diagnostic_detector" in config else None))
-                        if "diagnostic_stream" in config
-                        and config["diagnostic_hello_until"] > time.time() else None)
+        self.ingress: AiPortIngress | AiPortIngressPool | None = None
+        if config.get("diagnostic_hello_until", 0) > time.time():
+            if "diagnostic_stream" in config:
+                self.ingress = AiPortIngress(
+                    **config["diagnostic_stream"],
+                    frame_observer=(self._observe_frame
+                                    if "diagnostic_detector" in config else None))
+            elif "diagnostic_streams" in config:
+                self.ingress = AiPortIngressPool(config["diagnostic_streams"])
 
     async def _observe_frame(self, frame: bytes) -> None:
         policy = self.config["diagnostic_detector"]
@@ -355,7 +385,8 @@ class CandidateService:
         policy = self._smart_policy
         if (ws is None or policy is None or not policy.allows("person")
                 or time.time() >= self.config.get("diagnostic_event_until", 0)
-                or self.ingress is None or not self.ingress.list_streams()):
+                or not isinstance(self.ingress, AiPortIngress)
+                or not self.ingress.list_streams()):
             return
         for change in changes:
             if change.kind != "person":
@@ -618,20 +649,27 @@ class CandidateService:
         self._next_message_id += 1
 
     async def _send_stream_status(self, ws: aiohttp.ClientWebSocketResponse,
-                                  *, streaming: bool) -> None:
+                                  *, streaming: bool,
+                                  camera_mac: str | None = None) -> None:
         assert self.ingress is not None
+        if camera_mac is None:
+            camera_mac = getattr(self.ingress, "camera_mac", None)
+            if camera_mac is None:
+                raise CandidateError("Camera identity required for multi-camera status")
         # Only an expiring, single-camera probe may announce a temporary
         # capability. The controller otherwise has no reason to send smart
         # settings for a legacy camera with hasSmartDetect=false. Unpairing
         # restores the camera's original flags in Protect.
-        if (streaming and time.time()
-                < self.config.get("diagnostic_smart_probe_until", 0)):
+        smart_ready = (not isinstance(self.ingress, AiPortIngressPool) and streaming
+                       and time.time()
+                       < self.config.get("diagnostic_smart_probe_until", 0))
+        if smart_ready:
             feature_event = {
                 "from": "ubnt_avclient", "to": "UniFiVideo",
                 "responseExpected": False,
                 "functionName": "EventFeatureFlagsUpdated",
                 "messageId": self._next_message_id, "inResponseTo": 0,
-                "payload": {"deviceID": self.ingress.camera_mac,
+                "payload": {"deviceID": camera_mac,
                             "smartDetect": ["person"]},
             }
             await ws.send_bytes(json.dumps(feature_event, separators=(",", ":")).encode())
@@ -640,10 +678,9 @@ class CandidateService:
         event = {"from": "ubnt_avclient", "to": "UniFiVideo",
                  "responseExpected": False, "functionName": "EventAIPortStatus",
                  "messageId": self._next_message_id, "inResponseTo": 0,
-                 "payload": {"deviceID": self.ingress.camera_mac,
+                 "payload": {"deviceID": camera_mac,
                              "isStreaming": streaming,
-                             "isSmartDetectReady": (streaming and time.time()
-                                 < self.config.get("diagnostic_smart_probe_until", 0)),
+                             "isSmartDetectReady": smart_ready,
                              "isAudioEventReady": False}}
         await ws.send_bytes(json.dumps(event, separators=(",", ":")).encode())
         self._next_message_id += 1
@@ -700,7 +737,10 @@ class CandidateService:
                     self._cancel_ingress_close()
                 if streams:
                     self.stream_reconnects_preserved += 1
-                    await self._send_stream_status(ws, streaming=True)
+                    for stream in streams:
+                        await self._send_stream_status(
+                            ws, streaming=True,
+                            camera_mac=stream["deviceID"])
                 elif had_disconnect_grace:
                     await self.ingress.close()
             return
@@ -715,10 +755,13 @@ class CandidateService:
                 self.stream_resets_rejected += 1
                 return
             if self.ingress is not None:
-                was_streaming = bool(self.ingress.list_streams())
+                streams = self.ingress.list_streams()
                 await self.ingress.close()
-                if was_streaming and time.time() < self.config.get("diagnostic_hello_until", 0):
-                    await self._send_stream_status(ws, streaming=False)
+                if time.time() < self.config.get("diagnostic_hello_until", 0):
+                    for stream in streams:
+                        await self._send_stream_status(
+                            ws, streaming=False,
+                            camera_mac=stream["deviceID"])
             await self._reply_control(ws, function, request_id, 0, {})
             self.stream_resets_answered += 1
             return
@@ -838,7 +881,8 @@ class CandidateService:
             if not self._params_agreed or type(request_id) is not int or request_id < 0:
                 return
             self.smart_motion_probe_requests += 1
-            if (self.ingress is None or time.time() >= self.config.get(
+            if (not isinstance(self.ingress, AiPortIngress)
+                    or time.time() >= self.config.get(
                     "diagnostic_smart_probe_until", 0)):
                 await self._reply_control(ws, function, request_id, 501,
                                           {"description": "smart_motion_unavailable"})
@@ -876,7 +920,7 @@ class CandidateService:
             # Accept only a one-camera, expiring, full-frame person policy
             # when the local detector and event probe are explicitly armed.
             parsed_policy = None
-            if (self.ingress is not None
+            if (isinstance(self.ingress, AiPortIngress)
                     and time.time() < self.config.get("diagnostic_hello_until", 0)):
                 if time.time() < self.config.get("diagnostic_smart_probe_until", 0):
                     self._smart_settings_probe_shape = summarize_smart_request(
@@ -932,8 +976,13 @@ class CandidateService:
                     else:
                         self.stream_controls_stopped += 1
                     if time.time() < self.config["diagnostic_hello_until"]:
+                        payload = message.get("payload")
+                        camera_mac = (normalize_mac(payload["deviceID"])
+                                      if isinstance(payload, dict) and "deviceID" in payload
+                                      else getattr(self.ingress, "camera_mac", None))
                         await self._send_stream_status(
-                            ws, streaming=result["status"] == "started")
+                            ws, streaming=result["status"] == "started",
+                            camera_mac=camera_mac)
             else:
                 await self._reply_control(ws, function, request_id, 501,
                                           {"description": "stream_ingest_unavailable"})
