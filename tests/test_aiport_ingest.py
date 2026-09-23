@@ -57,6 +57,8 @@ async def test_ingress_starts_only_after_frame_and_stops_process(tmp_path):
         assert ingress.list_streams() == [{"deviceID": CAMERA_MAC, "points": 2}]
         args = json.loads(args_file.read_text())
         assert args[args.index("-i") + 1] == "rtsp://192.168.10.1:7447/SyntheticAlias123"
+        assert args[args.index("-timeout") + 1] == "5000000"
+        assert "-rw_timeout" not in args
         assert await ingress.control({"streaming": False, "deviceID": CAMERA_MAC}) == {
             "status": "stopped", "usedPoints": 0}
         assert ingress.list_streams() == []
@@ -97,14 +99,22 @@ async def test_ingress_never_reports_started_without_a_frame(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stderr_text,code", [
-    ("[rtsp] method DESCRIBE failed: 401 Unauthorized", "rtsp_access_denied"),
-    ("[rtsp] method DESCRIBE failed: 404 Not Found", "rtsp_stream_not_found"),
-    ("Connection refused", "rtsp_connect_failed"),
-    ("Failed to open private-alias-123", "stream_ended"),
+@pytest.mark.parametrize("stderr_text,code,markers,terms", [
+    ("[rtsp] method DESCRIBE failed: 401 Unauthorized", "rtsp_access_denied", (),
+     ("describe", "failed", "rtsp", "unauthorized")),
+    ("[rtsp] method DESCRIBE failed: 404 Not Found", "rtsp_stream_not_found", (),
+     ("describe", "failed", "found", "not", "rtsp")),
+    ("Connection refused", "rtsp_connect_failed", (), ("connection", "refused")),
+    ("Option rw_timeout not found", "decoder_option_missing", (),
+     ("found", "not", "option", "timeout")),
+    ("[rtsp] method DESCRIBE failed: 454 Session Not Found", "rtsp_status_454", (),
+     ("describe", "failed", "found", "not", "rtsp", "session")),
+    ("Failed to open private-alias-123", "stream_ended", (), ("failed", "open")),
+    ("Error opening input file rtsp://192.168.10.1/private-alias-123",
+     "stream_ended", ("input_open_failed",), ("error", "file", "input", "opening", "rtsp")),
 ])
 async def test_decoder_failure_is_classified_without_exposing_private_output(
-        tmp_path, stderr_text, code):
+        tmp_path, stderr_text, code, markers, terms):
     decoder, _ = fake_decoder(tmp_path, emit_frame=False, stderr_text=stderr_text)
     ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
                            ffmpeg_path=decoder, start_timeout=2)
@@ -114,8 +124,33 @@ async def test_decoder_failure_is_classified_without_exposing_private_output(
     assert "private-alias-123" not in str(failure.value)
     assert ingress.last_decoder_exit_code == 0
     assert ingress.last_decoder_stderr_seen
+    assert ingress.last_decoder_error_markers == markers
+    assert "private-alias-123" not in repr(ingress.last_decoder_error_markers)
+    assert ingress.last_decoder_error_terms == terms
+    assert "private" not in ingress.last_decoder_error_terms
+    assert "alias" not in ingress.last_decoder_error_terms
     assert ingress.list_streams() == []
     await ingress.close()
+
+
+@pytest.mark.asyncio
+async def test_success_clears_previous_decoder_error(tmp_path):
+    decoder, _ = fake_decoder(tmp_path, emit_frame=False,
+                              stderr_text="Option rw_timeout not found")
+    ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
+                           ffmpeg_path=decoder, start_timeout=2)
+    with pytest.raises(IngressError, match="decoder_option_missing"):
+        await ingress.control(start_payload())
+    assert ingress.last_decoder_error_terms == ("found", "not", "option", "timeout")
+    fake_decoder(tmp_path)
+    try:
+        assert await ingress.control(start_payload()) == {"status": "started", "usedPoints": 2}
+        assert ingress.last_decoder_exit_code is None
+        assert ingress.last_decoder_stderr_seen is False
+        assert ingress.last_decoder_error_markers == ()
+        assert ingress.last_decoder_error_terms == ()
+    finally:
+        await ingress.close()
 
 
 @pytest.mark.asyncio

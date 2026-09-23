@@ -22,6 +22,27 @@ _MAC = re.compile(r"(?:[0-9A-Fa-f]{12}|(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\Z")
 _ALIAS = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _MAX_FRAME = 1024 * 1024
 _MAX_DECODER_DIAGNOSTIC = 8192
+_DECODER_MARKERS = (
+    (b"error opening input", "input_open_failed"),
+    (b"does not contain any stream", "no_video_stream"),
+    (b"could not find codec parameters", "codec_parameters_missing"),
+    (b"error while filtering", "filter_failed"),
+    (b"option not found", "decoder_option_missing"),
+    (b"connection timed out", "connection_timed_out"),
+    (b"input/output error", "io_error"),
+    (b"end of file", "unexpected_eof"),
+)
+_DECODER_TERMS = frozenset({
+    "address", "argument", "authorization", "bad", "codec", "connection",
+    "contains", "data", "decode", "decoder", "demuxer", "denied", "describe", "device",
+    "encoder", "error", "failed", "file", "filter", "format", "found", "frame",
+    "handshake", "h264", "hevc", "input", "invalid", "mjpeg", "muxer",
+    "matches", "network", "no", "not", "open", "opening", "option", "output",
+    "parse", "permission", "play",
+    "protocol", "refused", "resource", "rtsp", "rtp", "scale", "server",
+    "session", "setup", "stream", "streams", "tcp", "timed", "timeout",
+    "transport", "unauthorized", "unavailable", "unsupported",
+})
 
 
 class IngressError(ValueError):
@@ -43,9 +64,29 @@ def _decoder_failure(stderr: bytes) -> str:
         return "rtsp_connect_failed"
     if b"400 bad request" in output or b"protocol not found" in output:
         return "rtsp_protocol_rejected"
+    if b"option rw_timeout not found" in output:
+        return "decoder_option_missing"
     if b"invalid data found" in output:
         return "rtsp_invalid_data"
+    status = re.search(
+        rb"(?:method (?:options|describe|setup|play) failed:|server returned)\s*([45][0-9]{2})\b",
+        output,
+    )
+    if status is not None:
+        return "rtsp_status_" + status.group(1).decode("ascii")
     return "stream_ended"
+
+
+def _decoder_markers(stderr: bytes) -> tuple[str, ...]:
+    """Expose only hard-coded failure labels, never text from a stream URL."""
+    output = stderr.lower()
+    return tuple(label for needle, label in _DECODER_MARKERS if needle in output)
+
+
+def _decoder_terms(stderr: bytes) -> tuple[str, ...]:
+    """Return bounded, fixed vocabulary only; arbitrary error text stays private."""
+    words = (word.decode("ascii") for word in re.findall(rb"[a-z]+", stderr.lower()))
+    return tuple(sorted(set(words) & _DECODER_TERMS))
 
 
 def normalize_mac(value: object) -> str:
@@ -123,6 +164,8 @@ class _Session:
         self._stderr = bytearray()
         self.stderr_seen = False
         self.exit_code: int | None = None
+        self.error_markers: tuple[str, ...] = ()
+        self.error_terms: tuple[str, ...] = ()
         self.first_frame = asyncio.Event()
         self.frame_count = 0
         self.latest_frame: bytes | None = None
@@ -141,7 +184,7 @@ class _Session:
         # retaining only a short in-memory excerpt for fixed-code classification.
         self.process = await asyncio.create_subprocess_exec(
             self.ffmpeg_path, "-hide_banner", "-nostdin", "-loglevel", "error",
-            "-rtsp_transport", "tcp", "-rw_timeout", "5000000", "-i", self.spec.url,
+            "-rtsp_transport", "tcp", "-timeout", "5000000", "-i", self.spec.url,
             "-map", "0:v:0", "-an", "-sn", "-dn", "-filter_threads", "1",
             "-vf", "fps=1,scale=320:-2", "-threads", "1", "-f", "image2pipe",
             "-vcodec", "mjpeg", "-q:v", "5", "pipe:1",
@@ -165,6 +208,8 @@ class _Session:
                     with contextlib.suppress(TimeoutError):
                         await asyncio.wait_for(self.stderr_reader, timeout=0.5)
                 reason = _decoder_failure(bytes(self._stderr))
+                self.error_markers = _decoder_markers(bytes(self._stderr))
+                self.error_terms = _decoder_terms(bytes(self._stderr))
             if self.process is not None:
                 self.exit_code = self.process.returncode
             await self.close()
@@ -242,6 +287,8 @@ class AiPortIngress:
         self.total_frames_decoded = 0
         self.last_decoder_exit_code: int | None = None
         self.last_decoder_stderr_seen = False
+        self.last_decoder_error_markers: tuple[str, ...] = ()
+        self.last_decoder_error_terms: tuple[str, ...] = ()
 
     async def control(self, payload: object) -> dict:
         if not isinstance(payload, dict) or "streaming" not in payload:
@@ -266,10 +313,16 @@ class AiPortIngress:
             except (OSError, IngressError) as exc:
                 self.last_decoder_exit_code = session.exit_code
                 self.last_decoder_stderr_seen = session.stderr_seen
+                self.last_decoder_error_markers = session.error_markers
+                self.last_decoder_error_terms = session.error_terms
                 await session.close()
                 if isinstance(exc, IngressError):
                     raise
                 raise IngressError("stream_decoder_unavailable") from exc
+            self.last_decoder_exit_code = None
+            self.last_decoder_stderr_seen = False
+            self.last_decoder_error_markers = ()
+            self.last_decoder_error_terms = ()
             self._session = session
             return {"status": "started", "usedPoints": spec.points}
 

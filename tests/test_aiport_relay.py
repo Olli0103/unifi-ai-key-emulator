@@ -14,7 +14,7 @@ from aikey.tls import ensure_identity_certificate
 
 @pytest.mark.asyncio
 async def test_relay_passes_tls_to_the_candidate_without_reading_http(tmp_path):
-    cert, _ = ensure_identity_certificate(tmp_path, "2A9D75736D4E")
+    cert, _ = ensure_identity_certificate(tmp_path, "2A1100F0A55E")
     candidate = CandidateService({}, tmp_path)
     upstream = TestServer(candidate.app())
     await upstream.start_server(ssl=candidate._server_context())
@@ -59,7 +59,7 @@ async def test_relay_rejects_non_controller_source():
 def test_relay_requires_distinct_private_endpoints():
     with pytest.raises(RelayError):
         BoundedRelay(listen_ip="8.8.8.8", listen_port=443,
-                     upstream_port=8443, allowed_source_ip="192.168.0.1")
+                     upstream_port=8443, allowed_source_ip="192.168.10.1")
     with pytest.raises(RelayError):
-        BoundedRelay(listen_ip="192.168.0.135", listen_port=443,
-                     upstream_port=443, allowed_source_ip="192.168.0.1")
+        BoundedRelay(listen_ip="192.168.10.20", listen_port=443,
+                     upstream_port=443, allowed_source_ip="192.168.10.1")

@@ -187,7 +187,7 @@ def test_secret_files_must_be_private(tmp_path):
 @pytest.mark.asyncio
 async def test_controller_must_be_an_explicit_private_ipv4(tmp_path):
     for host in ("console.local", "8.8.8.8", "0.0.0.0", "169.254.1.1",
-                 "192.168.0.1:443", "192.168.0.1/path"):
+                 "192.168.10.1:443", "192.168.10.1/path"):
         with pytest.raises(InventoryError, match="private IPv4"):
             await fetch_inventory(host, api_key_file=tmp_path / "missing",
                                   trust_file=tmp_path / "missing", cert_file=tmp_path / "missing")
