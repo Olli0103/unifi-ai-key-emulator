@@ -34,6 +34,9 @@ def test_two_unknown_resolution_protect_cameras_need_one_separate_ai_port():
     assert plan["instances"][0]["apple_publish"] == "192.0.2.10:443:8443/tcp"
     assert plan["ai_key"] == {"host_ip": "192.0.2.11", "management_tcp": 8080}
     assert plan["host_discovery_udp"] == 10001
+    assert plan["schema"] == "aikey-aiport-deployment-plan/2"
+    assert plan["camera_stream_ports"] == {
+        "protect_outbound_tcp": [7447], "onvif_outbound_tcp": []}
     assert plan["camera_pairing"] == "disabled"
     assert plan["instances"][0]["state"] == "planned_only"
 
@@ -62,6 +65,8 @@ def test_onvif_and_protect_never_share_an_instance():
     plan = plan_ai_ports(report(camera(1), camera(2, model="Third-party camera", source="onvif")))
     assert plan["ai_port_instances_required"] == 2
     assert {item["source_kind"] for item in plan["instances"]} == {"protect", "onvif"}
+    assert plan["camera_stream_ports"] == {
+        "protect_outbound_tcp": [7447], "onvif_outbound_tcp": "needs_evidence"}
 
 
 def test_no_legacy_cameras_expose_no_ai_port_listener():
@@ -69,6 +74,8 @@ def test_no_legacy_cameras_expose_no_ai_port_listener():
     assert plan["ai_port_instances_required"] == 0
     assert plan["host_discovery_udp"] is None
     assert plan["controller_websocket_tcp"] is None
+    assert plan["camera_stream_ports"] == {
+        "protect_outbound_tcp": [], "onvif_outbound_tcp": []}
 
 
 @pytest.mark.parametrize("rows", [
