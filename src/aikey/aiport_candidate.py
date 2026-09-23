@@ -1,8 +1,7 @@
 """Isolated, unadopted AI Port candidate for native interface discovery.
 
-This service has no camera access, adoption credentials or detection path. It
-holds a pinned outbound device connection and a TLS management listener whose
-adoption route deliberately rejects requests after recording only their shape.
+Camera ingress requires an expiring, one-camera private diagnostic policy.
+The management listener rejects adoption after recording only request shape.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ import time
 import aiohttp
 from aiohttp import web
 
+from .aiport_ingest import AiPortIngress, IngressError, executable_path, normalize_mac, private_source_ip
 from .device import VerifiedConnector
 
 
@@ -67,13 +67,25 @@ def load_config(path: Path) -> dict:
     except (ValueError, UnicodeError) as exc:
         raise CandidateError("Invalid candidate configuration JSON") from exc
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
-    allowed = required | {"diagnostic_hello_until"}
+    allowed = required | {"diagnostic_hello_until", "diagnostic_stream"}
     if not isinstance(value, dict) or not required <= set(value) or not set(value) <= allowed:
         raise CandidateError("Candidate configuration fields do not match the isolated profile")
     if "diagnostic_hello_until" in value:
         until = value["diagnostic_hello_until"]
         if type(until) is not int or until < 0 or until > int(time.time()) + 600:
             raise CandidateError("Diagnostic hello must expire within ten minutes")
+    if "diagnostic_stream" in value:
+        stream = value["diagnostic_stream"]
+        if (not isinstance(stream, dict) or set(stream) != {
+                "camera_mac", "source_ip", "ffmpeg_path"}
+                or "diagnostic_hello_until" not in value):
+            raise CandidateError("Stream diagnostic requires a bounded hello")
+        try:
+            stream["camera_mac"] = normalize_mac(stream["camera_mac"])
+            stream["source_ip"] = private_source_ip(stream["source_ip"])
+            stream["ffmpeg_path"] = executable_path(stream["ffmpeg_path"])
+        except IngressError as exc:
+            raise CandidateError("Invalid stream diagnostic policy") from exc
     value["controller_ip"] = _private_ipv4(value["controller_ip"])
     value["device_ip"] = _private_ipv4(value["device_ip"])
     mac = value["mac"]
@@ -133,10 +145,18 @@ class CandidateService:
         self.hello_replies = 0
         self.param_agreements = 0
         self.stream_lists_answered = 0
+        self.stream_controls_started = 0
+        self.stream_controls_stopped = 0
         self.stream_controls_rejected = 0
+        self.last_stream_error: str | None = None
         self.last_control_command: str | None = None
         self._next_message_id = 2
+        self._hello_agreed = False
+        self._params_agreed = False
         self.started = time.monotonic()
+        self.ingress = (AiPortIngress(**config["diagnostic_stream"])
+                        if "diagnostic_stream" in config
+                        and config["diagnostic_hello_until"] > time.time() else None)
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=_MAX_MANAGE)
@@ -156,7 +176,16 @@ class CandidateService:
             "hello_replies": self.hello_replies,
             "param_agreements": self.param_agreements,
             "stream_lists_answered": self.stream_lists_answered,
+            "stream_controls_started": self.stream_controls_started,
+            "stream_controls_stopped": self.stream_controls_stopped,
             "stream_controls_rejected": self.stream_controls_rejected,
+            "stream_frames_decoded": self.ingress.frame_count if self.ingress else 0,
+            "stream_frames_decoded_total": (
+                self.ingress.total_frames_decoded + self.ingress.frame_count
+                if self.ingress else 0),
+            "last_stream_error": self.last_stream_error,
+            "stream_ingest_enabled": (self.ingress is not None
+                                      and time.time() < self.config.get("diagnostic_hello_until", 0)),
             "last_control_command": self.last_control_command,
             "uptime_seconds": int(time.monotonic() - self.started)})
 
@@ -188,6 +217,8 @@ class CandidateService:
 
     async def _send_diagnostic_hello(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         self._next_message_id = 2
+        self._hello_agreed = False
+        self._params_agreed = False
         message = {"from": "ubnt_avclient", "to": "UniFiVideo",
                    "responseExpected": True, "functionName": "ubnt_avclient_hello",
                    "messageId": 1, "inResponseTo": 0,
@@ -220,22 +251,45 @@ class CandidateService:
         function = message.get("functionName")
         if function == "ubnt_avclient_hello" and message.get("inResponseTo") == 1:
             self.hello_replies += 1
+            self._hello_agreed = True
             return
-        if function == "ubnt_avclient_paramAgreement" and self.hello_replies:
+        if function == "ubnt_avclient_paramAgreement" and self._hello_agreed:
             request_id = message.get("messageId")
             if type(request_id) is not int or request_id < 0:
                 return
             await self._reply_control(ws, function, request_id, 0, {})
             self.param_agreements += 1
+            self._params_agreed = True
             return
         if function in {"GetStreamList", "UiStreamControl", "OnvifStreamControl"}:
             self.last_control_command = function
             request_id = message.get("messageId")
-            if not self.param_agreements or type(request_id) is not int or request_id < 0:
+            if not self._params_agreed or type(request_id) is not int or request_id < 0:
                 return
             if function == "GetStreamList":
-                await self._reply_control(ws, function, request_id, 0, {"list": []})
+                await self._reply_control(ws, function, request_id, 0,
+                                          {"list": self.ingress.list_streams() if self.ingress else []})
                 self.stream_lists_answered += 1
+            elif function == "UiStreamControl" and self.ingress is not None:
+                try:
+                    if time.time() >= self.config.get("diagnostic_hello_until", 0):
+                        raise IngressError("diagnostic_expired")
+                    result = await self.ingress.control(message.get("payload"))
+                    if time.time() >= self.config["diagnostic_hello_until"]:
+                        await self.ingress.close()
+                        raise IngressError("diagnostic_expired")
+                except IngressError as exc:
+                    await self._reply_control(ws, function, request_id, 5,
+                                              {"description": exc.code})
+                    self.stream_controls_rejected += 1
+                    self.last_stream_error = exc.code
+                else:
+                    await self._reply_control(ws, function, request_id, 0, result)
+                    self.last_stream_error = None
+                    if result["status"] == "started":
+                        self.stream_controls_started += 1
+                    else:
+                        self.stream_controls_stopped += 1
             else:
                 await self._reply_control(ws, function, request_id, 501,
                                           {"description": "stream_ingest_unavailable"})
@@ -267,6 +321,8 @@ class CandidateService:
             with contextlib.suppress(asyncio.CancelledError):
                 await self.task
             self.task = None
+        if self.ingress is not None:
+            await self.ingress.close()
         if self.runner is not None:
             await self.runner.cleanup()
             self.runner = None
@@ -318,6 +374,8 @@ class CandidateService:
                                     expiry_task.cancel()
                                     with contextlib.suppress(asyncio.CancelledError):
                                         await expiry_task
+                                if self.ingress is not None:
+                                    await self.ingress.close()
                             self.last_result = "websocket_closed"
                 except (aiohttp.ClientError, TimeoutError, ssl.SSLError) as exc:
                     self.last_result = type(exc).__name__
