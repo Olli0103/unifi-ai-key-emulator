@@ -27,6 +27,7 @@ from aiohttp import web
 
 from .aiport_ingest import AiPortIngress, IngressError, executable_path, normalize_mac, private_source_ip
 from .aiport_detection import DetectionError, RFDetrNanoDetector
+from .aiport_tracking import TemporalTracker, TrackingError
 from .aiport_credentials import CredentialError, CredentialStore
 from .aiport_adoption import AdoptionError, AdoptionStore, validate_management
 from .aiport_virtual_hardware import (
@@ -252,8 +253,11 @@ class CandidateService:
         self.detector_frames_attempted = 0
         self.detector_frames_succeeded = 0
         self.detector_objects_seen = 0
+        self.detector_tracks_entered = 0
+        self.detector_tracks_left = 0
         self.detector_error: str | None = None
         self._detector: RFDetrNanoDetector | None = None
+        self._tracker = TemporalTracker() if "diagnostic_detector" in config else None
         self.credentials = CredentialStore(self.state_dir)
         self.virtual_sound_led = VirtualSoundLedStore(self.state_dir)
         self.virtual_timezone = VirtualTimezoneStore(self.state_dir)
@@ -282,12 +286,16 @@ class CandidateService:
                     RFDetrNanoDetector.from_checkpoint, policy["checkpoint_path"],
                     policy["checkpoint_sha256"], threshold=policy["threshold"])
             observations = await asyncio.to_thread(self._detector.detect, frame)
-        except DetectionError as exc:
+            assert self._tracker is not None
+            changes = self._tracker.update(observations, now=time.monotonic())
+        except (DetectionError, TrackingError) as exc:
             self.detector_error = str(exc)
             raise
         if time.time() < self.config["diagnostic_hello_until"]:
             self.detector_frames_succeeded += 1
             self.detector_objects_seen += len(observations)
+            self.detector_tracks_entered += sum(change.edge == "enter" for change in changes)
+            self.detector_tracks_left += sum(change.edge == "leave" for change in changes)
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=_MAX_MANAGE)
@@ -339,6 +347,8 @@ class CandidateService:
             "detector_frames_attempted": self.detector_frames_attempted,
             "detector_frames_succeeded": self.detector_frames_succeeded,
             "detector_objects_seen": self.detector_objects_seen,
+            "detector_tracks_entered": self.detector_tracks_entered,
+            "detector_tracks_left": self.detector_tracks_left,
             "detector_error": self.detector_error,
             "last_stream_error": self.last_stream_error,
             "last_decoder_exit_code": (self.ingress.last_decoder_exit_code
