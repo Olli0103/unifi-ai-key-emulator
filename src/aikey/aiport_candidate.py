@@ -132,7 +132,10 @@ class CandidateService:
         self.hello_sent = 0
         self.hello_replies = 0
         self.param_agreements = 0
+        self.stream_lists_answered = 0
+        self.stream_controls_rejected = 0
         self.last_control_command: str | None = None
+        self._next_message_id = 2
         self.started = time.monotonic()
 
     def app(self) -> web.Application:
@@ -152,6 +155,8 @@ class CandidateService:
             "hello_sent": self.hello_sent,
             "hello_replies": self.hello_replies,
             "param_agreements": self.param_agreements,
+            "stream_lists_answered": self.stream_lists_answered,
+            "stream_controls_rejected": self.stream_controls_rejected,
             "last_control_command": self.last_control_command,
             "uptime_seconds": int(time.monotonic() - self.started)})
 
@@ -182,6 +187,7 @@ class CandidateService:
         return context
 
     async def _send_diagnostic_hello(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        self._next_message_id = 2
         message = {"from": "ubnt_avclient", "to": "UniFiVideo",
                    "responseExpected": True, "functionName": "ubnt_avclient_hello",
                    "messageId": 1, "inResponseTo": 0,
@@ -193,6 +199,15 @@ class CandidateService:
                                "features": {}}}
         await ws.send_bytes(json.dumps(message, separators=(",", ":")).encode())
         self.hello_sent += 1
+
+    async def _reply_control(self, ws: aiohttp.ClientWebSocketResponse, function: str,
+                             request_id: int, status: int, payload: dict) -> None:
+        response = {"from": "ubnt_avclient", "to": "UniFiVideo",
+                    "responseExpected": False, "functionName": function,
+                    "messageId": self._next_message_id, "inResponseTo": request_id,
+                    "statusCode": status, "payload": payload}
+        await ws.send_bytes(json.dumps(response, separators=(",", ":")).encode())
+        self._next_message_id += 1
 
     async def _handle_diagnostic_frame(self, ws: aiohttp.ClientWebSocketResponse,
                                        raw: bytes) -> None:
@@ -210,16 +225,23 @@ class CandidateService:
             request_id = message.get("messageId")
             if type(request_id) is not int or request_id < 0:
                 return
-            response = {"from": "ubnt_avclient", "to": "UniFiVideo",
-                        "responseExpected": False,
-                        "functionName": "ubnt_avclient_paramAgreement",
-                        "messageId": 2, "inResponseTo": request_id,
-                        "statusCode": 0, "payload": {}}
-            await ws.send_bytes(json.dumps(response, separators=(",", ":")).encode())
+            await self._reply_control(ws, function, request_id, 0, {})
             self.param_agreements += 1
             return
-        if function in {"UiStreamControl", "OnvifStreamControl", "GetStreamList",
-                        "ChangeDeviceSettings", "GetRequest"}:
+        if function in {"GetStreamList", "UiStreamControl", "OnvifStreamControl"}:
+            self.last_control_command = function
+            request_id = message.get("messageId")
+            if not self.param_agreements or type(request_id) is not int or request_id < 0:
+                return
+            if function == "GetStreamList":
+                await self._reply_control(ws, function, request_id, 0, {"list": []})
+                self.stream_lists_answered += 1
+            else:
+                await self._reply_control(ws, function, request_id, 501,
+                                          {"description": "stream_ingest_unavailable"})
+                self.stream_controls_rejected += 1
+            return
+        if function in {"ChangeDeviceSettings", "GetRequest"}:
             self.last_control_command = function
 
     @staticmethod
