@@ -27,6 +27,7 @@ local-aiport-event-watch = "aikey.aiport_event_watch:main"
 local-aiport-provision = "aikey.aiport_instance_state:main"
 local-aiport-candidate = "aikey.aiport_candidate:main"
 local-aiport-relay = "aikey.aiport_relay:main"
+local-aiport-host-relay = "aikey.aiport_host_relay:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

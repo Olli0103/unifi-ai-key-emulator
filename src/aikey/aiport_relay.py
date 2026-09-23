@@ -14,6 +14,7 @@ import contextlib
 import ipaddress
 import os
 import signal
+from typing import Awaitable, Callable
 
 
 _MAX_BYTES = 1024 * 1024
@@ -39,7 +40,8 @@ def _ipv4(value: str, *, allow_loopback: bool = False) -> str:
 class BoundedRelay:
     def __init__(self, *, listen_ip: str, listen_port: int,
                  upstream_port: int, allowed_source_ip: str,
-                 allow_loopback: bool = False):
+                 allow_loopback: bool = False,
+                 upstream_check: Callable[[], Awaitable[None]] | None = None):
         self.listen_ip = _ipv4(listen_ip, allow_loopback=allow_loopback)
         self.allowed_source_ip = _ipv4(allowed_source_ip, allow_loopback=allow_loopback)
         if not (0 <= listen_port <= 65535 and 1 <= upstream_port <= 65535):
@@ -48,6 +50,7 @@ class BoundedRelay:
             raise RelayError("Relay and upstream ports must differ")
         self.listen_port = listen_port
         self.upstream_port = upstream_port
+        self.upstream_check = upstream_check
         self.server: asyncio.AbstractServer | None = None
         self.accepted = 0
         self.rejected = 0
@@ -83,6 +86,8 @@ class BoundedRelay:
         self.active.add(task)
         upstream_writer = None
         try:
+            if self.upstream_check is not None:
+                await self.upstream_check()
             upstream_reader, upstream_writer = await asyncio.wait_for(
                 asyncio.open_connection(self.listen_ip, self.upstream_port), 5)
             directions = [asyncio.create_task(self._pipe(downstream_reader, upstream_writer)),
@@ -91,7 +96,7 @@ class BoundedRelay:
             for direction in pending:
                 direction.cancel()
             await asyncio.gather(*directions, return_exceptions=True)
-        except (OSError, TimeoutError):
+        except (OSError, TimeoutError, ValueError):
             pass
         finally:
             if upstream_writer is not None:

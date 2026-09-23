@@ -59,6 +59,18 @@ sudo /opt/homebrew/bin/python3 -I /absolute/project/src/aikey/aiport_relay.py \
 
 The relay exits after ten minutes or SIGINT/SIGTERM. Its final counters contain no request content. Without a private adoption window, the candidate rejects management requests and retains only their sanitized field shape. Camera stream control uses the separate WebSocket path described below. Stop the relay immediately after the single management request has been checked.
 
+For a fully addressed multi-instance deployment, `local-aiport-host-relay` verifies every existing private slot identity against the saved plan and its controller certificate pin. It checks that each candidate is already reachable on its own address at TCP 8443 with the expected TLS certificate **before** binding any host TCP 443 listener and before forwarding each later connection. If one bind fails, all newly opened listeners close. It does not create identities, assign host addresses, change firewall rules or pair cameras. First run `--preflight-only`, which opens no listener:
+
+```sh
+local-aiport-host-relay --plan PRIVATE_ADDRESSED_PLAN_JSON \
+  --slot-state 1=PRIVATE_SLOT_1_STATE_DIR \
+  --slot-state 2=PRIVATE_SLOT_2_STATE_DIR \
+  --controller-ip CONSOLE_LAN_IP --controller-pin VERIFIED_CONTROL_CERT_SHA256 \
+  --preflight-only
+```
+
+Supply one `--slot-state` for **every** plan slot. The command refuses an unaddressed slot or a missing, changed, incomplete or world-readable identity. After a passing preflight, an administrator can bind fixed port 443 for the addressed slots; the process then drops to the specified non-root user. `--seconds 0` keeps it running until SIGTERM under a service manager. Use a supervisor that restarts it only against the same verified plan and state, and never overwrite an adopted identity to fill a new slot. Additional slots need distinct routed LAN addresses and candidate containers. The host relay is transport, not proof of native event delivery or production camera pairing.
+
 The optional `diagnostic_adoption_until` config field is a Unix timestamp no more than ten minutes ahead. A management request during that window must present the controller-rotated credential and a `wss` token with a host list containing the certificate-pinned controller's exact address and control port. The candidate writes a pending token to a mode-600 file, then reconnects to that controller with the token. It marks itself adopted only after a verified WebSocket upgrade and removes the token from the adopted file. The adopted record is bound to the controller address, certificate pin and port; a changed destination cannot reuse it. The synthetic tests cover these transitions and rejection cases. Fresh management-token adoption and reset behavior on Protect 7.3.60 remain `needs_evidence`. This window does not enable any camera stream; that still requires the separate one-camera stream diagnostic.
 
 For a device that Protect already treats as adopted and whose certificate and identity have not changed, `diagnostic_resume_until` allows a separate, ten-minute tokenless reconnect. It cannot coexist with `diagnostic_adoption_until`. The candidate advertises its existing adopted state only during that window and saves a controller-bound adopted record only after the pinned WebSocket upgrade. Protect 7.3.60 accepted this path for the existing candidate. After removing the window and restarting the container, Protect still showed the AI Port Online; the private record contained no token, and stream ingestion stayed off. This does not validate fresh management-token adoption or authorize pairing more cameras.
