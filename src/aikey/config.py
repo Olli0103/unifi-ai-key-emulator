@@ -145,6 +145,34 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
                 config["worker"]["test_scopes"] = list(scopes)
         except WorkerError as exc:
             raise ConfigError(str(exc)) from exc
+    if "continuous" in config["worker"]:
+        policy = config["worker"]["continuous"]
+        required = {"enabled", "api_key_file", "web_trust_file", "web_cert_file",
+                    "camera_models"}
+        if (not isinstance(policy, dict) or not required <= set(policy)
+                or set(policy) - required - {"refresh_seconds"}
+                or policy["enabled"] is not True):
+            raise ConfigError("worker.continuous requires model families and three private files")
+        if "test_scope" in config["worker"] or "test_scopes" in config["worker"]:
+            raise ConfigError("worker.continuous and one-use test scopes are mutually exclusive")
+        for field in ("api_key_file", "web_trust_file", "web_cert_file"):
+            path = policy[field]
+            if not isinstance(path, str) or not Path(path).is_absolute() or len(path) > 1024:
+                raise ConfigError(f"worker.continuous.{field} must be an absolute path")
+        models = policy["camera_models"]
+        if (not isinstance(models, list) or not 1 <= len(models) <= 16
+                or any(not isinstance(model, str) or not 1 <= len(model) <= 128
+                       or not model.isprintable() for model in models)
+                or len(models) != len(set(models))):
+            raise ConfigError("worker.continuous.camera_models requires distinct model names")
+        interval = policy.get("refresh_seconds", 60)
+        if type(interval) is not int or not 30 <= interval <= 300:
+            raise ConfigError("worker.continuous.refresh_seconds must be 30 to 300")
+        policy["refresh_seconds"] = interval
+        if (config["controller"].get("protect_version") != "7.3.60"
+                or config["worker"].get("callback_mode") != "enabled"
+                or config["worker"].get("request_mp4_exports") is not True):
+            raise ConfigError("worker.continuous requires Protect 7.3.60, callbacks and MP4 exports")
     if runtime.get("mode") not in ("device", "lab"):
         raise ConfigError("runtime.mode must be device or lab")
     if "deployment" in runtime:

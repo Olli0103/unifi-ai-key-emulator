@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, parse_qsl, urljoin, urlsplit, urlunsplit
 
 import aiohttp
 
+from .caption_budget import CaptionBudget, CaptionBudgetError, CaptionBudgetExhausted
 from .providers import ProviderError, validate_inference_config
 
 
@@ -132,7 +133,8 @@ class JobProcessor:
     A successful callback means HTTP 2xx only, never native search acceptance.
     """
 
-    def __init__(self, config: dict, state_dir: Path, ssl_context: ssl.SSLContext | None = None):
+    def __init__(self, config: dict, state_dir: Path, ssl_context: ssl.SSLContext | None = None,
+                 camera_registry=None):
         self.config = config
         self.options = config.get("worker", {})
         self.lab = config.get("runtime", {}).get("mode") == "lab"
@@ -158,6 +160,13 @@ class JobProcessor:
         self.state_dir = Path(state_dir) / "worker-jobs"
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.test_scopes = configured_test_scopes(self.options)
+        self.continuous = "continuous" in self.options
+        if self.continuous and self.test_scopes:
+            raise WorkerError("Continuous mode and one-use test scopes are mutually exclusive")
+        if self.continuous and camera_registry is None:
+            raise WorkerError("Continuous mode requires a camera registry")
+        self.camera_registry = camera_registry
+        self.caption_budget = CaptionBudget(state_dir) if self.continuous else None
         self.test_scope = self.test_scopes[0] if "test_scope" in self.options else None
         self._scopes_by_camera = {scope["camera_id"]: scope for scope in self.test_scopes}
         self._scope_paths = {}
@@ -300,6 +309,8 @@ class JobProcessor:
             raise WorkerError("Invalid or oversized RequestAI command")
         if "command" in command:
             return self._normalize_recognize_key_frames(command)
+        if self.continuous:
+            raise WorkerError("Continuous mode accepts only automatic video captions")
         target = command.get("targetUri")
         if target not in {":7968/describe", ":7968/on_demand_inference"}:
             raise WorkerError("Unsupported RequestAI targetUri")
@@ -396,15 +407,15 @@ class JobProcessor:
             raise WorkerError("Test scope export must contain the requested timestamp and span at most 10 seconds")
 
     def _normalize_recognize_key_frames(self, command):
-        """Accept the observed basic video command only under a single-use scope.
+        """Accept the observed basic video command under a bounded camera policy.
 
         This internal wrapper is supplied by the UCP dispatcher, not a fabricated
         RequestAI target URI. Both native video labels use the caption-only profile;
         optional recognition metadata is retained for identity but not processed.
         """
         if (set(command) != {"command", "payload"} or command["command"] != "recognizeKeyFrames"
-                or not self.test_scopes):
-            raise WorkerError("recognizeKeyFrames requires its explicit single-use test scope")
+                or not (self.test_scopes or self.continuous)):
+            raise WorkerError("recognizeKeyFrames requires an explicit camera policy")
         body = command["payload"]
         required = {"reqUrl", "resUrl", "ramType", "camera", "event", "channel", "start", "end",
                     "type", "mute", "format", "createEvent", "keyMoments", "postVLM"}
@@ -415,8 +426,9 @@ class JobProcessor:
         body = json.loads(_json(body))
         camera_id = body.get("camera")
         scope = self._scopes_by_camera.get(camera_id) if isinstance(camera_id, str) else None
-        if (scope is None or scope.get("kind") != "recognizeKeyFrames"
-                or not isinstance(body["event"], str)
+        allowed = (self.camera_registry.allows(camera_id) if self.continuous
+                   else scope is not None and scope.get("kind") == "recognizeKeyFrames")
+        if (not allowed or not isinstance(body["event"], str)
                 or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])
                 or body["ramType"] not in ("video", "videoWithRecognition") or body["postVLM"] is not True
                 or type(body["channel"]) is not int or body["channel"] != 0
@@ -557,6 +569,8 @@ class JobProcessor:
         normalized = self._normalize(command)
         await self.start()
         job_id, fingerprint, operation, body, callback, kind, media, budget = normalized
+        if self.continuous and not self.camera_registry.allows(body["camera"]):
+            raise WorkerError("Camera inventory changed before admission")
         if job_id in self._pending:
             job = self._pending[job_id]
             if fingerprint != job.fingerprint:
@@ -568,6 +582,8 @@ class JobProcessor:
                 raise WorkerError("Task identity reused with different input")
             if previous["state"] in {"callback_sending", "callback_uncertain"}:
                 raise WorkerError("Callback outcome is uncertain; review journal before retrying")
+            if self.continuous and previous["state"] == "failed":
+                raise WorkerError("Failed automatic job cannot be replayed")
             if previous["state"] == "completed":
                 future = asyncio.get_running_loop().create_future()
                 if previous["result"].get("status") == "failed":
@@ -586,6 +602,15 @@ class JobProcessor:
                    time.monotonic() + budget, future)
         try:
             self._reserve_test_scope(job)
+            if self.caption_budget is not None:
+                try:
+                    receipt = self.caption_budget.reserve(job_id, fingerprint, body["camera"])
+                except CaptionBudgetExhausted as exc:
+                    raise WorkerError("Global caption budget is exhausted") from exc
+                except CaptionBudgetError as exc:
+                    raise WorkerError("Global caption budget is unavailable") from exc
+                if not receipt.new:
+                    raise WorkerError("Caption reservation exists without completed job")
             self._queue.put_nowait(job)
         except asyncio.QueueFull as exc:
             future.cancel()

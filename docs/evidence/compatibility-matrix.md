@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-22.2). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-23.1). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-22.2` for the `ai-key` profile, based on commit `54160ce`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-23.1` for the `ai-key` profile, based on commit `54160ce`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -46,6 +46,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `control.request_ai.describe`: RequestAI :7968/describe session task with image or video inputs | fixture-tested | not_observed | not_observed | Protect 7.2.105 | default |
 | `control.request_ai.unknown_target`: RequestAI with an unimplemented or malformed targetUri | fixture-tested | not_observed | not_observed | Protect 7.2.105, AI Key 2.2.8 | default |
 | `control.recognize_key_frames`: recognizeKeyFrames video caption command within explicit one-use camera scopes | native-verified | not_observed | native-verified | Protect 7.2.105, AI Key 2.2.8 | experimental_opt_in |
+| `control.continuous_caption_admission`: Opt-in automatic captions admitted by fresh Protect inventory, model-family policy and a durable global budget | fixture-tested | not_observed | not_observed | — | experimental_opt_in |
 | `control.recognize_key_frames.other_variants`: recognizeKeyFrames image, multipleImages, audio and retroactive variants | unsupported | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
 | `control.host_management`: reboot, factoryReset, firmware install, SSH management, support upload and hardware statistics | unsupported | — | — | AI Key 2.2.8 | default |
 | `control.ai_settings_commands`: changeAiInferAgentSettings, changeDescribePrompts, networkStatus and sshService | unsupported | — | — | — | default |
@@ -131,6 +132,9 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `control.request_ai.unknown_target`: Protect's retry treatment of errorCode 95 versus 5 for RequestAI
 - `control.recognize_key_frames`: Continuous and all-camera operation (issue #12)
 - `control.recognize_key_frames`: Persistence after a controller restart
+- `control.continuous_caption_admission`: Native Protect dispatch and persistence under continuous admission
+- `control.continuous_caption_admission`: Preservation of existing native recognition tags on additional model families
+- `control.continuous_caption_admission`: Fair scheduling and bounded worker-journal rollover
 - `control.recognize_key_frames.other_variants`: Which variants 7.3.60 sends in normal operation
 - `control.ai_settings_commands`: These names appear in the device diagnostic allowlist, but no public record states their source or when Protect sends them
 - `framing.ucp_two_record`: No raw native frame capture or independently recorded two-record layout
@@ -216,3 +220,4 @@ Every live trial must record each experimental activation below that was in effe
 - **N6** (`control.recognize_key_frames`, `callback.ram_full_event_tagging`): Repeat the persisted-caption check after a controller restart with a new reviewed permit. The second camera-family check passed on G4 Instant by native panel and full page reload; an exact-event GET remains open for that family.
 - **N7** (`control.request_ai.describe`, `search.e5_nl_parse`, `search.native_retrieval`): Issue #10: determine whether 7.3.60 dispatches /describe and which search path it uses, before any search trial.
 - **N8** (`lifecycle.abnormal_closure_backoff`): Interrupt the network path briefly and record reconnect timing and adoption state.
+- **N9** (`control.continuous_caption_admission`): In an isolated, reviewed rollout, confirm fresh model-family inventory, Protect-side dispatch, persistence, budget exhaustion, additions/removals and reconnect. Keep richer native-AI models excluded until tag preservation is verified.

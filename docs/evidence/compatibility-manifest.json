@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-22.2",
+ "manifest_version": "ai-key/2026-09-23.1",
  "processor_profile": "ai-key",
  "base_commit": "54160ce",
  "emulated_identity": {
@@ -884,6 +884,40 @@
     "Persistence after a controller restart"
    ],
    "notes": "One G5 Flex and one G4 Instant event with native captions after page reload. Each used a separate one-use permit; this does not establish continuous operation. Out-of-scope camera returns errorCode 95 before the worker is called."
+  },
+  {
+   "id": "control.continuous_caption_admission",
+   "area": "control",
+   "title": "Opt-in automatic captions admitted by fresh Protect inventory, model-family policy and a durable global budget",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.56": "not_observed",
+    "live-protect-7.3.60": "not_observed"
+   },
+   "static": [],
+   "tests": [
+    "tests/test_continuous_admission.py::test_continuous_config_is_explicit_and_excludes_one_use_scopes",
+    "tests/test_continuous_admission.py::test_registry_add_remove_offline_failure_and_expiry",
+    "tests/test_continuous_admission.py::test_device_gate_tracks_fresh_camera_registry",
+    "tests/test_continuous_admission.py::test_global_budget_charges_twelve_before_media_across_cameras_and_restart",
+    "tests/test_continuous_admission.py::test_continuous_real_loopback_callback_and_duplicate_no_extra_charge",
+    "tests/test_continuous_admission.py::test_orphaned_reservation_cannot_repeat_a_paid_call",
+    "tests/test_continuous_admission.py::test_inventory_change_during_start_never_reserves_or_fetches"
+   ],
+   "implementation": [
+    "src/aikey/camera_registry.py",
+    "src/aikey/caption_budget.py",
+    "src/aikey/config.py",
+    "src/aikey/device.py",
+    "src/aikey/worker.py"
+   ],
+   "activation": "experimental_opt_in",
+   "missing_evidence": [
+    "Native Protect dispatch and persistence under continuous admission",
+    "Preservation of existing native recognition tags on additional model families",
+    "Fair scheduling and bounded worker-journal rollover"
+   ],
+   "notes": "Not deployed. Only connected smart-event cameras in the explicit model-family allowlist can be admitted while the pinned 7.3.60 inventory is fresh. Twelve new paid attempts per rolling hour are reserved before media or inference; uncertain attempts are not refunded. Protect-side camera policies are separate."
   },
   {
    "id": "control.recognize_key_frames.other_variants",
@@ -1969,6 +2003,13 @@
     "lifecycle.abnormal_closure_backoff"
    ],
    "procedure": "Interrupt the network path briefly and record reconnect timing and adoption state."
+  },
+  {
+   "id": "N9",
+   "features": [
+    "control.continuous_caption_admission"
+   ],
+   "procedure": "In an isolated, reviewed rollout, confirm fresh model-family inventory, Protect-side dispatch, persistence, budget exhaustion, additions/removals and reconnect. Keep richer native-AI models excluded until tag preservation is verified."
   }
  ]
 }

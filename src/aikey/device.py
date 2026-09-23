@@ -52,7 +52,12 @@ _RAM_TYPES = ("video", "videoWithRecognition", "image", "multipleImages")
 _WORKER_REJECTION_REASONS = {
     "Invalid or oversized RequestAI command": "command_size_or_shape",
     "Job must contain finite JSON": "invalid_json",
-    "recognizeKeyFrames requires its explicit single-use test scope": "scope_kind",
+    "recognizeKeyFrames requires an explicit camera policy": "scope_kind",
+    "Global caption budget is exhausted": "budget_exhausted",
+    "Global caption budget is unavailable": "budget_unavailable",
+    "Caption reservation exists without completed job": "budget_uncertain",
+    "Failed automatic job cannot be replayed": "job_failed",
+    "Camera inventory changed before admission": "inventory_changed",
     "Unsupported recognizeKeyFrames payload fields": "payload_fields",
     "recognizeKeyFrames is limited to captioned, muted target-camera video": "video_contract",
     "recognizeKeyFrames video must span at most 10 seconds": "video_interval",
@@ -217,7 +222,8 @@ class DeviceService:
                  job_handler: Callable[[dict], Awaitable[dict]],
                  tls_context: ssl.SSLContext | None = None, logger=None,
                  queue_status: Callable[[], dict] | None = None,
-                 credential_handler: Callable[[str, str], Awaitable[None]] | None = None):
+                 credential_handler: Callable[[str, str], Awaitable[None]] | None = None,
+                 camera_registry=None):
         self.config = deepcopy(config)
         self.device = self.config.get("device", {})
         self.controller = self.config.get("controller", {})
@@ -227,6 +233,7 @@ class DeviceService:
         self.job_handler = job_handler
         self.queue_status = queue_status
         self.credential_handler = credential_handler
+        self.camera_registry = camera_registry
         self.tls_context = tls_context
         self.log = logger or logging.getLogger(__name__)
         self.mac = _text(self.device.get("mac"), "device MAC").replace(":", "").replace("-", "").upper()
@@ -319,6 +326,8 @@ class DeviceService:
         from .worker import configured_test_scopes
         basic_enabled = any(scope.get("kind") == "recognizeKeyFrames"
                             for scope in configured_test_scopes(self.config.get("worker", {})))
+        basic_enabled = basic_enabled or ("continuous" in self.config.get("worker", {})
+                                          and self.camera_registry is not None)
         return {"adopted": bool(self._state.get("adopted")), "connected": self._ws is not None and not self._ws.closed,
                 "connections": self._connections, "last_error": self._last_error,
                 "last_close_code": self._last_close_code,
@@ -447,8 +456,9 @@ class DeviceService:
             inference = self.config.get("inference", {})
             from .worker import WorkerError, configured_test_scopes
             try:
-                configured_test_scopes(worker)
-                scope_supported = True
+                scope_supported = (any(scope.get("kind") == "recognizeKeyFrames"
+                                       for scope in configured_test_scopes(worker))
+                                   or "continuous" in worker and self.camera_registry is not None)
             except WorkerError:
                 scope_supported = False
             decoder = worker.get("ffmpeg_path")
@@ -808,6 +818,8 @@ class DeviceService:
         """Retain only fixed field names and categories, never request values."""
         from .worker import configured_test_scopes
         targets = {scope["camera_id"] for scope in configured_test_scopes(self.config.get("worker", {}))}
+        if self.camera_registry is not None:
+            targets.update(self.camera_registry.allowed_ids)
         matches = []
         for field in ("camera", "cameraId"):
             _increment(self._recognize_diagnostics[f"{field}_shape_counts"], _field_shape(body, field))
@@ -915,12 +927,14 @@ class DeviceService:
             phases = self._recognize_diagnostics["phase_counts"]
             scopes = configured_test_scopes(self.config.get("worker", {}))
             active = {scope["camera_id"] for scope in scopes if scope.get("kind") == "recognizeKeyFrames"}
+            if self.camera_registry is not None and "continuous" in self.config.get("worker", {}):
+                active.update(self.camera_registry.allowed_ids)
             if not active:
                 _increment(phases, "scope_disabled")
-                raise CommandFailure(95, "recognizeKeyFrames is outside the configured single-use scope")
+                raise CommandFailure(95, "recognizeKeyFrames is outside the configured camera policy")
             if not isinstance(body.get("camera"), str) or body["camera"] not in active:
                 _increment(phases, "camera_mismatch")
-                raise CommandFailure(95, "recognizeKeyFrames is outside the configured single-use scope")
+                raise CommandFailure(95, "recognizeKeyFrames is outside the configured camera policy")
             self._active_admissions += 1
             _increment(phases, "worker_admission")
             try:

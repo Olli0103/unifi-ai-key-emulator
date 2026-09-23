@@ -5,6 +5,7 @@ from pathlib import Path
 
 from aiohttp import web
 
+from .camera_registry import CameraRegistry
 from .device import DeviceService
 from .discovery import DiscoveryService
 from .search import SearchService
@@ -17,14 +18,19 @@ class Application:
         self.config = config
         self.state_dir = Path(config["runtime"]["state_dir"])
         outbound = client_context(config)
-        self.worker = JobProcessor(config, self.state_dir, ssl_context=outbound)
+        continuous = config.get("worker", {}).get("continuous")
+        self.camera_registry = (CameraRegistry(config["controller"]["host"], continuous)
+                                if continuous is not None else None)
+        self.worker = JobProcessor(config, self.state_dir, ssl_context=outbound,
+                                   camera_registry=self.camera_registry)
         self.credential_handler = None
         if config.get("database", {}).get("enabled") is True:
             from .database import PgCredentialRotator
             self.credential_handler = PgCredentialRotator(config, self.state_dir)
         self.device = DeviceService(config, self.state_dir, self.worker.submit,
                                     tls_context=outbound, queue_status=self.worker.status,
-                                    credential_handler=self.credential_handler)
+                                    credential_handler=self.credential_handler,
+                                    camera_registry=self.camera_registry)
         self.search = SearchService(config, self.state_dir, ssl_context=outbound)
         self.discovery = DiscoveryService(config, info_provider=self.device.get_info,
                                            adopted_provider=lambda: self.device.status["adopted"])
@@ -35,6 +41,8 @@ class Application:
         # Validate the shared embedding identity before any listener or controller connection.
         self.search.validate_configuration()
         try:
+            if self.camera_registry is not None:
+                await self.camera_registry.start()
             # Worker startup validates document-only profiles and creates idle clients.
             # It does not fetch media or contact the inference service until a job arrives.
             await self.worker.start()
@@ -61,12 +69,16 @@ class Application:
     async def _health(self, request):
         return web.json_response({"service": "local-aikey", "version": "0.1.0",
             "device": self.device.status, "worker": self.worker.status(),
+            "camera_registry": (self.camera_registry.status() if self.camera_registry is not None
+                                else {"enabled": False}),
             "search": self.search.status, "discovery": self.discovery.status,
             "native_compatibility": "needs_evidence"})
 
     async def stop(self):
         outcomes = await asyncio.gather(self.device.stop(), self.search.stop(), self.discovery.stop(),
-                                         self.worker.stop(), return_exceptions=True)
+                                         self.worker.stop(),
+                                         self.camera_registry.stop() if self.camera_registry is not None
+                                         else asyncio.sleep(0), return_exceptions=True)
         if self.runner is not None:
             await self.runner.cleanup()
             self.runner = None

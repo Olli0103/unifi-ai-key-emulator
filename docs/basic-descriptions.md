@@ -1,6 +1,6 @@
 # Bounded automatic event descriptions
 
-The worker accepts one native `recognizeKeyFrames` video command within an explicit camera scope and returns a real vision-model caption through the adopted device's callback. This experimental basic-mode path does not implement deep understanding, object indexing, ReID, face or plate recognition, audio, or semantic search. Continuous all-camera processing is planned in the [feature-parity roadmap](../PLAN.md).
+The worker accepts native `recognizeKeyFrames` video commands within an explicit camera policy and returns real vision-model captions through the adopted device's callback. This experimental basic-mode path does not implement deep understanding, object indexing, ReID, face or plate recognition, audio, or semantic search. An opt-in continuous admission path is implemented but has only synthetic test evidence. The live deployment still uses one-use permits.
 
 The command and persistence contract below come from Protect 7.2.105 source. Native acceptance and durable display on another Protect version must be verified separately. Loopback tests prove the emulator's request handling and callback format, not Protect's database writes.
 
@@ -28,9 +28,28 @@ Existing scopes without `kind` retain their on-demand-only behavior. This scope 
 
 For a paired camera-family trial, replace `test_scope` with `test_scopes`, a list of one or two objects in the same format. Every camera ID and permit ID must be distinct. Each camera has its own durable one-use reservation, so an event from one cannot consume the other's permit. Existing single-scope configurations continue to work. Supplying both fields, an empty list, or more than two scopes fails validation. This is still a bounded trial, not all-camera mode.
 
-Continuous mode is not yet deployed. Its planned global limit is 12 new jobs per rolling hour across all discovered cameras, persisted across restarts.
+The separate `worker.continuous` policy is implemented but has not been deployed or native-tested. It excludes `test_scope` and `test_scopes`. It refreshes Protect 7.3.60 camera inventory through the pinned, read-only integration API. Only connected cameras reporting onboard smart-detection types and matching an explicit model-family allowlist are eligible. The first candidates for that list are the two families with native caption evidence, G5 Flex and G4 Instant. Additions and removals change admission on the next successful refresh; an invalid read immediately clears eligibility, and a stalled refresh becomes stale after two intervals. It does not turn on Protect's own camera policies or provide a legacy-camera event source. Other models, including cameras with richer native AI, need a separate preservation check before admission.
 
-In the examined controller, a new smart-detection event passes through native key-moment selection and a short coalescing delay. The basic dispatcher requires `recognizeAnythingSettings.enabled` and the selected camera in its camera list, or `allCameras`. It sets `postVLM` from `aiSummarySettings.enabled`. Configure only the intended camera through the normal Protect UI. These settings are controller policies, distinct from the worker's local permit.
+```json
+{
+  "worker": {
+    "callback_mode": "enabled",
+    "request_mp4_exports": true,
+    "continuous": {
+      "enabled": true,
+      "api_key_file": "/private/state/protect-api-key",
+      "web_trust_file": "/private/state/protect-web-trust.json",
+      "web_cert_file": "/private/state/protect-web-cert.pem",
+      "camera_models": ["UVC G5 Flex", "UVC G4 Instant"],
+      "refresh_seconds": 60
+    }
+  }
+}
+```
+
+The three files must be private and readable by the container. The controller version must be configured as 7.3.60. Every new automatic event reserves one of 12 installation-wide slots in a rolling hour before media or inference. Reservations survive restart and uncertain failures are not refunded. A completed duplicate returns its recorded result; an orphaned reservation or failed automatic job cannot trigger another paid call. Exhaustion and invalid budget state reject new work. This is a cost limit, not a throughput or fairness guarantee. The current worker journal still has a fixed entry limit, so long-running rollover remains open before an unattended rollout.
+
+In the examined controller, a new smart-detection event passes through native key-moment selection and a short coalescing delay. The basic dispatcher requires `recognizeAnythingSettings.enabled` and the selected camera in its camera list, or `allCameras`. It sets `postVLM` from `aiSummarySettings.enabled`. Configure the intended cameras through the normal Protect UI. These settings are controller policies, distinct from the worker's local policy.
 
 The UI summary capability is `supportAiSummary.enabled`. It remains an explicit opt-in and is reported as disabled if the local model, video decoder, callback mode or caption scope is not configured. Normal runtime construction also validates the inference provider. A caption test does not establish object indexing or any search capability. Keep `supportDeepMode`, `supportVlm`, and unsupported recognition capabilities disabled, with `aiMode: "basic"`. This implementation does not enable those flags or change Protect policies automatically. Opening the summary action on an older event can invoke the separate on-demand route; it does not prove this automatic path works. Retroactive jobs use other media forms and remain unsupported here.
 
