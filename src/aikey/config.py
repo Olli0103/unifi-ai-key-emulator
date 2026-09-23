@@ -199,6 +199,8 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
     if not re.fullmatch(r"[0-9A-F]{12}", mac) or int(mac[:2], 16) & 1:
         raise ConfigError("device.mac must be a unicast MAC address")
     device["mac"] = mac
+    if device.get("model") != "UP-AI-KEY" or device.get("sysid") != "0xa5f0":
+        raise ConfigError("This runtime supports only the AI Key identity; AI Port needs a separate profile and state")
     for key in ("name", "management_username"):
         if not isinstance(device.get(key), str) or not device[key]:
             raise ConfigError(f"device.{key} must be nonempty")

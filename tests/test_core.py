@@ -96,6 +96,19 @@ def test_runtime_openai_still_requires_hydrated_key():
         VisionProvider(config)
 
 
+@pytest.mark.parametrize("model,sysid", [
+    ("UVC AI Port", "0xa5f1"),
+    ("UVC AI Port", "0xa5f0"),
+    ("UP-AI-KEY", "0xa5f1"),
+])
+def test_ai_port_identity_cannot_reuse_ai_key_runtime_or_state(tmp_path, model, sysid):
+    config = ready_config(tmp_path)
+    config["device"]["model"] = model
+    config["device"]["sysid"] = sysid
+    with pytest.raises(ConfigError, match="AI Port needs a separate profile and state"):
+        validate_config(config)
+
+
 def test_readiness_reports_optional_deployment_label(tmp_path):
     config = ready_config(tmp_path)
     assert "deployment" not in config["runtime"]
