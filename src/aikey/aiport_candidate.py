@@ -154,6 +154,7 @@ class CandidateService:
         self.stream_controls_started = 0
         self.stream_controls_stopped = 0
         self.stream_controls_rejected = 0
+        self.stream_status_events_sent = 0
         self.last_stream_error: str | None = None
         self.last_control_command: str | None = None
         self.observed_function_counts: dict[str, int] = {}
@@ -190,6 +191,7 @@ class CandidateService:
             "stream_controls_started": self.stream_controls_started,
             "stream_controls_stopped": self.stream_controls_stopped,
             "stream_controls_rejected": self.stream_controls_rejected,
+            "stream_status_events_sent": self.stream_status_events_sent,
             "stream_frames_decoded": self.ingress.frame_count if self.ingress else 0,
             "stream_frames_decoded_total": (
                 self.ingress.total_frames_decoded + self.ingress.frame_count
@@ -275,6 +277,20 @@ class CandidateService:
         await ws.send_bytes(json.dumps(response, separators=(",", ":")).encode())
         self._next_message_id += 1
 
+    async def _send_stream_status(self, ws: aiohttp.ClientWebSocketResponse,
+                                  *, streaming: bool) -> None:
+        assert self.ingress is not None
+        event = {"from": "ubnt_avclient", "to": "UniFiVideo",
+                 "responseExpected": False, "functionName": "EventAIPortStatus",
+                 "messageId": self._next_message_id, "inResponseTo": 0,
+                 "payload": {"deviceID": self.ingress.camera_mac,
+                             "isStreaming": streaming,
+                             "isSmartDetectReady": False,
+                             "isAudioEventReady": False}}
+        await ws.send_bytes(json.dumps(event, separators=(",", ":")).encode())
+        self._next_message_id += 1
+        self.stream_status_events_sent += 1
+
     async def _handle_diagnostic_frame(self, ws: aiohttp.ClientWebSocketResponse,
                                        raw: bytes) -> None:
         try:
@@ -334,6 +350,9 @@ class CandidateService:
                         self.stream_controls_started += 1
                     else:
                         self.stream_controls_stopped += 1
+                    if time.time() < self.config["diagnostic_hello_until"]:
+                        await self._send_stream_status(
+                            ws, streaming=result["status"] == "started")
             else:
                 await self._reply_control(ws, function, request_id, 501,
                                           {"description": "stream_ingest_unavailable"})
