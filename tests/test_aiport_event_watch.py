@@ -73,8 +73,8 @@ async def test_watch_counts_native_subscription_events_without_retaining_payload
     class FakeSocket:
         def __init__(self):
             self.frames = iter([
-                aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, frame(), ""),
-                aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, frame(), ""),
+                aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, frame(types=[]), ""),
+                aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, frame(types=[]), ""),
                 aiohttp.WSMessage(aiohttp.WSMsgType.TEXT,
                                   frame(action="update"), ""),
                 aiohttp.WSMessage(aiohttp.WSMsgType.TEXT,
@@ -126,7 +126,9 @@ async def test_watch_counts_native_subscription_events_without_retaining_payload
     assert result["targeted_event_adds"] == 1
     assert result["targeted_event_updates"] == 1
     assert result["targeted_smart_video_adds"] == 1
-    assert result["targeted_person_adds"] == 1
+    assert result["targeted_smart_video_updates"] == 1
+    assert result["targeted_person_adds"] == 0
+    assert result["targeted_person_updates"] == 1
     assert result["selected_camera_count"] == 1
     assert result["timeline_persistence"] == "needs_evidence"
     assert CAMERA_ID not in json.dumps(result)
