@@ -1859,6 +1859,11 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
                for message in sink.messages)
     health = json.loads((await service._health(None)).text)
     assert health["pool_inference"]["successes"] == 5
+    assert len(health["pool_cameras"]) == 2
+    assert [item["index"] for item in health["pool_cameras"]] == [0, 1]
+    assert all("observations" in item and "events_entered" in item
+               for item in health["pool_cameras"])
+    assert cameras[0] not in json.dumps(health["pool_cameras"])
     assert health["smart_events_entered"] == 2
     assert "private-pool-frame" not in json.dumps(health)
     await service.stop()

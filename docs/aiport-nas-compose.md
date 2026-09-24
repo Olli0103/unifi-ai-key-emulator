@@ -4,7 +4,7 @@
 
 Protect expects each AI Port identity at HTTPS port 443 on its own LAN address. The number of instances follows camera resolution and source capacity, not one port per camera. A Linux macvlan network can assign each container a distinct IP and MAC on the NAS LAN. Docker's [macvlan documentation](https://docs.docker.com/engine/network/drivers/macvlan/) requires a real parent interface and warns that the NAS host cannot directly reach its macvlan containers without an additional network path. This mode has **not** been tested on the UGREEN NAS.
 
-Before generating a manifest, confirm the NAS has Docker Engine/Compose with macvlan support, identify the physical parent interface and subnet/gateway, and reserve each AI Port IP outside DHCP or through the router. Do not treat an unanswered ping as proof an address is free. The existing AI Key IP, NAS IP, gateway, controller IP, and camera IPs cannot be reused. On the current lab plan, five AI Port instances are required for the selected G3–G5/legacy scope, while only the existing Mac candidate's first address is assigned. Four additional reserved addresses are `needs_evidence`.
+Before generating a manifest, confirm the NAS has Docker Engine/Compose with macvlan support, identify the physical parent interface and subnet/gateway, and reserve each AI Port IP outside DHCP or through the router. Do not treat an unanswered ping as proof an address is free. The existing AI Key IP, NAS IP, gateway, controller IP, and camera IPs cannot be reused. The 24 September lab inventory selected nine connected G3–G5/legacy cameras across four conservatively sized AI Port instances. The existing Mac candidate and one staged NAS slot have addresses; two additional reserved addresses are `needs_evidence`. The staged NAS slot is not running, and actual stream dimensions may change this capacity plan.
 
 Create a fresh, saved `local-aiport-plan` result with an address for every slot selected in this NAS manifest. Other planned slots can wait for their reservations. Preserve the prior plan when adding slots so that an adopted identity does not silently move. Provision each selected NAS slot with `local-aiport-provision` in a private, persistent directory owned by the intended non-root container UID/GID. The generator verifies the stored MAC, device certificate, controller pin, fixed IP, and file ownership; it will not create or rotate identities. An already-running Mac slot can be excluded while later slots are prepared for the NAS:
 
@@ -14,7 +14,6 @@ local-aiport-nas-compose \
   --slot-state 2=/private/nas/aiport/slot-2 \
   --slot-state 3=/private/nas/aiport/slot-3 \
   --slot-state 4=/private/nas/aiport/slot-4 \
-  --slot-state 5=/private/nas/aiport/slot-5 \
   --controller-ip PROTECT_IPV4 --controller-pin VERIFIED_SHA256_PIN \
   --nas-ip NAS_IPV4 --subnet LAN_CIDR --gateway LAN_GATEWAY_IPV4 \
   --parent VERIFIED_NAS_ETHERNET_INTERFACE \
@@ -23,6 +22,8 @@ local-aiport-nas-compose \
 ```
 
 The output is mode 600 and never overwritten if it differs. Compose gets one service per selected slot, a static LAN IP and the slot's stored MAC, fixed HTTPS 443 inside the container, a writable private state mount, a read-only root filesystem, dropped Linux capabilities, and a namespaced unprivileged-port sysctl. It publishes no host ports. A separately armed stream diagnostic opens TCP 7447 on that same container IP; no extra host port is needed. [Docker Compose network attributes](https://docs.docker.com/reference/compose-file/services/#networks) and [network IPAM](https://docs.docker.com/reference/compose-file/networks/#ipam) support this layout. The NAS runtime must still prove that its kernel accepts the sysctl and that each service can bind 443 as the selected non-root user.
+
+Apple `container image save` emits an OCI archive. Before using the UGREEN Docker GUI's image import path, convert that local archive to a Docker archive with `skopeo copy --format v2s2 oci-archive:SOURCE.tar docker-archive:DEST.tar:IMAGE_TAG`, then inspect the resulting `manifest.json` for the intended tag and `linux/amd64` image configuration. A `.docker.tar` filename alone does not establish its format. This conversion has been verified locally; the NAS GUI import of the converted image is still `needs_evidence`.
 
 If the NAS already has a suitable macvlan, add `--external-network EXISTING_NETWORK_NAME` to both generation and reconciliation commands. The manifest then joins that network instead of creating a second one on the same LAN. Before reading or starting containers, reconciliation inspects the existing Docker network and requires the declared macvlan driver, parent interface, subnet and gateway. It also checks that each container is attached to the named network at its planned IP and MAC. The NAS Docker UI may show a friendly network-card label; use the actual parent interface reported by `docker network inspect` for `--parent`. This check does not reserve an IP in the router or prove that Protect can reach the container.
 

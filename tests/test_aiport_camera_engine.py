@@ -211,3 +211,8 @@ def test_live_event_budget_rolls_forward_without_affecting_other_camera():
     assert engine.observe(FIRST, (person(),), now=63) == ()
     renewed, = engine.observe(FIRST, (person(),), now=64)
     assert renewed.change.edge == "enter"
+    status = engine.camera_snapshot(now=64)
+    assert status[0]["events_entered"] == 2
+    assert status[0]["event_budget_remaining"] == 0
+    assert status[0]["eligible_observations"] >= 2
+    assert FIRST not in str(status)

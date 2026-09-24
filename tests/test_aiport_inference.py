@@ -60,6 +60,10 @@ async def test_round_robin_coalesces_busy_camera_and_keeps_results_separate():
         "dropped_frames": 1, "failed_cameras": 0,
         "pending_cameras": 0, "model_load_failed": False, "closed": False,
     }
+    camera_status = scheduler.camera_snapshot()
+    assert [(item["index"], item["attempts"], item["observations"]["person"])
+            for item in camera_status] == [(0, 2, 2), (1, 1, 1), (2, 1, 1)]
+    assert FIRST not in str(camera_status)
     await scheduler.close()
 
 
@@ -88,6 +92,8 @@ async def test_one_inference_failure_disables_only_that_camera():
     assert scheduler.is_available(SECOND)
     assert scheduler.snapshot()["failed_cameras"] == 1
     assert scheduler.snapshot()["dropped_frames"] == 1
+    assert scheduler.camera_snapshot()[0]["disabled"] is True
+    assert scheduler.camera_snapshot()[1]["disabled"] is False
     await scheduler.close()
 
 

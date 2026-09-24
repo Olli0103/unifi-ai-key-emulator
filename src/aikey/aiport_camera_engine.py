@@ -46,6 +46,7 @@ class CameraPolicyEngine:
         if len(set(cameras)) != len(cameras):
             raise IngressError("duplicate_camera")
         self._cameras = frozenset(cameras)
+        self._camera_order = tuple(cameras)
         self._policies: dict[str, SmartPolicy | None] = {
             camera: None for camera in cameras}
         self._trackers = {camera: TemporalTracker() for camera in cameras}
@@ -54,6 +55,7 @@ class CameraPolicyEngine:
         self._event_counts = {camera: 0 for camera in cameras}
         self._event_times: dict[str, deque[float]] = {
             camera: deque() for camera in cameras}
+        self._eligible_observations = dict.fromkeys(cameras, 0)
         self._last_moving: dict[str, dict[int, float]] = {
             camera: {} for camera in cameras}
         self._generations = dict.fromkeys(cameras, 0)
@@ -103,6 +105,7 @@ class CameraPolicyEngine:
         selected = tuple(value for value in observations
                          if policy.allows_score(value.kind, value.score)
                          and policy.zone_ids(value.kind, value.box) is not None)
+        self._eligible_observations[camera] += len(selected)
         changes = self._trackers[camera].update(selected, now=now)
         if self._event_window_seconds is not None:
             cutoff = now - self._event_window_seconds
@@ -148,3 +151,23 @@ class CameraPolicyEngine:
     def policy_generation(self, camera_mac: str) -> int:
         """Tag frames so a policy change cannot consume an older model result."""
         return self._generations[self._camera(camera_mac)]
+
+    def camera_snapshot(self, *, now: float) -> tuple[dict[str, int | bool], ...]:
+        """Policy counters in config order, without camera identifiers."""
+        if type(now) not in (int, float) or not math.isfinite(now):
+            raise IngressError("invalid_camera_engine")
+        result = []
+        for camera in self._camera_order:
+            if self._event_window_seconds is None:
+                used = self._event_counts[camera]
+            else:
+                cutoff = now - self._event_window_seconds
+                used = sum(at > cutoff for at in self._event_times[camera])
+            result.append({
+                "policy_enabled": self._policies[camera] is not None,
+                "eligible_observations": self._eligible_observations[camera],
+                "events_entered": self._event_counts[camera],
+                "active_tracks": len(self._active[camera]),
+                "event_budget_remaining": max(0, self._max_events - used),
+            })
+        return tuple(result)

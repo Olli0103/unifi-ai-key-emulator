@@ -54,6 +54,9 @@ class FairInference:
         self._disabled: set[str] = set()
         self._attempts = dict.fromkeys(cameras, 0)
         self._successes = dict.fromkeys(cameras, 0)
+        self._observations = {
+            camera: {"person": 0, "vehicle": 0, "animal": 0}
+            for camera in cameras}
         self._last_index = -1
         self._worker: asyncio.Task | None = None
         self._closed = False
@@ -114,6 +117,8 @@ class FairInference:
                     validate_observation(observation)
                 if self._closed:
                     return
+                for observation in result:
+                    self._observations[camera][observation.kind] += 1
                 await self._on_result(camera, result, generation, frame)
             except asyncio.CancelledError:
                 raise
@@ -187,3 +192,14 @@ class FairInference:
             "model_load_failed": self._global_failure,
             "closed": self._closed,
         }
+
+    def camera_snapshot(self) -> tuple[dict[str, object], ...]:
+        """Content-free counters in config order, without camera identifiers."""
+        return tuple({
+            "index": index,
+            "attempts": self._attempts[camera],
+            "successes": self._successes[camera],
+            "observations": dict(self._observations[camera]),
+            "disabled": camera in self._disabled or self._global_failure,
+            "pending": camera in self._pending,
+        } for index, camera in enumerate(self._cameras))

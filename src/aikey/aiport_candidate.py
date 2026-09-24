@@ -1248,6 +1248,13 @@ class CandidateService:
                 if "live_detector" in self.config else None),
             "pool_inference": (self._inference.snapshot()
                                if self._inference is not None else None),
+            "pool_cameras": ([dict(inference, **policy)
+                              for inference, policy in zip(
+                                  self._inference.camera_snapshot(),
+                                  self._camera_engine.camera_snapshot(now=time.monotonic()),
+                                  strict=True)]
+                             if self._inference is not None
+                             and self._camera_engine is not None else None),
             "last_stream_error": self.last_stream_error,
             "last_decoder_exit_code": (self.ingress.last_decoder_exit_code
                                        if self.ingress else None),
