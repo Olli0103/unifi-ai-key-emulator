@@ -139,6 +139,11 @@ def load_config(path: Path) -> dict:
             stream["ffmpeg_path"] = executable_path(stream["ffmpeg_path"])
         except IngressError as exc:
             raise CandidateError("Invalid paired stream policy") from exc
+        live_probe_fields = {"diagnostic_detector", "diagnostic_smart_probe_until",
+                             "diagnostic_event_until"}
+        if (set(value) & live_probe_fields
+                and not live_probe_fields <= set(value)):
+            raise CandidateError("Paired camera AI probe requires a complete bounded policy")
     if "diagnostic_hello_until" in value:
         until = value["diagnostic_hello_until"]
         if type(until) is not int or until < 0 or until > int(time.time()) + 600:
@@ -218,7 +223,8 @@ def load_config(path: Path) -> dict:
             raise CandidateError("Pool event diagnostic requires bounded streams and detector")
     if "diagnostic_detector" in value:
         detector = value["diagnostic_detector"]
-        if ("diagnostic_stream" not in value or not isinstance(detector, dict)
+        if (("diagnostic_stream" not in value and "paired_stream" not in value)
+                or not isinstance(detector, dict)
                 or set(detector) != {"checkpoint_path", "checkpoint_sha256",
                                      "threshold", "max_frames"}
                 or not isinstance(detector["checkpoint_path"], str)
@@ -271,9 +277,11 @@ def load_config(path: Path) -> dict:
             raise CandidateError(str(exc)) from exc
     if "diagnostic_smart_probe_until" in value:
         until = value["diagnostic_smart_probe_until"]
-        if ("diagnostic_stream" not in value or type(until) is not int
+        if (("diagnostic_stream" not in value and "paired_stream" not in value)
+                or type(until) is not int
                 or until <= int(time.time()) or until > int(time.time()) + 600
-                or until != value["diagnostic_hello_until"]):
+                or ("paired_stream" not in value
+                    and until != value.get("diagnostic_hello_until"))):
             raise CandidateError("Smart settings probe requires a bounded camera stream")
     if "diagnostic_event_until" in value:
         until = value["diagnostic_event_until"]
@@ -284,6 +292,8 @@ def load_config(path: Path) -> dict:
                 or ("diagnostic_detector" in value
                     and value["diagnostic_detector"]["max_frames"] < 2)):
             raise CandidateError("Smart event probe requires a bounded source and policy")
+        if ("paired_stream" in value and "diagnostic_detector" not in value):
+            raise CandidateError("Paired camera event probe requires a local detector")
     if "diagnostic_smart_type" in value:
         if (not isinstance(value["diagnostic_smart_type"], str)
                 or value["diagnostic_smart_type"] not in {"person", "vehicle", "animal"}
@@ -463,7 +473,10 @@ class CandidateService:
         self._send_lock = asyncio.Lock()
         self.ingress: AiPortIngress | AiPortIngressPool | None = None
         if "paired_stream" in config:
-            self.ingress = AiPortIngress(**config["paired_stream"])
+            self.ingress = AiPortIngress(
+                **config["paired_stream"],
+                frame_observer=(self._observe_frame
+                                if "diagnostic_detector" in config else None))
         elif config.get("diagnostic_hello_until", 0) > time.time():
             if "diagnostic_stream" in config:
                 self.ingress = AiPortIngress(
@@ -592,7 +605,9 @@ class CandidateService:
 
     async def _observe_frame(self, frame: bytes) -> None:
         policy = self.config["diagnostic_detector"]
-        if (time.time() >= self.config["diagnostic_hello_until"]
+        until = self.config.get("diagnostic_hello_until",
+                                self.config.get("diagnostic_event_until", 0))
+        if (time.time() >= until
                 or self.detector_frames_attempted >= policy["max_frames"]):
             return
         if ("diagnostic_event_until" in self.config
@@ -625,7 +640,7 @@ class CandidateService:
         except (DetectionError, TrackingError) as exc:
             self.detector_error = str(exc)
             raise
-        if time.time() < self.config["diagnostic_hello_until"]:
+        if time.time() < until:
             self.detector_frames_succeeded += 1
             self.detector_objects_seen += len(observations)
             self.detector_tracks_entered += sum(change.edge == "enter" for change in changes)
@@ -694,7 +709,8 @@ class CandidateService:
             if (previous is not None and self._smart_policy is not None
                     and isinstance(self.ingress, AiPortIngress)
                     and self._current_ws is ws and self._params_agreed
-                    and time.time() < self.config.get("diagnostic_event_until", 0)):
+                    and (time.time() < self.config.get("diagnostic_event_until", 0)
+                         or "paired_stream" in self.config)):
                 try:
                     payload = smart_event_payload(
                         self.ingress.camera_mac, previous, edge="leave",
@@ -1398,7 +1414,8 @@ class CandidateService:
             # when a local detector or one-use wire probe is explicitly armed.
             parsed_policy = None
             if (isinstance(self.ingress, AiPortIngress)
-                    and time.time() < self.config.get("diagnostic_hello_until", 0)):
+                    and (time.time() < self.config.get("diagnostic_hello_until", 0)
+                         or time.time() < self.config.get("diagnostic_smart_probe_until", 0))):
                 if time.time() < self.config.get("diagnostic_smart_probe_until", 0):
                     self._smart_settings_probe_shape = summarize_smart_request(
                         message.get("payload"), camera_mac=self.ingress.camera_mac)
@@ -1486,6 +1503,17 @@ class CandidateService:
     async def _expire_diagnostic(ws: aiohttp.ClientWebSocketResponse, until: int) -> None:
         await asyncio.sleep(max(0, until - time.time()))
         await ws.close()
+
+    async def _expire_paired_event_probe(
+            self, ws: aiohttp.ClientWebSocketResponse, until: int) -> None:
+        """Stop AI events at expiry while keeping the paired stream connected."""
+        await asyncio.sleep(max(0, until - time.time()))
+        if self._current_ws is not ws or not self._params_agreed:
+            return
+        await self._revoke_single_policy(ws)
+        if isinstance(self.ingress, AiPortIngress) and self.ingress.list_streams():
+            await self._send_stream_status(
+                ws, streaming=True, camera_mac=self.ingress.camera_mac)
 
     def _cancel_ingress_close(self) -> None:
         if self._ingress_close_task is not None:
@@ -1603,12 +1631,18 @@ class CandidateService:
                             diagnostic = until > time.time()
                             active_control = diagnostic or self.adoption.adopted
                             expiry_task = None
+                            event_expiry_task = None
                             try:
                                 if active_control:
                                     await self._send_diagnostic_hello(ws)
                                 if diagnostic:
                                     expiry_task = asyncio.create_task(
                                         self._expire_diagnostic(ws, until))
+                                if "paired_stream" in self.config:
+                                    event_until = self.config.get("diagnostic_event_until", 0)
+                                    if event_until > time.time():
+                                        event_expiry_task = asyncio.create_task(
+                                            self._expire_paired_event_probe(ws, event_until))
                                 async for message in ws:
                                     if message.type == aiohttp.WSMsgType.BINARY:
                                         self.ws_binary_frames += 1
@@ -1630,6 +1664,10 @@ class CandidateService:
                                     expiry_task.cancel()
                                     with contextlib.suppress(asyncio.CancelledError):
                                         await expiry_task
+                                if event_expiry_task is not None:
+                                    event_expiry_task.cancel()
+                                    with contextlib.suppress(asyncio.CancelledError):
+                                        await event_expiry_task
                                 if self.ingress is not None:
                                     await self._schedule_ingress_close()
                                 self._record_close(ws.close_code,

@@ -115,6 +115,63 @@ def test_paired_stream_rejects_other_sources_and_diagnostic_overlap(tmp_path):
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     with pytest.raises(CandidateError):
         load_config(tmp_path / "config.json")
+    del config["diagnostic_hello_until"]
+    config["diagnostic_smart_probe_until"] = int(time.time()) + 60
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError):
+        load_config(tmp_path / "config.json")
+
+
+def test_paired_stream_accepts_bounded_live_detector_without_hello_expiry(tmp_path):
+    config = fixture_state(tmp_path)
+    config["paired_stream"] = {"camera_mac": "2A1122334455",
+                               "source_ip": "192.168.10.1",
+                               "ffmpeg_path": sys.executable}
+    until = int(time.time()) + 60
+    config["diagnostic_smart_probe_until"] = until
+    config["diagnostic_event_until"] = until
+    config["diagnostic_detector"] = {
+        "checkpoint_path": str(tmp_path / "model.pt"),
+        "checkpoint_sha256": "a" * 64, "threshold": 0.3, "max_frames": 120}
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    loaded = load_config(tmp_path / "config.json")
+    service = CandidateService(loaded, tmp_path)
+    assert service.ingress is not None
+    assert service.ingress.frame_observer is not None
+    assert service._tracker is not None
+    assert service._inference is None
+
+
+@pytest.mark.asyncio
+async def test_paired_event_expiry_revokes_ai_without_disconnecting_stream(tmp_path):
+    config = fixture_state(tmp_path)
+    config["paired_stream"] = {"camera_mac": "2A1122334455",
+                               "source_ip": "192.168.10.1",
+                               "ffmpeg_path": sys.executable}
+    config["diagnostic_smart_probe_until"] = int(time.time())
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+    service._smart_policy = object()
+    service.ingress.list_streams = lambda: [{"deviceID": "2A1122334455"}]
+
+    class FakeWebSocket:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+        async def close(self):
+            raise AssertionError("pairing control must remain connected")
+
+    ws = FakeWebSocket()
+    service._current_ws = ws
+    await service._expire_paired_event_probe(ws, int(time.time()))
+    assert service._smart_policy is None
+    assert ws.messages[-1]["functionName"] == "EventAIPortStatus"
+    assert ws.messages[-1]["payload"] == {
+        "deviceID": "2A1122334455", "isStreaming": True,
+        "isSmartDetectReady": False, "isAudioEventReady": False}
 
 
 def test_diagnostic_hello_requires_short_lived_private_config(tmp_path):
