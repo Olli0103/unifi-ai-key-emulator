@@ -39,7 +39,7 @@ Keep the identity and TLS files private and persistent. Do not reuse the AI Key 
 
 ## Mac network test
 
-Build the dedicated image from source and run it as the state directory's owner. Set `AIPORT_DNS` to a resolver reachable from inside Apple container, such as the LAN router. The default virtual gateway may not answer DNS queries. Without an explicit resolver, camera streams can decode while every remote vision request fails before reaching its provider and exhausts the per-camera request cap. The container listens internally on unprivileged TCP 8443:
+Build the dedicated image from source and run it as the state directory's owner. Set `AIPORT_DNS` to a resolver reachable from inside Apple container, such as the LAN router. The default virtual gateway may not answer DNS queries. Without an explicit resolver, camera streams can decode while remote vision requests never reach their provider. The current detector checks DNS before claiming a paid-request allowance, reports `api_detection_dns_unavailable`, and retries resolution after 60 seconds. The container listens internally on unprivileged TCP 8443:
 
 ```sh
 AIPORT_DNS="REACHABLE_DNS_IPV4"

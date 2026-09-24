@@ -2,7 +2,8 @@
 
 import json
 from io import BytesIO
-from urllib.error import HTTPError
+import socket
+from urllib.error import HTTPError, URLError
 
 import pytest
 from PIL import Image, ImageDraw
@@ -119,6 +120,62 @@ def test_http_error_exposes_only_status_class(monkeypatch):
     with pytest.raises(ApiDetectionError, match="api_detection_http_429") as failure:
         _post("https://api.openai.com/v1/responses", {}, {})
     assert "private" not in str(failure.value)
+
+
+def test_dns_failure_exposes_safe_code_without_provider_details(monkeypatch):
+    class Opener:
+        def open(self, *_args, **_kwargs):
+            raise URLError(socket.gaierror("private resolver detail"))
+
+    monkeypatch.setattr("aikey.aiport_api_detection.build_opener",
+                        lambda *_args: Opener())
+    with pytest.raises(ApiDetectionError, match="api_detection_dns_unavailable") as failure:
+        _post("https://api.openai.com/v1/responses", {}, {})
+    assert "private" not in str(failure.value)
+
+
+def test_dns_outage_preserves_budget_and_recovers_without_restart(tmp_path, monkeypatch):
+    key = tmp_path / "openai-key"
+    key.write_text("synthetic-test-key\n")
+    key.chmod(0o600)
+    config = {"provider": "openai", "model": "gpt-6-luna",
+              "base_url": "https://api.openai.com/v1", "allow_remote": True,
+              "api_key_file": str(key), "max_output_tokens": 256}
+    detector = ApiObjectDetector(config, tmp_path, threshold=0.8,
+                                 max_requests_per_hour=2)
+    calls = []
+    detector.transport = lambda *_args: (calls.append(1) or {
+        "status": "completed", "output": [{
+            "type": "message", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": '{"detections":[]}'}],
+        }]})
+    clock = [100.0]
+    monkeypatch.setattr("aikey.aiport_api_detection.time.monotonic",
+                        lambda: clock[0])
+    resolutions = []
+
+    def unavailable(*_args, **_kwargs):
+        resolutions.append(1)
+        raise socket.gaierror("private resolver detail")
+
+    monkeypatch.setattr("aikey.aiport_api_detection.socket.getaddrinfo", unavailable)
+    detector.detect_for_camera(FIRST, STILL)
+    with pytest.raises(ApiDetectionError, match="api_detection_dns_unavailable"):
+        detector.detect_for_camera(FIRST, FRAME)
+    with pytest.raises(ApiDetectionError, match="api_detection_dns_unavailable"):
+        detector.detect_for_camera(FIRST, FRAME)
+    assert len(resolutions) == 1
+    assert calls == []
+    assert detector.budget.remaining(FIRST) == 2
+
+    clock[0] += 61
+    monkeypatch.setattr("aikey.aiport_api_detection.socket.getaddrinfo",
+                        lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM)])
+    for _ in range(4):
+        detector.detect_for_camera(FIRST, STILL)
+    assert detector.detect_for_camera(FIRST, FRAME) == ()
+    assert calls == [1]
+    assert detector.budget.remaining(FIRST) == 1
 
 
 @pytest.mark.parametrize("text", [

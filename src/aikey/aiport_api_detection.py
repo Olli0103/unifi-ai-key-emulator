@@ -10,9 +10,11 @@ import json
 from io import BytesIO
 import os
 from pathlib import Path
+import socket
 import stat
+import time
 from typing import Any, Callable
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
@@ -27,6 +29,7 @@ from .providers import ProviderError, image_mime, validate_inference_config
 _MAX_FRAME_BYTES = 1024 * 1024
 _MAX_REPLY_BYTES = 64 * 1024
 _MOTION_CHANGED_CELLS = 8
+_DNS_RETRY_SECONDS = 60
 _LABELS = {
     "person": {"person"},
     "vehicle": {"bicycle", "car", "motorcycle", "bus", "truck"},
@@ -165,6 +168,11 @@ def _post(url: str, headers: dict, payload: dict) -> dict:
                 "api_detection_http_5xx" if 500 <= exc.code < 600 else
                 "api_detection_http_failure")
         raise ApiDetectionError(code) from exc
+    except URLError as exc:
+        code = ("api_detection_dns_unavailable"
+                if isinstance(exc.reason, socket.gaierror)
+                else "api_detection_request_failed")
+        raise ApiDetectionError(code) from exc
     except Exception as exc:
         raise ApiDetectionError("api_detection_request_failed") from exc
 
@@ -198,6 +206,30 @@ class ApiObjectDetector:
             state_dir, limit=max_requests_per_hour, namespace="vision-request")
         self.transport = transport
         self.motion = _MotionGate()
+        self._remote_host = (endpoint.hostname if transport is _post
+                             and self.provider.provider in {"openai", "anthropic"}
+                             else None)
+        self._dns_ok_until = 0.0
+        self._dns_retry_at = 0.0
+
+    def _check_remote_dns(self) -> None:
+        """Leave the paid-request allowance untouched while DNS is unavailable."""
+        if self._remote_host is None:
+            return
+        now = time.monotonic()
+        if now < self._dns_retry_at:
+            raise ApiDetectionError("api_detection_dns_unavailable")
+        if now < self._dns_ok_until:
+            return
+        try:
+            addresses = socket.getaddrinfo(self._remote_host, 443,
+                                           type=socket.SOCK_STREAM)
+            if not addresses:
+                raise socket.gaierror()
+        except socket.gaierror as exc:
+            self._dns_retry_at = now + _DNS_RETRY_SECONDS
+            raise ApiDetectionError("api_detection_dns_unavailable") from exc
+        self._dns_ok_until = now + _DNS_RETRY_SECONDS
 
     def detect_for_camera(self, camera_mac: str,
                           frame: bytes) -> tuple[ObjectObservation, ...]:
@@ -210,6 +242,7 @@ class ApiObjectDetector:
             raise ApiDetectionError("invalid_api_detection_frame") from exc
         if not self.motion.should_request(camera_mac, frame):
             return ()
+        self._check_remote_dns()
         if not self.budget.claim(camera_mac):
             return ()
         try:
@@ -219,7 +252,10 @@ class ApiObjectDetector:
             reply = self.transport(url, headers, payload)
             text = self.provider.parse_response(reply)
             return parse_detections(text, threshold=self.threshold)
-        except ApiDetectionError:
+        except ApiDetectionError as exc:
+            if exc.args == ("api_detection_dns_unavailable",):
+                self._dns_ok_until = 0.0
+                self._dns_retry_at = time.monotonic() + _DNS_RETRY_SECONDS
             raise
         except ProviderError as exc:
             raise ApiDetectionError("api_detection_provider_response_invalid") from exc
