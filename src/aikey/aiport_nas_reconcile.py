@@ -187,7 +187,17 @@ def verify_inputs(plan: dict, manifest: dict, report: dict,
                 raise
             _verify_external_slot_capacity(plan, report, states)
         else:
-            if rebuilt != plan:
+            # Pairing can make a formerly legacy G3-G5 camera advertise smart
+            # types. That only changes these descriptive counts; the exact
+            # camera IDs, slots, addresses and capacity must still match.
+            descriptive = {"legacy_camera_count", "enhancement_camera_count"}
+            counts = tuple(plan.get(key) for key in sorted(descriptive))
+            if (any(type(value) is not int or value < 0 for value in counts)
+                    or sum(counts) != plan.get("selected_camera_count")
+                    or {key: value for key, value in rebuilt.items()
+                        if key not in descriptive} != {
+                            key: value for key, value in plan.items()
+                            if key not in descriptive}):
                 raise ReconcileError("Protect camera inventory or capacity changed; review a new plan")
         expected = build_nas_compose(plan, states, **options)
     except (AiPortPlanError, NasComposeError, KeyError, TypeError, ValueError) as exc:

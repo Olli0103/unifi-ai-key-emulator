@@ -39,6 +39,22 @@ def test_fresh_inventory_and_exact_manifest_are_required(tmp_path):
         verify_inputs(plan, manifest, report, states, options)
 
 
+def test_paired_camera_class_change_preserves_verified_nas_slot(tmp_path):
+    _, states, options, _, report = inputs(tmp_path)
+    plan = plan_ai_ports(report, camera_scope="legacy-and-g3-g5",
+                         device_ips=["192.168.10.135", "192.168.10.136"],
+                         ai_key_ip="192.168.10.98")
+    selected = {2: states[2]}
+    manifest = build_nas_compose(plan, selected, **options)
+    report["cameras"][0]["processing_class"] = "smart_event_candidate"
+    assert verify_inputs(plan, manifest, report, selected, options) == ["aiport_slot_2"]
+    malformed = deepcopy(plan)
+    malformed["legacy_camera_count"] = True
+    malformed["enhancement_camera_count"] = 2
+    with pytest.raises(ReconcileError, match="inventory"):
+        verify_inputs(malformed, manifest, report, selected, options)
+
+
 def test_selected_slot_rejects_configured_camera_outside_fresh_assignment(tmp_path):
     plan, states, options, _, report = inputs(tmp_path)
     for number, row in enumerate(report["cameras"], start=1):
