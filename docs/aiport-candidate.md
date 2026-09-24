@@ -70,6 +70,24 @@ An explicit `live_detector` policy keeps local detection running on that one pai
 
 This opt-in mode accepts Protect's validated one-camera smart settings, including zone and reverification checks. It sends native enter, moving and leave events and offers an event snapshot through the pinned controller upload path. The budget limits new event entries in a rolling hour **within one process lifetime**; a restart resets it. A detector failure withdraws smart readiness without unpairing the camera. The paired stream remains available when the policy is removed. Multi-person tracking, simultaneous classes, durable rate limits, sustained resource use, and loaded Protect timeline/filter behavior still need native validation. Do not treat this single-camera mode as AI Port feature parity.
 
+The live multi-camera profile uses one AI Port identity for two to five explicitly allowed cameras. Replace `paired_stream` and `live_detector` with `paired_streams` and `live_pool_detector`; never combine them with a `diagnostic_*` field. Each stream has its own exact camera MAC, controller source address and local FFmpeg path. For example:
+
+```json
+"paired_streams": [
+  {"camera_mac": "CAMERA_1_MAC", "source_ip": "CONTROLLER_PRIVATE_IP", "ffmpeg_path": "/usr/bin/ffmpeg"},
+  {"camera_mac": "CAMERA_2_MAC", "source_ip": "CONTROLLER_PRIVATE_IP", "ffmpeg_path": "/usr/bin/ffmpeg"}
+],
+"live_pool_detector": {
+  "checkpoint_path": "/state/models/rf-detr-nano.pth",
+  "checkpoint_sha256": "SHA256_OF_THE_EXACT_LOCAL_CHECKPOINT",
+  "threshold": 0.3,
+  "smart_types": ["person", "vehicle", "animal"],
+  "max_events_per_hour": 120
+}
+```
+
+The shared model keeps at most one queued frame per camera and takes fair turns without a lifetime frame ceiling. Each camera keeps a separate validated Protect policy, zone gate, tracker and rolling event budget. A failed model call disables only that camera. Native enter and leave events carry the original camera ID; leave events can supply the matching crop and full-frame JPEG through the pinned, mutual-TLS upload route. The instance still enforces the observed ten-point stream-capacity budget, so high-resolution cameras may need another AI Port identity and LAN address. Synthetic two-camera tests cover isolation and snapshot routing. Pairing two cameras on one live instance, original-camera timeline indexing, sustained resource use and automatic all-camera reconciliation remain `needs_evidence`; keep the current Flur deployment on its verified single-camera profile until those native checks pass.
+
 Keep the camera paired between diagnostics. Expiring or removing an inference permit must leave `paired_stream` and the adopted identity intact; unpair only when the operator asks to remove the camera or a verified fault requires it. Verify the control connection and decoded stream after replacing the container. Neither pairing nor frame decoding alone proves Person indexing.
 
 For one diagnostic trial, start the candidate first and verify its `control_connected` health field. Then run the relay from a local Terminal, entering the macOS administrator password there, not in chat or a file:

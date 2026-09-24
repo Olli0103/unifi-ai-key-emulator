@@ -6,6 +6,7 @@ import argparse
 import asyncio
 from collections import deque
 import contextlib
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import ipaddress
@@ -84,6 +85,15 @@ class CandidateError(ValueError):
     """Unsafe or incomplete isolated AI Port candidate configuration."""
 
 
+@dataclass
+class _PendingPoolSnapshot:
+    camera_mac: str
+    snapshot: SmartSnapshot
+    expires: float
+    crop_available: bool = True
+    full_available: bool = True
+
+
 def _private_file(path: Path, max_size: int) -> bytes:
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
@@ -113,8 +123,8 @@ def load_config(path: Path) -> dict:
     except (ValueError, UnicodeError) as exc:
         raise CandidateError("Invalid candidate configuration JSON") from exc
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
-    allowed = required | {"paired_stream", "diagnostic_hello_until", "diagnostic_stream",
-                          "live_detector",
+    allowed = required | {"paired_stream", "paired_streams", "diagnostic_hello_until",
+                          "diagnostic_stream", "live_detector", "live_pool_detector",
                           "diagnostic_streams",
                           "diagnostic_detector",
                           "diagnostic_pool_detector", "diagnostic_pool_event_until",
@@ -172,6 +182,49 @@ def load_config(path: Path) -> dict:
             RFDetrNanoDetector(object(), threshold=detector["threshold"])
         except DetectionError as exc:
             raise CandidateError("Invalid live detector threshold") from exc
+    if "paired_streams" in value:
+        streams = value["paired_streams"]
+        if ("paired_stream" in value or "live_pool_detector" not in value
+                or any(key.startswith("diagnostic_") for key in value)
+                or "live_detector" in value or not isinstance(streams, list)
+                or not 2 <= len(streams) <= 5):
+            raise CandidateError("Invalid live camera pool")
+        seen = set()
+        for stream in streams:
+            if not isinstance(stream, dict) or set(stream) != {
+                    "camera_mac", "source_ip", "ffmpeg_path"}:
+                raise CandidateError("Invalid live camera pool")
+            try:
+                camera_mac = normalize_mac(stream["camera_mac"])
+                stream["source_ip"] = private_source_ip(stream["source_ip"])
+                stream["ffmpeg_path"] = executable_path(stream["ffmpeg_path"])
+            except IngressError as exc:
+                raise CandidateError("Invalid live camera pool") from exc
+            if camera_mac in seen:
+                raise CandidateError("Duplicate live camera identity")
+            seen.add(camera_mac)
+            stream["camera_mac"] = camera_mac
+    if "live_pool_detector" in value:
+        detector = value["live_pool_detector"]
+        if ("paired_streams" not in value or not isinstance(detector, dict)
+                or set(detector) != {"checkpoint_path", "checkpoint_sha256",
+                                     "threshold", "smart_types", "max_events_per_hour"}
+                or not isinstance(detector["checkpoint_path"], str)
+                or not Path(detector["checkpoint_path"]).is_absolute()
+                or not isinstance(detector["checkpoint_sha256"], str)
+                or not _PIN.fullmatch(detector["checkpoint_sha256"])
+                or not isinstance(detector["smart_types"], list)
+                or not 1 <= len(detector["smart_types"]) <= 3
+                or any(type(kind) is not str or kind not in {
+                    "person", "vehicle", "animal"} for kind in detector["smart_types"])
+                or len(set(detector["smart_types"])) != len(detector["smart_types"])
+                or type(detector["max_events_per_hour"]) is not int
+                or not 1 <= detector["max_events_per_hour"] <= 3600):
+            raise CandidateError("Invalid live pool detector policy")
+        try:
+            RFDetrNanoDetector(object(), threshold=detector["threshold"])
+        except DetectionError as exc:
+            raise CandidateError("Invalid live pool detector threshold") from exc
     if "diagnostic_hello_until" in value:
         until = value["diagnostic_hello_until"]
         if type(until) is not int or until < 0 or until > int(time.time()) + 600:
@@ -455,8 +508,14 @@ class CandidateService:
         self._event_last_moving_at: float | None = None
         self._event_zone_ids: tuple[int, ...] = ()
         self._event_snapshot: SmartSnapshot | None = None
+        self._event_snapshot_expires: float | None = None
         self._pending_snapshot: tuple[SmartSnapshot, float] | None = None
         self._pending_full_fov: tuple[SmartSnapshot, float] | None = None
+        self._pool_event_snapshots: dict[
+            tuple[str, int], tuple[SmartSnapshot, float]] = {}
+        self._pool_pending_snapshots: dict[str, _PendingPoolSnapshot] = {}
+        self._pool_snapshot_number = 0
+        self._snapshot_cleanup_task: asyncio.Task | None = None
         self._live_event_times: deque[float] = deque()
         self.snapshot_requests = 0
         self.snapshot_uploads = 0
@@ -492,11 +551,17 @@ class CandidateService:
                          or "diagnostic_recorded_event_probe" in config else None)
         self._camera_engine: CameraPolicyEngine | None = None
         self._inference: FairInference | None = None
-        if "diagnostic_pool_detector" in config:
-            detector = config["diagnostic_pool_detector"]
-            cameras = [stream["camera_mac"] for stream in config["diagnostic_streams"]]
+        if "diagnostic_pool_detector" in config or "live_pool_detector" in config:
+            live_pool = "live_pool_detector" in config
+            detector = config["live_pool_detector" if live_pool
+                              else "diagnostic_pool_detector"]
+            cameras = [stream["camera_mac"] for stream in config[
+                "paired_streams" if live_pool else "diagnostic_streams"]]
             self._camera_engine = CameraPolicyEngine(
-                cameras, max_events_per_camera=len(self._pool_smart_types()))
+                cameras,
+                max_events_per_camera=(detector["max_events_per_hour"] if live_pool
+                                       else len(self._pool_smart_types())),
+                event_window_seconds=3600 if live_pool else None)
             self._inference = FairInference(
                 cameras,
                 load_detector=lambda: RFDetrNanoDetector.from_checkpoint(
@@ -504,7 +569,8 @@ class CandidateService:
                     threshold=detector["threshold"]),
                 on_result=self._observe_pool_result,
                 on_unavailable=self._pool_camera_unavailable,
-                max_frames_per_camera=detector["max_frames_per_camera"])
+                max_frames_per_camera=(None if live_pool else
+                                       detector["max_frames_per_camera"]))
         self.credentials = CredentialStore(self.state_dir)
         self.virtual_sound_led = VirtualSoundLedStore(self.state_dir)
         self.virtual_timezone = VirtualTimezoneStore(self.state_dir)
@@ -522,6 +588,11 @@ class CandidateService:
                 frame_observer=(self._observe_frame
                                 if "diagnostic_detector" in config
                                 or "live_detector" in config else None))
+        elif "paired_streams" in config:
+            self.ingress = AiPortIngressPool(
+                config["paired_streams"],
+                frame_observer_factory=lambda camera: (
+                    lambda frame: self._observe_pool_frame(camera, frame)))
         elif config.get("diagnostic_hello_until", 0) > time.time():
             if "diagnostic_stream" in config:
                 self.ingress = AiPortIngress(
@@ -535,10 +606,14 @@ class CandidateService:
                         (lambda camera: lambda frame: self._observe_pool_frame(camera, frame))
                         if self._inference is not None else None))
 
+    def _pool_event_enabled(self) -> bool:
+        return ("live_pool_detector" in self.config
+                or time.time() < self.config.get("diagnostic_pool_event_until", 0))
+
     async def _observe_pool_frame(self, camera_mac: str, frame: bytes) -> None:
         engine, inference = self._camera_engine, self._inference
         if (engine is None or inference is None
-                or time.time() >= self.config.get("diagnostic_pool_event_until", 0)
+                or not self._pool_event_enabled()
                 or not engine.has_policy(camera_mac)):
             return
         await inference.observe(
@@ -551,7 +626,7 @@ class CandidateService:
         ws = self._current_ws
         if (ws is None or not self._params_agreed
                 or not isinstance(self.ingress, AiPortIngressPool)
-                or time.time() >= self.config.get("diagnostic_pool_event_until", 0)):
+                or not self._pool_event_enabled()):
             return
         if any(stream["deviceID"] == camera_mac
                for stream in self.ingress.list_streams()):
@@ -559,21 +634,23 @@ class CandidateService:
 
     async def _observe_pool_result(self, camera_mac: str,
                                    observations: tuple[ObjectObservation, ...],
-                                   generation: int) -> None:
+                                   generation: int, frame: bytes | None = None) -> None:
         engine = self._camera_engine
         if (engine is None
-                or time.time() >= self.config.get("diagnostic_pool_event_until", 0)
+                or not self._pool_event_enabled()
                 or generation != engine.policy_generation(camera_mac)):
             return
         candidates = engine.observe(camera_mac, observations, now=time.monotonic())
-        await self._publish_pool_candidates(candidates)
+        await self._publish_pool_candidates(candidates, frame=frame)
 
     async def _publish_pool_candidates(
-            self, candidates: tuple[CameraEventCandidate, ...]) -> None:
+            self, candidates: tuple[CameraEventCandidate, ...],
+            *, frame: bytes | None = None) -> None:
+        self._prune_snapshots()
         ws = self._current_ws
         if (ws is None or not self._params_agreed
                 or not isinstance(self.ingress, AiPortIngressPool)
-                or time.time() >= self.config.get("diagnostic_pool_event_until", 0)):
+                or not self._pool_event_enabled()):
             return
         active = {stream["deviceID"] for stream in self.ingress.list_streams()}
         for candidate in candidates:
@@ -588,6 +665,35 @@ class CandidateService:
                     zone_ids=candidate.zone_ids)
             except SmartEventError:
                 continue
+            snapshot_key = (candidate.camera_mac, candidate.change.track_id)
+            if candidate.change.edge == "enter" and frame is not None:
+                try:
+                    self._pool_snapshot_number += 1
+                    snapshot = await asyncio.to_thread(
+                        make_smart_snapshot, frame, candidate.change,
+                        payload["clockWall"],
+                        filename_track_id=self._pool_snapshot_number)
+                except SnapshotError:
+                    pass
+                else:
+                    if len(self._pool_event_snapshots) >= 16:
+                        self._pool_event_snapshots.pop(next(iter(self._pool_event_snapshots)))
+                    self._pool_event_snapshots[snapshot_key] = (
+                        snapshot, time.monotonic() + 180)
+            elif candidate.change.edge == "leave":
+                pending_event = self._pool_event_snapshots.pop(snapshot_key, None)
+                if pending_event is not None and pending_event[1] > time.monotonic():
+                    snapshot = pending_event[0]
+                    snapshot.add_to_event(payload)
+                    now = time.monotonic()
+                    for filename, pending in tuple(self._pool_pending_snapshots.items()):
+                        if pending.expires <= now:
+                            del self._pool_pending_snapshots[filename]
+                    if len(self._pool_pending_snapshots) >= 16:
+                        self._pool_pending_snapshots.pop(
+                            next(iter(self._pool_pending_snapshots)))
+                    self._pool_pending_snapshots[snapshot.filename] = (
+                        _PendingPoolSnapshot(candidate.camera_mac, snapshot, now + 75))
             await self._send_control_event(ws, "EventSmartDetect", payload)
             if candidate.change.edge == "enter":
                 self.smart_events_entered += 1
@@ -627,7 +733,8 @@ class CandidateService:
         if (parsed is not None and parsed.enabled_types
                 and parsed.enabled_types <= set(self._pool_smart_types())
                 and camera in active and self._inference is not None
-                and time.time() < self.config.get("diagnostic_pool_event_until", 0)):
+                and self._inference.is_available(camera)
+                and self._pool_event_enabled()):
             engine.replace_policy(camera, parsed)
             await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 0, {})
             self.smart_settings_probe_acks += 1
@@ -636,7 +743,43 @@ class CandidateService:
                                   {"description": "smart_detection_unavailable"})
         self.smart_settings_requests_rejected += 1
 
+    def _select_pool_snapshot(self, filename: object) -> tuple[_PendingPoolSnapshot | None, bool]:
+        if not isinstance(filename, str):
+            return None, False
+        now = time.monotonic()
+        for key, pending in tuple(self._pool_pending_snapshots.items()):
+            if pending.expires <= now:
+                del self._pool_pending_snapshots[key]
+            elif filename == pending.snapshot.filename and pending.crop_available:
+                return pending, False
+            elif filename == pending.snapshot.full_fov_filename and pending.full_available:
+                return pending, True
+        return None, False
+
+    def _prune_snapshots(self) -> None:
+        now = time.monotonic()
+        if self._event_snapshot_expires is not None and self._event_snapshot_expires <= now:
+            self._event_snapshot = None
+            self._event_snapshot_expires = None
+        if self._pending_snapshot is not None and self._pending_snapshot[1] <= now:
+            self._pending_snapshot = None
+        if self._pending_full_fov is not None and self._pending_full_fov[1] <= now:
+            self._pending_full_fov = None
+        for key, (_, expires) in tuple(self._pool_event_snapshots.items()):
+            if expires <= now:
+                del self._pool_event_snapshots[key]
+        for key, pending in tuple(self._pool_pending_snapshots.items()):
+            if pending.expires <= now:
+                del self._pool_pending_snapshots[key]
+
+    async def _snapshot_cleanup_loop(self) -> None:
+        while True:
+            await asyncio.sleep(15)
+            self._prune_snapshots()
+
     def _pool_smart_types(self) -> tuple[str, ...]:
+        if "live_pool_detector" in self.config:
+            return tuple(self.config["live_pool_detector"]["smart_types"])
         return tuple(self.config.get("diagnostic_pool_smart_types", [
             self.config.get("diagnostic_smart_type", "person")]))
 
@@ -647,6 +790,9 @@ class CandidateService:
         if self._inference is not None:
             self._inference.discard_pending(camera_mac)
         await self._publish_pool_candidates(engine.replace_policy(camera_mac, None))
+        for key in tuple(self._pool_event_snapshots):
+            if key[0] == camera_mac:
+                del self._pool_event_snapshots[key]
 
     async def _observe_frame(self, frame: bytes) -> None:
         live = "live_detector" in self.config
@@ -710,6 +856,7 @@ class CandidateService:
 
     async def _publish_bounded_smart_changes(
             self, changes: tuple[TrackChange, ...], *, frame: bytes | None = None) -> None:
+        self._prune_snapshots()
         ws = self._current_ws
         policy = self._smart_policy
         live = "live_detector" in self.config
@@ -756,8 +903,10 @@ class CandidateService:
                 try:
                     self._event_snapshot = await asyncio.to_thread(
                         make_smart_snapshot, frame, change, payload["clockWall"])
+                    self._event_snapshot_expires = time.monotonic() + 180
                 except SnapshotError:
                     self._event_snapshot = None
+                    self._event_snapshot_expires = None
             if edge == "leave" and self._event_snapshot is not None:
                 self._event_snapshot.add_to_event(payload)
                 self._pending_snapshot = (self._event_snapshot, time.monotonic() + 75)
@@ -779,10 +928,12 @@ class CandidateService:
                 self._event_zone_ids = ()
                 self._event_last_moving_at = None
                 self._event_snapshot = None
+                self._event_snapshot_expires = None
                 self.smart_events_left += 1
 
     async def _revoke_single_policy(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Close a bounded event before a stream or policy is withdrawn."""
+        self._prune_snapshots()
         previous = self._event_track
         zone_ids = self._event_zone_ids
         try:
@@ -811,6 +962,7 @@ class CandidateService:
             self._event_zone_ids = ()
             self._event_last_moving_at = None
             self._event_snapshot = None
+            self._event_snapshot_expires = None
             if self._tracker is not None:
                 self._tracker = TemporalTracker()
 
@@ -1083,7 +1235,9 @@ class CandidateService:
             "detector_tracks_entered": self.detector_tracks_entered,
             "detector_tracks_left": self.detector_tracks_left,
             "detector_error": self.detector_error,
-            "detection_mode": ("live" if "live_detector" in self.config else
+            "detection_mode": ("live_pool" if "live_pool_detector" in self.config else
+                               "live" if "live_detector" in self.config else
+                               "diagnostic_pool" if "diagnostic_pool_detector" in self.config else
                                "diagnostic" if "diagnostic_detector" in self.config else
                                "passive"),
             "live_event_budget_remaining": (
@@ -1102,7 +1256,7 @@ class CandidateService:
             "last_decoder_error_terms": (list(self.ingress.last_decoder_error_terms)
                                          if self.ingress else []),
             "stream_ingest_enabled": (self.ingress is not None and (
-                "paired_stream" in self.config
+                "paired_stream" in self.config or "paired_streams" in self.config
                 or time.time() < self.config.get("diagnostic_hello_until", 0))),
             "last_control_command": self.last_control_command,
             "observed_function_counts": dict(self.observed_function_counts),
@@ -1132,7 +1286,7 @@ class CandidateService:
         return self.adoption.adopted or time.time() < self.config.get("diagnostic_hello_until", 0)
 
     def _stream_control_enabled(self) -> bool:
-        return ("paired_stream" in self.config
+        return ("paired_stream" in self.config or "paired_streams" in self.config
                 or time.time() < self.config.get("diagnostic_hello_until", 0))
 
     async def _manage(self, request: web.Request) -> web.Response:
@@ -1284,6 +1438,7 @@ class CandidateService:
         # pairing remains available without claiming an AI capability.
         smart_ready = (streaming and (
             ("live_detector" in self.config and self.detector_error is None)
+            or "live_pool_detector" in self.config
             or time.time() < (
                 self.config.get("diagnostic_pool_event_until", 0)
                 if isinstance(self.ingress, AiPortIngressPool)
@@ -1641,16 +1796,22 @@ class CandidateService:
             request_payload = message.get("payload")
             requested_filename = (request_payload.get("filename")
                                   if isinstance(request_payload, dict) else None)
-            full_fov = (self._pending_full_fov is not None
-                        and requested_filename == self._pending_full_fov[0].full_fov_filename)
-            pending = self._pending_full_fov if full_fov else self._pending_snapshot
+            pool_pending = None
+            if isinstance(self.ingress, AiPortIngressPool):
+                pool_pending, full_fov = self._select_pool_snapshot(requested_filename)
+                pending = ((pool_pending.snapshot, pool_pending.expires)
+                           if pool_pending is not None else None)
+            else:
+                full_fov = (self._pending_full_fov is not None
+                            and requested_filename == self._pending_full_fov[0].full_fov_filename)
+                pending = self._pending_full_fov if full_fov else self._pending_snapshot
             if pending is None or time.monotonic() > pending[1]:
                 await self._reply_control(ws, function, request_id, 5,
                                           {"description": "snapshot_unavailable"})
                 self.snapshot_rejections += 1
                 self.snapshot_rejection_reasons["no_pending_snapshot"] = (
                     self.snapshot_rejection_reasons.get("no_pending_snapshot", 0) + 1)
-                if pending is not None:
+                if pending is not None and pool_pending is None:
                     if full_fov:
                         self._pending_full_fov = None
                     else:
@@ -1661,6 +1822,14 @@ class CandidateService:
             what = ("smartDetectZoneSnapshotFullFoV" if full_fov
                     else "smartDetectZoneSnapshot")
             try:
+                if (pool_pending is not None and isinstance(request_payload, dict)
+                        and "deviceID" in request_payload):
+                    try:
+                        camera = normalize_mac(request_payload["deviceID"])
+                    except IngressError as exc:
+                        raise SnapshotError("unexpected_snapshot_camera") from exc
+                    if camera != pool_pending.camera_mac:
+                        raise SnapshotError("unexpected_snapshot_camera")
                 url = validated_upload_url(
                     message.get("payload"), controller_ip=self.config["controller_ip"],
                     filename=filename, what=what)
@@ -1672,7 +1841,14 @@ class CandidateService:
                 self.snapshot_rejection_reasons[reason] = (
                     self.snapshot_rejection_reasons.get(reason, 0) + 1)
                 return
-            if full_fov:
+            if pool_pending is not None:
+                if full_fov:
+                    pool_pending.full_available = False
+                else:
+                    pool_pending.crop_available = False
+                if not pool_pending.crop_available and not pool_pending.full_available:
+                    self._pool_pending_snapshots.pop(pool_pending.snapshot.filename, None)
+            elif full_fov:
                 self._pending_full_fov = None
             else:
                 self._pending_snapshot = None
@@ -1729,11 +1905,13 @@ class CandidateService:
             return
         self._cancel_ingress_close()
         until = self.config.get("diagnostic_hello_until", 0)
-        delay = (self.disconnect_grace_seconds if "paired_stream" in self.config
+        persistent = ("paired_stream" in self.config
+                      or "paired_streams" in self.config)
+        delay = (self.disconnect_grace_seconds if persistent
                  else min(self.disconnect_grace_seconds, max(0, until - time.time())))
         if delay <= 0 or not self.ingress.list_streams():
             await self.ingress.close()
-            if time.time() >= until:
+            if time.time() >= until and "live_pool_detector" not in self.config:
                 self._detector = None
                 if self._inference is not None:
                     await self._inference.close()
@@ -1742,7 +1920,7 @@ class CandidateService:
         async def close_after_grace() -> None:
             await asyncio.sleep(delay)
             await self.ingress.close()
-            if time.time() >= until:
+            if time.time() >= until and "live_pool_detector" not in self.config:
                 self._detector = None
                 if self._inference is not None:
                     await self._inference.close()
@@ -1757,12 +1935,19 @@ class CandidateService:
         await self.runner.setup()
         try:
             await web.TCPSite(self.runner, bind, port, ssl_context=self._server_context()).start()
+            self._snapshot_cleanup_task = asyncio.create_task(
+                self._snapshot_cleanup_loop(), name="aiport-snapshot-cleanup")
             self.task = asyncio.create_task(self._connect_loop(), name="aiport-candidate-control")
         except BaseException:
             await self.stop()
             raise
 
     async def stop(self):
+        if self._snapshot_cleanup_task is not None:
+            self._snapshot_cleanup_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._snapshot_cleanup_task
+            self._snapshot_cleanup_task = None
         if self._recorded_probe_task is not None:
             self._recorded_probe_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1863,6 +2048,9 @@ class CandidateService:
                                 self._current_ws = None
                                 if isinstance(self.ingress, AiPortIngress):
                                     await self._revoke_single_policy(ws)
+                                elif isinstance(self.ingress, AiPortIngressPool):
+                                    for stream in self.ingress.list_streams():
+                                        await self._revoke_pool_policy(stream["deviceID"])
                                 diagnostic_expired = (
                                     expiry_task is not None and expiry_task.done()
                                     and not expiry_task.cancelled())

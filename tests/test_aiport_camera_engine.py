@@ -190,3 +190,24 @@ def test_event_budget_applies_across_classes_on_one_camera():
     engine.replace_policy(FIRST, multiclass_policy(FIRST))
     assert engine.observe(FIRST, observations, now=3) == ()
     assert engine.observe(FIRST, observations, now=4) == ()
+
+
+def test_live_event_budget_rolls_forward_without_affecting_other_camera():
+    engine = CameraPolicyEngine([FIRST, SECOND], max_events_per_camera=1,
+                                event_window_seconds=60)
+    engine.replace_policy(FIRST, policy(FIRST))
+    engine.replace_policy(SECOND, policy(SECOND))
+    assert engine.observe(FIRST, (person(),), now=1) == ()
+    first, = engine.observe(FIRST, (person(),), now=2)
+    assert first.change.edge == "enter"
+    assert engine.observe(FIRST, (), now=6)[0].change.edge == "leave"
+    assert engine.observe(FIRST, (person(),), now=7) == ()
+    assert engine.observe(FIRST, (person(),), now=8) == ()
+    assert engine.observe(SECOND, (person(),), now=7) == ()
+    second, = engine.observe(SECOND, (person(),), now=8)
+    assert second.camera_mac == SECOND
+    engine.replace_policy(FIRST, None)
+    engine.replace_policy(FIRST, policy(FIRST))
+    assert engine.observe(FIRST, (person(),), now=63) == ()
+    renewed, = engine.observe(FIRST, (person(),), now=64)
+    assert renewed.change.edge == "enter"

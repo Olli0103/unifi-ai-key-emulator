@@ -7,6 +7,7 @@ them before any native Protect result can be claimed.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 import math
 
@@ -28,10 +29,15 @@ class CameraEventCandidate:
 class CameraPolicyEngine:
     """One independent policy and tracker per explicitly allowed camera."""
 
-    def __init__(self, camera_macs: list[str], *, max_events_per_camera: int = 1):
+    def __init__(self, camera_macs: list[str], *, max_events_per_camera: int = 1,
+                 event_window_seconds: float | None = None):
         if (not isinstance(camera_macs, list) or not 1 <= len(camera_macs) <= 5
                 or type(max_events_per_camera) is not int
-                or not 1 <= max_events_per_camera <= 100):
+                or not 1 <= max_events_per_camera <= 3600
+                or event_window_seconds is not None
+                and (type(event_window_seconds) not in (int, float)
+                     or not math.isfinite(event_window_seconds)
+                     or not 60 <= event_window_seconds <= 86_400)):
             raise IngressError("invalid_camera_engine")
         try:
             cameras = [normalize_mac(value) for value in camera_macs]
@@ -46,10 +52,13 @@ class CameraPolicyEngine:
         self._active: dict[str, dict[int, tuple[TrackChange, tuple[int, ...]]]] = {
             camera: {} for camera in cameras}
         self._event_counts = {camera: 0 for camera in cameras}
+        self._event_times: dict[str, deque[float]] = {
+            camera: deque() for camera in cameras}
         self._last_moving: dict[str, dict[int, float]] = {
             camera: {} for camera in cameras}
         self._generations = dict.fromkeys(cameras, 0)
         self._max_events = max_events_per_camera
+        self._event_window_seconds = event_window_seconds
 
     def _camera(self, camera_mac: str) -> str:
         camera = normalize_mac(camera_mac)
@@ -95,18 +104,28 @@ class CameraPolicyEngine:
                          if policy.allows_score(value.kind, value.score)
                          and policy.zone_ids(value.kind, value.box) is not None)
         changes = self._trackers[camera].update(selected, now=now)
+        if self._event_window_seconds is not None:
+            cutoff = now - self._event_window_seconds
+            event_times = self._event_times[camera]
+            while event_times and event_times[0] <= cutoff:
+                event_times.popleft()
         result = []
         for change in changes:
             if change.kind not in policy.enabled_types:
                 continue
             active = self._active[camera].get(change.track_id)
+            budget_used = (len(self._event_times[camera])
+                           if self._event_window_seconds is not None
+                           else self._event_counts[camera])
             if (change.edge == "enter" and active is None
-                    and self._event_counts[camera] < self._max_events):
+                    and budget_used < self._max_events):
                 zones = policy.zone_ids(change.kind, change.box)
                 if zones is not None:
                     self._active[camera][change.track_id] = (change, zones)
                     self._last_moving[camera][change.track_id] = now
                     self._event_counts[camera] += 1
+                    if self._event_window_seconds is not None:
+                        self._event_times[camera].append(now)
                     result.append(CameraEventCandidate(camera, change, zones))
             elif (change.edge == "moving" and active is not None
                   and active[0].kind == change.kind
