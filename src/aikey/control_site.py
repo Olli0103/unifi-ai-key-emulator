@@ -31,6 +31,7 @@ from .config_store import (
 
 _COOKIE = "aikey_admin_local"
 _G3_G5_MODEL = re.compile(r"UVC G[345](?:\s|\Z)")
+_INSTANCE_NAME = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
 _STYLE = """
 :root { font-family: system-ui, sans-serif; color: #192430; background: #f4f7fb; }
 body { max-width: 1100px; margin: 2rem auto; padding: 0 1.2rem; }
@@ -91,6 +92,7 @@ class ControlSite:
     def __init__(self, aikey_config: Path, aiport_config: Path, *,
                  signing_key: bytes, password_record: str, port: int,
                  aiport_runtime_state_dir: Path | None = None,
+                 aiport_instances: dict[str, Path] | None = None,
                  inventory_loader: Callable[[], Awaitable[dict]] | None = None):
         if type(port) is not int or not 1024 <= port <= 65535:
             raise ValueError("Invalid control-site port")
@@ -100,6 +102,18 @@ class ControlSite:
         self.aikey = ConfigurationStore(aikey_config)
         self.aiport = AiPortConfigurationStore(
             aiport_config, runtime_state_dir=aiport_runtime_state_dir)
+        self.aiports = {"aiport": self.aiport}
+        paths = {self.aiport.path}
+        for name, path in (aiport_instances or {}).items():
+            if (not isinstance(name, str) or not _INSTANCE_NAME.fullmatch(name)
+                    or name == "default"):
+                raise ValueError("Invalid AI Port instance name")
+            store = AiPortConfigurationStore(
+                path, runtime_state_dir=aiport_runtime_state_dir)
+            if store.path in paths:
+                raise ValueError("Duplicate AI Port configuration")
+            paths.add(store.path)
+            self.aiports[f"aiport:{name}"] = store
         self.inventory_loader = inventory_loader
 
     def app(self) -> web.Application:
@@ -123,7 +137,12 @@ class ControlSite:
             raise web.HTTPNotFound()
         try:
             report = await self.inventory_loader()
-            configured = self.aiport.configured_camera_macs()
+            configured = {}
+            for profile, store in self.aiports.items():
+                title = ("this AI Port" if profile == "aiport" else
+                         "AI Port " + profile.partition(":")[2])
+                for mac in store.configured_camera_macs():
+                    configured.setdefault(mac, []).append(title)
             if (not isinstance(report, dict)
                     or report.get("schema") != "aikey-camera-preflight/1"
                     or not isinstance(report.get("cameras"), list)):
@@ -141,14 +160,16 @@ class ControlSite:
             model = camera.get("model") or "Unknown"
             target = (state == "CONNECTED" and isinstance(model, str)
                       and _G3_G5_MODEL.match(model) is not None)
-            allowed = camera.get("mac") in configured
+            assigned = configured.get(camera.get("mac"), ())
+            allowed = bool(assigned)
             target_count += int(target)
             configured_count += int(allowed)
             scope = ("G3–G5 target" if target else "Offline" if state != "CONNECTED"
                      else "Outside G3–G5 target scope")
             cells = (camera.get("name") or "Unnamed", model, state or "Unknown", scope,
-                     "Configured for this AI Port" if allowed
-                     else "Not configured on this AI Port",
+                     "Configured for " + ", ".join(assigned) if allowed
+                     else ("Not configured on this AI Port" if len(self.aiports) == 1
+                           else "Not configured on any AI Port"),
                      ", ".join(camera.get("smart_detect_types") or ()) or "None")
             rows.append("<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in cells)
                         + "</tr>")
@@ -158,12 +179,13 @@ class ControlSite:
                 "<a href='/cameras'>Refresh</a></p>"
                 f"<p>Protect {_safe(report['protect_version'])} · Fetched {_safe(fetched)}</p>"
                 f"<p>{len(rows)} cameras · {target_count} connected G3–G5 targets · "
-                f"{configured_count} configured for this AI Port.</p>"
+                f"{configured_count} configured across {len(self.aiports)} AI Port "
+                "instance(s).</p>"
                 "<p class='muted'>Protect pairing and stream health are separate. "
-                "Configured means the camera is in this instance's local allowlist. "
+                "Configured means the camera is in a local instance allowlist. "
                 "Protect-reported smart types may reflect AI Port processing.</p>"
                 "<div class='scroll'><table><thead><tr><th>Camera</th><th>Model</th>"
-                "<th>State</th><th>AI Port scope</th><th>This instance</th>"
+                "<th>State</th><th>AI Port scope</th><th>Instance</th>"
                 "<th>Protect-reported smart types</th></tr></thead><tbody>"
                 + "".join(rows) + "</tbody></table></div>")
         return _page("Protect cameras", body)
@@ -216,10 +238,11 @@ class ControlSite:
         assert csrf is not None
         try:
             key = self.aikey.snapshot()
-            port = self.aiport.snapshot()
+            ports = {profile: store.snapshot()
+                     for profile, store in self.aiports.items()}
         except (ConfigurationStoreError, AiPortConfigurationError):
             return _page("Configuration unavailable", "<h1>Configuration unavailable</h1>"
-                         "<p class='error'>Check both private config files.</p>")
+                         "<p class='error'>Check the private profile config files.</p>")
         inference = key.configuration["inference"]
         key_configured = bool(inference.get("api_key_file", {}).get("configured"))
         notice = "<p class='notice'>Settings saved. Restart the affected service to apply them.</p>" \
@@ -235,24 +258,28 @@ class ControlSite:
                    if self.inventory_loader is not None else "") + "<div class='grid'>")
         body += self._provider_form("AI Key", "aikey", key.revision, inference,
                                     key_configured, csrf)
-        if port.camera_count >= 2:
-            current = {"provider": port.provider or "openai", "model": port.model or "gpt-6-luna",
-                       "base_url": port.base_url or "https://api.openai.com/v1",
-                       "allow_remote": port.allow_remote if port.provider else True,
-                       "allow_insecure_http": port.allow_insecure_http,
-                       "max_output_tokens": port.max_output_tokens or 256,
-                       "threshold": port.threshold if port.threshold is not None else .8,
-                       "smart_types": port.smart_types or ("person",),
-                       "max_events_per_hour": port.max_events_per_hour or 12,
-                       "max_requests_per_hour": port.max_requests_per_hour or 24}
-            body += self._provider_form("AI Port", "aiport", port.revision, current,
-                                        port.key_configured, csrf,
-                                        camera_count=port.camera_count,
-                                        backend=port.backend)
-        else:
-            body += ("<section><h2>AI Port</h2><p>No paired camera pool is configured. "
-                     "Provider settings become available after pairing at least two cameras."
-                     "</p></section>")
+        for profile, port in ports.items():
+            title = ("AI Port" if profile == "aiport" else
+                     "AI Port " + profile.partition(":")[2])
+            if port.camera_count >= 2:
+                current = {"provider": port.provider or "openai",
+                           "model": port.model or "gpt-6-luna",
+                           "base_url": port.base_url or "https://api.openai.com/v1",
+                           "allow_remote": port.allow_remote if port.provider else True,
+                           "allow_insecure_http": port.allow_insecure_http,
+                           "max_output_tokens": port.max_output_tokens or 256,
+                           "threshold": port.threshold if port.threshold is not None else .8,
+                           "smart_types": port.smart_types or ("person",),
+                           "max_events_per_hour": port.max_events_per_hour or 12,
+                           "max_requests_per_hour": port.max_requests_per_hour or 24}
+                body += self._provider_form(title, profile, port.revision, current,
+                                            port.key_configured, csrf,
+                                            camera_count=port.camera_count,
+                                            backend=port.backend)
+            else:
+                body += (f"<section><h2>{_safe(title)}</h2><p>No camera pool is configured. "
+                         "Provider settings become available after configuring at least two streams."
+                         "</p></section>")
         return _page("Local AI processor", body + "</div>")
 
     @staticmethod
@@ -268,7 +295,7 @@ class ControlSite:
         detail = (f"<p>{camera_count} configured camera slots. "
                   f"Configured detector: {_safe(backend or 'off')}.</p>"
                   if camera_count else "")
-        if profile == "aiport" and backend != "vision_api":
+        if profile.startswith("aiport") and backend != "vision_api":
             detail += ("<p class='muted'>Saving provider settings switches AI Port "
                        "to API detection after its next restart. The current local "
                        "detector keeps running until then.</p>")
@@ -295,7 +322,7 @@ class ControlSite:
                 "<label><input name='allow_insecure_http' type='checkbox' "
                 + ("checked" if current.get("allow_insecure_http") else "") +
                 ">Allow unencrypted remote HTTP</label></div>")
-        if profile == "aiport":
+        if profile.startswith("aiport"):
             form += (f"<label>Score threshold<input name='threshold' type='number' "
                      f"min='0.01' max='1' step='0.01' value='{_safe(current['threshold'])}'></label>"
                      "<div class='checks'><p>Detection classes</p>" + "".join(
@@ -315,9 +342,10 @@ class ControlSite:
         if cookie is None:
             raise web.HTTPForbidden()
         profile = fields.get("profile")
-        if profile not in {"aikey", "aiport"}:
+        if profile != "aikey" and profile not in self.aiports:
             raise web.HTTPBadRequest(text="Unknown profile")
-        store = self.aikey if profile == "aikey" else self.aiport
+        is_port = profile != "aikey"
+        store = self.aiports[profile] if is_port else self.aikey
         created_key: Path | None = None
         committed = False
         try:
@@ -329,7 +357,7 @@ class ControlSite:
                 "allow_insecure_http": "allow_insecure_http" in fields,
                 "max_output_tokens": int(fields["max_output_tokens"]),
             }
-            if profile == "aiport":
+            if is_port:
                 selection.update({
                     "threshold": float(fields["threshold"]),
                     "smart_types": fields.getall("smart_types", []),
@@ -342,9 +370,9 @@ class ControlSite:
                         or any(ch.isspace() for ch in key_value)):
                     raise ValueError
                 host_state = (self.aikey.path.parent if profile == "aikey"
-                              else self.aiport.path.parent)
+                              else store.path.parent)
                 runtime_state = (Path(load_config(self.aikey.path)["runtime"]["state_dir"])
-                                 if profile == "aikey" else self.aiport.runtime_state_dir)
+                                 if profile == "aikey" else store.runtime_state_dir)
                 _private_directory(host_state)
                 key_name = f"provider-key-{secrets.token_hex(8)}"
                 created_key = host_state / key_name
@@ -401,6 +429,8 @@ def _cli() -> argparse.ArgumentParser:
     run.add_argument("--aiport-config", required=True, type=Path)
     run.add_argument("--aiport-runtime-state-dir", type=Path,
                      help="AI Port state path inside its processor container")
+    run.add_argument("--aiport-instance", action="append", default=[], metavar="NAME=CONFIG",
+                     help="Add another AI Port instance with a private host config path")
     run.add_argument("--port", type=int, default=8765)
     run.add_argument("--inventory-controller")
     run.add_argument("--inventory-api-key-file", type=Path)
@@ -465,12 +495,20 @@ def main(argv: list[str] | None = None) -> int:
             trust_file=args.inventory_web_trust_file,
             cert_file=args.inventory_web_cert_file)) if all(
                 value is not None for value in inventory_fields) else None
+        instances = {}
+        for assignment in args.aiport_instance:
+            name, separator, config_path = assignment.partition("=")
+            if not separator or not config_path or name in instances:
+                raise ValueError("Invalid AI Port instance assignment")
+            instances[name] = Path(config_path)
         site = ControlSite(args.aikey_config, args.aiport_config,
                            signing_key=signing_key, password_record=record, port=args.port,
                            aiport_runtime_state_dir=args.aiport_runtime_state_dir,
+                           aiport_instances=instances,
                            inventory_loader=inventory_loader)
         site.aikey.snapshot()
-        site.aiport.snapshot()
+        for port_store in site.aiports.values():
+            port_store.snapshot()
         print(json.dumps({"control_site": site.origin, "loopback_only": True}))
         asyncio.run(_run(site, args.port))
         return 0

@@ -244,3 +244,71 @@ async def test_openai_key_is_write_only_and_wrong_host_is_rejected(tmp_path):
     finally:
         await client.close()
         await server.close()
+
+
+@pytest.mark.asyncio
+async def test_named_aiport_provider_change_targets_only_that_instance(tmp_path):
+    key_config, mac_port = fixture(tmp_path / "mac")
+    _, nas_port = fixture(tmp_path / "nas")
+    nas_data = json.loads(nas_port.read_text())
+    for index, stream in enumerate(nas_data["paired_streams"], start=7):
+        stream["camera_mac"] = f"2A112233445{index}"
+    nas_port.write_text(json.dumps(nas_data) + "\n")
+    mac_before = mac_port.read_bytes()
+    password = "synthetic-admin-passphrase"
+
+    async def inventory():
+        return {"schema": "aikey-camera-preflight/1", "protect_version": "7.3.60",
+                "fetched_at": 1800000000, "cameras": [
+                    {"name": "Mac camera", "model": "UVC G3 Instant",
+                     "state": "CONNECTED", "mac": "2A1122334455",
+                     "smart_detect_types": []},
+                    {"name": "NAS camera", "model": "UVC G4 Bullet",
+                     "state": "CONNECTED", "mac": "2A1122334457",
+                     "smart_detect_types": []}]}
+
+    site = ControlSite(
+        key_config, mac_port, signing_key=b"m" * 32,
+        password_record=AdminSecurity.create_password_record(password), port=8765,
+        aiport_instances={"nas-2": nas_port}, inventory_loader=inventory,
+    )
+    with pytest.raises(ValueError, match="Duplicate AI Port configuration"):
+        ControlSite(key_config, mac_port, signing_key=b"m" * 32,
+                    password_record=AdminSecurity.create_password_record(password),
+                    port=8765, aiport_instances={"copy": mac_port})
+    server = TestServer(site.app(), host="127.0.0.1")
+    await server.start_server()
+    site.origin = f"http://127.0.0.1:{server.port}"
+    site.security = AdminSecurity(b"m" * 32, site.origin, allow_loopback_http=True)
+    client = TestClient(server, cookie_jar=aiohttp.CookieJar(unsafe=True))
+    await client.start_server()
+    try:
+        await client.post("/login", data={"password": password},
+                          headers={"Origin": site.origin}, allow_redirects=False)
+        cookie = client.session.cookie_jar.filter_cookies(URL(site.origin))[_COOKIE].value
+        csrf = site.security.csrf_token(cookie)
+        page = await (await client.get("/")).text()
+        assert "AI Port nas-2" in page
+        assert "name='profile' value='aiport:nas-2'" in page
+        cameras = await (await client.get("/cameras")).text()
+        assert "Configured for this AI Port" in cameras
+        assert "Configured for AI Port nas-2" in cameras
+        data = {"csrf": csrf, "profile": "aiport:nas-2",
+                "revision": site.aiports["aiport:nas-2"].snapshot().revision,
+                "provider": "ollama", "model": "synthetic-vision",
+                "base_url": "http://127.0.0.1:11434",
+                "max_output_tokens": "128", "threshold": "0.8",
+                "smart_types": "person", "max_events_per_hour": "12",
+                "max_requests_per_hour": "24"}
+        saved = await client.post("/provider", data=data,
+                                  headers={"Origin": site.origin}, allow_redirects=False)
+        assert saved.status == 303
+        assert json.loads(nas_port.read_text())["live_pool_detector"]["inference_backend"] == "vision_api"
+        assert mac_port.read_bytes() == mac_before
+        unknown = await client.post("/provider", data={**data, "profile": "aiport:other"},
+                                    headers={"Origin": site.origin}, allow_redirects=False)
+        assert unknown.status == 400
+        assert mac_port.read_bytes() == mac_before
+    finally:
+        await client.close()
+        await server.close()
