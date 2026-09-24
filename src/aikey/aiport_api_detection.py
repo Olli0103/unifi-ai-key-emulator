@@ -61,6 +61,13 @@ class _MotionGate:
         self._quiet: dict[str, int] = {}
         self._armed: dict[str, bool] = {}
 
+    def reset(self, camera: str) -> None:
+        """Rearm startup sampling after a request was blocked before inference."""
+        self._previous.pop(camera, None)
+        self._pending.pop(camera, None)
+        self._quiet.pop(camera, None)
+        self._armed.pop(camera, None)
+
     def should_request(self, camera: str, frame: bytes) -> bool:
         try:
             with Image.open(BytesIO(frame)) as image:
@@ -213,6 +220,7 @@ class ApiObjectDetector:
         self.transport = transport
         self.motion = _MotionGate()
         self._camera_counts: dict[str, dict[str, int]] = {}
+        self._budget_retry_at: dict[str, float] = {}
         self._remote_host = (endpoint.hostname if transport is _post
                              and self.provider.provider in {"openai", "anthropic"}
                              else None)
@@ -247,10 +255,21 @@ class ApiObjectDetector:
                 raise ApiDetectionError("invalid_api_detection_frame")
         except ProviderError as exc:
             raise ApiDetectionError("invalid_api_detection_frame") from exc
+        if time.monotonic() < self._budget_retry_at.get(camera_mac, 0):
+            return ()
         if not self.motion.should_request(camera_mac, frame):
             return ()
-        self._check_remote_dns()
+        try:
+            self._check_remote_dns()
+        except ApiDetectionError:
+            self.motion.reset(camera_mac)
+            raise
         if not self.budget.claim(camera_mac):
+            # A denied startup or motion sample must not exhaust the motion
+            # gate permanently. Poll budget availability once per minute,
+            # then sample the current scene again even if it is stationary.
+            self.motion.reset(camera_mac)
+            self._budget_retry_at[camera_mac] = time.monotonic() + 60
             return ()
         try:
             url, headers, payload = self.provider.build_request([frame], _PROMPT)

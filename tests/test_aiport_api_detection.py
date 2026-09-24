@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw
 from aikey.aiport_api_detection import (
     ApiDetectionError, ApiObjectDetector, _post, parse_detections,
 )
+from aikey.aiport_event_budget import _HOUR_NS
 from aikey.aiport_tracking import TemporalTracker
 
 
@@ -136,6 +137,28 @@ def test_response_counts_distinguish_empty_from_score_rejection(tmp_path):
     }
 
 
+def test_stationary_camera_resamples_when_hourly_budget_recovers(tmp_path, monkeypatch):
+    now_ns = [10 * _HOUR_NS]
+    now_mono = [100.0]
+    monkeypatch.setattr("aikey.aiport_api_detection.time.monotonic",
+                        lambda: now_mono[0])
+    requests = []
+    detector = ApiObjectDetector(
+        _ollama_config(), tmp_path, threshold=0.8,
+        max_requests_per_hour=2,
+        transport=lambda *_args: (requests.append(1) or _response('{"detections":[]}')))
+    detector.budget.clock_ns = lambda: now_ns[0]
+    assert detector.budget.claim(FIRST)
+    assert detector.budget.claim(FIRST)
+    assert detector.detect_for_camera(FIRST, STILL) == ()
+    assert detector.detect_for_camera(FIRST, STILL) == ()
+    assert requests == []
+    now_ns[0] += _HOUR_NS
+    now_mono[0] += 3600
+    assert detector.detect_for_camera(FIRST, STILL) == ()
+    assert requests == [1]
+
+
 def test_package_observation_requires_exact_class_label_and_bounded_box():
     result = parse_detections(json.dumps({"detections": [{
         "kind": "package", "label": "package", "score": 0.91,
@@ -235,8 +258,8 @@ def test_dns_outage_preserves_budget_and_recovers_without_restart(tmp_path, monk
     for _ in range(4):
         detector.detect_for_camera(FIRST, STILL)
     assert detector.detect_for_camera(FIRST, FRAME) == ()
-    assert calls == [1]
-    assert detector.budget.remaining(FIRST) == 1
+    assert calls == [1, 1]
+    assert detector.budget.remaining(FIRST) == 0
 
 
 @pytest.mark.parametrize("text", [
