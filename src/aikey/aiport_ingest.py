@@ -190,11 +190,13 @@ class _Session:
         # The alias and destination have already passed exact policy checks.
         # FFmpeg may print the private alias. Drain stderr without logging it,
         # retaining only a short in-memory excerpt for fixed-code classification.
+        # The tracker needs two overlapping sightings. One frame per second
+        # can miss a person crossing a short camera view between samples.
         self.process = await asyncio.create_subprocess_exec(
             self.ffmpeg_path, "-hide_banner", "-nostdin", "-loglevel", "error",
             "-rtsp_transport", "tcp", "-timeout", "5000000", "-i", self.spec.url,
             "-map", "0:v:0", "-an", "-sn", "-dn", "-filter_threads", "1",
-            "-vf", "fps=1,scale=320:-2", "-threads", "1", "-f", "image2pipe",
+            "-vf", "fps=2,scale=320:-2", "-threads", "1", "-f", "image2pipe",
             "-vcodec", "mjpeg", "-q:v", "5", "pipe:1",
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, limit=_MAX_FRAME + 2,
