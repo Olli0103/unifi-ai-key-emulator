@@ -10,7 +10,8 @@ from dataclasses import dataclass
 import math
 
 from .aiport_ingest import IngressError, normalize_mac
-from .aiport_zones import SmartZone, ZoneError, parse_smart_zones
+from .aiport_zones import (SmartZone, ZoneError, parse_exclude_zones,
+                           parse_smart_zones)
 
 
 _REVERIFY_TYPES = frozenset({"person", "vehicle", "animal"})
@@ -135,6 +136,7 @@ class SmartPolicy:
     reverification_ceilings: tuple[tuple[str, float], ...]
     smart_zones: tuple[SmartZone, ...]
     zones_configured: bool
+    exclude_zones: tuple[SmartZone, ...] = ()
 
     def allows(self, kind: str) -> bool:
         return kind in self.enabled_types
@@ -155,6 +157,9 @@ class SmartPolicy:
                  box: tuple[float, float, float, float]) -> tuple[int, ...] | None:
         """Return matching zone IDs, or deny the box if zones are configured."""
         if not self.allows(kind):
+            return None
+        if any(kind in zone.object_types and zone.overlaps_box(box)
+               for zone in self.exclude_zones):
             return None
         if not self.zones_configured:
             return ()
@@ -222,8 +227,9 @@ def _reverification_ceilings(value: object, requested: list[str]
 def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
     """Accept bounded primary zones or full-frame object settings.
 
-    Secondary-lens zones, lines, exclusions, tamper, PTZ and access triggers
-    remain unsupported. Enabled reverification suppresses uncertain
+    Secondary-lens zones, lines, tamper, PTZ and access triggers remain
+    unsupported. Validated exclusions conservatively suppress overlapping
+    objects. Enabled reverification suppresses uncertain
     observations; it is not a second-stage inference implementation. The
     returned policy cannot enable native events by itself.
     """
@@ -256,6 +262,7 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
     raw_zones = payload.get("zones", {})
     try:
         smart_zones = parse_smart_zones(raw_zones)
+        exclude_zones = parse_exclude_zones(payload.get("excludeZones", {}))
     except ZoneError as exc:
         raise SmartSettingsError(str(exc)) from exc
     # Protect 7.3.60 can send an empty top-level list for a legacy camera
@@ -265,7 +272,7 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
     if not requested and smart_zones:
         zone_types = set().union(*(zone.object_types for zone in smart_zones))
         requested = sorted(zone_types)
-    for name in sorted(_REGION_MAPS - {"zones"}):
+    for name in sorted(_REGION_MAPS - {"zones", "excludeZones"}):
         value = payload.get(name, {})
         if not isinstance(value, dict):
             raise SmartSettingsError("invalid_smart_settings")
@@ -301,4 +308,4 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
                     or not 0 <= value <= 100):
                 raise SmartSettingsError("invalid_smart_settings")
     return SmartPolicy(expected, frozenset(requested), start_ms, stop_ms,
-                       ceilings, smart_zones, bool(raw_zones))
+                       ceilings, smart_zones, bool(raw_zones), exclude_zones)

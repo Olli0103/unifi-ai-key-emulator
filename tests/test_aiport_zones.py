@@ -2,7 +2,8 @@
 
 import pytest
 
-from aikey.aiport_zones import ZoneError, parse_person_zones, parse_smart_zones
+from aikey.aiport_zones import (ZoneError, parse_exclude_zones,
+                               parse_person_zones, parse_smart_zones)
 
 
 def square(*, x1=100, y1=100, x2=900, y2=900):
@@ -46,6 +47,32 @@ def test_non_person_zone_is_valid_but_cannot_admit_person():
     zone, = parse_smart_zones({"1": other})
     assert zone.object_types == frozenset({"vehicle"})
     assert zone.contains_box((0.2, 0.2, 0.5, 0.8))
+
+
+def test_exclude_zone_treats_any_box_overlap_as_excluded():
+    excluded, = parse_exclude_zones({"4": {
+        "coord": [450, 100, 550, 100, 550, 900, 450, 900],
+        "objectTypes": ["person"], "patrolSetID": -1,
+    }})
+    assert excluded.zone_id == 4
+    assert excluded.overlaps_box((0.4, 0.2, 0.5, 0.8))
+    assert not excluded.overlaps_box((0.2, 0.2, 0.4, 0.8))
+
+
+@pytest.mark.parametrize("data", [
+    {"0": {"coord": [0, 0, 1000, 0, 1000, 1000],
+           "objectTypes": ["person"], "patrolSetID": -1}},
+    {"1": {"coord": [0, 0, 1000, 0, 1000, 1000],
+           "objectTypes": ["person"]}},
+    {"1": {"coord": [0, 0, 1000, 0, 1000, 1000],
+           "objectTypes": ["person"], "patrolSetID": 0}},
+    {"1": {"coord": [0, 0, 1000, 0, 1000, 1000],
+           "objectTypes": ["person"], "patrolSetID": -1,
+           "unknown": "private"}},
+])
+def test_invalid_exclude_zone_fails_closed(data):
+    with pytest.raises(ZoneError, match="invalid_exclude_zone"):
+        parse_exclude_zones(data)
 
 
 @pytest.mark.parametrize("data", [

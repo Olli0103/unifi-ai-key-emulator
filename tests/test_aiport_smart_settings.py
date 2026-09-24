@@ -118,6 +118,18 @@ def test_package_policy_is_scoped_to_validated_primary_zone():
     assert not policy.allows("person")
 
 
+def test_exclude_zone_suppresses_only_its_selected_class():
+    raw = full_frame_policy()
+    raw["excludeZones"] = {"4": {
+        "coord": [450, 100, 550, 100, 550, 900, 450, 900],
+        "objectTypes": ["person"], "patrolSetID": -1,
+    }}
+    policy = parse_smart_settings(raw, camera_mac=CAMERA)
+    assert policy.person_zone_ids((0.4, 0.2, 0.5, 0.8)) is None
+    assert policy.person_zone_ids((0.2, 0.2, 0.4, 0.8)) == ()
+    assert policy.zone_ids("vehicle", (0.4, 0.2, 0.5, 0.8)) == ()
+
+
 def test_zone_only_mixed_classes_stay_bound_to_their_validated_zones():
     raw = full_frame_policy()
     raw["enableSmartDetect"] = []
@@ -221,7 +233,7 @@ def test_accepts_deprecated_read_only_auto_recognition_precision():
     ("zones", {"1": {"coord": [0, 0, 1000, 0, 1000, 1000]}},
      "invalid_smart_zone"),
     ("excludeZones", {"2": {"coord": [0, 0, 1000, 0, 1000, 1000]}},
-     "unsupported_smart_feature:regions:excludeZones"),
+     "invalid_exclude_zone"),
     ("lines", {"1": {}}, "unsupported_smart_feature:regions:lines"),
     ("accessTrigger", True, "unsupported_smart_feature:advanced"),
     ("enableTamperDetection", True, "unsupported_smart_feature:tamper"),

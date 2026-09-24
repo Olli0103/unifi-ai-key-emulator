@@ -32,22 +32,28 @@ class SmartZone:
     points: tuple[tuple[float, float], ...]
     object_types: frozenset[str]
 
-    def contains_box(self, box: tuple[float, float, float, float]) -> bool:
+    def overlap_ratio(self, box: tuple[float, float, float, float]) -> float:
         if (not isinstance(box, tuple) or len(box) != 4
                 or any(type(value) not in (int, float) or not math.isfinite(value)
                        for value in box)):
-            return False
+            return 0.0
         x1, y1, x2, y2 = box
         if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
-            return False
+            return 0.0
         clipped = self.points
         for axis, bound, keep_greater in ((0, x1, True), (0, x2, False),
                                           (1, y1, True), (1, y2, False)):
             clipped = _clip_half_plane(clipped, axis, bound, keep_greater)
             if not clipped:
-                return False
+                return 0.0
         box_area = (x2 - x1) * (y2 - y1)
-        return _area(clipped) / box_area >= _MIN_BOX_OVERLAP - _EPSILON
+        return _area(clipped) / box_area
+
+    def contains_box(self, box: tuple[float, float, float, float]) -> bool:
+        return self.overlap_ratio(box) >= _MIN_BOX_OVERLAP - _EPSILON
+
+    def overlaps_box(self, box: tuple[float, float, float, float]) -> bool:
+        return self.overlap_ratio(box) > 0
 
 
 def _clip_half_plane(points: tuple[tuple[float, float], ...], axis: int,
@@ -173,3 +179,29 @@ def parse_person_zones(value: object) -> tuple[SmartZone, ...]:
     """Keep the person-only view used by older callers and tests."""
     return tuple(zone for zone in parse_smart_zones(value)
                  if "person" in zone.object_types)
+
+
+def parse_exclude_zones(value: object) -> tuple[SmartZone, ...]:
+    """Validate the observed exclusion-map subset without admitting objects.
+
+    The source map supplies coordinates, selected classes, and a sentinel
+    patrol-set ID. Unknown fields fail closed. Unsupported detection classes
+    cannot affect the supported object-event path.
+    """
+    if not isinstance(value, dict) or len(value) > _MAX_ZONES:
+        raise ZoneError("invalid_exclude_zone")
+    zones = []
+    for raw_id, data in value.items():
+        if (not isinstance(raw_id, str) or _ZONE_ID.fullmatch(raw_id) is None
+                or int(raw_id) > 4_294_967_295 or not isinstance(data, dict)
+                or set(data) != {"coord", "objectTypes", "patrolSetID"}
+                or type(data["patrolSetID"]) is not int
+                or data["patrolSetID"] != -1):
+            raise ZoneError("invalid_exclude_zone")
+        try:
+            zones.extend(parse_smart_zones({raw_id: {
+                "coord": data["coord"], "objectTypes": data["objectTypes"],
+            }}))
+        except ZoneError as exc:
+            raise ZoneError("invalid_exclude_zone") from exc
+    return tuple(sorted(zones, key=lambda zone: zone.zone_id))
