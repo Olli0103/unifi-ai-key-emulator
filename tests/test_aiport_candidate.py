@@ -10,6 +10,7 @@ from pathlib import Path
 import ssl
 import sys
 import time
+from types import SimpleNamespace
 
 import aiohttp
 from aiohttp import web
@@ -70,7 +71,7 @@ def test_live_pool_accepts_explicit_capped_api_provider(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_live_api_frames_publish_native_person_event_without_network(
+async def test_live_api_frames_publish_native_person_enter_and_snapshot_leave_without_network(
         tmp_path, monkeypatch):
     """Exercise the full API-frame-to-native-event path with a fake reply."""
     camera = "2A1122334455"
@@ -137,6 +138,22 @@ async def test_live_api_frames_publish_native_person_event_without_network(
         assert enters[0]["payload"]["deviceID"] == camera
         assert enters[0]["payload"]["objectTypes"] == ["person"]
         assert service._inference.camera_snapshot()[0]["observations"]["person"] == 2
+        # A motion-gated frame makes no paid request, but still needs to
+        # close the native track and release its crop/full-frame references.
+        later = time.monotonic() + 21
+        monkeypatch.setattr(
+            "aikey.aiport_candidate.time",
+            SimpleNamespace(monotonic=lambda: later, time=time.time))
+        await service._observe_pool_frame(camera, frame)
+        await service._inference.join()
+        leaves = [message for message in sink.messages
+                  if message.get("functionName") == "EventSmartDetect"
+                  and message["payload"]["edgeType"] == "leave"]
+        assert len(calls) == 2
+        assert len(leaves) == 1
+        assert leaves[0]["payload"]["objectTypes"] == ["person"]
+        assert len(leaves[0]["payload"]["smartDetectSnapshots"]) == 1
+        assert service._pool_pending_snapshots
     finally:
         await service.stop()
 
