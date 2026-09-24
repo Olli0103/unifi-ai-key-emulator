@@ -90,7 +90,7 @@ def _verify_existing(state_dir: Path, expected: dict, pem: bytes) -> None:
     except (CandidateError, OSError, ValueError, ssl.SSLError, UnicodeError,
             IndexError) as exc:
         raise InstanceStateError("Existing AI Port identity is incomplete or invalid") from exc
-    if (set(config) != _BASE_KEYS or not isinstance(identity, dict)
+    if (not _BASE_KEYS <= set(config) or not isinstance(identity, dict)
             or identity.get("mac") != config["mac"]
             or any(config.get(name) != value for name, value in expected.items())
             or not hmac.compare_digest(saved_ca, pem)

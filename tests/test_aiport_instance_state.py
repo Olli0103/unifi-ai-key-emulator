@@ -3,6 +3,7 @@
 import hashlib
 import json
 import ssl
+import sys
 
 import pytest
 
@@ -48,6 +49,40 @@ def test_provision_creates_stable_private_identity_and_never_rotates_it(tmp_path
                             controller_cert_file=cert, controller_pin=pin)
     assert second["state"] == "verified_existing"
     assert (state / "device.key").read_bytes() == previous_key
+
+
+def test_existing_slot_accepts_valid_camera_policy_without_rewriting_identity(tmp_path):
+    plan, cert, pin, root = fixture(tmp_path)
+    state = root / "slot-1"
+    provision_slot(plan, 1, state, controller_ip="192.168.10.1",
+                   controller_cert_file=cert, controller_pin=pin)
+    config_path = state / "config.json"
+    config = json.loads(config_path.read_text())
+    config["paired_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1", "ffmpeg_path": sys.executable}
+        for mac in ("2A1122334455", "2A1122334456")]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api",
+        "provider_config": {"provider": "ollama", "model": "synthetic-vision",
+                            "base_url": "http://127.0.0.1:11434"},
+        "threshold": 0.8, "smart_types": ["person"],
+        "max_events_per_hour": 12, "max_requests_per_hour": 24,
+    }
+    config_path.write_text(json.dumps(config) + "\n")
+    previous_config = config_path.read_bytes()
+    previous_key = (state / "device.key").read_bytes()
+
+    result = provision_slot(plan, 1, state, controller_ip="192.168.10.1",
+                            controller_cert_file=cert, controller_pin=pin)
+    assert result["state"] == "verified_existing"
+    assert config_path.read_bytes() == previous_config
+    assert (state / "device.key").read_bytes() == previous_key
+
+    config["device_ip"] = "192.168.10.22"
+    config_path.write_text(json.dumps(config) + "\n")
+    with pytest.raises(InstanceStateError, match="differs"):
+        provision_slot(plan, 1, state, controller_ip="192.168.10.1",
+                       controller_cert_file=cert, controller_pin=pin)
 
 
 @pytest.mark.parametrize("change", [
