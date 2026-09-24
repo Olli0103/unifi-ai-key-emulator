@@ -2192,6 +2192,62 @@ async def test_live_pool_routes_two_camera_events_and_pinned_snapshots(
 
 
 @pytest.mark.asyncio
+async def test_live_pool_exclusion_policy_suppresses_inside_but_emits_outside(
+        tmp_path):
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    config["paired_streams"] = [{
+        "camera_mac": camera, "source_ip": "192.168.10.1",
+        "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "checkpoint_path": str(tmp_path / "model.pth"),
+        "checkpoint_sha256": "a" * 64, "threshold": 0.3,
+        "smart_types": ["person"], "max_events_per_hour": 12}
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    policy = {"deviceID": camera, "algoVersion": "beta",
+              "enableSmartDetect": ["person"], "eventStartMSec": 1000,
+              "eventStopMSec": 3000, "zones": {},
+              "excludeZones": {"4": {
+                  "coord": [450, 100, 550, 100, 550, 900, 450, 900],
+                  "objectTypes": ["person"], "patrolSetID": -1}}}
+    try:
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "ChangeSmartDetectSettings", "messageId": 16,
+            "payload": policy}).encode())
+        assert sink.messages[-1]["statusCode"] == 0
+        generation = service._camera_engine.policy_generation(camera)
+        excluded = (ObjectObservation("person", "person", 0.9,
+                                      (0.4, 0.2, 0.5, 0.8)),)
+        admitted = (ObjectObservation("person", "person", 0.9,
+                                      (0.2, 0.2, 0.4, 0.8)),)
+        for _ in range(2):
+            await service._observe_pool_result(camera, excluded, generation)
+        assert service.smart_events_entered == 0
+        for _ in range(2):
+            await service._observe_pool_result(camera, admitted, generation)
+        enters = [message for message in sink.messages
+                  if message["functionName"] == "EventSmartDetect"
+                  and message["payload"]["edgeType"] == "enter"]
+        assert len(enters) == 1
+        assert enters[0]["payload"]["deviceID"] == camera
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
 async def test_event_probe_acks_person_policy_then_sends_one_real_track_pair(tmp_path):
     config = fixture_state(tmp_path)
     config["diagnostic_hello_until"] = int(time.time()) + 90
