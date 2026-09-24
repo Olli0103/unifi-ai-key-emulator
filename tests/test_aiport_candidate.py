@@ -1376,6 +1376,8 @@ async def test_stream_reset_rejects_unexpected_payload_without_stopping(tmp_path
 
     class FakeIngress:
         frame_count = 0
+        restart_attempts = 0
+        restart_successes = 0
         streams_with_decoded_frames = 0
         total_frames_decoded = 0
         frames_observed = 0

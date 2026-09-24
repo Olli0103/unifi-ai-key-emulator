@@ -10,7 +10,7 @@ import time
 import pytest
 
 from aikey.aiport_candidate import CandidateService
-from aikey.aiport_ingest import AiPortIngress, IngressError
+from aikey.aiport_ingest import AiPortIngress, AiPortIngressPool, IngressError
 from test_aiport_candidate import fixture_state
 
 
@@ -37,6 +37,25 @@ def fake_decoder(tmp_path: Path, *, emit_frame: bool = True,
                           + shlex.quote(str(script)) + ' "$@"\n')
     executable.chmod(0o700)
     return str(executable), args_file
+
+
+def restartable_decoder(tmp_path: Path) -> tuple[str, Path]:
+    executable = tmp_path / "restartable-decoder"
+    script = tmp_path / "restartable-decoder.py"
+    attempts = tmp_path / "attempts"
+    script.write_text(
+        "import pathlib, sys, time\n"
+        f"p = pathlib.Path({str(attempts)!r})\n"
+        "n = int(p.read_text()) + 1 if p.exists() else 1\n"
+        "p.write_text(str(n))\n"
+        f"sys.stdout.buffer.write({FRAME!r})\n"
+        "sys.stdout.buffer.flush()\n"
+        "time.sleep(0.5 if n == 1 else 30)\n"
+    )
+    executable.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+                          + shlex.quote(str(script)) + ' "$@"\n')
+    executable.chmod(0o700)
+    return str(executable), attempts
 
 
 def start_payload(**changes) -> dict:
@@ -68,6 +87,79 @@ async def test_ingress_starts_only_after_frame_and_stops_process(tmp_path):
         assert ingress.total_frames_decoded == 1
     finally:
         await ingress.close()
+
+
+@pytest.mark.asyncio
+async def test_ingress_recovers_decoder_exit_without_new_stream_command(tmp_path):
+    executable, attempts = restartable_decoder(tmp_path)
+    ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
+                           ffmpeg_path=executable, start_timeout=2)
+    try:
+        await ingress.control(start_payload())
+
+        async def recovered() -> None:
+            while int(attempts.read_text()) < 2 or not ingress.list_streams():
+                await asyncio.sleep(0.1)
+
+        await asyncio.wait_for(recovered(), timeout=6)
+        assert ingress.frame_count == 1
+        assert ingress.total_frames_decoded >= 1
+        assert ingress.restart_attempts == 1
+        assert ingress.restart_successes == 1
+        assert await ingress.control({"streaming": False, "deviceID": CAMERA_MAC}) == {
+            "status": "stopped", "usedPoints": 0}
+        assert ingress.list_streams() == []
+    finally:
+        await ingress.close()
+
+
+@pytest.mark.asyncio
+async def test_ingress_explicit_stop_cancels_decoder_recovery(tmp_path):
+    executable, attempts = restartable_decoder(tmp_path)
+    ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
+                           ffmpeg_path=executable, start_timeout=2)
+    try:
+        await ingress.control(start_payload())
+        await ingress.control({"streaming": False, "deviceID": CAMERA_MAC})
+        await asyncio.sleep(1.2)
+        assert attempts.read_text() == "1"
+        assert ingress.reserved_points == 0
+        assert ingress.list_streams() == []
+    finally:
+        await ingress.close()
+
+
+@pytest.mark.asyncio
+async def test_pool_recovers_one_decoder_without_interrupting_other(tmp_path):
+    failing_dir = tmp_path / "failing"
+    healthy_dir = tmp_path / "healthy"
+    failing_dir.mkdir()
+    healthy_dir.mkdir()
+    restarting_decoder, attempts = restartable_decoder(failing_dir)
+    stable_decoder, _ = fake_decoder(healthy_dir)
+    other_mac = "2A1122334466"
+    pool = AiPortIngressPool([
+        {"camera_mac": CAMERA_MAC, "source_ip": SOURCE_IP,
+         "ffmpeg_path": restarting_decoder},
+        {"camera_mac": other_mac, "source_ip": SOURCE_IP,
+         "ffmpeg_path": stable_decoder},
+    ])
+    try:
+        await pool.control(start_payload())
+        await pool.control(start_payload(deviceID=other_mac))
+        other_session = pool._ingresses[other_mac]._session
+
+        async def recovered() -> None:
+            while int(attempts.read_text()) < 2 or len(pool.list_streams()) < 2:
+                await asyncio.sleep(0.1)
+
+        await asyncio.wait_for(recovered(), timeout=6)
+        assert pool._ingresses[other_mac]._session is other_session
+        assert pool.reserved_points == 4
+        assert pool.restart_attempts == 1
+        assert pool.restart_successes == 1
+    finally:
+        await pool.close()
 
 
 @pytest.mark.asyncio
