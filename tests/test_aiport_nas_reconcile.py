@@ -63,7 +63,8 @@ def test_modified_manifest_is_rejected(tmp_path, mutation):
 
 class FakeDocker:
     def __init__(self, manifest, rows="", fail_health=False, wrong_ip=False,
-                 unsafe_runtime=None, adopted=False, control_connected=False):
+                 unsafe_runtime=None, adopted=False, control_connected=False,
+                 unsafe_network=None):
         self.manifest = manifest
         self.rows = rows
         self.fail_health = fail_health
@@ -71,11 +72,26 @@ class FakeDocker:
         self.unsafe_runtime = unsafe_runtime
         self.adopted = adopted
         self.control_connected = control_connected
+        self.unsafe_network = unsafe_network
         self.started = False
         self.calls = []
 
     def __call__(self, argv, timeout):
         self.calls.append(argv)
+        if argv[:3] == ["docker", "network", "inspect"]:
+            expected = self.manifest["x-aikey-network-check"]
+            value = {
+                "Name": "wrong" if self.unsafe_network == "name" else expected["name"],
+                "Driver": "bridge" if self.unsafe_network == "driver" else "macvlan",
+                "Options": {"parent": ("wrong0" if self.unsafe_network == "parent"
+                                       else expected["parent"])},
+                "IPAM": {"Config": [{
+                    "Subnet": ("192.168.11.0/24" if self.unsafe_network == "subnet"
+                               else expected["subnet"]),
+                    "Gateway": ("192.168.10.2" if self.unsafe_network == "gateway"
+                                else expected["gateway"])}]},
+            }
+            return json.dumps(value)
         if "config" in argv:
             return ""
         if "ps" in argv:
@@ -113,7 +129,11 @@ class FakeDocker:
                     else volume["source"],
                     "Destination": volume["target"], "RW": True}])
             network = service["networks"]["aiport_lan"]
-            return json.dumps({"local-aiport_aiport_lan": {
+            network_name = (self.manifest["networks"]["aiport_lan"].get("name")
+                            or "local-aiport_aiport_lan")
+            if self.unsafe_network == "attachment":
+                network_name = "wrong"
+            return json.dumps({network_name: {
                 "IPAddress": "192.168.10.200" if self.wrong_ip else network["ipv4_address"],
                 "MacAddress": network["mac_address"]}})
         if "exec" in argv:
@@ -145,6 +165,36 @@ def test_dry_run_does_not_mutate_and_apply_starts_once(tmp_path):
     assert sum("up" in call for call in fake.calls) == 1
     assert "--no-recreate" in next(call for call in fake.calls if "up" in call)
     assert "--pull" in next(call for call in fake.calls if "up" in call)
+
+
+def test_external_macvlan_is_verified_before_start(tmp_path):
+    plan, states, options, _, report = inputs(tmp_path)
+    options["external_network"] = "caddy_lan"
+    selected = {2: states[2]}
+    manifest = build_nas_compose(plan, selected, **options)
+    assert verify_inputs(plan, manifest, report, selected, options) == ["aiport_slot_2"]
+    fake = FakeDocker(manifest)
+    outcome = reconcile(tmp_path / "compose.json", manifest, selected,
+                        apply=True, run=fake, pause=lambda _: None)
+    assert outcome["started"] == ["aiport_slot_2"]
+    assert sum(call[:3] == ["docker", "network", "inspect"] for call in fake.calls) == 1
+
+
+@pytest.mark.parametrize("unsafe_network", [
+    "name", "driver", "parent", "subnet", "gateway", "attachment",
+])
+def test_wrong_external_macvlan_or_container_attachment_blocks_apply(
+        tmp_path, unsafe_network):
+    plan, states, options, _, _ = inputs(tmp_path)
+    manifest = build_nas_compose(plan, {2: states[2]},
+                                 **(options | {"external_network": "caddy_lan"}))
+    row = {"Service": "aiport_slot_2", "State": "created",
+           "ID": "a" * 12, "Publishers": []}
+    fake = FakeDocker(manifest, json.dumps(row), unsafe_network=unsafe_network)
+    with pytest.raises(ReconcileError):
+        reconcile(tmp_path / "compose.json", manifest, {2: states[2]},
+                  apply=True, run=fake)
+    assert not any("up" in call or "stop" in call for call in fake.calls)
 
 
 def test_existing_running_container_is_preserved(tmp_path):

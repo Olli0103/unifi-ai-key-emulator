@@ -67,6 +67,27 @@ def test_existing_mac_slot_can_be_excluded_during_nas_migration(tmp_path):
     assert compose["services"]["aiport_slot_2"]["networks"]["aiport_lan"]["ipv4_address"] == "192.168.10.136"
 
 
+def test_existing_macvlan_can_be_reused_with_an_explicit_network_contract(tmp_path):
+    plan, states, options = fixture(tmp_path)
+    compose = build_nas_compose(plan, {2: states[2]},
+                                **(options | {"external_network": "caddy_lan"}))
+    assert compose["networks"] == {"aiport_lan": {
+        "external": True, "name": "caddy_lan"}}
+    assert compose["x-aikey-network-check"] == {
+        "name": "caddy_lan", "driver": "macvlan", "parent": "bond0.10",
+        "subnet": "192.168.10.0/24", "gateway": "192.168.10.1"}
+    assert compose["services"]["aiport_slot_2"]["networks"]["aiport_lan"][
+        "ipv4_address"] == "192.168.10.136"
+
+
+@pytest.mark.parametrize("name", ["", "bad/name", "bad name", ".hidden"])
+def test_existing_network_requires_a_safe_explicit_name(tmp_path, name):
+    plan, states, options = fixture(tmp_path)
+    with pytest.raises(NasComposeError, match="valid name"):
+        build_nas_compose(plan, {2: states[2]},
+                          **(options | {"external_network": name}))
+
+
 def test_selected_slot_can_start_before_other_planned_slots_have_addresses(tmp_path):
     plan, states, options = fixture(tmp_path)
     plan["instances"][1]["host_ip"] = None

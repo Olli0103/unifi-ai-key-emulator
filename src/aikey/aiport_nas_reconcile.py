@@ -129,7 +129,53 @@ def _rows(output: str, services: list[str]) -> dict[str, dict]:
     return found
 
 
-def _inspect(run: Callable[[list[str], int], str], row: dict, service: dict) -> None:
+def _network_name(manifest: dict) -> str:
+    try:
+        network = manifest["networks"]["aiport_lan"]
+        if network.get("external") is True:
+            name = network["name"]
+        else:
+            name = f"{manifest['name']}_aiport_lan"
+    except (AttributeError, KeyError, TypeError) as exc:
+        raise ReconcileError("AI Port network cannot be identified") from exc
+    if not isinstance(name, str) or not name:
+        raise ReconcileError("AI Port network cannot be identified")
+    return name
+
+
+def _verify_external_network(run: Callable[[list[str], int], str],
+                             manifest: dict) -> None:
+    try:
+        network = manifest["networks"]["aiport_lan"]
+    except (KeyError, TypeError) as exc:
+        raise ReconcileError("AI Port network cannot be identified") from exc
+    if not isinstance(network, dict):
+        raise ReconcileError("AI Port network cannot be identified")
+    if network.get("external") is not True:
+        return
+    expected = manifest.get("x-aikey-network-check")
+    name = _network_name(manifest)
+    if (not isinstance(expected, dict) or expected.get("name") != name
+            or expected.get("driver") != "macvlan"):
+        raise ReconcileError("External AI Port network lacks its verified contract")
+    try:
+        actual = json.loads(run(["docker", "network", "inspect", "--format",
+                                 "{{json .}}", name], 15))
+        ipam = actual["IPAM"]["Config"]
+        parent = actual["Options"]["parent"]
+    except (ReconcileError, ValueError, KeyError, TypeError) as exc:
+        raise ReconcileError("Existing AI Port macvlan network cannot be inspected") from exc
+    if (not isinstance(actual, dict) or actual.get("Name") != name
+            or actual.get("Driver") != "macvlan" or parent != expected.get("parent")
+            or not isinstance(ipam, list) or len(ipam) != 1
+            or not isinstance(ipam[0], dict)
+            or ipam[0].get("Subnet") != expected.get("subnet")
+            or ipam[0].get("Gateway") != expected.get("gateway")):
+        raise ReconcileError("Existing AI Port macvlan differs from the verified LAN")
+
+
+def _inspect(run: Callable[[list[str], int], str], row: dict, service: dict,
+             network_name: str) -> None:
     container_id = row.get("ID")
     if not isinstance(container_id, str) or not _CONTAINER_ID.fullmatch(container_id):
         raise ReconcileError("Docker Compose did not identify its container")
@@ -169,11 +215,12 @@ def _inspect(run: Callable[[list[str], int], str], row: dict, service: dict) -> 
             or mounts[0].get("Destination") != expected_volume["target"]
             or mounts[0].get("RW") is not True):
         raise ReconcileError("Docker container user, isolation or state mount differs from the manifest")
-    actual = next(iter(networks.values()))
+    actual = networks.get(network_name)
     if (not isinstance(actual, dict)
+            or network_name not in networks
             or actual.get("IPAddress") != selected["ipv4_address"]
             or str(actual.get("MacAddress", "")).lower() != selected["mac_address"].lower()):
-        raise ReconcileError("Docker container IP or MAC differs from the planned identity")
+        raise ReconcileError("Docker container network, IP or MAC differs from the planned identity")
 
 
 def _health(run: Callable[[list[str], int], str], manifest_path: Path,
@@ -205,6 +252,8 @@ def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
     """Validate Compose, inspect state, and optionally start only missing slots."""
     services = sorted(manifest["services"])
     run(_compose(manifest_path, "config", "--quiet"), 15)
+    network_name = _network_name(manifest)
+    _verify_external_network(run, manifest)
     found = _rows(run(_compose(manifest_path, "ps", "--all", "--format", "json"), 15),
                   services)
     running = [name for name in services if name in found and found[name]["State"] == "running"]
@@ -212,7 +261,7 @@ def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
     health = {}
     readiness = {}
     for name, row in found.items():
-        _inspect(run, row, manifest["services"][name])
+        _inspect(run, row, manifest["services"][name], network_name)
     for name in running:
         slot = int(name.removeprefix("aiport_slot_"))
         health[name] = _health(run, manifest_path, name, states[slot])
@@ -232,7 +281,7 @@ def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
                                 15), services)
             if name not in current or current[name]["State"] != "running":
                 raise ReconcileError(f"{name} did not enter running state")
-            _inspect(run, current[name], manifest["services"][name])
+            _inspect(run, current[name], manifest["services"][name], network_name)
             slot = int(name.removeprefix("aiport_slot_"))
             for attempt in range(_HEALTH_ATTEMPTS):
                 try:
@@ -267,6 +316,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--subnet", required=True)
     parser.add_argument("--gateway", required=True)
     parser.add_argument("--parent", required=True)
+    parser.add_argument("--external-network")
     parser.add_argument("--image", required=True)
     parser.add_argument("--uid", required=True, type=int)
     parser.add_argument("--gid", required=True, type=int)
@@ -290,7 +340,8 @@ def main(argv: list[str] | None = None) -> int:
                                              cert_file=args.web_cert_file))
         options = {"controller_ip": args.controller_ip, "controller_pin": args.controller_pin,
                    "nas_ip": args.nas_ip, "subnet": args.subnet, "gateway": args.gateway,
-                   "parent": args.parent, "image": args.image, "uid": args.uid, "gid": args.gid}
+                   "parent": args.parent, "image": args.image, "uid": args.uid, "gid": args.gid,
+                   "external_network": args.external_network}
         verify_inputs(plan, manifest, report, states, options)
         outcome = reconcile(args.compose, manifest, states, apply=args.apply)
     except (InventoryError, ReconcileError, OSError, ValueError) as exc:
