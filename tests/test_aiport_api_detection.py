@@ -123,3 +123,30 @@ def test_openai_luna_uses_private_key_and_no_response_storage(tmp_path):
     assert payload["reasoning"] == {"effort": "none"}
     assert payload["store"] is False and payload["stream"] is False
     assert "synthetic-test-key" not in json.dumps(payload)
+
+
+def test_claude_adapter_uses_private_key_and_official_endpoint(tmp_path):
+    key = tmp_path / "anthropic-key"
+    key.write_text("synthetic-claude-key\n")
+    key.chmod(0o600)
+    calls = []
+
+    def transport(url, headers, payload):
+        calls.append((url, headers, payload))
+        return {"type": "message", "role": "assistant", "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": '{"detections":[]}'}]}
+
+    detector = ApiObjectDetector(
+        {"provider": "anthropic", "model": "claude-opus-5-5",
+         "base_url": "https://api.anthropic.com/v1", "allow_remote": True,
+         "api_key_file": str(key), "max_output_tokens": 256},
+        tmp_path, threshold=0.8, max_requests_per_hour=2, transport=transport)
+    assert detector.detect_for_camera(FIRST, STILL) == ()
+    assert detector.detect_for_camera(FIRST, FRAME) == ()
+    assert len(calls) == 1
+    url, headers, payload = calls[0]
+    assert url == "https://api.anthropic.com/v1/messages"
+    assert headers == {"x-api-key": "synthetic-claude-key",
+                       "anthropic-version": "2023-06-01"}
+    assert payload["model"] == "claude-opus-5-5"
+    assert "synthetic-claude-key" not in json.dumps(payload)

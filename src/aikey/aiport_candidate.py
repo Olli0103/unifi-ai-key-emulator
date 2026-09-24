@@ -120,7 +120,15 @@ def _private_ipv4(value: object) -> str:
     return str(address)
 
 
-def load_config(path: Path) -> dict:
+def _offline_decoder_path(value: object) -> str:
+    """Validate syntax when an admin runs outside the decoder's container."""
+    if (type(value) is not str or not Path(value).is_absolute()
+            or len(value) > 4096 or "\x00" in value):
+        raise IngressError("invalid_decoder")
+    return value
+
+
+def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
     raw = _private_file(path, 4096)
     try:
         value = json.loads(raw)
@@ -152,7 +160,9 @@ def load_config(path: Path) -> dict:
         try:
             stream["camera_mac"] = normalize_mac(stream["camera_mac"])
             stream["source_ip"] = private_source_ip(stream["source_ip"])
-            stream["ffmpeg_path"] = executable_path(stream["ffmpeg_path"])
+            stream["ffmpeg_path"] = (executable_path(stream["ffmpeg_path"])
+                                      if check_decoder_executable else
+                                      _offline_decoder_path(stream["ffmpeg_path"]))
         except IngressError as exc:
             raise CandidateError("Invalid paired stream policy") from exc
         live_probe_fields = {"diagnostic_detector", "diagnostic_smart_probe_until",
@@ -201,7 +211,9 @@ def load_config(path: Path) -> dict:
             try:
                 camera_mac = normalize_mac(stream["camera_mac"])
                 stream["source_ip"] = private_source_ip(stream["source_ip"])
-                stream["ffmpeg_path"] = executable_path(stream["ffmpeg_path"])
+                stream["ffmpeg_path"] = (executable_path(stream["ffmpeg_path"])
+                                          if check_decoder_executable else
+                                          _offline_decoder_path(stream["ffmpeg_path"]))
             except IngressError as exc:
                 raise CandidateError("Invalid live camera pool") from exc
             if camera_mac in seen:
@@ -287,7 +299,9 @@ def load_config(path: Path) -> dict:
         try:
             stream["camera_mac"] = normalize_mac(stream["camera_mac"])
             stream["source_ip"] = private_source_ip(stream["source_ip"])
-            stream["ffmpeg_path"] = executable_path(stream["ffmpeg_path"])
+            stream["ffmpeg_path"] = (executable_path(stream["ffmpeg_path"])
+                                      if check_decoder_executable else
+                                      _offline_decoder_path(stream["ffmpeg_path"]))
         except IngressError as exc:
             raise CandidateError("Invalid stream diagnostic policy") from exc
     if "diagnostic_streams" in value:
@@ -308,7 +322,9 @@ def load_config(path: Path) -> dict:
             try:
                 camera_mac = normalize_mac(stream["camera_mac"])
                 stream["source_ip"] = private_source_ip(stream["source_ip"])
-                stream["ffmpeg_path"] = executable_path(stream["ffmpeg_path"])
+                stream["ffmpeg_path"] = (executable_path(stream["ffmpeg_path"])
+                                          if check_decoder_executable else
+                                          _offline_decoder_path(stream["ffmpeg_path"]))
             except IngressError as exc:
                 raise CandidateError("Invalid multi-camera stream policy") from exc
             if camera_mac in seen:

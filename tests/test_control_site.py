@@ -3,6 +3,7 @@
 import hashlib
 import json
 import ssl
+import stat
 import sys
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from yarl import URL
 
 from aikey.admin_security import AdminSecurity
 from aikey.config import initialize
-from aikey.control_site import ControlSite, _COOKIE
+from aikey.control_site import ControlSite, _COOKIE, main
 from aikey.tls import ensure_identity_certificate
 
 
@@ -43,6 +44,19 @@ def fixture(tmp_path):
     }) + "\n")
     port_config.chmod(0o600)
     return key_config, port_config
+
+
+def test_generated_bootstrap_password_stays_private_and_is_not_printed(tmp_path, capsys):
+    state = tmp_path / "admin"
+    assert main(["init", "--state-dir", str(state), "--generate"]) == 0
+    output = capsys.readouterr().out
+    password = (state / "admin-bootstrap-password").read_text().strip()
+    record = (state / "admin-password-record").read_text().strip()
+    assert len(password) >= 32
+    assert AdminSecurity.verify_password(password, record)
+    assert password not in output
+    assert stat.S_IMODE((state / "admin-bootstrap-password").stat().st_mode) == 0o600
+    assert main(["init", "--state-dir", str(state), "--generate"]) == 2
 
 
 @pytest.mark.asyncio
@@ -116,10 +130,13 @@ async def test_browser_login_provider_save_and_csrf_preserve_pairing(tmp_path):
 @pytest.mark.asyncio
 async def test_openai_key_is_write_only_and_wrong_host_is_rejected(tmp_path):
     key_config, port_config = fixture(tmp_path)
+    key_data = json.loads(key_config.read_text())
+    key_data["runtime"]["state_dir"] = "/state"
+    key_config.write_text(json.dumps(key_data) + "\n")
     password = "synthetic-admin-passphrase"
     site = ControlSite(key_config, port_config, signing_key=b"r" * 32,
                        password_record=AdminSecurity.create_password_record(password),
-                       port=8765)
+                       port=8765, aiport_runtime_state_dir=Path("/state"))
     server = TestServer(site.app(), host="127.0.0.1")
     await server.start_server()
     site.origin = f"http://127.0.0.1:{server.port}"
@@ -145,12 +162,26 @@ async def test_openai_key_is_write_only_and_wrong_host_is_rejected(tmp_path):
         assert response.status == 303
         saved = json.loads(port_config.read_text())
         key_path = saved["live_pool_detector"]["provider_config"]["api_key_file"]
-        assert key_path.startswith(str(port_config.parent))
-        assert Path(key_path).read_text().strip() == secret
+        assert Path(key_path).parent == Path("/state")
+        assert (port_config.parent / Path(key_path).name).read_text().strip() == secret
         assert site.aiport.snapshot().key_configured is True
         assert site.aiport.snapshot().allow_remote is True
+        key_response = await client.post("/provider", data={
+            "csrf": site.security.csrf_token(cookie), "profile": "aikey",
+            "revision": site.aikey.snapshot().revision,
+            "provider": "openai", "model": "gpt-6-luna",
+            "base_url": "https://api.openai.com/v1",
+            "allow_remote": "on", "max_output_tokens": "256",
+            "api_key": "synthetic-key-profile-secret",
+        }, headers={"Origin": site.origin}, allow_redirects=False)
+        assert key_response.status == 303
+        key_reference = json.loads(key_config.read_text())["inference"]["api_key_file"]
+        assert Path(key_reference).parent == Path("/state")
+        assert (key_config.parent / Path(key_reference).name).read_text().strip() == (
+            "synthetic-key-profile-secret")
         markup = await (await client.get("/")).text()
         assert secret not in markup and key_path not in markup
+        assert "synthetic-key-profile-secret" not in markup
         assert "Key reference configured: yes" in markup
     finally:
         await client.close()

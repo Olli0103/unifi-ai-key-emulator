@@ -255,7 +255,7 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
             if u.scheme not in ("http", "https") or not u.hostname or u.username or u.password:
                 raise ConfigError("Inference/embedding URLs must be HTTP(S), without credentials")
     if config["inference"].get("provider", "openai-compatible") not in {
-            "openai", "ollama", "openai-compatible"}:
+            "openai", "anthropic", "ollama", "openai-compatible"}:
         raise ConfigError("Unknown vision provider")
     if config["inference"].get("api_key"):
         raise ConfigError("Use inference.api_key_file instead of an inline API key")
@@ -313,7 +313,7 @@ def readiness(config: dict) -> dict:
         "vision_model_configured": bool(config["inference"].get("model")),
     }
     provider = config["inference"].get("provider", "openai-compatible")
-    if provider == "openai":
+    if provider in {"openai", "anthropic"}:
         checks["vision_api_key_file"] = Path(config["inference"].get("api_key_file", "")).is_file()
     errors = {}
     try:

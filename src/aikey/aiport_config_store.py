@@ -66,8 +66,12 @@ class AiPortPreview:
 class AiPortConfigurationStore:
     """Change AI Port inference without touching its identity or paired streams."""
 
-    def __init__(self, config_path: Path):
+    def __init__(self, config_path: Path, *, runtime_state_dir: Path | None = None):
         self.path = Path(config_path).expanduser().absolute()
+        self.runtime_state_dir = (Path(runtime_state_dir).expanduser().absolute()
+                                  if runtime_state_dir is not None else self.path.parent)
+        if not self.runtime_state_dir.is_absolute():
+            raise AiPortConfigurationError("aiport_runtime_state_directory_invalid")
         self.lock_path = self.path.with_name("." + self.path.name + ".admin.lock")
         self.history_dir = self.path.parent / ".aiport-config-history"
 
@@ -86,7 +90,8 @@ class AiPortConfigurationStore:
                 content = source.read(4097)
                 if len(content) > 4096:
                     raise ValueError
-            return content, load_config(self.path)
+            return content, load_config(
+                self.path, check_decoder_executable=(self.runtime_state_dir == self.path.parent))
         except (OSError, ValueError, CandidateError) as exc:
             raise AiPortConfigurationError("aiport_config_unavailable") from exc
 
@@ -147,7 +152,7 @@ class AiPortConfigurationStore:
         if "api_key_file" in settings:
             path = settings["api_key_file"]
             if (not isinstance(path, str) or not Path(path).is_absolute()
-                    or Path(path).parent != self.path.parent):
+                    or Path(path).parent != self.runtime_state_dir):
                 raise AiPortConfigurationError("aiport_key_must_be_in_state_directory")
         provider = {key: settings[key] for key in _PROVIDER_FIELDS if key in settings}
         previous = current.get("live_pool_detector", {}).get("provider_config", {})
@@ -172,7 +177,8 @@ class AiPortConfigurationStore:
             descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             with os.fdopen(descriptor, "wb") as output:
                 output.write(self._encode(candidate))
-            load_config(temporary)
+            load_config(temporary,
+                        check_decoder_executable=(self.runtime_state_dir == self.path.parent))
         except (OSError, CandidateError, TypeError, ValueError) as exc:
             raise AiPortConfigurationError("aiport_provider_settings_invalid") from exc
         finally:

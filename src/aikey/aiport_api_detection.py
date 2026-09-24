@@ -170,7 +170,8 @@ class ApiObjectDetector:
         except ProviderError as exc:
             raise ApiDetectionError("invalid_api_detection_provider") from exc
         endpoint = urlsplit(self.provider.base_url)
-        if not (endpoint.hostname == "api.openai.com"
+        if not ((self.provider.provider == "openai" and endpoint.hostname == "api.openai.com")
+                or (self.provider.provider == "anthropic" and endpoint.hostname == "api.anthropic.com")
                 or endpoint.hostname in {"localhost", "127.0.0.1", "::1"}):
             raise ApiDetectionError("api_detection_endpoint_not_approved")
         self.threshold = float(threshold)

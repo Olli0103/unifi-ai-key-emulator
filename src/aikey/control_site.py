@@ -81,14 +81,16 @@ def _private_directory(path: Path) -> None:
 
 class ControlSite:
     def __init__(self, aikey_config: Path, aiport_config: Path, *,
-                 signing_key: bytes, password_record: str, port: int):
+                 signing_key: bytes, password_record: str, port: int,
+                 aiport_runtime_state_dir: Path | None = None):
         if type(port) is not int or not 1024 <= port <= 65535:
             raise ValueError("Invalid control-site port")
         self.origin = f"http://127.0.0.1:{port}"
         self.security = AdminSecurity(signing_key, self.origin, allow_loopback_http=True)
         self.password_record = password_record
         self.aikey = ConfigurationStore(aikey_config)
-        self.aiport = AiPortConfigurationStore(aiport_config)
+        self.aiport = AiPortConfigurationStore(
+            aiport_config, runtime_state_dir=aiport_runtime_state_dir)
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=8192)
@@ -192,7 +194,8 @@ class ControlSite:
         provider = current.get("provider", "openai")
         options = "".join(
             f"<option value='{name}'{' selected' if name == provider else ''}>{label}</option>"
-            for name, label in (("openai", "OpenAI"), ("ollama", "Ollama"),
+            for name, label in (("openai", "OpenAI"), ("anthropic", "Claude / Anthropic"),
+                                ("ollama", "Ollama"),
                                 ("openai-compatible", "Compatible API")))
         detail = (f"<p>{camera_count} paired cameras</p>" if camera_count else "")
         output_limit = 32768 if profile == "aikey" else 512
@@ -242,6 +245,7 @@ class ControlSite:
             raise web.HTTPBadRequest(text="Unknown profile")
         store = self.aikey if profile == "aikey" else self.aiport
         created_key: Path | None = None
+        committed = False
         try:
             provider = fields["provider"]
             base_url = fields["base_url"].strip()
@@ -263,12 +267,15 @@ class ControlSite:
                 if (not isinstance(key_value, str) or not 8 <= len(key_value) <= 4096
                         or any(ch.isspace() for ch in key_value)):
                     raise ValueError
-                state = (Path(load_config(self.aikey.path)["runtime"]["state_dir"])
-                         if profile == "aikey" else self.aiport.path.parent)
-                _private_directory(state)
-                created_key = state / f"provider-key-{secrets.token_hex(8)}"
-                selection["api_key_file"] = str(created_key)
-            if provider == "openai" and created_key is None:
+                host_state = (self.aikey.path.parent if profile == "aikey"
+                              else self.aiport.path.parent)
+                runtime_state = (Path(load_config(self.aikey.path)["runtime"]["state_dir"])
+                                 if profile == "aikey" else self.aiport.runtime_state_dir)
+                _private_directory(host_state)
+                key_name = f"provider-key-{secrets.token_hex(8)}"
+                created_key = host_state / key_name
+                selection["api_key_file"] = str(runtime_state / key_name)
+            if provider in {"openai", "anthropic"} and created_key is None:
                 current = store.snapshot()
                 if profile == "aikey":
                     saved = current.configuration["inference"]
@@ -285,10 +292,13 @@ class ControlSite:
                 atomic_private(created_key, key_value + "\n")
             result = (store.apply_inference(fields["revision"], selection)
                       if profile == "aikey" else store.apply(fields["revision"], selection))
+            committed = True
             if result.revision != preview.resulting_revision:
                 raise ValueError
         except (KeyError, ValueError, TypeError, OSError, ConfigurationStoreError,
                 AiPortConfigurationError, RevisionConflict, AiPortRevisionConflict):
+            if created_key is not None and not committed:
+                created_key.unlink(missing_ok=True)
             return _page("Settings not saved", "<h1>Settings not saved</h1>"
                          "<p class='error'>Check the provider, model, key and request limits. "
                          "The configuration may also have changed in another session.</p>"
@@ -309,10 +319,14 @@ def _cli() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     initial = commands.add_parser("init", help="Set an administrator password locally")
     initial.add_argument("--state-dir", required=True, type=Path)
+    initial.add_argument("--generate", action="store_true",
+                         help="Generate a private one-time bootstrap password file")
     run = commands.add_parser("run", help="Serve provider settings on loopback")
     run.add_argument("--state-dir", required=True, type=Path)
     run.add_argument("--aikey-config", required=True, type=Path)
     run.add_argument("--aiport-config", required=True, type=Path)
+    run.add_argument("--aiport-runtime-state-dir", type=Path,
+                     help="AI Port state path inside its processor container")
     run.add_argument("--port", type=int, default=8765)
     return parser
 
@@ -341,22 +355,31 @@ def main(argv: list[str] | None = None) -> int:
             _private_directory(state)
             record_path = state / "admin-password-record"
             key_path = state / "admin-signing-key"
-            if record_path.exists() or key_path.exists():
+            bootstrap_path = state / "admin-bootstrap-password"
+            if record_path.exists() or key_path.exists() or bootstrap_path.exists():
                 raise ValueError("Administrator already initialized")
-            password = getpass.getpass("New administrator password: ")
-            repeated = getpass.getpass("Repeat administrator password: ")
-            if password != repeated:
-                raise ValueError("Passwords do not match")
+            if args.generate:
+                password = secrets.token_urlsafe(32)
+            else:
+                password = getpass.getpass("New administrator password: ")
+                repeated = getpass.getpass("Repeat administrator password: ")
+                if password != repeated:
+                    raise ValueError("Passwords do not match")
             record = AdminSecurity.create_password_record(password)
             atomic_private(key_path, secrets.token_bytes(32))
             atomic_private(record_path, record + "\n")
-            print(json.dumps({"initialized": True, "state_dir": str(state)}))
+            if args.generate:
+                atomic_private(bootstrap_path, password + "\n")
+            print(json.dumps({"initialized": True, "state_dir": str(state),
+                              "bootstrap_password_file": str(bootstrap_path)
+                              if args.generate else None}))
             return 0
         _private_directory(state)
         signing_key = _private_bytes(state / "admin-signing-key", 64)
         record = _private_bytes(state / "admin-password-record", 4096).decode().strip()
         site = ControlSite(args.aikey_config, args.aiport_config,
-                           signing_key=signing_key, password_record=record, port=args.port)
+                           signing_key=signing_key, password_record=record, port=args.port,
+                           aiport_runtime_state_dir=args.aiport_runtime_state_dir)
         site.aikey.snapshot()
         site.aiport.snapshot()
         print(json.dumps({"control_site": site.origin, "loopback_only": True}))

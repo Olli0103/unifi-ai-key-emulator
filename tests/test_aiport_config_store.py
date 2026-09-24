@@ -96,3 +96,22 @@ def test_no_camera_pool_or_key_path_outside_state_is_rejected(tmp_path):
     path.write_text(json.dumps(raw) + "\n")
     with pytest.raises(AiPortConfigurationError, match="incomplete"):
         store.preview(store.snapshot().revision, settings(tmp_path))
+
+
+def test_host_editor_validates_container_paths_without_changing_pairing(tmp_path):
+    _, path, _ = fixture(tmp_path)
+    raw = json.loads(path.read_text())
+    for stream in raw["paired_streams"]:
+        stream["ffmpeg_path"] = "/container-only/bin/ffmpeg"
+    path.write_text(json.dumps(raw) + "\n")
+    with pytest.raises(AiPortConfigurationError, match="unavailable"):
+        AiPortConfigurationStore(path).snapshot()
+    store = AiPortConfigurationStore(path, runtime_state_dir=tmp_path / "runtime-state")
+    revision = store.snapshot().revision
+    selected = settings(tmp_path)
+    selected["api_key_file"] = str(store.runtime_state_dir / "provider-key")
+    store.apply(revision, selected)
+    saved = json.loads(path.read_text())
+    assert saved["paired_streams"] == raw["paired_streams"]
+    assert saved["live_pool_detector"]["provider_config"]["api_key_file"] == (
+        str(store.runtime_state_dir / "provider-key"))
