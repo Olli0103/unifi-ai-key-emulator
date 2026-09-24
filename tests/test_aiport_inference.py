@@ -9,6 +9,7 @@ from aikey.aiport_detection import ObjectObservation
 from aikey.aiport_api_detection import ApiDetectionError
 from aikey.aiport_inference import FairInference
 from aikey.aiport_ingest import IngressError
+from aikey.aiport_tracking import TemporalTracker
 
 
 FIRST = "2A1122334455"
@@ -88,6 +89,46 @@ async def test_round_robin_coalesces_busy_camera_and_keeps_results_separate():
     assert [(item["index"], item["attempts"], item["observations"]["person"])
             for item in camera_status] == [(0, 2, 2), (1, 1, 1), (2, 1, 1)]
     assert FIRST not in str(camera_status)
+    await scheduler.close()
+
+
+@pytest.mark.asyncio
+async def test_slow_vision_request_keeps_first_followup_person_frame():
+    """A crossing must retain its confirming frame while the API is busy."""
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+    tracker = TemporalTracker()
+    edges = []
+
+    class SlowVision:
+        def detect_for_camera(self, camera, frame):
+            calls.append(frame)
+            if len(calls) == 1:
+                started.set()
+                assert release.wait(2)
+            if frame.startswith(b"person"):
+                return (ObjectObservation("person", "person", 0.95,
+                                          (0.2, 0.1, 0.4, 0.8)),)
+            return ()
+
+    async def on_result(_camera, observations, _generation, _frame):
+        edges.extend(change.edge for change in tracker.update(
+            observations, now=float(len(calls))))
+
+    scheduler = FairInference(
+        [FIRST], load_detector=SlowVision, on_result=on_result,
+        max_frames_per_camera=None, preserve_first_pending=True)
+    await scheduler.observe(FIRST, b"person-first", generation=1)
+    assert await asyncio.wait_for(asyncio.to_thread(started.wait, 2), 3)
+    await scheduler.observe(FIRST, b"person-second", generation=1)
+    await scheduler.observe(FIRST, b"intermediate", generation=1)
+    await scheduler.observe(FIRST, b"empty-later", generation=1)
+    release.set()
+    await asyncio.wait_for(scheduler.join(), 3)
+    assert calls == [b"person-first", b"person-second", b"empty-later"]
+    assert "enter" in edges
+    assert scheduler.snapshot()["dropped_frames"] == 1
     await scheduler.close()
 
 

@@ -23,11 +23,13 @@ class Detector(Protocol):
 
 
 class FairInference:
-    """Use one model across at most five cameras, one pending frame each.
+    """Use one model across at most five cameras with bounded frame queues.
 
     A camera cannot occupy more than every other turn when another camera has
-    a pending frame. New frames replace old pending frames, never queue behind
-    them. An inference or observer failure disables only that camera.
+    a pending frame. API vision may retain the first frame after an active
+    request, plus the latest frame, so a short crossing can still receive a
+    confirming observation. Other inference keeps only the latest frame.
+    An inference or observer failure disables only that camera.
     """
 
     _SAFE_API_ERRORS = frozenset({
@@ -45,13 +47,16 @@ class FairInference:
                  load_detector: Callable[[], Detector],
                  on_result: Callable[[str, tuple[ObjectObservation, ...], int, bytes], Awaitable[None]],
                  on_unavailable: Callable[[str], Awaitable[None]] | None = None,
-                 max_frames_per_camera: int | None):
+                 max_frames_per_camera: int | None,
+                 preserve_first_pending: bool = False):
         if (not isinstance(camera_macs, list) or not 1 <= len(camera_macs) <= 5
                 or max_frames_per_camera is not None
                 and (type(max_frames_per_camera) is not int
                      or not 1 <= max_frames_per_camera <= 120)
                 or not callable(load_detector) or not callable(on_result)
                 or on_unavailable is not None and not callable(on_unavailable)):
+            raise IngressError("invalid_inference_policy")
+        if type(preserve_first_pending) is not bool:
             raise IngressError("invalid_inference_policy")
         cameras = tuple(normalize_mac(camera) for camera in camera_macs)
         if len(set(cameras)) != len(cameras):
@@ -62,8 +67,10 @@ class FairInference:
         self._on_result = on_result
         self._on_unavailable = on_unavailable
         self._max_frames = max_frames_per_camera
+        self._preserve_first_pending = preserve_first_pending
         self._model: Detector | None = None
         self._pending: dict[str, tuple[bytes, int]] = {}
+        self._latest_pending: dict[str, tuple[bytes, int]] = {}
         self._disabled: set[str] = set()
         self._attempts = dict.fromkeys(cameras, 0)
         self._successes = dict.fromkeys(cameras, 0)
@@ -95,8 +102,15 @@ class FairInference:
             self.dropped_frames += 1
             return
         if camera in self._pending:
-            self.dropped_frames += 1
-        self._pending[camera] = (frame, generation)
+            if self._preserve_first_pending:
+                if camera in self._latest_pending:
+                    self.dropped_frames += 1
+                self._latest_pending[camera] = (frame, generation)
+            else:
+                self.dropped_frames += 1
+                self._pending[camera] = (frame, generation)
+        else:
+            self._pending[camera] = (frame, generation)
         if self._worker is None or self._worker.done():
             self._worker = asyncio.create_task(self._run(), name="aiport-fair-inference")
 
@@ -113,6 +127,8 @@ class FairInference:
         while self._pending and not self._closed and not self._global_failure:
             camera = self._next_camera()
             frame, generation = self._pending.pop(camera)
+            if camera in self._latest_pending:
+                self._pending[camera] = self._latest_pending.pop(camera)
             self._attempts[camera] += 1
             try:
                 if self._model is None:
@@ -126,6 +142,7 @@ class FairInference:
                     except Exception:
                         self._global_failure = True
                         self._pending.clear()
+                        self._latest_pending.clear()
                         for unavailable_camera in self._cameras:
                             await self._notify_unavailable(unavailable_camera)
                         return
@@ -162,6 +179,7 @@ class FairInference:
                 # of public health. One bad camera must not stop the others.
                 self._disabled.add(camera)
                 self._pending.pop(camera, None)
+                self._latest_pending.pop(camera, None)
                 self.failed_cameras += 1
                 await self._notify_unavailable(camera)
             else:
@@ -169,6 +187,7 @@ class FairInference:
                 if (self._max_frames is not None
                         and self._attempts[camera] >= self._max_frames):
                     self._pending.pop(camera, None)
+                    self._latest_pending.pop(camera, None)
                     await self._notify_unavailable(camera)
 
     async def _notify_unavailable(self, camera: str) -> None:
@@ -192,6 +211,7 @@ class FairInference:
         if camera not in self._allowed:
             raise IngressError("camera_not_authorized")
         self._pending.pop(camera, None)
+        self._latest_pending.pop(camera, None)
 
     def is_available(self, camera_mac: str) -> bool:
         """Whether this camera can still receive a model call in this permit."""
@@ -206,6 +226,7 @@ class FairInference:
     async def close(self) -> None:
         self._closed = True
         self._pending.clear()
+        self._latest_pending.clear()
         worker = self._worker
         if worker is not None and not worker.done():
             worker.cancel()

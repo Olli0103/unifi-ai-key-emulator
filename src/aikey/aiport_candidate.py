@@ -644,6 +644,8 @@ class CandidateService:
                         threshold=detector["threshold"]))),
                 on_result=self._observe_pool_result,
                 on_unavailable=self._pool_camera_unavailable,
+                preserve_first_pending=(live_pool and
+                                        detector.get("inference_backend") == "vision_api"),
                 max_frames_per_camera=(None if live_pool else
                                        detector["max_frames_per_camera"]))
         self.credentials = CredentialStore(self.state_dir)
