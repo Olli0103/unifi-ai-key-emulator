@@ -252,5 +252,9 @@ class FairInference:
                 "pending": camera in self._pending,
                 "api_requests_remaining": remaining,
                 "api_request_budget_healthy": budget_healthy,
+                "api_response_counts": (self._model.diagnostic_counts(camera)
+                                        if callable(getattr(self._model,
+                                                            "diagnostic_counts", None))
+                                        else None),
             })
         return tuple(result)

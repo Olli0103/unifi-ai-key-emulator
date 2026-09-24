@@ -265,12 +265,15 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
     if not requested and smart_zones:
         zone_types = set().union(*(zone.object_types for zone in smart_zones))
         requested = sorted(zone_types)
-    for name in _REGION_MAPS - {"zones"}:
+    for name in sorted(_REGION_MAPS - {"zones"}):
         value = payload.get(name, {})
         if not isinstance(value, dict):
             raise SmartSettingsError("invalid_smart_settings")
         if value:
-            raise SmartSettingsError("unsupported_smart_feature:regions")
+            # A fixed, known field name is safe to expose in private health.
+            # It identifies the first unsupported region map without logging
+            # zone coordinates or other controller policy content.
+            raise SmartSettingsError(f"unsupported_smart_feature:regions:{name}")
     for name in _OPTIONAL_ADVANCED - {"reVerificationPolicy"}:
         value = payload.get(name)
         if value is not None and value is not False and not (

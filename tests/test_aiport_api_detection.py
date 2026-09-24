@@ -112,6 +112,30 @@ def test_stationary_person_is_confirmed_by_startup_probe(tmp_path):
     assert detector.budget.remaining(FIRST) == 0
 
 
+def test_response_counts_distinguish_empty_from_score_rejection(tmp_path):
+    replies = iter((
+        '{"detections":[{"kind":"person","label":"person","score":0.79,"box":[0.1,0.2,0.4,0.8]}]}',
+        '{"detections":[{"kind":"person","label":"person","score":0.92,"box":[0.1,0.2,0.4,0.8]}]}',
+        '{"detections":[]}',
+    ))
+    detector = ApiObjectDetector(
+        _ollama_config(), tmp_path, threshold=0.8, max_requests_per_hour=3,
+        transport=lambda *_args: _response(next(replies)))
+    assert detector.detect_for_camera(FIRST, STILL) == ()
+    assert len(detector.detect_for_camera(FIRST, STILL)) == 1
+    for _ in range(3):
+        assert detector.detect_for_camera(FIRST, STILL) == ()
+    assert detector.detect_for_camera(FIRST, FRAME) == ()
+    assert detector.diagnostic_counts(FIRST) == {
+        "responses": 3, "empty_responses": 1,
+        "below_threshold": 1, "accepted_objects": 1,
+    }
+    assert detector.diagnostic_counts(SECOND) == {
+        "responses": 0, "empty_responses": 0,
+        "below_threshold": 0, "accepted_objects": 0,
+    }
+
+
 def test_package_observation_requires_exact_class_label_and_bounded_box():
     result = parse_detections(json.dumps({"detections": [{
         "kind": "package", "label": "package", "score": 0.91,

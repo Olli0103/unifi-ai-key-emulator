@@ -212,6 +212,7 @@ class ApiObjectDetector:
             state_dir, limit=max_requests_per_hour, namespace="vision-request")
         self.transport = transport
         self.motion = _MotionGate()
+        self._camera_counts: dict[str, dict[str, int]] = {}
         self._remote_host = (endpoint.hostname if transport is _post
                              and self.provider.provider in {"openai", "anthropic"}
                              else None)
@@ -257,7 +258,20 @@ class ApiObjectDetector:
                 payload["reasoning"] = {"effort": "none"}
             reply = self.transport(url, headers, payload)
             text = self.provider.parse_response(reply)
-            return parse_detections(text, threshold=self.threshold)
+            # Keep only counts. This distinguishes a real empty provider
+            # response from an object rejected by the configured score gate.
+            reported = parse_detections(text, threshold=0)
+            accepted = tuple(item for item in reported
+                             if item.score >= self.threshold)
+            counts = self._camera_counts.setdefault(camera_mac, {
+                "responses": 0, "empty_responses": 0,
+                "below_threshold": 0, "accepted_objects": 0,
+            })
+            counts["responses"] += 1
+            counts["empty_responses"] += not reported
+            counts["below_threshold"] += len(reported) - len(accepted)
+            counts["accepted_objects"] += len(accepted)
+            return accepted
         except ApiDetectionError as exc:
             if exc.args == ("api_detection_dns_unavailable",):
                 self._dns_ok_until = 0.0
@@ -267,3 +281,10 @@ class ApiObjectDetector:
             raise ApiDetectionError("api_detection_provider_response_invalid") from exc
         except (TypeError, ValueError) as exc:
             raise ApiDetectionError("api_detection_request_failed") from exc
+
+    def diagnostic_counts(self, camera_mac: str) -> dict[str, int]:
+        """Return content-free response counts for one configured camera."""
+        return dict(self._camera_counts.get(camera_mac, {
+            "responses": 0, "empty_responses": 0,
+            "below_threshold": 0, "accepted_objects": 0,
+        }))
