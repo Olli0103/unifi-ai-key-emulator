@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw
 from aikey.aiport_api_detection import (
     ApiDetectionError, ApiObjectDetector, _post, parse_detections,
 )
+from aikey.aiport_tracking import TemporalTracker
 
 
 FIRST = "2A1122334455"
@@ -49,19 +50,18 @@ def test_detects_only_valid_bounded_observations_and_caps_paid_calls(tmp_path):
 
     detector = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.7,
                                  max_requests_per_hour=2, transport=transport)
-    assert detector.detect_for_camera(FIRST, STILL) == ()
+    assert [result.kind for result in detector.detect_for_camera(FIRST, STILL)] == ["person"]
     assert [result.kind for result in detector.detect_for_camera(FIRST, FRAME)] == ["person"]
-    assert len(detector.detect_for_camera(FIRST, FRAME)) == 1
     assert detector.detect_for_camera(FIRST, FRAME) == ()
     assert len(calls) == 2
     assert calls[0][0] == "http://127.0.0.1:11434/api/chat"
     assert calls[0][1] == {}
-    assert detector.detect_for_camera(SECOND, STILL) == ()
+    assert detector.detect_for_camera(SECOND, STILL)[0].label == "person"
     assert detector.detect_for_camera(SECOND, FRAME)[0].label == "person"
     restarted = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.7,
                                   max_requests_per_hour=2, transport=transport)
     assert restarted.detect_for_camera(FIRST, FRAME) == ()
-    assert len(calls) == 3
+    assert len(calls) == 4
 
 
 def test_motion_gate_detects_person_sized_change(tmp_path):
@@ -81,10 +81,35 @@ def test_motion_gate_detects_person_sized_change(tmp_path):
         return _response('{"detections":[]}')
 
     detector = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.8,
-                                 max_requests_per_hour=2, transport=transport)
+                                 max_requests_per_hour=4, transport=transport)
     assert detector.detect_for_camera(FIRST, scene(False)) == ()
+    assert detector.detect_for_camera(FIRST, scene(False)) == ()
+    for _ in range(2):
+        assert detector.detect_for_camera(FIRST, scene(False)) == ()
     assert detector.detect_for_camera(FIRST, scene(True)) == ()
-    assert len(requests) == 1
+    assert len(requests) == 3
+
+
+def test_stationary_person_is_confirmed_by_startup_probe(tmp_path):
+    requests = []
+
+    def transport(*_args):
+        requests.append(1)
+        return _response(json.dumps({"detections": [
+            {"kind": "person", "label": "person", "score": 0.92,
+             "box": [0.1, 0.2, 0.4, 0.8]},
+        ]}))
+
+    detector = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.8,
+                                 max_requests_per_hour=2, transport=transport)
+    tracker = TemporalTracker(max_gap_seconds=20)
+    first = detector.detect_for_camera(FIRST, STILL)
+    second = detector.detect_for_camera(FIRST, STILL)
+    assert tracker.update(first, now=1) == ()
+    assert [change.edge for change in tracker.update(second, now=2)] == ["enter"]
+    assert detector.detect_for_camera(FIRST, STILL) == ()
+    assert len(requests) == 2
+    assert detector.budget.remaining(FIRST) == 0
 
 
 def test_continuous_motion_is_one_burst_until_three_quiet_frames(tmp_path):
@@ -159,9 +184,8 @@ def test_dns_outage_preserves_budget_and_recovers_without_restart(tmp_path, monk
         raise socket.gaierror("private resolver detail")
 
     monkeypatch.setattr("aikey.aiport_api_detection.socket.getaddrinfo", unavailable)
-    detector.detect_for_camera(FIRST, STILL)
     with pytest.raises(ApiDetectionError, match="api_detection_dns_unavailable"):
-        detector.detect_for_camera(FIRST, FRAME)
+        detector.detect_for_camera(FIRST, STILL)
     with pytest.raises(ApiDetectionError, match="api_detection_dns_unavailable"):
         detector.detect_for_camera(FIRST, FRAME)
     assert len(resolutions) == 1
@@ -204,9 +228,8 @@ def test_bad_response_spends_one_request_but_does_not_publish(tmp_path):
     detector = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.7,
                                  max_requests_per_hour=2,
                                  transport=lambda *_: _response("private malformed text"))
-    assert detector.detect_for_camera(FIRST, STILL) == ()
     with pytest.raises(ApiDetectionError, match="invalid_api_detection_response") as failure:
-        detector.detect_for_camera(FIRST, FRAME)
+        detector.detect_for_camera(FIRST, STILL)
     assert "private malformed text" not in str(failure.value)
     assert detector.budget.remaining(FIRST) == 1
 
@@ -231,7 +254,7 @@ def test_openai_luna_uses_private_key_and_no_response_storage(tmp_path):
         tmp_path, threshold=0.8, max_requests_per_hour=2, transport=transport)
     assert detector.detect_for_camera(FIRST, STILL) == ()
     assert detector.detect_for_camera(FIRST, FRAME) == ()
-    assert len(requests) == 1
+    assert len(requests) == 2
     url, headers, payload = requests[0]
     assert url == "https://api.openai.com/v1/responses"
     assert headers == {"Authorization": "Bearer synthetic-test-key"}
@@ -259,7 +282,7 @@ def test_claude_adapter_uses_private_key_and_official_endpoint(tmp_path):
         tmp_path, threshold=0.8, max_requests_per_hour=2, transport=transport)
     assert detector.detect_for_camera(FIRST, STILL) == ()
     assert detector.detect_for_camera(FIRST, FRAME) == ()
-    assert len(calls) == 1
+    assert len(calls) == 2
     url, headers, payload = calls[0]
     assert url == "https://api.anthropic.com/v1/messages"
     assert headers == {"x-api-key": "synthetic-claude-key",

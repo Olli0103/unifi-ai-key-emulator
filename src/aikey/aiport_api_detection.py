@@ -52,7 +52,7 @@ class ApiDetectionError(ValueError):
 
 
 class _MotionGate:
-    """Use cheap frame differences to request two API frames per motion burst."""
+    """Probe twice at startup, then request two API frames per motion burst."""
 
     def __init__(self):
         self._previous: dict[str, bytes] = {}
@@ -73,19 +73,24 @@ class _MotionGate:
         previous = self._previous.get(camera)
         self._previous[camera] = thumbnail
         if previous is None:
-            return False
-        changed = sum(abs(a - b) >= 24 for a, b in zip(previous, thumbnail, strict=True))
-        if changed < _MOTION_CHANGED_CELLS:
-            self._quiet[camera] = min(3, self._quiet.get(camera, 0) + 1)
-            if self._quiet[camera] == 3:
-                self._armed[camera] = True
-        else:
-            self._quiet[camera] = 0
-        if (changed >= _MOTION_CHANGED_CELLS
-                and self._armed.get(camera, True)
-                and self._pending.get(camera, 0) == 0):
+            # A stationary object already in view would never pass a
+            # frame-difference gate. Two observations also let the tracker
+            # confirm it without accepting a single model hallucination.
             self._pending[camera] = 2
             self._armed[camera] = False
+        else:
+            changed = sum(abs(a - b) >= 24 for a, b in zip(previous, thumbnail, strict=True))
+            if changed < _MOTION_CHANGED_CELLS:
+                self._quiet[camera] = min(3, self._quiet.get(camera, 0) + 1)
+                if self._quiet[camera] == 3:
+                    self._armed[camera] = True
+            else:
+                self._quiet[camera] = 0
+            if (changed >= _MOTION_CHANGED_CELLS
+                    and self._armed.get(camera, True)
+                    and self._pending.get(camera, 0) == 0):
+                self._pending[camera] = 2
+                self._armed[camera] = False
         if self._pending.get(camera, 0):
             self._pending[camera] -= 1
             return True
