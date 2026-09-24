@@ -34,12 +34,15 @@ class EventBudget:
     """Enforce a rolling limit across restarts sharing one private state dir."""
 
     def __init__(self, state_dir: Path, *, limit: int,
-                 clock_ns: Callable[[], int] = time.time_ns):
+                 clock_ns: Callable[[], int] = time.time_ns,
+                 namespace: str = "event"):
         if type(limit) is not int or not 1 <= limit <= _MAX_EVENTS_PER_CAMERA:
             raise EventBudgetError("invalid_event_limit")
+        if type(namespace) is not str or namespace not in {"event", "vision-request"}:
+            raise EventBudgetError("invalid_budget_namespace")
         self.directory = Path(state_dir)
-        self.path = self.directory / "aiport-event-budget.json"
-        self.lock_path = self.directory / ".aiport-event-budget.lock"
+        self.path = self.directory / f"aiport-{namespace}-budget.json"
+        self.lock_path = self.directory / f".aiport-{namespace}-budget.lock"
         self.limit = limit
         self.clock_ns = clock_ns
         self._check_directory()

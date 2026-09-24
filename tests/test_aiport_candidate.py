@@ -40,6 +40,29 @@ def fixture_state(tmp_path):
     return config
 
 
+def test_live_pool_accepts_explicit_capped_api_provider(tmp_path):
+    config = fixture_state(tmp_path)
+    config["paired_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1",
+         "ffmpeg_path": sys.executable}
+        for mac in ("2A1122334455", "2A1122334456")]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person"], "max_events_per_hour": 12,
+        "max_requests_per_hour": 24,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["live_pool_detector"] == (
+        config["live_pool_detector"])
+    config["live_pool_detector"]["max_requests_per_hour"] = 0
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="API detector"):
+        load_config(tmp_path / "config.json")
+
+
 @pytest.mark.asyncio
 async def test_snapshot_request_keeps_image_until_matching_one_use_upload(
         tmp_path, monkeypatch):

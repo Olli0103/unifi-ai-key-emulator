@@ -30,6 +30,7 @@ from .aiport_ingest import (
     normalize_mac, private_source_ip,
 )
 from .aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
+from .aiport_api_detection import ApiObjectDetector
 from .aiport_onnx_detection import OnnxRFDetrNanoDetector
 from .aiport_camera_engine import CameraEventCandidate, CameraPolicyEngine
 from .aiport_event_budget import EventBudget, EventBudgetError
@@ -53,6 +54,7 @@ from .aiport_virtual_hardware import (
     VirtualHardwareError, VirtualSoundLedStore, VirtualTimezoneStore,
 )
 from .device import VerifiedConnector
+from .providers import ProviderError, validate_inference_config
 
 
 _MAC = re.compile(r"[0-9A-Fa-f]{12}\Z")
@@ -211,20 +213,25 @@ def load_config(path: Path) -> dict:
         common = {"threshold", "smart_types", "max_events_per_hour"}
         pytorch_fields = common | {"checkpoint_path", "checkpoint_sha256"}
         onnx_fields = common | {"inference_backend", "model_path", "model_sha256"}
-        is_onnx = isinstance(detector, dict) and "inference_backend" in detector
+        api_fields = common | {"inference_backend", "provider_config",
+                               "max_requests_per_hour"}
+        backend = detector.get("inference_backend") if isinstance(detector, dict) else None
+        is_api = backend == "vision_api"
+        is_onnx = isinstance(backend, str) and backend in {
+            "onnx_cpu", "onnx_openvino_gpu"}
         if ("paired_streams" not in value or not isinstance(detector, dict)
-                or set(detector) != (onnx_fields if is_onnx else pytorch_fields)
-                or is_onnx and (type(detector["inference_backend"]) is not str
-                                or detector["inference_backend"] not in {
-                                    "onnx_cpu", "onnx_openvino_gpu"})
-                or not isinstance(detector["model_path" if is_onnx else
-                                           "checkpoint_path"], str)
-                or not Path(detector["model_path" if is_onnx else
-                                     "checkpoint_path"]).is_absolute()
-                or not isinstance(detector["model_sha256" if is_onnx else
-                                           "checkpoint_sha256"], str)
-                or not _PIN.fullmatch(detector["model_sha256" if is_onnx else
-                                                "checkpoint_sha256"])
+                or set(detector) != (api_fields if is_api else
+                                    onnx_fields if is_onnx else pytorch_fields)
+                or backend is not None and not (is_api or is_onnx)
+                or not is_api and (
+                    not isinstance(detector["model_path" if is_onnx else
+                                            "checkpoint_path"], str)
+                    or not Path(detector["model_path" if is_onnx else
+                                         "checkpoint_path"]).is_absolute()
+                    or not isinstance(detector["model_sha256" if is_onnx else
+                                               "checkpoint_sha256"], str)
+                    or not _PIN.fullmatch(detector["model_sha256" if is_onnx else
+                                                    "checkpoint_sha256"]))
                 or not isinstance(detector["smart_types"], list)
                 or not 1 <= len(detector["smart_types"]) <= 3
                 or any(type(kind) is not str or kind not in {
@@ -237,6 +244,22 @@ def load_config(path: Path) -> dict:
             RFDetrNanoDetector(object(), threshold=detector["threshold"])
         except DetectionError as exc:
             raise CandidateError("Invalid live pool detector threshold") from exc
+        if is_api:
+            provider = detector["provider_config"]
+            allowed_provider_fields = {"provider", "model", "base_url", "api_key_file",
+                                       "allow_remote", "allow_insecure_http",
+                                       "max_output_tokens"}
+            if (not isinstance(provider, dict) or not set(provider) <= allowed_provider_fields
+                    or "api_key" in provider
+                    or type(detector["max_requests_per_hour"]) is not int
+                    or not 2 <= detector["max_requests_per_hour"] <= 3600
+                    or type(provider.get("max_output_tokens", 256)) is not int
+                    or not 1 <= provider.get("max_output_tokens", 256) <= 512):
+                raise CandidateError("Invalid live API detector policy")
+            try:
+                validate_inference_config(provider, require_api_key=False)
+            except ProviderError as exc:
+                raise CandidateError("Invalid live API detector provider") from exc
     if "diagnostic_hello_until" in value:
         until = value["diagnostic_hello_until"]
         if type(until) is not int or until < 0 or until > int(time.time()) + 600:
@@ -578,10 +601,18 @@ class CandidateService:
                 max_events_per_camera=(detector["max_events_per_hour"] if live_pool
                                        else len(self._pool_smart_types())),
                 event_window_seconds=3600 if live_pool else None,
-                event_budget=self._event_budget if live_pool else None)
+                event_budget=self._event_budget if live_pool else None,
+                max_track_gap_seconds=(20 if live_pool and
+                                       detector.get("inference_backend") == "vision_api"
+                                       else 3))
             self._inference = FairInference(
                 cameras,
                 load_detector=(
+                    (lambda: ApiObjectDetector(
+                        detector["provider_config"], self.state_dir,
+                        threshold=detector["threshold"],
+                        max_requests_per_hour=detector["max_requests_per_hour"]))
+                    if live_pool and detector.get("inference_backend") == "vision_api" else
                     (lambda: OnnxRFDetrNanoDetector.from_model(
                         detector["model_path"], detector["model_sha256"],
                         backend=detector["inference_backend"],

@@ -32,7 +32,8 @@ class CameraPolicyEngine:
 
     def __init__(self, camera_macs: list[str], *, max_events_per_camera: int = 1,
                  event_window_seconds: float | None = None,
-                 event_budget: EventBudget | None = None):
+                 event_budget: EventBudget | None = None,
+                 max_track_gap_seconds: float = 3.0):
         if (not isinstance(camera_macs, list) or not 1 <= len(camera_macs) <= 5
                 or type(max_events_per_camera) is not int
                 or not 1 <= max_events_per_camera <= 3600
@@ -40,7 +41,10 @@ class CameraPolicyEngine:
                 and (type(event_window_seconds) not in (int, float)
                      or not math.isfinite(event_window_seconds)
                      or not 60 <= event_window_seconds <= 86_400)
-                or event_budget is not None and not isinstance(event_budget, EventBudget)):
+                or event_budget is not None and not isinstance(event_budget, EventBudget)
+                or type(max_track_gap_seconds) not in (int, float)
+                or not math.isfinite(max_track_gap_seconds)
+                or not 0.5 <= max_track_gap_seconds <= 30):
             raise IngressError("invalid_camera_engine")
         try:
             cameras = [normalize_mac(value) for value in camera_macs]
@@ -52,7 +56,9 @@ class CameraPolicyEngine:
         self._camera_order = tuple(cameras)
         self._policies: dict[str, SmartPolicy | None] = {
             camera: None for camera in cameras}
-        self._trackers = {camera: TemporalTracker() for camera in cameras}
+        self._track_gap = float(max_track_gap_seconds)
+        self._trackers = {camera: TemporalTracker(max_gap_seconds=self._track_gap)
+                          for camera in cameras}
         self._active: dict[str, dict[int, tuple[TrackChange, tuple[int, ...]]]] = {
             camera: {} for camera in cameras}
         self._event_counts = {camera: 0 for camera in cameras}
@@ -90,7 +96,7 @@ class CameraPolicyEngine:
             for _, (previous, zones) in sorted(self._active[camera].items()))
         self._active[camera] = {}
         self._last_moving[camera] = {}
-        self._trackers[camera] = TemporalTracker()
+        self._trackers[camera] = TemporalTracker(max_gap_seconds=self._track_gap)
         self._policies[camera] = policy
         self._generations[camera] += 1
         return result

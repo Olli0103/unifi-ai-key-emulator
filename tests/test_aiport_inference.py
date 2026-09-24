@@ -33,6 +33,27 @@ class Detector:
 
 
 @pytest.mark.asyncio
+async def test_camera_aware_api_detector_receives_only_its_camera():
+    calls = []
+
+    class CameraAware:
+        def detect_for_camera(self, camera, frame):
+            calls.append((camera, frame))
+            return ()
+
+    async def on_result(*_args):
+        return None
+
+    scheduler = FairInference([FIRST, SECOND], load_detector=CameraAware,
+                              on_result=on_result, max_frames_per_camera=2)
+    await scheduler.observe(FIRST, b"one!", generation=1)
+    await scheduler.observe(SECOND, b"two!", generation=1)
+    await scheduler.join()
+    assert calls == [(FIRST, b"one!"), (SECOND, b"two!")]
+    await scheduler.close()
+
+
+@pytest.mark.asyncio
 async def test_round_robin_coalesces_busy_camera_and_keeps_results_separate():
     started = threading.Event()
     release = threading.Event()

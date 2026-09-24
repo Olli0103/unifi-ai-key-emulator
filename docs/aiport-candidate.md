@@ -88,6 +88,32 @@ The live multi-camera profile uses one AI Port identity for two to five explicit
 
 The shared model keeps at most one queued frame per camera and takes fair turns without a lifetime frame ceiling. Each camera keeps a separate validated Protect policy, zone gate, tracker and rolling event budget. The same private state file enforces each camera's event cap across process restarts. A failed model call disables only that camera. Native enter and leave events carry the original camera ID; leave events can supply the matching crop and full-frame JPEG through the pinned, mutual-TLS upload route. The instance enforces a ten-point stream-capacity budget using the dimensions in Protect's stream command: HD costs two points, up to 2560×1440 costs three, and larger streams cost five. Protect's displayed "2K" label did not predict the cost of one G4 Instant stream, which the candidate rejected as `stream_capacity_exceeded` after three other cameras were paired. Protect kept those three pairings. Synthetic two-camera tests cover isolation and snapshot routing. Native three-camera pairing and concurrent inference now pass on the Mac; saved Person events from the other cameras, long-running resource use and automatic all-camera reconciliation remain `needs_evidence`.
 
+### Optional vision API detector
+
+The live camera pool can select a vision API instead of loading RF-DETR weights. This backend uses the existing OpenAI, Ollama or compatible vision request adapter. It requires a provider and model, plus an explicit request cap per camera. The provider must return object classes, boxes and scores in the strict JSON shape checked by the adapter. A small CPU frame-difference gate sends two frames when motion starts; unchanged frames cause no API request. The request cap has its own durable state and cannot be reset by restarting the candidate. Requests consume the allowance even when the provider fails, because billing may already have occurred.
+
+For OpenAI, replace only `live_pool_detector` while retaining the paired streams and adopted identity:
+
+```json
+"live_pool_detector": {
+  "inference_backend": "vision_api",
+  "provider_config": {
+    "provider": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "model": "gpt-6-luna",
+    "api_key_file": "/state/openai-api-key",
+    "allow_remote": true,
+    "max_output_tokens": 256
+  },
+  "threshold": 0.8,
+  "smart_types": ["person"],
+  "max_events_per_hour": 12,
+  "max_requests_per_hour": 24
+}
+```
+
+The key file must be owned by the container user and mode 600. The adapter sends selected JPEGs to the configured provider. It does not forward Protect credentials or follow HTTP redirects. For now, API detection allows only the official OpenAI endpoint or a loopback provider endpoint; arbitrary remote provider hosts need the DNS and destination controls in issue #13. OpenAI requests set `store:false` and use `reasoning.effort:"none"` for `gpt-6-luna`. The API detector and motion gate have synthetic tests, but their box accuracy, score calibration, alert timing and native Protect results on real footage remain `needs_evidence`. Do not enable this backend for normal camera coverage until those checks pass. The planned control site will expose provider, model and budget selection; it is not implemented yet.
+
 ### Optional ONNX inference for an Intel GPU trial
 
 The default live pool continues to use its pinned RF-DETR PyTorch checkpoint. An optional ONNX backend accepts an exported, checksum-pinned local model. Export it from the same validated Nano checkpoint with `local-aiport-onnx-export --checkpoint /private/model.pth --checkpoint-sha256 EXPECTED_SHA256 --output-dir /private/empty-directory`. The output directory must already exist, be empty, and be private. The export needed an 8 GB container memory allowance in the Apple container lab; its default allowance killed the process. The command prints the ONNX path and SHA-256. Copy that artifact into the instance's private model mount. It does not download weights.
@@ -105,7 +131,9 @@ Replace only `live_pool_detector` with this block to select the Intel GPU execut
 }
 ```
 
-Build the Linux x86-64 candidate image with `--build-arg ENABLE_LOCAL_DETECTOR=1 --build-arg ONNX_RUNTIME=openvino`. The NAS must expose a working Intel GPU and its driver to the container. The backend refuses to start if the OpenVINO execution provider is unavailable or not primary; it does not intentionally switch to CPU. ONNX Runtime can still assign unsupported graph nodes to its CPU provider, so an active provider alone does not prove GPU-only computation. Measure end-to-end latency and verify native event recall on the NAS before choosing it for normal operation. `inference_backend: "onnx_cpu"` with `ONNX_RUNTIME=cpu` is available for a parity check. On the isolated Apple container CPU benchmark, ONNX Runtime was slower than PyTorch on the synthetic frame; no live camera was switched. GPU support, throughput, and detector parity on the UGREEN remain `needs_evidence`.
+Build the Linux x86-64 candidate image with `--build-arg ENABLE_LOCAL_DETECTOR=1 --build-arg ONNX_RUNTIME=openvino`. The NAS must expose a working Intel GPU and its driver to the container. The backend refuses to start if the OpenVINO execution provider is unavailable or not primary; it does not intentionally switch to CPU. ONNX Runtime can still assign unsupported graph nodes to its CPU provider, so an active provider alone does not prove GPU-only computation. Measure end-to-end latency and verify native event recall on the NAS before choosing it for normal operation. `inference_backend: "onnx_cpu"` with `ONNX_RUNTIME=cpu` is available for a parity check. On the isolated Apple container CPU benchmark, ONNX Runtime was slower than PyTorch on the synthetic frame; no live camera was switched.
+
+On 24 September, an isolated UGREEN NAS probe loaded the pinned ONNX model after its file was made group-readable to UID/GID 10001. The container could read and write `/dev/dri/renderD128`, and ONNX Runtime listed `OpenVINOExecutionProvider`, but loading with `device_type: GPU` failed with `GPU is not available`. GPU inference on this NAS is therefore **not working yet**. The current image installed the OpenVINO Python wheel but no Intel OpenCL compute runtime; [OpenVINO's GPU setup documentation](https://docs.openvino.ai/2026/get-started/install-openvino/configurations/configurations-intel-gpu.html) requires that runtime. This is a likely cause, not a confirmed diagnosis of the NAS driver. In a separate network-isolated CPU probe, the same model completed three blank JPEG frames: model load 0.569 s, first `detect()` 11.785 s, then 0.288 s and 0.434 s. The first call also imports the RF-DETR preprocessing stack, so its time is not steady-state inference latency. These synthetic timings prove local execution only; live-camera accuracy, throughput under concurrent streams, and native Protect event persistence remain `needs_evidence`.
 
 For a missed live detection, `/healthz` now reports `pool_cameras` in the same order as the private `paired_streams` configuration. Each entry contains only an index and counters: inference attempts and successes, observation totals by class, observations that passed Protect's score gate, those that also passed its zone gate, frames with at least one eligible observation, entered events, active tracks, and remaining entries in the current rolling-hour budget. It does not expose camera IDs, scores, images or stream addresses. Compare two readings around a test walk to locate the stage that dropped it. `event_budget_healthy` reports whether the durable state was readable and the wall clock passed its rollback check; false means zero remaining entries.
 

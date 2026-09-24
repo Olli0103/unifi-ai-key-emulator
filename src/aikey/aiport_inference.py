@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from .aiport_detection import ObjectObservation
+from .aiport_event_budget import EventBudgetError
 from .aiport_ingest import IngressError, normalize_mac
 from .aiport_tracking import TrackingError, validate_observation
 
@@ -102,7 +103,9 @@ class FairInference:
                     try:
                         self._model = await asyncio.to_thread(self._load_detector)
                         if (self._model is None
-                                or not callable(getattr(self._model, "detect", None))):
+                                or not callable(getattr(self._model, "detect", None))
+                                and not callable(getattr(self._model,
+                                                         "detect_for_camera", None))):
                             raise TypeError("invalid detector")
                     except Exception:
                         self._global_failure = True
@@ -110,7 +113,11 @@ class FairInference:
                         for unavailable_camera in self._cameras:
                             await self._notify_unavailable(unavailable_camera)
                         return
-                result = await asyncio.to_thread(self._model.detect, frame)
+                detect_for_camera = getattr(self._model, "detect_for_camera", None)
+                if callable(detect_for_camera):
+                    result = await asyncio.to_thread(detect_for_camera, camera, frame)
+                else:
+                    result = await asyncio.to_thread(self._model.detect, frame)
                 if not isinstance(result, tuple) or len(result) > 100:
                     raise TrackingError("invalid_tracking_observation")
                 for observation in result:
@@ -195,11 +202,23 @@ class FairInference:
 
     def camera_snapshot(self) -> tuple[dict[str, object], ...]:
         """Content-free counters in config order, without camera identifiers."""
-        return tuple({
-            "index": index,
-            "attempts": self._attempts[camera],
-            "successes": self._successes[camera],
-            "observations": dict(self._observations[camera]),
-            "disabled": camera in self._disabled or self._global_failure,
-            "pending": camera in self._pending,
-        } for index, camera in enumerate(self._cameras))
+        budget = getattr(self._model, "budget", None)
+        result = []
+        for index, camera in enumerate(self._cameras):
+            remaining, budget_healthy = None, None
+            if budget is not None:
+                try:
+                    remaining, budget_healthy = budget.remaining(camera), True
+                except EventBudgetError:
+                    remaining, budget_healthy = 0, False
+            result.append({
+                "index": index,
+                "attempts": self._attempts[camera],
+                "successes": self._successes[camera],
+                "observations": dict(self._observations[camera]),
+                "disabled": camera in self._disabled or self._global_failure,
+                "pending": camera in self._pending,
+                "api_requests_remaining": remaining,
+                "api_request_budget_healthy": budget_healthy,
+            })
+        return tuple(result)

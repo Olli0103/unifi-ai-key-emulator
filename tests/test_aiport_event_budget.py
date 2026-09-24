@@ -37,6 +37,17 @@ def test_per_camera_hour_survives_restart_and_rolls_forward(tmp_path):
     assert state["events"][FIRST] == [now[0]]
 
 
+def test_vision_request_cap_is_separate_from_native_event_cap(tmp_path):
+    now = 10 * _HOUR_NS
+    events = EventBudget(tmp_path, limit=1, clock_ns=lambda: now)
+    requests = EventBudget(tmp_path, limit=2, clock_ns=lambda: now,
+                           namespace="vision-request")
+    assert requests.claim(FIRST) and requests.claim(FIRST)
+    assert not requests.claim(FIRST)
+    assert events.claim(FIRST)
+    assert not events.claim(FIRST)
+
+
 def test_corrupt_state_clock_rollback_and_failed_write_deny(tmp_path, monkeypatch):
     now = [5 * _HOUR_NS]
     budget = EventBudget(tmp_path, limit=1, clock_ns=lambda: now[0])
