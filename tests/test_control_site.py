@@ -85,6 +85,7 @@ async def test_browser_login_provider_save_and_csrf_preserve_pairing(tmp_path):
         markup = await page.text()
         assert page.status == 200 and "AI Key" in markup and "AI Port" in markup
         assert "2 paired cameras" in markup
+        assert "Configured detector: local" in markup
         original_port = json.loads(port_config.read_text())
         data = {"csrf": csrf, "profile": "aiport",
                 "revision": site.aiport.snapshot().revision,

@@ -181,7 +181,9 @@ class ControlSite:
                        "max_events_per_hour": port.max_events_per_hour or 12,
                        "max_requests_per_hour": port.max_requests_per_hour or 24}
             body += self._provider_form("AI Port", "aiport", port.revision, current,
-                                        port.key_configured, csrf, camera_count=port.camera_count)
+                                        port.key_configured, csrf,
+                                        camera_count=port.camera_count,
+                                        backend=port.backend)
         else:
             body += ("<section><h2>AI Port</h2><p>No paired camera pool is configured. "
                      "Provider settings become available after pairing at least two cameras."
@@ -190,14 +192,21 @@ class ControlSite:
 
     @staticmethod
     def _provider_form(title: str, profile: str, revision: str, current: dict,
-                       key_configured: bool, csrf: str, *, camera_count: int = 0) -> str:
+                       key_configured: bool, csrf: str, *, camera_count: int = 0,
+                       backend: str | None = None) -> str:
         provider = current.get("provider", "openai")
         options = "".join(
             f"<option value='{name}'{' selected' if name == provider else ''}>{label}</option>"
             for name, label in (("openai", "OpenAI"), ("anthropic", "Claude / Anthropic"),
                                 ("ollama", "Ollama"),
                                 ("openai-compatible", "Compatible API")))
-        detail = (f"<p>{camera_count} paired cameras</p>" if camera_count else "")
+        detail = (f"<p>{camera_count} paired cameras. "
+                  f"Configured detector: {_safe(backend or 'off')}.</p>"
+                  if camera_count else "")
+        if profile == "aiport" and backend != "vision_api":
+            detail += ("<p class='muted'>Saving provider settings switches AI Port "
+                       "to API detection after its next restart. The current local "
+                       "detector keeps running until then.</p>")
         output_limit = 32768 if profile == "aikey" else 512
         form = (f"<section><h2>{_safe(title)}</h2>{detail}<p class='muted'>"
                 f"Key reference configured: {'yes' if key_configured else 'no'}. "
