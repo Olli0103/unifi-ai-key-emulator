@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
 import getpass
 import html
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import signal
 import stat
@@ -19,6 +22,7 @@ from .admin_security import AdminSecurity
 from .aiport_config_store import (
     AiPortConfigurationError, AiPortConfigurationStore, AiPortRevisionConflict,
 )
+from .camera_inventory import InventoryError, fetch_inventory
 from .config import atomic_private, load_config
 from .config_store import (
     ConfigurationStore, ConfigurationStoreError, RevisionConflict,
@@ -26,6 +30,7 @@ from .config_store import (
 
 
 _COOKIE = "aikey_admin_local"
+_G3_G5_MODEL = re.compile(r"UVC G[345](?:\s|\Z)")
 _STYLE = """
 :root { font-family: system-ui, sans-serif; color: #192430; background: #f4f7fb; }
 body { max-width: 1100px; margin: 2rem auto; padding: 0 1.2rem; }
@@ -42,6 +47,9 @@ button { margin-top: 1.2rem; border: 0; border-radius: 6px; padding: .7rem 1rem;
          background: #075bd8; color: white; font: inherit; cursor: pointer; }
 .muted { color: #4f6173; } .error { color: #a1231b; } .notice { color: #195c31; }
 .row { display: flex; gap: .8rem; align-items: center; justify-content: space-between; }
+table { width: 100%; border-collapse: collapse; background: white; }
+th, td { padding: .65rem; text-align: left; border-bottom: 1px solid #d9e2eb; }
+.scroll { overflow-x: auto; }
 """
 
 
@@ -82,7 +90,8 @@ def _private_directory(path: Path) -> None:
 class ControlSite:
     def __init__(self, aikey_config: Path, aiport_config: Path, *,
                  signing_key: bytes, password_record: str, port: int,
-                 aiport_runtime_state_dir: Path | None = None):
+                 aiport_runtime_state_dir: Path | None = None,
+                 inventory_loader: Callable[[], Awaitable[dict]] | None = None):
         if type(port) is not int or not 1024 <= port <= 65535:
             raise ValueError("Invalid control-site port")
         self.origin = f"http://127.0.0.1:{port}"
@@ -91,10 +100,12 @@ class ControlSite:
         self.aikey = ConfigurationStore(aikey_config)
         self.aiport = AiPortConfigurationStore(
             aiport_config, runtime_state_dir=aiport_runtime_state_dir)
+        self.inventory_loader = inventory_loader
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=8192)
         app.router.add_get("/", self.index)
+        app.router.add_get("/cameras", self.cameras)
         app.router.add_get("/login", self.login_page)
         app.router.add_post("/login", self.login)
         app.router.add_post("/provider", self.save_provider)
@@ -104,6 +115,58 @@ class ControlSite:
 
     async def health(self, _: web.Request) -> web.Response:
         return web.json_response({"service": "control-site"})
+
+    async def cameras(self, request: web.Request) -> web.Response:
+        if self._session(request) is None:
+            raise web.HTTPSeeOther("/login")
+        if self.inventory_loader is None:
+            raise web.HTTPNotFound()
+        try:
+            report = await self.inventory_loader()
+            configured = self.aiport.configured_camera_macs()
+            if (not isinstance(report, dict)
+                    or report.get("schema") != "aikey-camera-preflight/1"
+                    or not isinstance(report.get("cameras"), list)):
+                raise InventoryError("Invalid camera inventory")
+        except (InventoryError, AiPortConfigurationError):
+            return _page("Camera inventory unavailable", "<h1>Camera inventory unavailable</h1>"
+                         "<p class='error'>Check Protect connectivity and the private trust files.</p>"
+                         "<p><a href='/'>Back to settings</a></p>")
+        rows = []
+        target_count = 0
+        configured_count = 0
+        for camera in sorted(report["cameras"], key=lambda item: (
+                (item.get("name") or "").casefold(), item.get("id") or "")):
+            state = camera.get("state")
+            model = camera.get("model") or "Unknown"
+            target = (state == "CONNECTED" and isinstance(model, str)
+                      and _G3_G5_MODEL.match(model) is not None)
+            allowed = camera.get("mac") in configured
+            target_count += int(target)
+            configured_count += int(allowed)
+            scope = ("G3–G5 target" if target else "Offline" if state != "CONNECTED"
+                     else "Outside G3–G5 target scope")
+            cells = (camera.get("name") or "Unnamed", model, state or "Unknown", scope,
+                     "Configured for this AI Port" if allowed
+                     else "Not configured on this AI Port",
+                     ", ".join(camera.get("smart_detect_types") or ()) or "None")
+            rows.append("<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in cells)
+                        + "</tr>")
+        fetched = datetime.fromtimestamp(report["fetched_at"], timezone.utc).strftime(
+            "%Y-%m-%d %H:%M UTC")
+        body = ("<h1>Protect cameras</h1><p><a href='/'>Settings</a> · "
+                "<a href='/cameras'>Refresh</a></p>"
+                f"<p>Protect {_safe(report['protect_version'])} · Fetched {_safe(fetched)}</p>"
+                f"<p>{len(rows)} cameras · {target_count} connected G3–G5 targets · "
+                f"{configured_count} configured for this AI Port.</p>"
+                "<p class='muted'>Protect pairing and stream health are separate. "
+                "Configured means the camera is in this instance's local allowlist. "
+                "Protect-reported smart types may reflect AI Port processing.</p>"
+                "<div class='scroll'><table><thead><tr><th>Camera</th><th>Model</th>"
+                "<th>State</th><th>AI Port scope</th><th>This instance</th>"
+                "<th>Protect-reported smart types</th></tr></thead><tbody>"
+                + "".join(rows) + "</tbody></table></div>")
+        return _page("Protect cameras", body)
 
     def _same_host(self, request: web.Request) -> bool:
         return request.host == self.origin.removeprefix("http://")
@@ -167,7 +230,9 @@ class ControlSite:
                 f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
                 "<button>Sign out</button></form></div>" + notice +
                 "<p>Changes are saved with a revision check. They take effect after a service "
-                "restart. Pairings and device identities stay in place.</p><div class='grid'>")
+                "restart. Pairings and device identities stay in place.</p>"
+                + ("<p><a href='/cameras'>View current Protect cameras</a></p>"
+                   if self.inventory_loader is not None else "") + "<div class='grid'>")
         body += self._provider_form("AI Key", "aikey", key.revision, inference,
                                     key_configured, csrf)
         if port.camera_count >= 2:
@@ -200,7 +265,7 @@ class ControlSite:
             for name, label in (("openai", "OpenAI"), ("anthropic", "Claude / Anthropic"),
                                 ("ollama", "Ollama"),
                                 ("openai-compatible", "Compatible API")))
-        detail = (f"<p>{camera_count} paired cameras. "
+        detail = (f"<p>{camera_count} configured camera slots. "
                   f"Configured detector: {_safe(backend or 'off')}.</p>"
                   if camera_count else "")
         if profile == "aiport" and backend != "vision_api":
@@ -337,6 +402,10 @@ def _cli() -> argparse.ArgumentParser:
     run.add_argument("--aiport-runtime-state-dir", type=Path,
                      help="AI Port state path inside its processor container")
     run.add_argument("--port", type=int, default=8765)
+    run.add_argument("--inventory-controller")
+    run.add_argument("--inventory-api-key-file", type=Path)
+    run.add_argument("--inventory-web-trust-file", type=Path)
+    run.add_argument("--inventory-web-cert-file", type=Path)
     return parser
 
 
@@ -386,9 +455,20 @@ def main(argv: list[str] | None = None) -> int:
         _private_directory(state)
         signing_key = _private_bytes(state / "admin-signing-key", 64)
         record = _private_bytes(state / "admin-password-record", 4096).decode().strip()
+        inventory_fields = (args.inventory_controller, args.inventory_api_key_file,
+                            args.inventory_web_trust_file, args.inventory_web_cert_file)
+        if any(value is not None for value in inventory_fields) and not all(
+                value is not None for value in inventory_fields):
+            raise ValueError("Complete pinned inventory settings are required")
+        inventory_loader = (lambda: fetch_inventory(
+            args.inventory_controller, api_key_file=args.inventory_api_key_file,
+            trust_file=args.inventory_web_trust_file,
+            cert_file=args.inventory_web_cert_file)) if all(
+                value is not None for value in inventory_fields) else None
         site = ControlSite(args.aikey_config, args.aiport_config,
                            signing_key=signing_key, password_record=record, port=args.port,
-                           aiport_runtime_state_dir=args.aiport_runtime_state_dir)
+                           aiport_runtime_state_dir=args.aiport_runtime_state_dir,
+                           inventory_loader=inventory_loader)
         site.aikey.snapshot()
         site.aiport.snapshot()
         print(json.dumps({"control_site": site.origin, "loopback_only": True}))

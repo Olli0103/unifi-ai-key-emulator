@@ -23,6 +23,7 @@ import time
 import aiohttp
 from cryptography import x509
 
+from .aiport_ingest import IngressError, normalize_mac
 from .device import verify_peer_pin
 
 
@@ -46,6 +47,7 @@ class InventoryError(RuntimeError):
 @dataclass(frozen=True)
 class Camera:
     id: str
+    mac: str
     name: str | None
     model: str | None
     state: str
@@ -128,6 +130,10 @@ def parse_cameras(value) -> tuple[Camera, ...]:
         if camera_id in ids:
             raise InventoryError("Duplicate camera ID")
         ids.add(camera_id)
+        try:
+            mac = normalize_mac(row.get("mac"))
+        except IngressError as exc:
+            raise InventoryError("Invalid camera MAC") from exc
         if row.get("modelKey") != "camera":
             raise InventoryError("Unexpected inventory model key")
         state = row.get("state")
@@ -149,7 +155,7 @@ def parse_cameras(value) -> tuple[Camera, ...]:
         else:
             processing_class = "legacy_ingress_needed"
             reason = "No onboard smart detections; an AI Port or verified ingress path is needed."
-        cameras.append(Camera(camera_id, name, model, state, smart, audio,
+        cameras.append(Camera(camera_id, mac, name, model, state, smart, audio,
                               processing_class, reason))
     return tuple(sorted(cameras, key=lambda item: item.id))
 

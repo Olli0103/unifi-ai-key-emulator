@@ -17,6 +17,7 @@ from aikey.tls import ensure_identity_certificate, server_context
 def camera(number=1, *, name="Synthetic camera", state="CONNECTED", smart=("person",)):
     return {"id": f"{number:024x}", "modelKey": "camera", "state": state,
             "name": name, "type": "Synthetic model",
+            "mac": f"02:00:00:00:00:{number:02x}",
             "featureFlags": {"smartDetectTypes": list(smart), "smartDetectAudioTypes": []}}
 
 
@@ -77,6 +78,7 @@ def test_inventory_add_remove_rename_offline_and_legacy_classification():
     second = parse_cameras([camera(1, name="Renamed", state="DISCONNECTED"), camera(3)])
     assert [item.name for item in second] == ["Renamed", "Synthetic camera"]
     assert second[0].processing_class == "offline"
+    assert first[0].mac == "020000000001"
     assert {item.id for item in second}.isdisjoint({first[1].id})
 
 
@@ -108,6 +110,7 @@ def test_static_report_escapes_camera_names_and_has_no_script():
     [{**camera(1), "featureFlags": {"smartDetectTypes": ["futureClass"],
                                    "smartDetectAudioTypes": []}}],
     [{**camera(1), "id": "not-an-id"}],
+    [{**camera(1), "mac": "not-a-mac"}],
 ])
 def test_invalid_inventory_fails_as_a_whole(rows):
     with pytest.raises(InventoryError):

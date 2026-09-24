@@ -114,6 +114,11 @@ class AiPortConfigurationStore:
         content, value = self._read()
         return self._public(content, value)
 
+    def configured_camera_macs(self) -> frozenset[str]:
+        """Return the validated local allowlist, not Protect pairing state."""
+        _, value = self._read()
+        return frozenset(stream["camera_mac"] for stream in value.get("paired_streams", ()))
+
     def preview(self, expected_revision: str, settings: dict[str, Any]) -> AiPortPreview:
         content, current = self._read()
         before = self._revision(content)
