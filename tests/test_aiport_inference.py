@@ -6,6 +6,7 @@ import threading
 import pytest
 
 from aikey.aiport_detection import ObjectObservation
+from aikey.aiport_api_detection import ApiDetectionError
 from aikey.aiport_inference import FairInference
 from aikey.aiport_ingest import IngressError
 
@@ -79,6 +80,7 @@ async def test_round_robin_coalesces_busy_camera_and_keeps_results_separate():
     assert scheduler.snapshot() == {
         "camera_count": 3, "attempts": 4, "successes": 4,
         "dropped_frames": 1, "failed_cameras": 0,
+        "api_failures": 0,
         "pending_cameras": 0, "model_load_failed": False, "closed": False,
     }
     camera_status = scheduler.camera_snapshot()
@@ -115,6 +117,44 @@ async def test_one_inference_failure_disables_only_that_camera():
     assert scheduler.snapshot()["dropped_frames"] == 1
     assert scheduler.camera_snapshot()[0]["disabled"] is True
     assert scheduler.camera_snapshot()[1]["disabled"] is False
+    await scheduler.close()
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_keeps_camera_available_for_next_frame():
+    calls = []
+    results = []
+    unavailable = []
+
+    class FlakyProvider:
+        def detect_for_camera(self, camera, frame):
+            calls.append((camera, frame))
+            if frame == b"fail":
+                raise ApiDetectionError("api_detection_request_failed")
+            return ()
+
+    async def on_result(camera, *_args):
+        results.append(camera)
+
+    async def on_unavailable(camera):
+        unavailable.append(camera)
+
+    scheduler = FairInference([FIRST, SECOND], load_detector=FlakyProvider,
+                              on_result=on_result, on_unavailable=on_unavailable,
+                              max_frames_per_camera=None)
+    await scheduler.observe(FIRST, b"fail", generation=1)
+    await scheduler.join()
+    assert scheduler.is_available(FIRST)
+    assert unavailable == []
+    await scheduler.observe(FIRST, b"next", generation=1)
+    await scheduler.observe(SECOND, b"other", generation=1)
+    await scheduler.join()
+    assert set(results) == {FIRST, SECOND}
+    assert calls[0] == (FIRST, b"fail")
+    assert set(calls[1:]) == {(FIRST, b"next"), (SECOND, b"other")}
+    assert scheduler.snapshot()["api_failures"] == 1
+    assert scheduler.camera_snapshot()[0]["api_failures"] == 1
+    assert scheduler.snapshot()["failed_cameras"] == 0
     await scheduler.close()
 
 

@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
+from .aiport_api_detection import ApiDetectionError
 from .aiport_detection import ObjectObservation
 from .aiport_event_budget import EventBudgetError
 from .aiport_ingest import IngressError, normalize_mac
@@ -64,6 +65,8 @@ class FairInference:
         self._global_failure = False
         self.dropped_frames = 0
         self.failed_cameras = 0
+        self.api_failures = 0
+        self._api_failures_by_camera = dict.fromkeys(cameras, 0)
 
     async def observe(self, camera_mac: str, frame: bytes, *, generation: int) -> None:
         camera = normalize_mac(camera_mac)
@@ -127,6 +130,12 @@ class FairInference:
                 for observation in result:
                     self._observations[camera][observation.kind] += 1
                 await self._on_result(camera, result, generation, frame)
+            except ApiDetectionError:
+                # A remote API can fail for one frame without making the
+                # camera or its Protect smart policy permanently unavailable.
+                # The detector's durable request budget still bounds retries.
+                self.api_failures += 1
+                self._api_failures_by_camera[camera] += 1
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -195,6 +204,7 @@ class FairInference:
             "successes": sum(self._successes.values()),
             "dropped_frames": self.dropped_frames,
             "failed_cameras": self.failed_cameras,
+            "api_failures": self.api_failures,
             "pending_cameras": len(self._pending),
             "model_load_failed": self._global_failure,
             "closed": self._closed,
@@ -217,6 +227,7 @@ class FairInference:
                 "successes": self._successes[camera],
                 "observations": dict(self._observations[camera]),
                 "disabled": camera in self._disabled or self._global_failure,
+                "api_failures": self._api_failures_by_camera[camera],
                 "pending": camera in self._pending,
                 "api_requests_remaining": remaining,
                 "api_request_budget_healthy": budget_healthy,
