@@ -62,4 +62,12 @@ def smart_event_payload(camera_mac: str, change: TrackChange, *,
             "stationary": False, "attributes": {}, "coord3d": [],
         }],
     })
+    if edge == "leave":
+        # The final per-track class is carried separately from descriptors.
+        # Keep the association limited to the observed class and zone; no
+        # recognition or image metadata can be inferred from a box track.
+        payload["trackerIDAttrMap"] = {
+            str(change.track_id): {"objectType": change.kind,
+                                   "zone": list(zone_ids)}
+        }
     return payload
