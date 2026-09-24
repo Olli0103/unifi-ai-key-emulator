@@ -95,6 +95,7 @@ def test_zone_enter_and_leave_keep_same_numeric_zone_id():
 @pytest.mark.parametrize("kind,label,expected_name", [
     ("vehicle", "car", ""),
     ("animal", "dog", "animal"),
+    ("package", "package", "package"),
 ])
 def test_other_object_events_never_claim_a_recognized_plate(kind, label, expected_name):
     track = TrackChange("enter", 2, kind, label, 0.9, (0.1, 0.2, 0.4, 0.5))
@@ -112,7 +113,7 @@ def test_other_object_events_never_claim_a_recognized_plate(kind, label, expecte
 
 
 @pytest.mark.parametrize("track,edge,clock", [
-    (TrackChange("enter", 1, "package", "package", 0.9, (0.1, 0.2, 0.4, 0.5)),
+    (TrackChange("enter", 1, "face", "face", 0.9, (0.1, 0.2, 0.4, 0.5)),
      "enter", 1_700_000_000_000),
     (PERSON, "unknown", 1_700_000_000_000),
     (PERSON, "enter", True),

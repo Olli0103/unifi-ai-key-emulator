@@ -121,6 +121,19 @@ def test_vehicle_and_animal_candidates_are_isolated_by_class_and_zone():
     assert engine.has_policy(SECOND)
 
 
+def test_package_candidate_keeps_its_camera_and_zone():
+    engine = CameraPolicyEngine([FIRST, SECOND])
+    engine.replace_policy(FIRST, policy(FIRST, zone=True, kind="package"))
+    package = ObjectObservation("package", "package", 0.93, INSIDE)
+    assert engine.observe(FIRST, (package,), now=1) == ()
+    entered, = engine.observe(FIRST, (package,), now=2)
+    assert (entered.camera_mac, entered.change.kind, entered.zone_ids) == (
+        FIRST, "package", (7,))
+    assert engine.observe(SECOND, (package,), now=1) == ()
+    closed, = engine.replace_policy(FIRST, None)
+    assert (closed.change.kind, closed.change.edge) == ("package", "leave")
+
+
 def test_unknown_camera_or_cross_camera_policy_is_rejected():
     engine = CameraPolicyEngine([FIRST, SECOND])
     with pytest.raises(IngressError, match="camera_not_authorized"):

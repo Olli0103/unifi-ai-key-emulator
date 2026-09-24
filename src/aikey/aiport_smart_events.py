@@ -22,7 +22,7 @@ def smart_event_payload(camera_mac: str, change: TrackChange, *,
                         first_shown_ms: int | None = None) -> dict:
     """Encode one bounded object track edge, without recognition claims."""
     if (not isinstance(change, TrackChange)
-            or change.kind not in {"person", "vehicle", "animal"}
+            or change.kind not in {"person", "vehicle", "animal", "package"}
             or edge not in {"enter", "moving", "leave"}
             or type(clock_wall_ms) is not int or clock_wall_ms <= 0
             or type(change.track_id) is not int or change.track_id <= 0

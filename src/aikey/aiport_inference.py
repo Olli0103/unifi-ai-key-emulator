@@ -68,7 +68,7 @@ class FairInference:
         self._attempts = dict.fromkeys(cameras, 0)
         self._successes = dict.fromkeys(cameras, 0)
         self._observations = {
-            camera: {"person": 0, "vehicle": 0, "animal": 0}
+            camera: {"person": 0, "vehicle": 0, "animal": 0, "package": 0}
             for camera in cameras}
         self._last_index = -1
         self._worker: asyncio.Task | None = None

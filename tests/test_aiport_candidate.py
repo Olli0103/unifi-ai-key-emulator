@@ -57,6 +57,11 @@ def test_live_pool_accepts_explicit_capped_api_provider(tmp_path):
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     assert load_config(tmp_path / "config.json")["live_pool_detector"] == (
         config["live_pool_detector"])
+    config["live_pool_detector"]["smart_types"] = [
+        "person", "vehicle", "animal", "package"]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["live_pool_detector"]["smart_types"] == [
+        "person", "vehicle", "animal", "package"]
     config["live_pool_detector"]["max_requests_per_hour"] = 0
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     with pytest.raises(CandidateError, match="API detector"):
@@ -407,6 +412,11 @@ def test_live_pool_accepts_explicit_pinned_onnx_provider(tmp_path):
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     assert load_config(tmp_path / "config.json")["live_pool_detector"] == (
         config["live_pool_detector"])
+    config["live_pool_detector"]["smart_types"] = ["package"]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="live pool detector"):
+        load_config(tmp_path / "config.json")
+    config["live_pool_detector"]["smart_types"] = ["person"]
     config["live_pool_detector"]["inference_backend"] = "unknown"
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     with pytest.raises(CandidateError, match="live pool detector"):

@@ -87,13 +87,14 @@ async def test_browser_login_provider_save_and_csrf_preserve_pairing(tmp_path):
         assert page.status == 200 and "AI Key" in markup and "AI Port" in markup
         assert "2 configured camera slots" in markup
         assert "Configured detector: local" in markup
+        assert "value='package'" in markup
         original_port = json.loads(port_config.read_text())
         data = {"csrf": csrf, "profile": "aiport",
                 "revision": site.aiport.snapshot().revision,
                 "provider": "ollama", "model": "synthetic-vision",
                 "base_url": "http://127.0.0.1:11434",
                 "max_output_tokens": "128", "threshold": "0.8",
-                "smart_types": "person", "max_events_per_hour": "12",
+                "smart_types": "package", "max_events_per_hour": "12",
                 "max_requests_per_hour": "24"}
         rejected = await client.post("/provider", data={**data, "csrf": "wrong"},
                                      headers={"Origin": site.origin}, allow_redirects=False)
@@ -107,6 +108,7 @@ async def test_browser_login_provider_save_and_csrf_preserve_pairing(tmp_path):
         assert updated["mac"] == original_port["mac"]
         assert updated["live_pool_detector"]["provider_config"]["model"] == "synthetic-vision"
         assert updated["live_pool_detector"]["inference_backend"] == "vision_api"
+        assert updated["live_pool_detector"]["smart_types"] == ["package"]
         assert site.aiport.snapshot().max_requests_per_hour == 24
         key_saved = await client.post("/provider", data={
             "csrf": csrf, "profile": "aikey", "revision": site.aikey.snapshot().revision,

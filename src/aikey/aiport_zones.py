@@ -15,7 +15,7 @@ import re
 _ZONE_ID = re.compile(r"[1-9][0-9]{0,9}\Z")
 _OBJECT_TYPES = frozenset({"person", "vehicle", "animal", "package",
                            "face", "licensePlate"})
-_SUPPORTED_TYPES = frozenset({"person", "vehicle", "animal"})
+_SUPPORTED_TYPES = frozenset({"person", "vehicle", "animal", "package"})
 _MAX_ZONES = 32
 _MAX_VERTICES = 32
 _EPSILON = 1e-9

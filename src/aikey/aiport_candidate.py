@@ -231,6 +231,8 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
         is_api = backend == "vision_api"
         is_onnx = isinstance(backend, str) and backend in {
             "onnx_cpu", "onnx_openvino_gpu"}
+        supported_types = ({"person", "vehicle", "animal", "package"} if is_api
+                           else {"person", "vehicle", "animal"})
         if ("paired_streams" not in value or not isinstance(detector, dict)
                 or set(detector) != (api_fields if is_api else
                                     onnx_fields if is_onnx else pytorch_fields)
@@ -245,9 +247,9 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
                     or not _PIN.fullmatch(detector["model_sha256" if is_onnx else
                                                     "checkpoint_sha256"]))
                 or not isinstance(detector["smart_types"], list)
-                or not 1 <= len(detector["smart_types"]) <= 3
-                or any(type(kind) is not str or kind not in {
-                    "person", "vehicle", "animal"} for kind in detector["smart_types"])
+                or not 1 <= len(detector["smart_types"]) <= len(supported_types)
+                or any(type(kind) is not str or kind not in supported_types
+                       for kind in detector["smart_types"])
                 or len(set(detector["smart_types"])) != len(detector["smart_types"])
                 or type(detector["max_events_per_hour"]) is not int
                 or not 1 <= detector["max_events_per_hour"] <= 3600):

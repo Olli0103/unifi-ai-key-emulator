@@ -87,7 +87,7 @@ class CameraPolicyEngine:
         if (policy is not None and (not isinstance(policy, SmartPolicy)
                 or policy.camera_mac != camera
                 or not 1 <= len(policy.enabled_types) <= 3
-                or not policy.enabled_types <= {"person", "vehicle", "animal"})):
+                or not policy.enabled_types <= {"person", "vehicle", "animal", "package"})):
             raise IngressError("invalid_camera_policy")
         result = tuple(
             CameraEventCandidate(camera, TrackChange(

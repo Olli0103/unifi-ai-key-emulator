@@ -13,7 +13,8 @@ from .aiport_ingest import IngressError, normalize_mac
 from .aiport_zones import SmartZone, ZoneError, parse_smart_zones
 
 
-_OBJECT_TYPES = frozenset({"person", "vehicle", "animal"})
+_REVERIFY_TYPES = frozenset({"person", "vehicle", "animal"})
+_OBJECT_TYPES = _REVERIFY_TYPES | {"package"}
 _REGION_MAPS = frozenset({
     "zones", "secondLensZones", "lines", "loiterZones", "excludeZones",
     "intelligenceZones",
@@ -82,11 +83,11 @@ def summarize_smart_request(payload: object, *, camera_mac: str) -> dict[str, in
         result[name + "_configured"] = payload.get(name) not in (None, False, {})
     reverify = payload.get("reVerificationPolicy")
     result["reverification_object"] = isinstance(reverify, dict)
-    result["reverification_known_count"] = (len(set(reverify) & _OBJECT_TYPES)
+    result["reverification_known_count"] = (len(set(reverify) & _REVERIFY_TYPES)
                                                if isinstance(reverify, dict) else -1)
-    result["reverification_unknown_count"] = (len(set(reverify) - _OBJECT_TYPES)
+    result["reverification_unknown_count"] = (len(set(reverify) - _REVERIFY_TYPES)
                                                  if isinstance(reverify, dict) else -1)
-    for kind in sorted(_OBJECT_TYPES):
+    for kind in sorted(_REVERIFY_TYPES):
         item = reverify.get(kind) if isinstance(reverify, dict) else None
         result["reverification_" + kind + "_object"] = isinstance(item, dict)
         result["reverification_" + kind + "_enabled"] = (
@@ -195,7 +196,7 @@ def _reverification_ceilings(value: object, requested: list[str]
     Enabled reverification drops uncertain observations for each requested
     class; it does not perform a second inference pass.
     """
-    if not isinstance(value, dict) or set(value) != _OBJECT_TYPES:
+    if not isinstance(value, dict) or set(value) != _REVERIFY_TYPES:
         raise SmartSettingsError("unsupported_smart_feature:reverification")
     ceilings = []
     for kind, item in value.items():

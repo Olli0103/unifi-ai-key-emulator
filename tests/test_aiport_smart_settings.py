@@ -106,6 +106,18 @@ def test_zone_only_person_policy_is_scoped_to_that_zone():
     assert parse_smart_settings(raw, camera_mac=CAMERA).enabled_types == frozenset()
 
 
+def test_package_policy_is_scoped_to_validated_primary_zone():
+    raw = full_frame_policy()
+    raw["enableSmartDetect"] = ["package"]
+    raw["zones"] = {"7": {"coord": [100, 100, 900, 100, 900, 900, 100, 900],
+                          "objectTypes": ["package"], "triggerAccessTypes": []}}
+    policy = parse_smart_settings(raw, camera_mac=CAMERA)
+    assert policy.enabled_types == frozenset({"package"})
+    assert policy.zone_ids("package", (0.2, 0.2, 0.5, 0.8)) == (7,)
+    assert policy.zone_ids("package", (0.05, 0.2, 0.5, 0.8)) is None
+    assert not policy.allows("person")
+
+
 def test_zone_only_mixed_classes_stay_bound_to_their_validated_zones():
     raw = full_frame_policy()
     raw["enableSmartDetect"] = []

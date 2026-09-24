@@ -12,7 +12,7 @@ import math
 from .aiport_detection import ObjectObservation
 
 
-_KINDS = frozenset({"person", "vehicle", "animal"})
+_KINDS = frozenset({"person", "vehicle", "animal", "package"})
 _MAX_OBSERVATIONS_PER_FRAME = 100
 _MAX_REACQUIRE_SECONDS = 30.0
 

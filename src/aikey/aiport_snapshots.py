@@ -44,7 +44,7 @@ def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int, *,
     """Keep one cropped JPEG in memory until Protect requests it."""
     if not isinstance(frame, bytes) or len(frame) > 2_000_000 or len(frame) < 16:
         raise SnapshotError("invalid_snapshot_frame")
-    if not isinstance(change, TrackChange) or change.kind not in {"person", "vehicle", "animal"}:
+    if not isinstance(change, TrackChange) or change.kind not in {"person", "vehicle", "animal", "package"}:
         raise SnapshotError("invalid_snapshot_track")
     if type(wall_ms) is not int or wall_ms <= 0:
         raise SnapshotError("invalid_snapshot_time")

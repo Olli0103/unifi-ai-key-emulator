@@ -112,6 +112,19 @@ def test_stationary_person_is_confirmed_by_startup_probe(tmp_path):
     assert detector.budget.remaining(FIRST) == 0
 
 
+def test_package_observation_requires_exact_class_label_and_bounded_box():
+    result = parse_detections(json.dumps({"detections": [{
+        "kind": "package", "label": "package", "score": 0.91,
+        "box": [0.2, 0.3, 0.5, 0.7],
+    }]}), threshold=0.8)
+    assert [(item.kind, item.label) for item in result] == [("package", "package")]
+    with pytest.raises(ApiDetectionError, match="invalid_api_detection_response"):
+        parse_detections(json.dumps({"detections": [{
+            "kind": "package", "label": "person", "score": 0.91,
+            "box": [0.2, 0.3, 0.5, 0.7],
+        }]}), threshold=0.8)
+
+
 def test_continuous_motion_is_one_burst_until_three_quiet_frames(tmp_path):
     calls = []
 

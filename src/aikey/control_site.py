@@ -330,7 +330,7 @@ class ControlSite:
                      "<div class='checks'><p>Detection classes</p>" + "".join(
                          f"<label><input name='smart_types' type='checkbox' value='{kind}'"
                          f"{' checked' if kind in current['smart_types'] else ''}>{kind.title()}</label>"
-                         for kind in ("person", "vehicle", "animal")) + "</div>"
+                         for kind in ("person", "vehicle", "animal", "package")) + "</div>"
                      f"<label>Maximum events per camera per hour<input name='max_events_per_hour' "
                      f"type='number' min='1' max='3600' value='{_safe(current['max_events_per_hour'])}'></label>"
                      f"<label>Maximum API requests per camera per hour<input "

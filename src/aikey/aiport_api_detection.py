@@ -34,14 +34,15 @@ _LABELS = {
     "person": {"person"},
     "vehicle": {"bicycle", "car", "motorcycle", "bus", "truck"},
     "animal": {"bird", "cat", "dog", "horse", "sheep", "cow"},
+    "package": {"package"},
 }
 _PROMPT = (
-    "Detect visible people, vehicles and animals. Return only compact JSON with "
+    "Detect visible people, vehicles, animals and delivery packages. Return only compact JSON with "
     "this exact shape: {\"detections\":[{\"kind\":\"person\",\"label\":\"person\","
     "\"score\":0.9,\"box\":[0.1,0.1,0.5,0.8]}]}. "
     "Box values are fractions of image width and height in left, top, right, bottom order. "
-    "Use kind person, vehicle or animal. Valid labels are person; bicycle, car, "
-    "motorcycle, bus, truck; bird, cat, dog, horse, sheep, cow. "
+    "Use kind person, vehicle, animal or package. Valid labels are person; bicycle, car, "
+    "motorcycle, bus, truck; bird, cat, dog, horse, sheep, cow; package. "
     "Include an object only when its full visible extent can be located. "
     "Return an empty detections array when uncertain. Do not infer off-screen objects."
 )
