@@ -131,9 +131,11 @@ async def test_watch_counts_native_subscription_events_without_retaining_payload
     monkeypatch.setattr(aiport_event_watch, "PinnedWebConnector",
                         lambda *args: "pinned connector")
     monkeypatch.setattr(aiport_event_watch.aiohttp, "ClientSession", FakeSession)
+    progress = []
     result = await watch_events("192.0.2.1", api_key_file=Path("key"),
                                 trust_file=Path("trust"), cert_file=Path("cert"),
-                                camera_name="Flur", seconds=1)
+                                camera_name="Flur", seconds=1,
+                                on_progress=progress.append)
     assert result["subscription_opened"] is True
     assert result["messages_seen"] == 7
     assert result["targeted_event_adds"] == 1
@@ -150,6 +152,13 @@ async def test_watch_counts_native_subscription_events_without_retaining_payload
     }
     assert result["selected_camera_count"] == 1
     assert result["timeline_persistence"] == "needs_evidence"
+    assert progress[0]["subscription_opened"] is True
+    assert progress[0]["messages_seen"] == 0
+    assert progress[-1]["targeted_person_updates"] == 3
+    assert progress[-1]["targeted_empty_to_person_transitions"] == 1
+    assert len(progress) == 7
+    assert CAMERA_ID not in json.dumps(progress)
+    assert "private-test-key" not in json.dumps(progress)
     assert CAMERA_ID not in json.dumps(result)
     assert "private-test-key" not in json.dumps(result)
 
@@ -212,3 +221,22 @@ async def test_watch_deadline_cancels_a_stalled_websocket_read(monkeypatch):
     assert read_cancelled is True
     assert result["subscription_opened"] is True
     assert result["messages_seen"] == 0
+
+
+def test_progress_jsonl_prints_partial_counts_before_final_report(monkeypatch, capsys):
+    async def fake_watch(host, *, on_progress, **kwargs):
+        assert host == "192.0.2.1"
+        assert callable(on_progress)
+        on_progress({"messages_seen": 0, "targeted_person_updates": 0})
+        on_progress({"messages_seen": 2, "targeted_person_updates": 1})
+        return {"messages_seen": 2, "targeted_person_updates": 1}
+
+    monkeypatch.setattr(aiport_event_watch, "watch_events", fake_watch)
+    assert aiport_event_watch.main([
+        "--controller", "192.0.2.1", "--api-key-file", "key",
+        "--web-trust-file", "trust", "--web-cert-file", "cert",
+        "--progress-jsonl"]) == 0
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [line["phase"] for line in lines] == ["progress", "progress", "final"]
+    assert [line["report"]["messages_seen"] for line in lines] == [0, 2, 2]
+    assert CAMERA_ID not in json.dumps(lines)
