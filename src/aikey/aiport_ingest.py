@@ -131,6 +131,12 @@ class StreamSpec:
         return f"rtsp://{self.ip}:7447/{self.alias}"
 
 
+def stream_capacity_points(width: int, height: int) -> int:
+    """Reserve the same capacity for a planned or a live Protect stream."""
+    pixels = width * height
+    return 2 if pixels <= 1920 * 1080 else 3 if pixels <= 2560 * 1440 else 5
+
+
 def _stream_spec(payload: object, *, camera_mac: str, source_ip: str) -> StreamSpec:
     if not isinstance(payload, dict) or set(payload) != {
         "streaming", "ip", "port", "uri", "deviceID", "width", "height", "fps"
@@ -150,8 +156,7 @@ def _stream_spec(payload: object, *, camera_mac: str, source_ip: str) -> StreamS
             or type(fps) not in (int, float) or not math.isfinite(fps)
             or fps < 1 or fps > 120):
         raise IngressError("invalid_stream_dimensions")
-    pixels = width * height
-    points = 2 if pixels <= 1920 * 1080 else 3 if pixels <= 2560 * 1440 else 5
+    points = stream_capacity_points(width, height)
     return StreamSpec(device_id, source_ip, alias, width, height, float(fps), points)
 
 
