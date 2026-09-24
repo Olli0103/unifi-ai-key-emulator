@@ -262,21 +262,21 @@ def load_config(path: Path) -> dict:
                 raise CandidateError("Invalid live API detector provider") from exc
     if "diagnostic_hello_until" in value:
         until = value["diagnostic_hello_until"]
-        if type(until) is not int or until < 0 or until > int(time.time()) + 600:
+        if type(until) is not int or until < 0 or until > time.time() + 600:
             raise CandidateError("Diagnostic hello must expire within ten minutes")
     if "diagnostic_adoption_until" in value:
         until = value["diagnostic_adoption_until"]
-        if type(until) is not int or until < 0 or until > int(time.time()) + 600:
+        if type(until) is not int or until < 0 or until > time.time() + 600:
             raise CandidateError("Diagnostic adoption must expire within ten minutes")
     if "diagnostic_resume_until" in value:
         until = value["diagnostic_resume_until"]
-        if type(until) is not int or until < 0 or until > int(time.time()) + 600:
+        if type(until) is not int or until < 0 or until > time.time() + 600:
             raise CandidateError("Diagnostic resume must expire within ten minutes")
         if "diagnostic_adoption_until" in value:
             raise CandidateError("Adoption and existing-device resume cannot be combined")
     if "diagnostic_function_fingerprints_until" in value:
         until = value["diagnostic_function_fingerprints_until"]
-        if type(until) is not int or until < 0 or until > int(time.time()) + 600:
+        if type(until) is not int or until < 0 or until > time.time() + 600:
             raise CandidateError("Function fingerprint diagnostic must expire within ten minutes")
     if "diagnostic_stream" in value:
         stream = value["diagnostic_stream"]
@@ -398,7 +398,7 @@ def load_config(path: Path) -> dict:
         until = value["diagnostic_smart_probe_until"]
         if (("diagnostic_stream" not in value and "paired_stream" not in value)
                 or type(until) is not int
-                or until <= int(time.time()) or until > int(time.time()) + 600
+                or until <= int(time.time()) or until > time.time() + 600
                 or ("paired_stream" not in value
                     and until != value.get("diagnostic_hello_until"))):
             raise CandidateError("Smart settings probe requires a bounded camera stream")

@@ -32,6 +32,9 @@ _WRITE_ONLY_PATHS = {
     ("database", "password_file"),
 }
 _SENSITIVE_KEY_PARTS = ("password", "secret", "token", "api_key", "authorization")
+_INFERENCE_FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
+                               "allow_insecure_http", "max_output_tokens",
+                               "api_key_file"})
 _IMMUTABLE_PATHS = {
     ("runtime", "mode"),
     ("runtime", "state_dir"),
@@ -186,6 +189,66 @@ class ConfigurationStore:
             self._replace(target_content)
             persisted, persisted_checked = self._read(self.path)
             return ConfigurationSnapshot(_revision(persisted), _public(persisted_checked))
+
+    def preview_inference(self, expected_revision: str,
+                          inference: dict[str, Any]) -> ConfigurationPreview:
+        content, current = self._read(self.path)
+        candidate = self._inference_candidate(current, inference)
+        return self._prepare_inference(content, current, expected_revision, candidate)
+
+    def apply_inference(self, expected_revision: str,
+                        inference: dict[str, Any]) -> ConfigurationSnapshot:
+        """Change only the vision provider, including its write-only key reference."""
+        with self._locked():
+            content, current = self._read(self.path)
+            candidate = self._inference_candidate(current, inference)
+            preview = self._prepare_inference(content, current, expected_revision, candidate)
+            if not preview.changed_fields:
+                return ConfigurationSnapshot(preview.current_revision, _public(current))
+            encoded = self._encode(self._validate(candidate))
+            self._archive(content)
+            self._replace(encoded)
+            persisted, checked = self._read(self.path)
+            if _revision(persisted) != _revision(encoded):
+                raise ConfigurationStoreError("Configuration replacement could not be verified")
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
+
+    def _inference_candidate(self, current: dict[str, Any],
+                             inference: dict[str, Any]) -> dict[str, Any]:
+        if (not isinstance(inference, dict) or not {"provider", "model", "base_url"} <=
+                set(inference) or not set(inference) <= _INFERENCE_FIELDS):
+            raise UnsafeConfigurationChange("Vision provider settings are incomplete")
+        selected = deepcopy(inference)
+        if ("api_key_file" not in selected
+                and current["inference"].get("provider") == selected["provider"]
+                and current["inference"].get("base_url") == selected["base_url"]
+                and current["inference"].get("api_key_file")):
+            selected["api_key_file"] = current["inference"]["api_key_file"]
+        if "api_key_file" in inference:
+            key_path = selected["api_key_file"]
+            state = Path(current["runtime"]["state_dir"])
+            if (not isinstance(key_path, str) or not Path(key_path).is_absolute()
+                    or Path(key_path).parent != state):
+                raise UnsafeConfigurationChange(
+                    "Vision key file must be inside the processor state directory")
+        candidate = deepcopy(current)
+        candidate["inference"] = selected
+        return candidate
+
+    def _prepare_inference(self, content: bytes, current: dict[str, Any],
+                           expected_revision: str,
+                           candidate: dict[str, Any]) -> ConfigurationPreview:
+        revision = _revision(content)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(revision, expected_revision)):
+            raise RevisionConflict("Configuration changed since it was read")
+        checked = self._validate(candidate)
+        self._assert_immutable(current, checked)
+        self._assert_search_profile(checked)
+        changes = tuple(_changed(current, checked))
+        result_revision = revision if not changes else _revision(self._encode(checked))
+        return ConfigurationPreview(revision, result_revision, _public(checked),
+                                    changes, bool(changes))
 
     def _prepare(self, content: bytes, current: dict[str, Any], expected_revision: str,
                  patch: dict[str, Any]) -> ConfigurationPreview:
