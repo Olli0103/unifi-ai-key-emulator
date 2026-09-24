@@ -115,7 +115,7 @@ def parse_recorded_probe(raw: object, *, state_dir: Path,
                          float(raw["threshold"]))
 
 
-def _read_frame(frame: RecordedFrame) -> bytes:
+def read_recorded_frame(frame: RecordedFrame) -> bytes:
     try:
         fd = os.open(frame.path, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd, "rb") as source:
@@ -136,7 +136,7 @@ def _read_frame(frame: RecordedFrame) -> bytes:
 
 def infer_recorded_person(probe: RecordedProbe) -> RecordedPersonTrack:
     """Return two observed positions of one confirmed person or fail closed."""
-    first, second = (_read_frame(frame) for frame in probe.frames)
+    first, second = (read_recorded_frame(frame) for frame in probe.frames)
     detector = RFDetrNanoDetector.from_checkpoint(
         probe.checkpoint_path, probe.checkpoint_sha256,
         threshold=probe.threshold)

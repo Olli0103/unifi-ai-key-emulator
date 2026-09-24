@@ -1,8 +1,8 @@
 """Bounded, independent smart-zone geometry for AI Port object candidates.
 
-Coordinates and field names follow the observed controller interface. The
-predicate deliberately requires the entire detection box inside a simple
-polygon. It favors missed detections over publishing outside a camera zone.
+Coordinates and field names follow the observed controller interface. A
+candidate needs at least 90% of its box area inside a validated zone. This is
+a provisional compatibility rule, not a proven Protect Person threshold.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ _SUPPORTED_TYPES = frozenset({"person", "vehicle", "animal"})
 _MAX_ZONES = 32
 _MAX_VERTICES = 32
 _EPSILON = 1e-9
+_MIN_BOX_OVERLAP = 0.9
 
 
 class ZoneError(ValueError):
@@ -39,13 +40,46 @@ class SmartZone:
         x1, y1, x2, y2 = box
         if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
             return False
-        corners = ((x1, y1), (x1, y2), (x2, y1), (x2, y2))
-        if not all(_strict_inside(point, self.points) for point in corners):
-            return False
-        rectangle = ((x1, y1), (x2, y1), (x2, y2), (x1, y2))
-        return not any(_segments_intersect(a, b, c, d)
-                       for a, b in _edges(rectangle)
-                       for c, d in _edges(self.points))
+        clipped = self.points
+        for axis, bound, keep_greater in ((0, x1, True), (0, x2, False),
+                                          (1, y1, True), (1, y2, False)):
+            clipped = _clip_half_plane(clipped, axis, bound, keep_greater)
+            if not clipped:
+                return False
+        box_area = (x2 - x1) * (y2 - y1)
+        return _area(clipped) / box_area >= _MIN_BOX_OVERLAP - _EPSILON
+
+
+def _clip_half_plane(points: tuple[tuple[float, float], ...], axis: int,
+                     bound: float, keep_greater: bool) -> tuple[tuple[float, float], ...]:
+    """Clip a simple polygon against one side of an axis-aligned box."""
+    if not points:
+        return ()
+
+    def inside(point: tuple[float, float]) -> bool:
+        return point[axis] >= bound if keep_greater else point[axis] <= bound
+
+    def crossing(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float]:
+        factor = (bound - a[axis]) / (b[axis] - a[axis])
+        other = a[1 - axis] + factor * (b[1 - axis] - a[1 - axis])
+        return (bound, other) if axis == 0 else (other, bound)
+
+    result = []
+    previous = points[-1]
+    previous_inside = inside(previous)
+    for current in points:
+        current_inside = inside(current)
+        if current_inside != previous_inside:
+            result.append(crossing(previous, current))
+        if current_inside:
+            result.append(current)
+        previous, previous_inside = current, current_inside
+    return tuple(result)
+
+
+def _area(points: tuple[tuple[float, float], ...]) -> float:
+    return abs(sum(a[0] * b[1] - b[0] * a[1]
+                   for a, b in _edges(points))) / 2
 
 
 def _edges(points: tuple[tuple[float, float], ...]):
@@ -76,25 +110,10 @@ def _segments_intersect(a, b, c, d) -> bool:
             or _on_segment(c, d, a) or _on_segment(c, d, b))
 
 
-def _strict_inside(point: tuple[float, float],
-                   polygon: tuple[tuple[float, float], ...]) -> bool:
-    x, y = point
-    inside = False
-    for a, b in _edges(polygon):
-        if _on_segment(a, b, point):
-            return False
-        if (a[1] > y) != (b[1] > y):
-            crossing_x = a[0] + (y - a[1]) * (b[0] - a[0]) / (b[1] - a[1])
-            if crossing_x > x:
-                inside = not inside
-    return inside
-
-
 def _simple_polygon(points: tuple[tuple[float, float], ...]) -> bool:
     if len(set(points)) != len(points):
         return False
-    area = sum(a[0] * b[1] - b[0] * a[1] for a, b in _edges(points)) / 2
-    if abs(area) <= _EPSILON:
+    if _area(points) <= _EPSILON:
         return False
     edges = tuple(_edges(points))
     for i, (a, b) in enumerate(edges):

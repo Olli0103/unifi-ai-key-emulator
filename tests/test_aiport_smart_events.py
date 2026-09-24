@@ -34,6 +34,8 @@ def test_leave_payload_keeps_the_tracked_object_for_class_association():
     assert payload["displayTimeoutMSec"] == 1000
     assert payload["zonesStatus"] == {}
     assert payload["objectTypes"] == ["person"]
+    assert payload["trackerIDAttrMap"] == {
+        "4": {"objectType": "person", "zone": []}}
     assert payload["descriptors"][0] == {
         "trackerID": 4, "name": "person", "confidenceLevel": 87,
         "coord": [100, 200, 300, 500], "objectType": "person",
@@ -42,18 +44,36 @@ def test_leave_payload_keeps_the_tracked_object_for_class_association():
     }
 
 
-def test_moving_payload_updates_track_and_preserves_zone_status():
+def test_moving_payload_updates_track_without_new_zone_transition():
     moving = TrackChange("moving", 4, "person", "person", 0.91,
                          (0.12, 0.2, 0.42, 0.7))
     payload = smart_event_payload("2A1122334455", moving,
                                   edge="moving", clock_wall_ms=1_700_000_001_000,
                                   zone_ids=(7,))
     assert payload["edgeType"] == "moving"
-    assert payload["zonesStatus"] == {"7": {"status": "moving", "level": 91}}
+    assert payload["zonesStatus"] == {}
     assert payload["descriptors"][0]["trackerID"] == 4
     assert payload["descriptors"][0]["objectType"] == "person"
     assert payload["descriptors"][0]["zones"] == [7]
     assert payload["descriptors"][0]["confidenceLevel"] == 91
+
+
+def test_recorded_track_can_carry_one_validated_first_seen_time_across_edges():
+    first = 1_700_000_000_000
+    for edge, clock in (("enter", first), ("moving", first + 2000),
+                        ("leave", first + 4000)):
+        payload = smart_event_payload(
+            "2A1122334455", PERSON, edge=edge, clock_wall_ms=clock,
+            first_shown_ms=first)
+        assert payload["descriptors"][0]["firstShownTimeMs"] == first
+
+
+@pytest.mark.parametrize("first_seen", [True, 0, 1_700_000_000_001])
+def test_first_seen_time_must_be_an_earlier_positive_integer(first_seen):
+    with pytest.raises(SmartEventError):
+        smart_event_payload("2A1122334455", PERSON, edge="enter",
+                            clock_wall_ms=1_700_000_000_000,
+                            first_shown_ms=first_seen)
 
 
 def test_zone_enter_and_leave_keep_same_numeric_zone_id():
@@ -67,6 +87,9 @@ def test_zone_enter_and_leave_keep_same_numeric_zone_id():
     assert leave["displayTimeoutMSec"] == 1000
     assert leave["descriptors"][0]["zones"] == [7]
     assert leave["descriptors"][0]["trackerID"] == enter["descriptors"][0]["trackerID"]
+    assert leave["trackerIDAttrMap"] == {
+        "4": {"objectType": "person", "zone": [7]}}
+    assert enter["trackerIDAttrMap"] == {}
 
 
 @pytest.mark.parametrize("kind,label,expected_name", [
@@ -81,6 +104,11 @@ def test_other_object_events_never_claim_a_recognized_plate(kind, label, expecte
     assert payload["descriptors"][0]["objectType"] == kind
     assert payload["descriptors"][0]["name"] == expected_name
     assert payload["descriptors"][0]["zones"] == [3]
+    leave = smart_event_payload("2A1122334455", track, edge="leave",
+                                clock_wall_ms=1_700_000_001_000, zone_ids=(3,))
+    assert leave["trackerIDAttrMap"] == {
+        "2": {"objectType": kind, "zone": [3]}}
+    assert "matchedName" not in leave["trackerIDAttrMap"]["2"]
 
 
 @pytest.mark.parametrize("track,edge,clock", [
