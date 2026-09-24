@@ -2,10 +2,13 @@
 
 import json
 import time
+from copy import deepcopy
 
 import pytest
 
 from aikey.aiport_nas_compose import build_nas_compose
+from aikey.aiport_deployment import plan_ai_ports
+from aikey.aiport_instance_state import provision_slot
 from aikey.aiport_nas_reconcile import ReconcileError, reconcile, verify_inputs
 from test_aiport_nas_compose import fixture
 
@@ -46,6 +49,44 @@ def test_fresh_inventory_permits_selected_slot_with_unaddressed_future_slot(tmp_
     plan["ai_port_instances_without_address"] = 0
     with pytest.raises(ReconcileError, match="inventory"):
         verify_inputs(plan, manifest, report, selected, options)
+
+
+def test_missing_resolution_on_untouched_mac_slot_does_not_block_nas_slot(tmp_path):
+    old_plan, states, options, _, report = inputs(tmp_path)
+    old_plan = plan_ai_ports(report, camera_scope="legacy-and-g3-g5",
+                             device_ips=["192.168.10.135", "192.168.10.136"],
+                             ai_key_ip="192.168.10.98")
+    enriched = deepcopy(report)
+    for row in enriched["cameras"][:2]:
+        row["recording_resolution"] = "HD"
+    enriched["cameras"].append({**enriched["cameras"][2],
+                                "id": f"{4:024x}", "recording_resolution": None})
+    plan = plan_ai_ports(enriched, previous_plan=old_plan,
+                         camera_scope="legacy-and-g3-g5",
+                         device_ips=["192.168.10.135", "192.168.10.136"],
+                         ai_key_ip="192.168.10.98")
+    assert plan["instances"][0]["reserved_capacity"] == "9/10"
+    raw = deepcopy(enriched)
+    for row in raw["cameras"]:
+        row.pop("recording_resolution", None)
+    # Protect may advertise AI Port-generated smart types on a formerly legacy
+    # camera; its identity and slot assignment remain unchanged.
+    raw["cameras"][0]["processing_class"] = "smart_event_candidate"
+
+    selected = {2: states[2]}
+    manifest = build_nas_compose(plan, selected, **options)
+    assert verify_inputs(plan, manifest, raw, selected, options) == ["aiport_slot_2"]
+
+    first_state = states[2].parent / "slot-1"
+    provision_slot(plan, 1, first_state, controller_ip=options["controller_ip"],
+                   controller_cert_file=states[2] / "controller-ca.pem",
+                   controller_pin=options["controller_pin"])
+    with pytest.raises(ReconcileError, match="Selected NAS slot"):
+        verify_inputs(plan, build_nas_compose(plan, {1: first_state}, **options),
+                      raw, {1: first_state}, options)
+    raw["cameras"].pop()
+    with pytest.raises(ReconcileError, match="inventory"):
+        verify_inputs(plan, manifest, raw, selected, options)
 
 
 @pytest.mark.parametrize("mutation", ["host_port", "extra_service", "changed_ip"])

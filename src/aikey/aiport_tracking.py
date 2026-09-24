@@ -14,6 +14,7 @@ from .aiport_detection import ObjectObservation
 
 _KINDS = frozenset({"person", "vehicle", "animal"})
 _MAX_OBSERVATIONS_PER_FRAME = 100
+_MAX_REACQUIRE_SECONDS = 30.0
 
 
 class TrackingError(ValueError):
@@ -81,8 +82,10 @@ class TemporalTracker:
 
     ``update`` accepts one frame's observations at a nondecreasing monotonic
     timestamp. A track enters after ``min_hits`` consecutive matching frames.
-    An active track leaves once its last sighting exceeds ``max_gap_seconds``.
-    Tentative tracks disappear on a missed frame. Nothing is persisted.
+    An active track leaves after an unmatched observation frame exceeds
+    ``max_gap_seconds``. A matching box can bridge a short inference delay,
+    but not a stream outage longer than 30 seconds. Tentative tracks disappear
+    on a missed frame. Nothing is persisted.
     """
 
     def __init__(self, *, min_hits: int = 2, max_gap_seconds: float = 3.0,
@@ -118,7 +121,9 @@ class TemporalTracker:
 
         changes = []
         for track_id, track in tuple(self._tracks.items()):
-            if now - track.last_seen > self.max_gap_seconds:
+            gap = now - track.last_seen
+            if (not track.active and gap > self.max_gap_seconds
+                    or track.active and gap > _MAX_REACQUIRE_SECONDS):
                 if track.active:
                     changes.append(track.change("leave"))
                 del self._tracks[track_id]
@@ -149,7 +154,12 @@ class TemporalTracker:
                 changes.append(track.change("enter"))
 
         for track_id, track in tuple(self._tracks.items()):
-            if track_id not in matched_tracks and not track.active:
+            if track_id in matched_tracks:
+                continue
+            if not track.active:
+                del self._tracks[track_id]
+            elif now - track.last_seen > self.max_gap_seconds:
+                changes.append(track.change("leave"))
                 del self._tracks[track_id]
         for index, observation in enumerate(observations):
             if index in matched_observations:
