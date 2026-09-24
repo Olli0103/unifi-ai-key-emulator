@@ -41,7 +41,6 @@ _CAPACITY = {
 _PROTECT_MODEL_MAX_PIXELS = {
     "UVC G3 Instant": (1920, 1080),
     "UVC G4 Instant": (2688, 1512),
-    "UVC G4 Doorbell Pro": (1600, 1200),
     "UVC G4 Pro": (3840, 2160),
     "UVC G4 Bullet": (2688, 1512),
     "UVC G4 Dome": (2688, 1512),

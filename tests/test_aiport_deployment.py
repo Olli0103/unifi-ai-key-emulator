@@ -132,7 +132,7 @@ def test_known_legacy_models_fit_four_ports_from_fresh_inventory_and_keep_existi
                                previous_plan=previous)
     assert reconciled["ai_port_instances_required"] == 4
     assert [item["reserved_capacity"] for item in reconciled["instances"]] == [
-        "9/10", "7/10", "1", "1"]
+        "9/10", "1", "1", "1"]
     assert [item["host_ip"] for item in reconciled["instances"]] == [
         f"192.0.2.{index}" for index in range(11, 15)]
 
@@ -140,10 +140,12 @@ def test_known_legacy_models_fit_four_ports_from_fresh_inventory_and_keep_existi
 def test_model_capacity_bound_requires_an_exact_name_and_missing_resolution():
     known = plan_ai_ports(report(camera(1, model="UVC G3 Instant")))
     unknown = plan_ai_ports(report(camera(1, model="UVC G3 Instant Variant")))
+    dual_lens = plan_ai_ports(report(camera(1, model="UVC G4 Doorbell Pro")))
     declared = plan_ai_ports(report(camera(1, model="UVC G3 Instant",
                                            resolution="4K")))
     assert known["instances"][0]["reserved_capacity"] == "1/5"
     assert unknown["instances"][0]["reserved_capacity"] == "1/2"
+    assert dual_lens["instances"][0]["reserved_capacity"] == "1/2"
     assert declared["instances"][0]["reserved_capacity"] == "1/2"
     assert all(plan["instances"][0]["resolution_unverified"]
                for plan in (known, unknown))
