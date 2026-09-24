@@ -606,12 +606,15 @@ class CandidateService:
                          or "diagnostic_recorded_event_probe" in config else None)
         self._camera_engine: CameraPolicyEngine | None = None
         self._inference: FairInference | None = None
+        self._pool_camera_order: tuple[str, ...] = ()
+        self._pool_policy_errors: dict[str, str] = {}
         if "diagnostic_pool_detector" in config or "live_pool_detector" in config:
             live_pool = "live_pool_detector" in config
             detector = config["live_pool_detector" if live_pool
                               else "diagnostic_pool_detector"]
             cameras = [stream["camera_mac"] for stream in config[
                 "paired_streams" if live_pool else "diagnostic_streams"]]
+            self._pool_camera_order = tuple(normalize_mac(camera) for camera in cameras)
             self._camera_engine = CameraPolicyEngine(
                 cameras,
                 max_events_per_camera=(detector["max_events_per_hour"] if live_pool
@@ -793,10 +796,11 @@ class CandidateService:
             self._inference.discard_pending(camera)
         await self._publish_pool_candidates(engine.replace_policy(camera, None))
         parsed = None
+        rejection_reason = None
         try:
             parsed = parse_smart_settings(payload, camera_mac=camera)
-        except SmartSettingsError:
-            pass
+        except SmartSettingsError as exc:
+            rejection_reason = str(exc)
         else:
             self.smart_settings_subset_matches += 1
         active = {stream["deviceID"] for stream in self.ingress.list_streams()}
@@ -806,9 +810,28 @@ class CandidateService:
                 and self._inference.is_available(camera)
                 and self._pool_event_enabled()):
             engine.replace_policy(camera, parsed)
+            self._pool_policy_errors.pop(camera, None)
             await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 0, {})
             self.smart_settings_probe_acks += 1
             return
+        if rejection_reason not in {
+                "invalid_smart_settings", "wrong_camera", "unsupported_smart_feature",
+                "invalid_smart_zone", "unsupported_smart_zone"}:
+            rejection_reason = None
+        if rejection_reason is None:
+            if parsed is None:
+                rejection_reason = "invalid_smart_settings"
+            elif not parsed.enabled_types:
+                rejection_reason = "disabled_policy"
+            elif not parsed.enabled_types <= set(self._pool_smart_types()):
+                rejection_reason = "unsupported_type"
+            elif camera not in active:
+                rejection_reason = "inactive_stream"
+            elif self._inference is None or not self._inference.is_available(camera):
+                rejection_reason = "inference_unavailable"
+            else:
+                rejection_reason = "event_disabled"
+        self._pool_policy_errors[camera] = rejection_reason
         await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
                                   {"description": "smart_detection_unavailable"})
         self.smart_settings_requests_rejected += 1
@@ -1334,11 +1357,13 @@ class CandidateService:
             "live_event_budget_healthy": live_budget_healthy,
             "pool_inference": (self._inference.snapshot()
                                if self._inference is not None else None),
-            "pool_cameras": ([dict(inference, **policy)
-                              for inference, policy in zip(
+            "pool_cameras": ([dict(inference, **policy,
+                                    policy_rejection=self._pool_policy_errors.get(
+                                        self._pool_camera_order[index]))
+                              for index, (inference, policy) in enumerate(zip(
                                   self._inference.camera_snapshot(),
                                   self._camera_engine.camera_snapshot(now=time.monotonic()),
-                                  strict=True)]
+                                  strict=True))]
                              if self._inference is not None
                              and self._camera_engine is not None else None),
             "last_stream_error": self.last_stream_error,
