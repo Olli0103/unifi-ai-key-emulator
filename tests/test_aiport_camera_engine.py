@@ -37,6 +37,14 @@ def person(score=0.9, box=INSIDE):
     return ObjectObservation("person", "person", score, box)
 
 
+def multiclass_policy(camera, kinds=("person", "vehicle", "animal")):
+    return parse_smart_settings({
+        "deviceID": camera, "algoVersion": "beta",
+        "enableSmartDetect": list(kinds),
+        "eventStartMSec": 1000, "eventStopMSec": 3000,
+    }, camera_mac=camera)
+
+
 def test_two_cameras_keep_tracks_zones_and_revoke_independent():
     engine = CameraPolicyEngine([FIRST, SECOND])
     engine.replace_policy(FIRST, policy(FIRST, zone=True))
@@ -127,3 +135,58 @@ def test_bad_model_observation_is_rejected_even_when_policy_would_filter_it():
     malformed = ObjectObservation("vehicle", "vehicle", 0.9, (0.9, 0.2, 0.1, 0.8))
     with pytest.raises(TrackingError, match="invalid_tracking_observation"):
         engine.observe(FIRST, (malformed,), now=1)
+
+
+def test_one_camera_tracks_person_vehicle_and_animal_independently():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=3)
+    engine.replace_policy(FIRST, multiclass_policy(FIRST))
+    observations = (person(), ObjectObservation("vehicle", "car", 0.91, INSIDE),
+                    ObjectObservation("animal", "dog", 0.92, INSIDE))
+    assert engine.observe(FIRST, observations, now=1) == ()
+    entered = engine.observe(FIRST, observations, now=2)
+    assert {item.change.kind for item in entered} == {"person", "vehicle", "animal"}
+    assert len({item.change.track_id for item in entered}) == 3
+    assert all(item.change.edge == "enter" for item in entered)
+    assert engine.observe(FIRST, observations, now=2.5) == ()
+    moving = engine.observe(FIRST, observations, now=3.5)
+    assert {(item.change.kind, item.change.track_id) for item in moving} == {
+        (item.change.kind, item.change.track_id) for item in entered}
+    assert all(item.change.edge == "moving" for item in moving)
+    left = engine.observe(FIRST, (), now=7)
+    assert {(item.change.kind, item.change.track_id) for item in left} == {
+        (item.change.kind, item.change.track_id) for item in entered}
+    assert all(item.change.edge == "leave" for item in left)
+
+
+def test_multiclass_revoke_closes_only_its_camera_tracks():
+    engine = CameraPolicyEngine([FIRST, SECOND], max_events_per_camera=3)
+    engine.replace_policy(FIRST, multiclass_policy(FIRST))
+    engine.replace_policy(SECOND, policy(SECOND))
+    first_observations = (person(), ObjectObservation("vehicle", "car", 0.9, INSIDE))
+    assert engine.observe(FIRST, first_observations, now=1) == ()
+    assert engine.observe(SECOND, (person(),), now=1) == ()
+    entered = engine.observe(FIRST, first_observations, now=2)
+    assert len(entered) == 2
+    second, = engine.observe(SECOND, (person(),), now=2)
+    closed = engine.replace_policy(FIRST, None)
+    assert {(item.change.kind, item.change.track_id) for item in closed} == {
+        (item.change.kind, item.change.track_id) for item in entered}
+    assert all(item.change.edge == "leave" and item.camera_mac == FIRST
+               for item in closed)
+    still_active, = engine.observe(SECOND, (person(),), now=3.5)
+    assert (still_active.camera_mac, still_active.change.track_id,
+            still_active.change.edge) == (SECOND, second.change.track_id, "moving")
+
+
+def test_event_budget_applies_across_classes_on_one_camera():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=2)
+    engine.replace_policy(FIRST, multiclass_policy(FIRST))
+    observations = (person(), ObjectObservation("vehicle", "car", 0.9, INSIDE),
+                    ObjectObservation("animal", "dog", 0.9, INSIDE))
+    assert engine.observe(FIRST, observations, now=1) == ()
+    entered = engine.observe(FIRST, observations, now=2)
+    assert {item.change.kind for item in entered} == {"person", "vehicle"}
+    engine.replace_policy(FIRST, None)
+    engine.replace_policy(FIRST, multiclass_policy(FIRST))
+    assert engine.observe(FIRST, observations, now=3) == ()
+    assert engine.observe(FIRST, observations, now=4) == ()
