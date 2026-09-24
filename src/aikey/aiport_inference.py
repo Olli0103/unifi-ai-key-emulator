@@ -1,4 +1,4 @@
-"""Bounded, fair inference for an explicitly allowlisted AI Port camera pool.
+"""Fair inference for an explicitly allowlisted AI Port camera pool.
 
 This schedules model calls; it does not enable a stream or publish a Protect
 event. A caller supplies a pinned local model and an event-candidate observer.
@@ -30,12 +30,13 @@ class FairInference:
 
     def __init__(self, camera_macs: list[str], *,
                  load_detector: Callable[[], Detector],
-                 on_result: Callable[[str, tuple[ObjectObservation, ...], int], Awaitable[None]],
+                 on_result: Callable[[str, tuple[ObjectObservation, ...], int, bytes], Awaitable[None]],
                  on_unavailable: Callable[[str], Awaitable[None]] | None = None,
-                 max_frames_per_camera: int):
+                 max_frames_per_camera: int | None):
         if (not isinstance(camera_macs, list) or not 1 <= len(camera_macs) <= 5
-                or type(max_frames_per_camera) is not int
-                or not 1 <= max_frames_per_camera <= 120
+                or max_frames_per_camera is not None
+                and (type(max_frames_per_camera) is not int
+                     or not 1 <= max_frames_per_camera <= 120)
                 or not callable(load_detector) or not callable(on_result)
                 or on_unavailable is not None and not callable(on_unavailable)):
             raise IngressError("invalid_inference_policy")
@@ -69,7 +70,8 @@ class FairInference:
         if type(generation) is not int or generation < 0:
             raise IngressError("invalid_policy_generation")
         if (self._closed or self._global_failure or camera in self._disabled
-                or self._attempts[camera] >= self._max_frames):
+                or self._max_frames is not None
+                and self._attempts[camera] >= self._max_frames):
             self.dropped_frames += 1
             return
         if camera in self._pending:
@@ -112,7 +114,7 @@ class FairInference:
                     validate_observation(observation)
                 if self._closed:
                     return
-                await self._on_result(camera, result, generation)
+                await self._on_result(camera, result, generation, frame)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -124,7 +126,8 @@ class FairInference:
                 await self._notify_unavailable(camera)
             else:
                 self._successes[camera] += 1
-                if self._attempts[camera] >= self._max_frames:
+                if (self._max_frames is not None
+                        and self._attempts[camera] >= self._max_frames):
                     self._pending.pop(camera, None)
                     await self._notify_unavailable(camera)
 
@@ -157,7 +160,8 @@ class FairInference:
             raise IngressError("camera_not_authorized")
         return (not self._closed and not self._global_failure
                 and camera not in self._disabled
-                and self._attempts[camera] < self._max_frames)
+                and (self._max_frames is None
+                     or self._attempts[camera] < self._max_frames))
 
     async def close(self) -> None:
         self._closed = True

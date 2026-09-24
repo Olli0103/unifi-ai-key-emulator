@@ -39,7 +39,8 @@ class SmartSnapshot:
         payload["smartDetectSnapshotFullFoVHeight"] = self.full_fov_height
 
 
-def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int) -> SmartSnapshot:
+def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int, *,
+                        filename_track_id: int | None = None) -> SmartSnapshot:
     """Keep one cropped JPEG in memory until Protect requests it."""
     if not isinstance(frame, bytes) or len(frame) > 2_000_000 or len(frame) < 16:
         raise SnapshotError("invalid_snapshot_frame")
@@ -47,6 +48,10 @@ def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int) -> Smar
         raise SnapshotError("invalid_snapshot_track")
     if type(wall_ms) is not int or wall_ms <= 0:
         raise SnapshotError("invalid_snapshot_time")
+    if (filename_track_id is not None
+            and (type(filename_track_id) is not int
+                 or not 1 <= filename_track_id <= 2**63 - 1)):
+        raise SnapshotError("invalid_snapshot_track")
     try:
         with Image.open(BytesIO(frame)) as image:
             if image.format != "JPEG" or not 1 <= image.width <= 4096 or not 1 <= image.height <= 4096:
@@ -76,8 +81,9 @@ def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int) -> Smar
     full_fov_jpeg = full_fov.getvalue()
     if len(full_fov_jpeg) > 2_000_000:
         raise SnapshotError("snapshot_too_large")
-    filename = f"smartdetectsnap_zone_{change.track_id}{wall_ms}.jpg"
-    full_fov_filename = f"smartdetectsnap_zone_{change.track_id}{wall_ms}_fullfov.jpg"
+    filename_id = change.track_id if filename_track_id is None else filename_track_id
+    filename = f"smartdetectsnap_zone_{filename_id}{wall_ms}.jpg"
+    full_fov_filename = f"smartdetectsnap_zone_{filename_id}{wall_ms}_fullfov.jpg"
     metadata = {
         "clockBestWall": wall_ms,
         "smartDetectSnapshot": filename,

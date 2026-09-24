@@ -2,7 +2,7 @@
 
 For the Linux NAS multi-instance network manifest, see [AI Port NAS Compose](aiport-nas-compose.md).
 
-This profile presents a separate AI Port identity, keeps an outbound certificate-pinned camera WebSocket to Protect and exposes an HTTPS management listener. Camera ingress is off by default. A private `paired_stream` policy can keep one exact camera paired and decoding while separate, expiring permits control inference and event publication. The profile has no camera credentials and does not advertise AI detection by default. Its management-token adoption handshake has passed synthetic tests; a separate existing-device reconnect was accepted by Protect 7.3.60 and survived a container restart. One legacy camera paired and supplied frames to the optional local model during a bounded test. A later, one-use recorded-frame trial sent a native smart event and showed a Smart card on that camera's Protect timeline; continuous live detection and feature parity remain unverified.
+This profile presents a separate AI Port identity, keeps an outbound certificate-pinned camera WebSocket to Protect and exposes an HTTPS management listener. Camera ingress is off by default. A private `paired_stream` policy can keep one exact camera paired and decoding. Explicit live or expiring diagnostic policies control inference and event publication. The profile has no camera credentials and does not advertise AI detection by default. Its management-token adoption handshake has passed synthetic tests; a separate existing-device reconnect was accepted by Protect 7.3.60 and survived a container restart. One legacy camera paired and supplied frames to the optional local model. A one-use recorded-frame trial sent a native smart event and showed a Smart card on that camera's Protect timeline. The deployed Flur profile has analyzed over 1,000 frames without a diagnostic expiry, but a live Person event, multi-camera native operation and feature parity remain unverified.
 
 For a multi-camera stream trial, `/healthz` reports `active_streams` and `streams_with_decoded_frames` without camera identifiers. The latter counts only active streams that have decoded at least one frame. Compare both counts during the trial; an aggregate frame total alone cannot show that every paired camera supplied frames. These counters do not prove detection or event persistence.
 
@@ -69,6 +69,24 @@ An explicit `live_detector` policy keeps local detection running on that one pai
 ```
 
 This opt-in mode accepts Protect's validated one-camera smart settings, including zone and reverification checks. It sends native enter, moving and leave events and offers an event snapshot through the pinned controller upload path. The budget limits new event entries in a rolling hour **within one process lifetime**; a restart resets it. A detector failure withdraws smart readiness without unpairing the camera. The paired stream remains available when the policy is removed. Multi-person tracking, simultaneous classes, durable rate limits, sustained resource use, and loaded Protect timeline/filter behavior still need native validation. Do not treat this single-camera mode as AI Port feature parity.
+
+The live multi-camera profile uses one AI Port identity for two to five explicitly allowed cameras. Replace `paired_stream` and `live_detector` with `paired_streams` and `live_pool_detector`; never combine them with a `diagnostic_*` field. Each stream has its own exact camera MAC, controller source address and local FFmpeg path. For example:
+
+```json
+"paired_streams": [
+  {"camera_mac": "CAMERA_1_MAC", "source_ip": "CONTROLLER_PRIVATE_IP", "ffmpeg_path": "/usr/bin/ffmpeg"},
+  {"camera_mac": "CAMERA_2_MAC", "source_ip": "CONTROLLER_PRIVATE_IP", "ffmpeg_path": "/usr/bin/ffmpeg"}
+],
+"live_pool_detector": {
+  "checkpoint_path": "/state/models/rf-detr-nano.pth",
+  "checkpoint_sha256": "SHA256_OF_THE_EXACT_LOCAL_CHECKPOINT",
+  "threshold": 0.3,
+  "smart_types": ["person", "vehicle", "animal"],
+  "max_events_per_hour": 120
+}
+```
+
+The shared model keeps at most one queued frame per camera and takes fair turns without a lifetime frame ceiling. Each camera keeps a separate validated Protect policy, zone gate, tracker and rolling event budget. A failed model call disables only that camera. Native enter and leave events carry the original camera ID; leave events can supply the matching crop and full-frame JPEG through the pinned, mutual-TLS upload route. The instance still enforces the observed ten-point stream-capacity budget, so high-resolution cameras may need another AI Port identity and LAN address. Synthetic two-camera tests cover isolation and snapshot routing. Pairing two cameras on one live instance, original-camera timeline indexing, sustained resource use and automatic all-camera reconciliation remain `needs_evidence`; keep the current Flur deployment on its verified single-camera profile until those native checks pass.
 
 Keep the camera paired between diagnostics. Expiring or removing an inference permit must leave `paired_stream` and the adopted identity intact; unpair only when the operator asks to remove the camera or a verified fault requires it. Verify the control connection and decoded stream after replacing the container. Neither pairing nor frame decoding alone proves Person indexing.
 

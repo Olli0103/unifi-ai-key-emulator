@@ -188,6 +188,21 @@ async def test_snapshot_upload_uses_pinned_multipart_payload(tmp_path, monkeypat
         await service.stop()
 
 
+def test_snapshot_cleanup_removes_expired_single_camera_media(tmp_path):
+    config = fixture_state(tmp_path)
+    service = CandidateService(config, tmp_path)
+    snapshot = SmartSnapshot("crop.jpg", b"crop", {}, "full.jpg", b"full", 64, 64)
+    expired = time.monotonic() - 1
+    service._event_snapshot = snapshot
+    service._event_snapshot_expires = expired
+    service._pending_snapshot = (snapshot, expired)
+    service._pending_full_fov = (snapshot, expired)
+    service._prune_snapshots()
+    assert service._event_snapshot is None
+    assert service._pending_snapshot is None
+    assert service._pending_full_fov is None
+
+
 def test_candidate_requires_private_stable_identity(tmp_path):
     config = fixture_state(tmp_path)
     assert load_config(tmp_path / "config.json") == config
@@ -323,6 +338,36 @@ def test_live_detector_requires_exact_paired_camera_and_valid_budget(tmp_path):
     detector["max_events_per_hour"] = 0
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     with pytest.raises(CandidateError, match="live detector"):
+        load_config(tmp_path / "config.json")
+
+
+def test_live_pool_requires_unique_allowlisted_cameras_and_local_detector(tmp_path):
+    config = fixture_state(tmp_path)
+    cameras = ("2A1122334455", "2A1122334456")
+    config["paired_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1",
+         "ffmpeg_path": sys.executable} for mac in cameras]
+    config["live_pool_detector"] = {
+        "checkpoint_path": str(tmp_path / "model.pth"),
+        "checkpoint_sha256": "a" * 64, "threshold": 0.3,
+        "smart_types": ["person", "vehicle"], "max_events_per_hour": 120}
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    loaded = load_config(tmp_path / "config.json")
+    assert [item["camera_mac"] for item in loaded["paired_streams"]] == list(cameras)
+
+    config["paired_streams"][1]["camera_mac"] = cameras[0]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="Duplicate live camera"):
+        load_config(tmp_path / "config.json")
+    config["paired_streams"][1]["camera_mac"] = cameras[1]
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="Invalid live camera pool"):
+        load_config(tmp_path / "config.json")
+    del config["diagnostic_hello_until"]
+    config["live_pool_detector"]["smart_types"] = ["person", "person"]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="live pool detector"):
         load_config(tmp_path / "config.json")
 
 
@@ -1931,6 +1976,138 @@ async def test_pool_multiclass_probe_keeps_camera_policies_and_tracks_separate(
     assert (leaves[-1]["deviceID"], leaves[-1]["objectTypes"]) == (
         cameras[1], ["person"])
     await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_live_pool_routes_two_camera_events_and_pinned_snapshots(
+        tmp_path, monkeypatch):
+    config = fixture_state(tmp_path)
+    cameras = ("2A1122334455", "2A1122334456")
+    config["paired_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1",
+         "ffmpeg_path": sys.executable} for mac in cameras]
+    config["live_pool_detector"] = {
+        "checkpoint_path": str(tmp_path / "model.pth"),
+        "checkpoint_sha256": "a" * 64, "threshold": 0.3,
+        "smart_types": ["person", "vehicle"], "max_events_per_hour": 120}
+    frames = []
+    for color in ("red", "blue"):
+        image = BytesIO()
+        Image.new("RGB", (640, 360), color).save(image, format="JPEG")
+        frames.append(image.getvalue())
+    observations = (
+        ObjectObservation("person", "person", 0.9, (0.2, 0.2, 0.5, 0.8)),
+        ObjectObservation("vehicle", "car", 0.9, (0.2, 0.2, 0.6, 0.7)))
+
+    class Model:
+        def detect(self, frame):
+            return (observations[frames.index(frame)],)
+
+    monkeypatch.setattr(RFDetrNanoDetector, "from_checkpoint", lambda *a, **k: Model())
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": mac} for mac in cameras]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    for index, (camera, kind) in enumerate(zip(cameras, ("person", "vehicle")), 1):
+        await service._send_stream_status(sink, streaming=True, camera_mac=camera)
+        assert sink.messages[-1]["payload"]["isSmartDetectReady"] is True
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "ChangeSmartDetectSettings", "messageId": index,
+            "payload": {"deviceID": camera, "algoVersion": "beta",
+                        "enableSmartDetect": [kind], "eventStartMSec": 1000,
+                        "eventStopMSec": 3000, "zones": {}, "lines": {}}}).encode())
+        assert sink.messages[-1]["statusCode"] == 0
+    for _ in range(2):
+        for camera, frame in zip(cameras, frames):
+            await service._observe_pool_frame(camera, frame)
+            await service._inference.join()
+    entered = [message for message in sink.messages
+               if message["functionName"] == "EventSmartDetect"
+               and message["payload"]["edgeType"] == "enter"]
+    assert [(event["payload"]["deviceID"],
+             event["payload"]["descriptors"][0]["objectType"])
+            for event in entered] == list(zip(cameras, ("person", "vehicle")))
+    for camera in cameras:
+        changes = service._camera_engine.observe(camera, (), now=time.monotonic() + 4)
+        await service._publish_pool_candidates(changes)
+    left = [message for message in sink.messages
+            if message["functionName"] == "EventSmartDetect"
+            and message["payload"]["edgeType"] == "leave"]
+    assert len(left) == 2
+    assert all("smartDetectSnapshots" in event["payload"] for event in left)
+    snapshots = [service._pool_pending_snapshots[
+        event["payload"]["smartDetectSnapshots"][0]["smartDetectSnapshot"]]
+        for event in left]
+    assert [item.camera_mac for item in snapshots] == list(cameras)
+    assert snapshots[0].snapshot.filename != snapshots[1].snapshot.filename
+
+    received = []
+
+    async def upload(request):
+        assert request.transport.get_extra_info("peercert") is not None
+        reader = await request.multipart()
+        field = await reader.next()
+        received.append((field.filename, await field.read()))
+        return web.json_response({"success": True})
+
+    app = web.Application()
+    app.router.add_post("/internal/camera-upload/{token}", upload)
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.load_cert_chain(tmp_path / "device.crt", tmp_path / "device.key")
+    server_context.load_verify_locations(cafile=tmp_path / "device.crt")
+    server_context.verify_mode = ssl.CERT_REQUIRED
+    server = TestServer(app)
+    await server.start_server(ssl=server_context)
+    url = str(server.make_url("/internal/camera-upload/" +
+                              "01234567-89ab-4def-8123-0123456789ab"))
+    monkeypatch.setattr("aikey.aiport_candidate.validated_upload_url",
+                        lambda *_args, **_kwargs: url)
+    command = {"functionName": "GetRequest", "messageId": 40,
+               "payload": {"what": "smartDetectZoneSnapshot",
+                           "filename": snapshots[0].snapshot.filename,
+                           "deviceID": cameras[1]}}
+    try:
+        await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+        assert sink.messages[-1]["statusCode"] == 5
+        assert not received
+        command["messageId"] = 41
+        command["payload"]["deviceID"] = cameras[0]
+        await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+        assert sink.messages[-1]["statusCode"] == 0
+        command["messageId"] = 42
+        command["payload"] = {"what": "smartDetectZoneSnapshotFullFoV",
+                              "filename": snapshots[1].snapshot.full_fov_filename,
+                              "deviceID": cameras[1]}
+        await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+        assert sink.messages[-1]["statusCode"] == 0
+        assert received == [
+            (snapshots[0].snapshot.filename, snapshots[0].snapshot.jpeg),
+            (snapshots[1].snapshot.full_fov_filename,
+             snapshots[1].snapshot.full_fov_jpeg)]
+        assert snapshots[0].crop_available is False
+        assert snapshots[1].full_available is False
+        assert service._inference.is_available(cameras[0])
+        assert service._inference.is_available(cameras[1])
+        for pending in service._pool_pending_snapshots.values():
+            pending.expires = time.monotonic() - 1
+        service._pool_event_snapshots[(cameras[0], 99)] = (
+            snapshots[0].snapshot, time.monotonic() - 1)
+        service._prune_snapshots()
+        assert not service._pool_pending_snapshots
+        assert not service._pool_event_snapshots
+    finally:
+        await server.close()
+        await service.stop()
 
 
 @pytest.mark.asyncio
