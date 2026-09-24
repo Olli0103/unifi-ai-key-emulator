@@ -59,6 +59,64 @@ def test_candidate_rejects_invalid_identity_and_destination(tmp_path, field, val
         load_config(tmp_path / "config.json")
 
 
+@pytest.mark.asyncio
+async def test_adopted_paired_stream_accepts_control_without_diagnostic_expiry(tmp_path):
+    config = fixture_state(tmp_path)
+    config["paired_stream"] = {"camera_mac": "2A1122334455",
+                               "source_ip": "192.168.10.1",
+                               "ffmpeg_path": sys.executable}
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    loaded = load_config(tmp_path / "config.json")
+    service = CandidateService(loaded, tmp_path)
+    assert service.ingress is not None
+    assert service._tracker is None
+    assert service._inference is None
+    service._params_agreed = True
+
+    class FakeIngress:
+        camera_mac = "2A1122334455"
+
+        async def control(self, payload):
+            assert payload == {"streaming": True}
+            return {"status": "started", "usedPoints": 1}
+
+    class FakeWebSocket:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    service.ingress = FakeIngress()
+    ws = FakeWebSocket()
+    await service._handle_diagnostic_frame(ws, json.dumps({
+        "functionName": "UiStreamControl", "messageId": 10,
+        "payload": {"streaming": True}}).encode())
+    assert [message["functionName"] for message in ws.messages] == [
+        "UiStreamControl", "EventAIPortStatus"]
+    assert ws.messages[0]["statusCode"] == 0
+    assert ws.messages[1]["payload"] == {
+        "deviceID": "2A1122334455", "isStreaming": True,
+        "isSmartDetectReady": False, "isAudioEventReady": False}
+    assert service.stream_controls_started == 1
+    assert service.stream_controls_rejected == 0
+
+
+def test_paired_stream_rejects_other_sources_and_diagnostic_overlap(tmp_path):
+    config = fixture_state(tmp_path)
+    config["paired_stream"] = {"camera_mac": "2A1122334455",
+                               "source_ip": "8.8.8.8",
+                               "ffmpeg_path": sys.executable}
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError):
+        load_config(tmp_path / "config.json")
+    config["paired_stream"]["source_ip"] = "192.168.10.1"
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError):
+        load_config(tmp_path / "config.json")
+
+
 def test_diagnostic_hello_requires_short_lived_private_config(tmp_path):
     config = fixture_state(tmp_path)
     config["diagnostic_hello_until"] = int(time.time()) + 60

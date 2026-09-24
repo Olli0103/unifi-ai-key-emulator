@@ -1,7 +1,7 @@
 """Isolated AI Port candidate for native interface discovery.
 
-Camera ingress requires an expiring, explicitly scoped private diagnostic.
-Adoption is time-bounded and requires the rotated management credential.
+A private, single-camera pairing policy can keep stream ingress available.
+AI inference and event publication remain behind expiring diagnostics.
 """
 
 from __future__ import annotations
@@ -112,7 +112,7 @@ def load_config(path: Path) -> dict:
     except (ValueError, UnicodeError) as exc:
         raise CandidateError("Invalid candidate configuration JSON") from exc
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
-    allowed = required | {"diagnostic_hello_until", "diagnostic_stream",
+    allowed = required | {"paired_stream", "diagnostic_hello_until", "diagnostic_stream",
                           "diagnostic_streams",
                           "diagnostic_detector",
                           "diagnostic_pool_detector", "diagnostic_pool_event_until",
@@ -125,6 +125,20 @@ def load_config(path: Path) -> dict:
                           "diagnostic_function_fingerprints_until"}
     if not isinstance(value, dict) or not required <= set(value) or not set(value) <= allowed:
         raise CandidateError("Candidate configuration fields do not match the isolated profile")
+    if "paired_stream" in value:
+        stream = value["paired_stream"]
+        if (not isinstance(stream, dict) or set(stream) != {
+                "camera_mac", "source_ip", "ffmpeg_path"}
+                or "diagnostic_hello_until" in value
+                or "diagnostic_stream" in value
+                or "diagnostic_streams" in value):
+            raise CandidateError("Paired stream requires one isolated camera policy")
+        try:
+            stream["camera_mac"] = normalize_mac(stream["camera_mac"])
+            stream["source_ip"] = private_source_ip(stream["source_ip"])
+            stream["ffmpeg_path"] = executable_path(stream["ffmpeg_path"])
+        except IngressError as exc:
+            raise CandidateError("Invalid paired stream policy") from exc
     if "diagnostic_hello_until" in value:
         until = value["diagnostic_hello_until"]
         if type(until) is not int or until < 0 or until > int(time.time()) + 600:
@@ -448,7 +462,9 @@ class CandidateService:
         self._current_ws: aiohttp.ClientWebSocketResponse | None = None
         self._send_lock = asyncio.Lock()
         self.ingress: AiPortIngress | AiPortIngressPool | None = None
-        if config.get("diagnostic_hello_until", 0) > time.time():
+        if "paired_stream" in config:
+            self.ingress = AiPortIngress(**config["paired_stream"])
+        elif config.get("diagnostic_hello_until", 0) > time.time():
             if "diagnostic_stream" in config:
                 self.ingress = AiPortIngress(
                     **config["diagnostic_stream"],
@@ -974,6 +990,10 @@ class CandidateService:
     def _control_enabled(self) -> bool:
         return self.adoption.adopted or time.time() < self.config.get("diagnostic_hello_until", 0)
 
+    def _stream_control_enabled(self) -> bool:
+        return ("paired_stream" in self.config
+                or time.time() < self.config.get("diagnostic_hello_until", 0))
+
     async def _manage(self, request: web.Request) -> web.Response:
         self.manage_requests += 1
         if not request.secure:
@@ -1220,7 +1240,7 @@ class CandidateService:
                 if isinstance(self.ingress, AiPortIngressPool):
                     for stream in streams:
                         await self._revoke_pool_policy(stream["deviceID"])
-                if time.time() < self.config.get("diagnostic_hello_until", 0):
+                if self._stream_control_enabled():
                     for stream in streams:
                         await self._send_stream_status(
                             ws, streaming=False,
@@ -1422,10 +1442,10 @@ class CandidateService:
                 self.stream_lists_answered += 1
             elif function == "UiStreamControl" and self.ingress is not None:
                 try:
-                    if time.time() >= self.config.get("diagnostic_hello_until", 0):
+                    if not self._stream_control_enabled():
                         raise IngressError("diagnostic_expired")
                     result = await self.ingress.control(message.get("payload"))
-                    if time.time() >= self.config["diagnostic_hello_until"]:
+                    if not self._stream_control_enabled():
                         await self.ingress.close()
                         raise IngressError("diagnostic_expired")
                 except IngressError as exc:
@@ -1443,7 +1463,7 @@ class CandidateService:
                         self.stream_controls_started += 1
                     else:
                         self.stream_controls_stopped += 1
-                    if time.time() < self.config["diagnostic_hello_until"]:
+                    if self._stream_control_enabled():
                         payload = message.get("payload")
                         camera_mac = (normalize_mac(payload["deviceID"])
                                       if isinstance(payload, dict) and "deviceID" in payload
@@ -1477,7 +1497,8 @@ class CandidateService:
             return
         self._cancel_ingress_close()
         until = self.config.get("diagnostic_hello_until", 0)
-        delay = min(self.disconnect_grace_seconds, max(0, until - time.time()))
+        delay = (self.disconnect_grace_seconds if "paired_stream" in self.config
+                 else min(self.disconnect_grace_seconds, max(0, until - time.time())))
         if delay <= 0 or not self.ingress.list_streams():
             await self.ingress.close()
             if time.time() >= until:
