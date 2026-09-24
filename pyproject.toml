@@ -18,6 +18,8 @@ dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "ruff==0.16.8", "build==1.6.1",
        "numpy>=2,<3", "pillow>=11,<13"]
 models = ["sentence-transformers>=5,<6"]
 detector = ["rfdetr==1.9.1"]
+detector-onnx-cpu = ["rfdetr==1.9.1", "onnxruntime==1.28.0"]
+detector-onnx-openvino = ["rfdetr==1.9.1", "onnxruntime-openvino==1.24.1"]
 database = ["psycopg[binary]>=3.2,<4"]
 
 [project.scripts]
@@ -30,6 +32,7 @@ local-aiport-relay = "aikey.aiport_relay:main"
 local-aiport-host-relay = "aikey.aiport_host_relay:main"
 local-aiport-nas-compose = "aikey.aiport_nas_compose:main"
 local-aiport-nas-reconcile = "aikey.aiport_nas_reconcile:main"
+local-aiport-onnx-export = "aikey.aiport_onnx_export:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -30,6 +30,7 @@ from .aiport_ingest import (
     normalize_mac, private_source_ip,
 )
 from .aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
+from .aiport_onnx_detection import OnnxRFDetrNanoDetector
 from .aiport_camera_engine import CameraEventCandidate, CameraPolicyEngine
 from .aiport_event_budget import EventBudget, EventBudgetError
 from .aiport_inference import FairInference
@@ -207,13 +208,23 @@ def load_config(path: Path) -> dict:
             stream["camera_mac"] = camera_mac
     if "live_pool_detector" in value:
         detector = value["live_pool_detector"]
+        common = {"threshold", "smart_types", "max_events_per_hour"}
+        pytorch_fields = common | {"checkpoint_path", "checkpoint_sha256"}
+        onnx_fields = common | {"inference_backend", "model_path", "model_sha256"}
+        is_onnx = isinstance(detector, dict) and "inference_backend" in detector
         if ("paired_streams" not in value or not isinstance(detector, dict)
-                or set(detector) != {"checkpoint_path", "checkpoint_sha256",
-                                     "threshold", "smart_types", "max_events_per_hour"}
-                or not isinstance(detector["checkpoint_path"], str)
-                or not Path(detector["checkpoint_path"]).is_absolute()
-                or not isinstance(detector["checkpoint_sha256"], str)
-                or not _PIN.fullmatch(detector["checkpoint_sha256"])
+                or set(detector) != (onnx_fields if is_onnx else pytorch_fields)
+                or is_onnx and (type(detector["inference_backend"]) is not str
+                                or detector["inference_backend"] not in {
+                                    "onnx_cpu", "onnx_openvino_gpu"})
+                or not isinstance(detector["model_path" if is_onnx else
+                                           "checkpoint_path"], str)
+                or not Path(detector["model_path" if is_onnx else
+                                     "checkpoint_path"]).is_absolute()
+                or not isinstance(detector["model_sha256" if is_onnx else
+                                           "checkpoint_sha256"], str)
+                or not _PIN.fullmatch(detector["model_sha256" if is_onnx else
+                                                "checkpoint_sha256"])
                 or not isinstance(detector["smart_types"], list)
                 or not 1 <= len(detector["smart_types"]) <= 3
                 or any(type(kind) is not str or kind not in {
@@ -570,9 +581,15 @@ class CandidateService:
                 event_budget=self._event_budget if live_pool else None)
             self._inference = FairInference(
                 cameras,
-                load_detector=lambda: RFDetrNanoDetector.from_checkpoint(
-                    detector["checkpoint_path"], detector["checkpoint_sha256"],
-                    threshold=detector["threshold"]),
+                load_detector=(
+                    (lambda: OnnxRFDetrNanoDetector.from_model(
+                        detector["model_path"], detector["model_sha256"],
+                        backend=detector["inference_backend"],
+                        threshold=detector["threshold"]))
+                    if live_pool and "inference_backend" in detector else
+                    (lambda: RFDetrNanoDetector.from_checkpoint(
+                        detector["checkpoint_path"], detector["checkpoint_sha256"],
+                        threshold=detector["threshold"]))),
                 on_result=self._observe_pool_result,
                 on_unavailable=self._pool_camera_unavailable,
                 max_frames_per_camera=(None if live_pool else

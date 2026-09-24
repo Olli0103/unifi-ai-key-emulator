@@ -88,6 +88,25 @@ The live multi-camera profile uses one AI Port identity for two to five explicit
 
 The shared model keeps at most one queued frame per camera and takes fair turns without a lifetime frame ceiling. Each camera keeps a separate validated Protect policy, zone gate, tracker and rolling event budget. The same private state file enforces each camera's event cap across process restarts. A failed model call disables only that camera. Native enter and leave events carry the original camera ID; leave events can supply the matching crop and full-frame JPEG through the pinned, mutual-TLS upload route. The instance enforces a ten-point stream-capacity budget using the dimensions in Protect's stream command: HD costs two points, up to 2560×1440 costs three, and larger streams cost five. Protect's displayed "2K" label did not predict the cost of one G4 Instant stream, which the candidate rejected as `stream_capacity_exceeded` after three other cameras were paired. Protect kept those three pairings. Synthetic two-camera tests cover isolation and snapshot routing. Native three-camera pairing and concurrent inference now pass on the Mac; saved Person events from the other cameras, long-running resource use and automatic all-camera reconciliation remain `needs_evidence`.
 
+### Optional ONNX inference for an Intel GPU trial
+
+The default live pool continues to use its pinned RF-DETR PyTorch checkpoint. An optional ONNX backend accepts an exported, checksum-pinned local model. Export it from the same validated Nano checkpoint with `local-aiport-onnx-export --checkpoint /private/model.pth --checkpoint-sha256 EXPECTED_SHA256 --output-dir /private/empty-directory`. The output directory must already exist, be empty, and be private. The export needed an 8 GB container memory allowance in the Apple container lab; its default allowance killed the process. The command prints the ONNX path and SHA-256. Copy that artifact into the instance's private model mount. It does not download weights.
+
+Replace only `live_pool_detector` with this block to select the Intel GPU execution provider; keep `paired_streams` and the adopted state intact:
+
+```json
+"live_pool_detector": {
+  "inference_backend": "onnx_openvino_gpu",
+  "model_path": "/state/models/rfdetr-nano.onnx",
+  "model_sha256": "SHA256_OF_THE_EXACT_ONNX_ARTIFACT",
+  "threshold": 0.3,
+  "smart_types": ["person", "vehicle", "animal"],
+  "max_events_per_hour": 120
+}
+```
+
+Build the Linux x86-64 candidate image with `--build-arg ENABLE_LOCAL_DETECTOR=1 --build-arg ONNX_RUNTIME=openvino`. The NAS must expose a working Intel GPU and its driver to the container. The backend refuses to start if the OpenVINO execution provider is unavailable or not primary; it does not intentionally switch to CPU. ONNX Runtime can still assign unsupported graph nodes to its CPU provider, so an active provider alone does not prove GPU-only computation. Measure end-to-end latency and verify native event recall on the NAS before choosing it for normal operation. `inference_backend: "onnx_cpu"` with `ONNX_RUNTIME=cpu` is available for a parity check. On the isolated Apple container CPU benchmark, ONNX Runtime was slower than PyTorch on the synthetic frame; no live camera was switched. GPU support, throughput, and detector parity on the UGREEN remain `needs_evidence`.
+
 For a missed live detection, `/healthz` now reports `pool_cameras` in the same order as the private `paired_streams` configuration. Each entry contains only an index and counters: inference attempts and successes, observation totals by class, observations that passed Protect's score gate, those that also passed its zone gate, frames with at least one eligible observation, entered events, active tracks, and remaining entries in the current rolling-hour budget. It does not expose camera IDs, scores, images or stream addresses. Compare two readings around a test walk to locate the stage that dropped it. `event_budget_healthy` reports whether the durable state was readable and the wall clock passed its rollback check; false means zero remaining entries.
 
 Keep the camera paired between diagnostics. Expiring or removing an inference permit must leave `paired_stream` and the adopted identity intact; unpair only when the operator asks to remove the camera or a verified fault requires it. Verify the control connection and decoded stream after replacing the container. Neither pairing nor frame decoding alone proves Person indexing.

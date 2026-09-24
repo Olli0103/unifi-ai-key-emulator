@@ -371,6 +371,29 @@ def test_live_pool_requires_unique_allowlisted_cameras_and_local_detector(tmp_pa
         load_config(tmp_path / "config.json")
 
 
+def test_live_pool_accepts_explicit_pinned_onnx_provider(tmp_path):
+    config = fixture_state(tmp_path)
+    config["paired_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1",
+         "ffmpeg_path": sys.executable}
+        for mac in ("2A1122334455", "2A1122334456")]
+    config["live_pool_detector"] = {
+        "inference_backend": "onnx_openvino_gpu",
+        "model_path": str(tmp_path / "model.onnx"), "model_sha256": "a" * 64,
+        "threshold": 0.3, "smart_types": ["person"], "max_events_per_hour": 120}
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["live_pool_detector"] == (
+        config["live_pool_detector"])
+    config["live_pool_detector"]["inference_backend"] = "unknown"
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="live pool detector"):
+        load_config(tmp_path / "config.json")
+    config["live_pool_detector"]["inference_backend"] = []
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="live pool detector"):
+        load_config(tmp_path / "config.json")
+
+
 @pytest.mark.asyncio
 async def test_live_detector_runs_past_probe_limit_and_enforces_hourly_event_budget(
         tmp_path):

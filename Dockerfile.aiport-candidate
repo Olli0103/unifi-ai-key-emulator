@@ -14,6 +14,13 @@ RUN if [ "$ENABLE_LOCAL_DETECTOR" = "1" ]; then \
         'torch==2.14.0+cpu' 'torchvision==0.29.0+cpu' && \
       pip install --no-cache-dir '.[detector]'; \
     fi
+ARG ONNX_RUNTIME=none
+RUN case "$ONNX_RUNTIME" in \
+      none) ;; \
+      cpu) pip install --no-cache-dir 'onnxruntime==1.28.0' ;; \
+      openvino) pip install --no-cache-dir 'onnxruntime-openvino==1.24.1' ;; \
+      *) echo 'Unsupported ONNX_RUNTIME' >&2; exit 1 ;; \
+    esac
 USER 10001:10001
 ENTRYPOINT ["local-aiport-candidate"]
 CMD ["--config", "/state/config.json"]
