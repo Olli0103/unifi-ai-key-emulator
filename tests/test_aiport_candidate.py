@@ -1,4 +1,4 @@
-"""The isolated AI Port candidate keeps camera access behind an expiring permit."""
+"""AI Port candidate keeps camera access behind explicit private policy."""
 
 import asyncio
 from dataclasses import replace
@@ -18,7 +18,7 @@ import pytest
 from PIL import Image
 
 from aikey.aiport_candidate import CandidateError, CandidateService, load_config
-from aikey.aiport_detection import ObjectObservation, RFDetrNanoDetector
+from aikey.aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
 from aikey.aiport_snapshots import SmartSnapshot
 from aikey.aiport_smart_settings import SmartPolicy
 from aikey.aiport_tracking import TrackChange
@@ -297,6 +297,143 @@ def test_paired_stream_accepts_bounded_live_detector_without_hello_expiry(tmp_pa
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     with pytest.raises(CandidateError, match="bounded detector"):
         load_config(tmp_path / "config.json")
+
+
+def test_live_detector_requires_exact_paired_camera_and_valid_budget(tmp_path):
+    config = fixture_state(tmp_path)
+    detector = {"checkpoint_path": str(tmp_path / "model.pth"),
+                "checkpoint_sha256": "a" * 64, "threshold": 0.3,
+                "smart_type": "person", "max_events_per_hour": 2}
+    config["live_detector"] = detector
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError):
+        load_config(tmp_path / "config.json")
+
+    config["paired_stream"] = {"camera_mac": "2A1122334455",
+                               "source_ip": "192.168.10.1",
+                               "ffmpeg_path": sys.executable}
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["live_detector"] == detector
+
+    config["diagnostic_event_until"] = int(time.time()) + 60
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError):
+        load_config(tmp_path / "config.json")
+    del config["diagnostic_event_until"]
+    detector["max_events_per_hour"] = 0
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="live detector"):
+        load_config(tmp_path / "config.json")
+
+
+@pytest.mark.asyncio
+async def test_live_detector_runs_past_probe_limit_and_enforces_hourly_event_budget(
+        tmp_path):
+    config = fixture_state(tmp_path)
+    config["paired_stream"] = {"camera_mac": "2A1122334455",
+                               "source_ip": "192.168.10.1",
+                               "ffmpeg_path": sys.executable}
+    config["live_detector"] = {"checkpoint_path": str(tmp_path / "model.pth"),
+                               "checkpoint_sha256": "a" * 64, "threshold": 0.3,
+                               "smart_type": "person", "max_events_per_hour": 1}
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": "2A1122334455"}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    await service._send_stream_status(sink, streaming=True)
+    assert sink.messages[-2]["payload"]["smartDetect"] == ["person"]
+    assert sink.messages[-1]["payload"]["isSmartDetectReady"] is True
+
+    settings = {"deviceID": "2A1122334455", "algoVersion": "beta",
+                "enableSmartDetect": ["person"], "eventStartMSec": 1000,
+                "eventStopMSec": 3000, "zones": {}, "lines": {},
+                "reVerificationPolicy": {kind: {"enable": False}
+                                         for kind in ("person", "vehicle", "animal")}}
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 16,
+        "responseExpected": True, "payload": settings}).encode())
+    assert sink.messages[-1]["statusCode"] == 0
+
+    class EmptyDetector:
+        @staticmethod
+        def detect(_frame):
+            return ()
+
+    service._detector = EmptyDetector()
+    for _ in range(601):
+        await service._observe_frame(b"test-frame")
+    assert service.detector_frames_succeeded == 601
+    assert service.detector_error is None
+
+    enter = TrackChange("enter", 1, "person", "person", 0.9,
+                        (0.2, 0.2, 0.5, 0.8))
+    leave = replace(enter, edge="leave")
+    await service._publish_bounded_smart_changes((enter, leave))
+    assert service.smart_events_entered == 1
+    await service._publish_bounded_smart_changes((replace(enter, track_id=2),))
+    assert service.smart_events_entered == 1
+    service._live_event_times[0] -= 3601
+    await service._publish_bounded_smart_changes((replace(enter, track_id=3),))
+    assert service.smart_events_entered == 2
+    health = json.loads((await service._health(None)).text)
+    assert health["detection_mode"] == "live"
+    assert health["live_event_budget_remaining"] == 0
+    await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_live_detector_failure_revokes_readiness_without_unpairing(tmp_path):
+    config = fixture_state(tmp_path)
+    config["paired_stream"] = {"camera_mac": "2A1122334455",
+                               "source_ip": "192.168.10.1",
+                               "ffmpeg_path": sys.executable}
+    config["live_detector"] = {"checkpoint_path": str(tmp_path / "model.pth"),
+                               "checkpoint_sha256": "a" * 64, "threshold": 0.3,
+                               "smart_type": "person", "max_events_per_hour": 1}
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": "2A1122334455"}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    settings = {"deviceID": "2A1122334455", "algoVersion": "beta",
+                "enableSmartDetect": ["person"], "eventStartMSec": 1000,
+                "eventStopMSec": 3000, "zones": {}, "lines": {},
+                "reVerificationPolicy": {kind: {"enable": False}
+                                         for kind in ("person", "vehicle", "animal")}}
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 16,
+        "responseExpected": True, "payload": settings}).encode())
+    assert sink.messages[-1]["statusCode"] == 0
+
+    class FailingDetector:
+        @staticmethod
+        def detect(_frame):
+            raise DetectionError("detector_inference_failed")
+
+    service._detector = FailingDetector()
+    await service._observe_frame(b"test-frame")
+    assert service.detector_error == "detector_inference_failed"
+    assert service._smart_policy is None
+    assert sink.messages[-1]["payload"]["isSmartDetectReady"] is False
+    assert service.ingress is not None
+    await service.stop()
 
 
 @pytest.mark.asyncio
