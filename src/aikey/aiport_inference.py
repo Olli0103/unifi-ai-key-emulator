@@ -25,10 +25,11 @@ class Detector(Protocol):
 class FairInference:
     """Use one model across at most five cameras with bounded frame queues.
 
-    A camera cannot occupy more than every other turn when another camera has
-    a pending frame. API vision may retain the first frame after an active
-    request, plus the latest frame, so a short crossing can still receive a
-    confirming observation. Other inference keeps only the latest frame.
+    Local inference rotates cameras every turn. API vision may retain the first
+    frame after an active request, plus the latest frame. One positive API
+    result may prioritize that camera's first pending confirmation frame;
+    another camera then gets the next turn. This keeps a short crossing inside
+    the tracker's time limit without letting one camera monopolize the worker.
     An inference or observer failure disables only that camera.
     """
 
@@ -78,6 +79,9 @@ class FairInference:
             camera: {"person": 0, "vehicle": 0, "animal": 0, "package": 0}
             for camera in cameras}
         self._last_index = -1
+        self._last_served_camera: str | None = None
+        self._consecutive_turns = 0
+        self._confirmation_camera: str | None = None
         self._worker: asyncio.Task | None = None
         self._closed = False
         self._global_failure = False
@@ -115,11 +119,24 @@ class FairInference:
             self._worker = asyncio.create_task(self._run(), name="aiport-fair-inference")
 
     def _next_camera(self) -> str:
+        preferred = self._confirmation_camera
+        self._confirmation_camera = None
+        if (preferred is not None and preferred in self._pending
+                and self._consecutive_turns < 2):
+            camera = preferred
+            self._last_index = self._cameras.index(camera)
+            self._consecutive_turns = (self._consecutive_turns + 1
+                                       if self._last_served_camera == camera else 1)
+            self._last_served_camera = camera
+            return camera
         for offset in range(1, len(self._cameras) + 1):
             index = (self._last_index + offset) % len(self._cameras)
             camera = self._cameras[index]
             if camera in self._pending:
                 self._last_index = index
+                self._consecutive_turns = (self._consecutive_turns + 1
+                                           if self._last_served_camera == camera else 1)
+                self._last_served_camera = camera
                 return camera
         raise RuntimeError("inference queue is empty")
 
@@ -160,6 +177,9 @@ class FairInference:
                 for observation in result:
                     self._observations[camera][observation.kind] += 1
                 await self._on_result(camera, result, generation, frame)
+                if (self._preserve_first_pending and result
+                        and camera in self._pending and self._consecutive_turns < 2):
+                    self._confirmation_camera = camera
             except ApiDetectionError as exc:
                 # A remote API can fail for one frame without making the
                 # camera or its Protect smart policy permanently unavailable.
@@ -212,6 +232,8 @@ class FairInference:
             raise IngressError("camera_not_authorized")
         self._pending.pop(camera, None)
         self._latest_pending.pop(camera, None)
+        if self._confirmation_camera == camera:
+            self._confirmation_camera = None
 
     def is_available(self, camera_mac: str) -> bool:
         """Whether this camera can still receive a model call in this permit."""
@@ -227,6 +249,7 @@ class FairInference:
         self._closed = True
         self._pending.clear()
         self._latest_pending.clear()
+        self._confirmation_camera = None
         worker = self._worker
         if worker is not None and not worker.done():
             worker.cancel()

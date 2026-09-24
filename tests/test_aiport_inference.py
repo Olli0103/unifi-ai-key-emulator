@@ -7,8 +7,10 @@ import pytest
 
 from aikey.aiport_detection import ObjectObservation
 from aikey.aiport_api_detection import ApiDetectionError
+from aikey.aiport_camera_engine import CameraPolicyEngine
 from aikey.aiport_inference import FairInference
 from aikey.aiport_ingest import IngressError
+from aikey.aiport_smart_settings import parse_smart_settings
 from aikey.aiport_tracking import TemporalTracker
 
 
@@ -129,6 +131,44 @@ async def test_slow_vision_request_keeps_first_followup_person_frame():
     assert calls == [b"person-first", b"person-second", b"empty-later"]
     assert "enter" in edges
     assert scheduler.snapshot()["dropped_frames"] == 1
+    await scheduler.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_api_worker_confirms_person_before_other_camera_delay_expires_track():
+    """Two valid Person replies must still form an event with two active cameras."""
+    clock = [0.0]
+    calls = []
+    entered = []
+    engine = CameraPolicyEngine([FIRST, SECOND], max_track_gap_seconds=20)
+    engine.replace_policy(FIRST, parse_smart_settings({
+        "deviceID": FIRST, "enableSmartDetect": ["person"],
+        "eventStartMSec": 1000, "eventStopMSec": 3000, "zones": {},
+    }, camera_mac=FIRST))
+
+    class SlowApi:
+        def detect_for_camera(self, camera, frame):
+            calls.append((camera, frame))
+            clock[0] += 12
+            if camera == FIRST:
+                return (ObjectObservation("person", "person", 0.95,
+                                          (0.2, 0.1, 0.4, 0.8)),)
+            return ()
+
+    async def on_result(camera, observations, _generation, _frame):
+        entered.extend(candidate for candidate in engine.observe(
+            camera, observations, now=clock[0])
+            if candidate.change.edge == "enter")
+
+    scheduler = FairInference(
+        [FIRST, SECOND], load_detector=SlowApi, on_result=on_result,
+        max_frames_per_camera=None, preserve_first_pending=True)
+    await scheduler.observe(FIRST, b"person-first", generation=1)
+    await scheduler.observe(SECOND, b"empty-other", generation=1)
+    await scheduler.observe(FIRST, b"person-second", generation=1)
+    await scheduler.join()
+    assert len(entered) == 1
+    assert [camera for camera, _ in calls] == [FIRST, FIRST, SECOND]
     await scheduler.close()
 
 
