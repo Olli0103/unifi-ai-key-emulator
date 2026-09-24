@@ -258,13 +258,12 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
     except ZoneError as exc:
         raise SmartSettingsError(str(exc)) from exc
     # Protect 7.3.60 can send an empty top-level list for a legacy camera
-    # while a Detection Zone carries the requested class. Only derive a
-    # single supported class from validated primary-lens zones; never turn
-    # an empty policy with no usable zone into full-frame detection.
+    # while Detection Zones carry the requested classes. Derive only classes
+    # present in validated primary-lens zones; never turn an empty policy
+    # with no usable zone into full-frame detection.
     if not requested and smart_zones:
         zone_types = set().union(*(zone.object_types for zone in smart_zones))
-        if len(zone_types) == 1:
-            requested = list(zone_types)
+        requested = sorted(zone_types)
     for name in _REGION_MAPS - {"zones"}:
         value = payload.get(name, {})
         if not isinstance(value, dict):

@@ -1434,10 +1434,18 @@ async def test_pool_multiclass_probe_keeps_camera_policies_and_tracks_separate(
 
     for index, (mac, kinds) in enumerate(zip(cameras, (
             ["person", "vehicle", "animal"], ["person"])), 1):
+        payload = {"deviceID": mac, "enableSmartDetect": kinds,
+                   "eventStartMSec": 1000, "eventStopMSec": 3000}
+        if index == 1:
+            payload["enableSmartDetect"] = []
+            payload["zones"] = {
+                str(zone_id): {
+                    "coord": [50, 50, 950, 50, 950, 950, 50, 950],
+                    "objectTypes": [kind], "triggerAccessTypes": []}
+                for zone_id, kind in enumerate(kinds, 7)}
         await service._handle_diagnostic_frame(sink, json.dumps({
             "functionName": "ChangeSmartDetectSettings", "messageId": index,
-            "payload": {"deviceID": mac, "enableSmartDetect": kinds,
-                        "eventStartMSec": 1000, "eventStopMSec": 3000},
+            "payload": payload,
         }).encode())
         assert sink.messages[-1]["statusCode"] == 0
 
@@ -1451,6 +1459,8 @@ async def test_pool_multiclass_probe_keeps_camera_policies_and_tracks_separate(
     assert [(event["deviceID"], event["objectTypes"][0]) for event in enters] == [
         (cameras[0], "person"), (cameras[0], "vehicle"),
         (cameras[0], "animal"), (cameras[1], "person")]
+    assert [event["descriptors"][0]["zones"] for event in enters] == [
+        [7], [8], [9], []]
     assert len({event["descriptors"][0]["trackerID"]
                 for event in enters if event["deviceID"] == cameras[0]}) == 3
     assert service.smart_events_entered == 4
