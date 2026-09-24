@@ -143,15 +143,18 @@ async def test_authenticated_camera_page_refreshes_inventory_and_marks_allowlist
             raise InventoryError("Protect unavailable")
         return {"schema": "aikey-camera-preflight/1", "protect_version": "7.3.60",
                 "fetched_at": 1800000000, "summary": {"total": 4}, "cameras": [
-                    {"name": "<Büro>", "model": "UVC G5 Flex", "state": "CONNECTED",
+                    {"id": f"{1:024x}", "name": "<Büro>", "model": "UVC G5 Flex", "state": "CONNECTED",
+                     "processing_class": "smart_event_candidate",
                      "mac": "2A1122334455", "smart_detect_types": ["person"]},
-                    {"name": "Esszimmer", "model": "UVC G4 Instant",
+                    {"id": f"{2:024x}", "name": "Esszimmer", "model": "UVC G4 Instant",
+                     "processing_class": "legacy_ingress_needed",
                      "state": "CONNECTED", "mac": "2A1122334499",
                      "smart_detect_types": []},
-                    {"name": "Wohnzimmer", "model": "UVC G6 Instant",
+                    {"id": f"{3:024x}", "name": "Wohnzimmer", "model": "UVC G6 Instant",
+                     "processing_class": "smart_event_candidate",
                      "state": "CONNECTED", "mac": "2A1122334498",
                      "smart_detect_types": ["person"]},
-                    {"name": "Legacy ONVIF", "model": "ONVIF Camera",
+                    {"id": f"{4:024x}", "name": "Legacy ONVIF", "model": "ONVIF Camera",
                      "source_kind": "onvif", "processing_class": "legacy_ingress_needed",
                      "state": "CONNECTED", "mac": "2A1122334497",
                      "smart_detect_types": []}]}
@@ -178,6 +181,8 @@ async def test_authenticated_camera_page_refreshes_inventory_and_marks_allowlist
         assert "Esszimmer" in markup and "Wohnzimmer" in markup
         assert "Legacy ONVIF" in markup and "Legacy camera target" in markup
         assert "3 connected legacy / G3–G5 targets" in markup
+        assert "AI Port capacity plan: 2 instance(s) for 3 connected target camera(s)" in markup
+        assert "create each identity and pair its cameras in Protect" in markup
         assert "Configured for this AI Port" in markup
         assert "Not configured on this AI Port" in markup
         assert "Protect pairing and stream health are separate" in markup

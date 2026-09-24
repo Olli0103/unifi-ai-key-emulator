@@ -22,6 +22,7 @@ from .admin_security import AdminSecurity
 from .aiport_config_store import (
     AiPortConfigurationError, AiPortConfigurationStore, AiPortRevisionConflict,
 )
+from .aiport_deployment import AiPortPlanError, plan_ai_ports
 from .camera_inventory import InventoryError, fetch_inventory
 from .config import atomic_private, load_config
 from .config_store import (
@@ -151,6 +152,17 @@ class ControlSite:
             return _page("Camera inventory unavailable", "<h1>Camera inventory unavailable</h1>"
                          "<p class='error'>Check Protect connectivity and the private trust files.</p>"
                          "<p><a href='/'>Back to settings</a></p>")
+        try:
+            capacity = plan_ai_ports(report, camera_scope="legacy-and-g3-g5")
+        except AiPortPlanError:
+            capacity_note = ("<p>AI Port capacity: needs_evidence. Check the camera IDs, "
+                             "source types and recording limits before assigning slots.</p>")
+        else:
+            capacity_note = (f"<p>AI Port capacity plan: "
+                             f"{capacity['ai_port_instances_required']} instance(s) for "
+                             f"{capacity['selected_camera_count']} connected target camera(s). "
+                             "This plans capacity only; create each identity and pair its cameras "
+                             "in Protect.</p>")
         rows = []
         target_count = 0
         configured_count = 0
@@ -183,6 +195,7 @@ class ControlSite:
                 f"<p>{len(rows)} cameras · {target_count} connected legacy / G3–G5 targets · "
                 f"{configured_count} configured across {len(self.aiports)} AI Port "
                 "instance(s).</p>"
+                + capacity_note +
                 "<p class='muted'>Protect pairing and stream health are separate. "
                 "Configured means the camera is in a local instance allowlist. "
                 "Protect-reported smart types may reflect AI Port processing.</p>"
