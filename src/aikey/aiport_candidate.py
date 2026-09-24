@@ -390,6 +390,9 @@ class CandidateService:
         self.recorded_probe_claimed = 0
         self.recorded_probe_errors = 0
         self.recorded_probe_qualified = 0
+        self.recorded_probe_attempts = 0
+        self.recorded_probe_phase = "idle"
+        self.recorded_probe_zone_status = "not_evaluated"
         self._recorded_probe_task: asyncio.Task | None = None
         self._smart_policy: SmartPolicy | None = None
         self._event_track: TrackChange | None = None
@@ -759,6 +762,8 @@ class CandidateService:
     async def _run_recorded_probe(self, ws: aiohttp.ClientWebSocketResponse,
                                   policy: SmartPolicy) -> None:
         """Send one model-confirmed historical person event with its capture time."""
+        self.recorded_probe_attempts += 1
+        self.recorded_probe_phase = "initial_gate"
         try:
             if (not isinstance(self.ingress, AiPortIngress)
                     or self._current_ws is not ws or not self._params_agreed
@@ -766,43 +771,60 @@ class CandidateService:
                     or time.time() + 8 >= self.config["diagnostic_event_until"]
                     or policy.enabled_types != frozenset({"person"})):
                 return
+            self.recorded_probe_phase = "validating"
             probe = parse_recorded_probe(
                 self.config["diagnostic_recorded_event_probe"],
                 state_dir=self.state_dir, camera_mac=self.ingress.camera_mac)
             if (self.recorded_probe_claimed
                     or os.path.lexists(self.state_dir / f".native-event-probe-{probe.nonce}")):
+                self.recorded_probe_phase = "already_claimed"
                 return
+            self.recorded_probe_phase = "inference_running"
             track = await asyncio.to_thread(infer_recorded_person, probe)
+            self.recorded_probe_phase = "inference_finished"
             frame_gap = (probe.frames[1].captured_ms
                          - probe.frames[0].captured_ms) / 1000
             if (self._current_ws is not ws or self._smart_policy is not policy
-                    or not self.ingress.list_streams()
-                    or time.time() + frame_gap + 3
-                    >= self.config["diagnostic_event_until"]
-                    or not policy.allows_score("person", track.enter.score)
+                    or not self.ingress.list_streams()):
+                self.recorded_probe_phase = "control_or_stream_changed"
+                return
+            if time.time() + frame_gap + 3 >= self.config["diagnostic_event_until"]:
+                self.recorded_probe_phase = "expired_after_inference"
+                return
+            if (not policy.allows_score("person", track.enter.score)
                     or not policy.allows_score("person", track.moving.score)):
+                self.recorded_probe_phase = "score_gate"
                 return
             zone_ids = policy.zone_ids("person", track.enter.box)
+            self.recorded_probe_zone_status = (
+                "not_configured" if not policy.zones_configured else
+                "no_match" if not zone_ids else "matched")
             # A recorded Person probe must match a validated Person zone before
             # it claims the one-use permit or publishes an event.
             if (not zone_ids
                     or zone_ids != policy.zone_ids("person", track.moving.box)):
+                self.recorded_probe_phase = "zone_gate"
                 return
+            self.recorded_probe_phase = "qualified"
             self.recorded_probe_qualified += 1
             if not self._claim_native_probe(probe.nonce):
+                self.recorded_probe_phase = "permit_unclaimable"
                 return
             self.recorded_probe_claimed += 1
             enter = smart_event_payload(
                 probe.camera_mac, track.enter, edge="enter",
-                clock_wall_ms=probe.frames[0].captured_ms, zone_ids=zone_ids)
+                clock_wall_ms=probe.frames[0].captured_ms, zone_ids=zone_ids,
+                first_shown_ms=probe.frames[0].captured_ms)
             moving = smart_event_payload(
                 probe.camera_mac, track.moving, edge="moving",
-                clock_wall_ms=probe.frames[1].captured_ms, zone_ids=zone_ids)
+                clock_wall_ms=probe.frames[1].captured_ms, zone_ids=zone_ids,
+                first_shown_ms=probe.frames[0].captured_ms)
             leave = smart_event_payload(
                 probe.camera_mac, track.moving, edge="leave",
                 clock_wall_ms=probe.frames[1].captured_ms + 2000,
-                zone_ids=zone_ids)
+                zone_ids=zone_ids, first_shown_ms=probe.frames[0].captured_ms)
             await self._send_control_event(ws, "EventSmartDetect", enter)
+            self.recorded_probe_phase = "enter_sent"
             self.smart_events_entered += 1
             # Each descriptor comes from its own recorded model observation.
             # Deliver the track updates at the same spacing as the frames.
@@ -812,20 +834,28 @@ class CandidateService:
                     or not self.ingress.list_streams()
                     or time.time() + 2 >= self.config["diagnostic_event_until"]):
                 self.recorded_probe_errors += 1
+                self.recorded_probe_phase = "interrupted_after_enter"
                 return
             await self._send_control_event(ws, "EventSmartDetect", moving)
+            self.recorded_probe_phase = "moving_sent"
             self.smart_events_moved += 1
             await asyncio.sleep(2)
             if (self._current_ws is ws and self._smart_policy is policy
                     and self.ingress.list_streams()
                     and time.time() < self.config["diagnostic_event_until"]):
                 await self._send_control_event(ws, "EventSmartDetect", leave)
+                self.recorded_probe_phase = "leave_sent"
                 self.smart_events_left += 1
             else:
                 self.recorded_probe_errors += 1
+                self.recorded_probe_phase = "interrupted_after_moving"
         except (CandidateError, RecordedProbeError, DetectionError, TrackingError,
                 SmartEventError, OSError, aiohttp.ClientError, RuntimeError):
             self.recorded_probe_errors += 1
+            self.recorded_probe_phase = "error"
+        except asyncio.CancelledError:
+            self.recorded_probe_phase = "cancelled"
+            raise
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=_MAX_MANAGE)
@@ -882,6 +912,9 @@ class CandidateService:
             "recorded_probe_qualified": self.recorded_probe_qualified,
             "recorded_probe_claimed": self.recorded_probe_claimed,
             "recorded_probe_errors": self.recorded_probe_errors,
+            "recorded_probe_attempts": self.recorded_probe_attempts,
+            "recorded_probe_phase": self.recorded_probe_phase,
+            "recorded_probe_zone_status": self.recorded_probe_zone_status,
             "smart_settings_probe_shape": (self._smart_settings_probe_shape
                 if time.time() < self.config.get("diagnostic_smart_probe_until", 0)
                 else None),

@@ -18,13 +18,17 @@ class SmartEventError(ValueError):
 
 def smart_event_payload(camera_mac: str, change: TrackChange, *,
                         edge: str, clock_wall_ms: int,
-                        zone_ids: tuple[int, ...] = ()) -> dict:
+                        zone_ids: tuple[int, ...] = (),
+                        first_shown_ms: int | None = None) -> dict:
     """Encode one bounded object track edge, without recognition claims."""
     if (not isinstance(change, TrackChange)
             or change.kind not in {"person", "vehicle", "animal"}
             or edge not in {"enter", "moving", "leave"}
             or type(clock_wall_ms) is not int or clock_wall_ms <= 0
             or type(change.track_id) is not int or change.track_id <= 0
+            or (first_shown_ms is not None
+                and (type(first_shown_ms) is not int
+                     or not 0 < first_shown_ms <= clock_wall_ms))
             or not math.isfinite(change.score) or not 0 <= change.score <= 1
             or not isinstance(zone_ids, tuple) or len(zone_ids) > 32
             or any(type(zone_id) is not int or not 1 <= zone_id <= 4_294_967_295
@@ -50,19 +54,22 @@ def smart_event_payload(camera_mac: str, change: TrackChange, *,
     if not all(math.isfinite(v) for v in change.box) or not (
             0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
         raise SmartEventError("invalid_smart_event")
+    descriptor = {
+        "trackerID": change.track_id,
+        # The controller interprets a vehicle name as a license plate.
+        # An object detector cannot supply one.
+        "name": "" if change.kind == "vehicle" else change.kind,
+        "confidenceLevel": round(change.score * 100),
+        "coord": [round(x1 * 1000), round(y1 * 1000),
+                  round((x2 - x1) * 1000), round((y2 - y1) * 1000)],
+        "objectType": change.kind, "zones": list(zone_ids), "lines": [],
+        "stationary": False, "attributes": {}, "coord3d": [],
+    }
+    if first_shown_ms is not None:
+        descriptor["firstShownTimeMs"] = first_shown_ms
     payload.update({
         "objectTypes": [change.kind],
-        "descriptors": [{
-            "trackerID": change.track_id,
-            # The controller interprets a vehicle name as a license plate.
-            # An object detector cannot supply one.
-            "name": "" if change.kind == "vehicle" else change.kind,
-            "confidenceLevel": round(change.score * 100),
-            "coord": [round(x1 * 1000), round(y1 * 1000),
-                      round((x2 - x1) * 1000), round((y2 - y1) * 1000)],
-            "objectType": change.kind, "zones": list(zone_ids), "lines": [],
-            "stationary": False, "attributes": {}, "coord3d": [],
-        }],
+        "descriptors": [descriptor],
     })
     if edge == "leave":
         # The final per-track class is carried separately from descriptors.

@@ -463,14 +463,22 @@ async def test_recorded_event_probe_sends_original_time_once(tmp_path, monkeypat
                 config["diagnostic_recorded_event_probe"]["frames"][1]["captured_ms"],
                 config["diagnostic_recorded_event_probe"]["frames"][1]["captured_ms"]
                 + 2000]
+            assert [event["payload"]["descriptors"][0]["firstShownTimeMs"]
+                    for event in events] == [
+                config["diagnostic_recorded_event_probe"]["frames"][0]["captured_ms"]
+            ] * 3
             assert sink.native_event_times[1] - sink.native_event_times[0] >= 1.8
             assert sink.native_event_times[2] - sink.native_event_times[1] >= 1.8
             assert service.recorded_probe_claimed == 1
+            assert service.recorded_probe_attempts == 1
+            assert service.recorded_probe_phase == "leave_sent"
+            assert service.recorded_probe_zone_status == "matched"
             assert service.smart_events_entered == service.smart_events_left == 1
             assert service.smart_events_moved == 1
         else:
             assert events == []
             assert service.recorded_probe_claimed == 0
+            assert service.recorded_probe_phase == "already_claimed"
         await service.stop()
     marker = tmp_path / (".native-event-probe-" + "b" * 32)
     assert marker.stat().st_mode & 0o777 == 0o600
@@ -518,6 +526,8 @@ async def test_recorded_event_probe_does_not_claim_without_person_zone(
                    for message in sink.messages)
     assert service.recorded_probe_claimed == 0
     assert service.recorded_probe_qualified == 0
+    assert service.recorded_probe_phase == "zone_gate"
+    assert service.recorded_probe_zone_status == "not_configured"
     assert not list(tmp_path.glob(".native-event-probe-*"))
     await service.stop()
 

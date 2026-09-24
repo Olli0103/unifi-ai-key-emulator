@@ -58,6 +58,24 @@ def test_moving_payload_updates_track_without_new_zone_transition():
     assert payload["descriptors"][0]["confidenceLevel"] == 91
 
 
+def test_recorded_track_can_carry_one_validated_first_seen_time_across_edges():
+    first = 1_700_000_000_000
+    for edge, clock in (("enter", first), ("moving", first + 2000),
+                        ("leave", first + 4000)):
+        payload = smart_event_payload(
+            "2A1122334455", PERSON, edge=edge, clock_wall_ms=clock,
+            first_shown_ms=first)
+        assert payload["descriptors"][0]["firstShownTimeMs"] == first
+
+
+@pytest.mark.parametrize("first_seen", [True, 0, 1_700_000_000_001])
+def test_first_seen_time_must_be_an_earlier_positive_integer(first_seen):
+    with pytest.raises(SmartEventError):
+        smart_event_payload("2A1122334455", PERSON, edge="enter",
+                            clock_wall_ms=1_700_000_000_000,
+                            first_shown_ms=first_seen)
+
+
 def test_zone_enter_and_leave_keep_same_numeric_zone_id():
     enter = smart_event_payload("2A1122334455", PERSON, edge="enter",
                                 clock_wall_ms=1_700_000_000_000, zone_ids=(7,))
