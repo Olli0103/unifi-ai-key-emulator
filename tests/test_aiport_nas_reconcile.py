@@ -63,12 +63,14 @@ def test_modified_manifest_is_rejected(tmp_path, mutation):
 
 class FakeDocker:
     def __init__(self, manifest, rows="", fail_health=False, wrong_ip=False,
-                 unsafe_runtime=None):
+                 unsafe_runtime=None, adopted=False, control_connected=False):
         self.manifest = manifest
         self.rows = rows
         self.fail_health = fail_health
         self.wrong_ip = wrong_ip
         self.unsafe_runtime = unsafe_runtime
+        self.adopted = adopted
+        self.control_connected = control_connected
         self.started = False
         self.calls = []
 
@@ -109,8 +111,8 @@ class FakeDocker:
         if "exec" in argv:
             if self.fail_health:
                 raise ReconcileError("health failed")
-            return json.dumps({"service": "aiport-candidate", "adopted": False,
-                               "control_connected": False})
+            return json.dumps({"service": "aiport-candidate", "adopted": self.adopted,
+                               "control_connected": self.control_connected})
         if "up" in argv:
             self.started = True
             return ""
@@ -131,6 +133,7 @@ def test_dry_run_does_not_mutate_and_apply_starts_once(tmp_path):
     applied = reconcile(path, manifest, states, apply=True, run=fake,
                         pause=lambda _: None)
     assert applied["started"] == ["aiport_slot_2"]
+    assert applied["readiness"] == {"aiport_slot_2": "awaiting_adoption"}
     assert sum("up" in call for call in fake.calls) == 1
     assert "--no-recreate" in next(call for call in fake.calls if "up" in call)
     assert "--pull" in next(call for call in fake.calls if "up" in call)
@@ -146,6 +149,36 @@ def test_existing_running_container_is_preserved(tmp_path):
     assert outcome["preserved"] == ["aiport_slot_2"]
     assert outcome["started"] == []
     assert not any("up" in call or "stop" in call for call in fake.calls)
+
+
+def test_adopted_new_slot_must_reconnect_or_it_is_stopped(tmp_path):
+    _, states, _, manifest, _ = inputs(tmp_path)
+    fake = FakeDocker(manifest, adopted=True)
+    with pytest.raises(ReconcileError, match="disconnected from Protect"):
+        reconcile(tmp_path / "compose.json", manifest, states,
+                  apply=True, run=fake, pause=lambda _: None)
+    assert sum("exec" in call for call in fake.calls) == 16
+    assert [call[-1] for call in fake.calls if "stop" in call] == ["aiport_slot_2"]
+
+
+def test_existing_disconnected_slot_blocks_new_apply_without_stopping_it(tmp_path):
+    _, states, _, manifest, _ = inputs(tmp_path)
+    row = {"Service": "aiport_slot_2", "State": "running",
+           "ID": "a" * 12, "Publishers": []}
+    fake = FakeDocker(manifest, json.dumps(row), adopted=True)
+    dry = reconcile(tmp_path / "compose.json", manifest, states, run=fake)
+    assert dry["readiness"] == {"aiport_slot_2": "controller_disconnected"}
+    with pytest.raises(ReconcileError, match="no new slots"):
+        reconcile(tmp_path / "compose.json", manifest, states, apply=True, run=fake)
+    assert not any("up" in call or "stop" in call for call in fake.calls)
+
+
+def test_connected_adopted_slot_reports_ready(tmp_path):
+    _, states, _, manifest, _ = inputs(tmp_path)
+    fake = FakeDocker(manifest, adopted=True, control_connected=True)
+    applied = reconcile(tmp_path / "compose.json", manifest, states,
+                        apply=True, run=fake, pause=lambda _: None)
+    assert applied["readiness"] == {"aiport_slot_2": "connected"}
 
 
 def test_failed_new_container_stops_only_attempted_service(tmp_path):

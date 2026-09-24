@@ -46,6 +46,8 @@ if body.get('service') != 'aiport-candidate' or type(body.get('adopted')) is not
 print(json.dumps({'service': body['service'], 'adopted': body['adopted'], 'control_connected': body['control_connected']}))
 """
 _CONTAINER_ID = re.compile(r"[0-9a-fA-F]{12,64}\Z")
+_HEALTH_ATTEMPTS = 16
+_HEALTH_PAUSE_SECONDS = 2
 
 
 def _read_json(path: Path) -> dict:
@@ -185,6 +187,12 @@ def _health(run: Callable[[list[str], int], str], manifest_path: Path,
     return health
 
 
+def _readiness(health: dict) -> str:
+    if not health["adopted"]:
+        return "awaiting_adoption"
+    return "connected" if health["control_connected"] else "controller_disconnected"
+
+
 def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
               *, apply: bool = False, run: Callable[[list[str], int], str] = _run,
               pause: Callable[[float], None] = time.sleep) -> dict:
@@ -196,14 +204,18 @@ def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
     running = [name for name in services if name in found and found[name]["State"] == "running"]
     to_start = [name for name in services if name not in running]
     health = {}
+    readiness = {}
     for name, row in found.items():
         _inspect(run, row, manifest["services"][name])
     for name in running:
         slot = int(name.removeprefix("aiport_slot_"))
         health[name] = _health(run, manifest_path, name, states[slot])
+        readiness[name] = _readiness(health[name])
     if not apply:
         return {"mode": "dry_run", "running": running, "would_start": to_start,
-                "health": health}
+                "health": health, "readiness": readiness}
+    if any(status == "controller_disconnected" for status in readiness.values()):
+        raise ReconcileError("An adopted AI Port is disconnected; no new slots were started")
     attempted = []
     try:
         for name in to_start:
@@ -216,16 +228,19 @@ def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
                 raise ReconcileError(f"{name} did not enter running state")
             _inspect(run, current[name], manifest["services"][name])
             slot = int(name.removeprefix("aiport_slot_"))
-            for attempt in range(6):
+            for attempt in range(_HEALTH_ATTEMPTS):
                 try:
                     health[name] = _health(run, manifest_path, name, states[slot])
+                    readiness[name] = _readiness(health[name])
+                    if readiness[name] == "controller_disconnected":
+                        raise ReconcileError(f"{name} is adopted but disconnected from Protect")
                     break
                 except ReconcileError:
-                    if attempt == 5:
+                    if attempt == _HEALTH_ATTEMPTS - 1:
                         raise
-                    pause(2)
+                    pause(_HEALTH_PAUSE_SECONDS)
         return {"mode": "applied", "preserved": running, "started": to_start,
-                "health": health}
+                "health": health, "readiness": readiness}
     except ReconcileError:
         for name in reversed(attempted):
             try:
