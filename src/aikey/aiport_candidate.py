@@ -1,13 +1,10 @@
-"""Isolated AI Port candidate for native interface discovery.
-
-A private, single-camera pairing policy can keep stream ingress available.
-AI inference and event publication remain behind expiring diagnostics.
-"""
+"""Isolated AI Port candidate with explicit camera and detection policies."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import deque
 import contextlib
 from datetime import datetime, timezone
 import hashlib
@@ -117,6 +114,7 @@ def load_config(path: Path) -> dict:
         raise CandidateError("Invalid candidate configuration JSON") from exc
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
     allowed = required | {"paired_stream", "diagnostic_hello_until", "diagnostic_stream",
+                          "live_detector",
                           "diagnostic_streams",
                           "diagnostic_detector",
                           "diagnostic_pool_detector", "diagnostic_pool_event_until",
@@ -154,6 +152,26 @@ def load_config(path: Path) -> dict:
         if (set(value) & required_probe_fields
                 and not required_probe_fields <= set(value)):
             raise CandidateError("Paired camera AI probe requires a complete bounded policy")
+    if "live_detector" in value:
+        detector = value["live_detector"]
+        if ("paired_stream" not in value
+                or any(key.startswith("diagnostic_") for key in value)
+                or not isinstance(detector, dict)
+                or set(detector) != {"checkpoint_path", "checkpoint_sha256",
+                                     "threshold", "smart_type", "max_events_per_hour"}
+                or not isinstance(detector["checkpoint_path"], str)
+                or not Path(detector["checkpoint_path"]).is_absolute()
+                or not isinstance(detector["checkpoint_sha256"], str)
+                or not _PIN.fullmatch(detector["checkpoint_sha256"])
+                or type(detector["smart_type"]) is not str
+                or detector["smart_type"] not in {"person", "vehicle", "animal"}
+                or type(detector["max_events_per_hour"]) is not int
+                or not 1 <= detector["max_events_per_hour"] <= 120):
+            raise CandidateError("Invalid live detector policy")
+        try:
+            RFDetrNanoDetector(object(), threshold=detector["threshold"])
+        except DetectionError as exc:
+            raise CandidateError("Invalid live detector threshold") from exc
     if "diagnostic_hello_until" in value:
         until = value["diagnostic_hello_until"]
         if type(until) is not int or until < 0 or until > int(time.time()) + 600:
@@ -439,6 +457,7 @@ class CandidateService:
         self._event_snapshot: SmartSnapshot | None = None
         self._pending_snapshot: tuple[SmartSnapshot, float] | None = None
         self._pending_full_fov: tuple[SmartSnapshot, float] | None = None
+        self._live_event_times: deque[float] = deque()
         self.snapshot_requests = 0
         self.snapshot_uploads = 0
         self.snapshot_rejections = 0
@@ -467,7 +486,8 @@ class CandidateService:
         self.detector_tracks_left = 0
         self.detector_error: str | None = None
         self._detector: RFDetrNanoDetector | None = None
-        self._tracker = (TemporalTracker() if "diagnostic_detector" in config
+        self._tracker = (TemporalTracker() if "live_detector" in config
+                         or "diagnostic_detector" in config
                          or "diagnostic_native_event_probe" in config
                          or "diagnostic_recorded_event_probe" in config else None)
         self._camera_engine: CameraPolicyEngine | None = None
@@ -500,7 +520,8 @@ class CandidateService:
             self.ingress = AiPortIngress(
                 **config["paired_stream"],
                 frame_observer=(self._observe_frame
-                                if "diagnostic_detector" in config else None))
+                                if "diagnostic_detector" in config
+                                or "live_detector" in config else None))
         elif config.get("diagnostic_hello_until", 0) > time.time():
             if "diagnostic_stream" in config:
                 self.ingress = AiPortIngress(
@@ -628,14 +649,16 @@ class CandidateService:
         await self._publish_pool_candidates(engine.replace_policy(camera_mac, None))
 
     async def _observe_frame(self, frame: bytes) -> None:
-        policy = self.config["diagnostic_detector"]
-        until = self.config.get("diagnostic_hello_until",
-                                self.config.get("diagnostic_event_until", 0))
-        if (time.time() >= until
-                or self.detector_frames_attempted >= policy["max_frames"]):
+        live = "live_detector" in self.config
+        policy = self.config["live_detector" if live else "diagnostic_detector"]
+        until = (float("inf") if live else self.config.get(
+            "diagnostic_hello_until", self.config.get("diagnostic_event_until", 0)))
+        if (time.time() >= until or self.detector_error is not None
+                or not live and self.detector_frames_attempted >= policy["max_frames"]):
             return
-        if ("diagnostic_event_until" in self.config
-                and self._smart_policy is None):
+        smart_mode = live or "diagnostic_event_until" in self.config
+        smart_policy = self._smart_policy
+        if smart_mode and smart_policy is None:
             return
         self.detector_frames_attempted += 1
         try:
@@ -644,12 +667,12 @@ class CandidateService:
                     RFDetrNanoDetector.from_checkpoint, policy["checkpoint_path"],
                     policy["checkpoint_sha256"], threshold=policy["threshold"])
             observations = await asyncio.to_thread(self._detector.detect, frame)
+            if smart_mode and self._smart_policy is not smart_policy:
+                return
             assert self._tracker is not None
             track_observations = observations
-            if "diagnostic_event_until" in self.config:
-                smart_policy = self._smart_policy
-                if smart_policy is None:
-                    return
+            if smart_mode:
+                assert smart_policy is not None
                 kind = next(iter(smart_policy.enabled_types))
                 # A reverification policy cannot be silently bypassed. Only
                 # objects above its upper confidence bound reach the temporal
@@ -665,25 +688,33 @@ class CandidateService:
                                            now=time.monotonic())
         except (DetectionError, TrackingError) as exc:
             self.detector_error = str(exc)
+            if live:
+                ws = self._current_ws
+                if ws is not None:
+                    await self._revoke_single_policy(ws)
+                    if self.ingress is not None and self.ingress.list_streams():
+                        await self._send_stream_status(ws, streaming=True)
+                return
             raise
         if time.time() < until:
             self.detector_frames_succeeded += 1
             self.detector_objects_seen += len(observations)
-            if "diagnostic_event_until" in self.config:
+            if smart_mode:
                 self.detector_objects_enabled += len(enabled)
                 self.detector_objects_score_eligible += len(scored)
                 self.detector_objects_zone_eligible += len(track_observations)
             self.detector_tracks_entered += sum(change.edge == "enter" for change in changes)
             self.detector_tracks_left += sum(change.edge == "leave" for change in changes)
-            if time.time() < self.config.get("diagnostic_event_until", 0):
+            if smart_mode and (live or time.time() < self.config.get("diagnostic_event_until", 0)):
                 await self._publish_bounded_smart_changes(changes, frame=frame)
 
     async def _publish_bounded_smart_changes(
             self, changes: tuple[TrackChange, ...], *, frame: bytes | None = None) -> None:
         ws = self._current_ws
         policy = self._smart_policy
+        live = "live_detector" in self.config
         if (ws is None or policy is None or len(policy.enabled_types) != 1
-                or time.time() >= self.config.get("diagnostic_event_until", 0)
+                or not live and time.time() >= self.config.get("diagnostic_event_until", 0)
                 or not isinstance(self.ingress, AiPortIngress)
                 or not self.ingress.list_streams()):
             return
@@ -692,10 +723,15 @@ class CandidateService:
             if change.kind != kind:
                 continue
             matched_zone_ids = policy.zone_ids(kind, change.box)
+            if live and change.edge == "enter":
+                cutoff = time.monotonic() - 3600
+                while self._live_event_times and self._live_event_times[0] <= cutoff:
+                    self._live_event_times.popleft()
             if (change.edge == "enter" and policy.allows_score(kind, change.score)
                     and matched_zone_ids is not None
                     and self._event_track is None
-                    and self.smart_events_entered == 0):
+                    and (len(self._live_event_times) < self.config["live_detector"]["max_events_per_hour"]
+                         if live else self.smart_events_entered == 0)):
                 edge = "enter"
             elif (change.edge == "moving" and self._event_track is not None
                   and change.track_id == self._event_track.track_id
@@ -728,6 +764,8 @@ class CandidateService:
                 self._pending_full_fov = (self._event_snapshot, time.monotonic() + 75)
             await self._send_control_event(ws, "EventSmartDetect", payload)
             if edge == "enter":
+                if live:
+                    self._live_event_times.append(time.monotonic())
                 self._event_track = change
                 self._event_zone_ids = matched_zone_ids
                 self._event_last_moving_at = time.monotonic()
@@ -751,7 +789,8 @@ class CandidateService:
             if (previous is not None and self._smart_policy is not None
                     and isinstance(self.ingress, AiPortIngress)
                     and self._current_ws is ws and self._params_agreed
-                    and (time.time() < self.config.get("diagnostic_event_until", 0)
+                    and ("live_detector" in self.config
+                         or time.time() < self.config.get("diagnostic_event_until", 0)
                          or "paired_stream" in self.config)):
                 try:
                     payload = smart_event_payload(
@@ -1044,6 +1083,13 @@ class CandidateService:
             "detector_tracks_entered": self.detector_tracks_entered,
             "detector_tracks_left": self.detector_tracks_left,
             "detector_error": self.detector_error,
+            "detection_mode": ("live" if "live_detector" in self.config else
+                               "diagnostic" if "diagnostic_detector" in self.config else
+                               "passive"),
+            "live_event_budget_remaining": (
+                max(0, self.config["live_detector"]["max_events_per_hour"] - sum(
+                    entered > time.monotonic() - 3600 for entered in self._live_event_times))
+                if "live_detector" in self.config else None),
             "pool_inference": (self._inference.snapshot()
                                if self._inference is not None else None),
             "last_stream_error": self.last_stream_error,
@@ -1055,8 +1101,9 @@ class CandidateService:
                                            if self.ingress else []),
             "last_decoder_error_terms": (list(self.ingress.last_decoder_error_terms)
                                          if self.ingress else []),
-            "stream_ingest_enabled": (self.ingress is not None
-                                      and time.time() < self.config.get("diagnostic_hello_until", 0)),
+            "stream_ingest_enabled": (self.ingress is not None and (
+                "paired_stream" in self.config
+                or time.time() < self.config.get("diagnostic_hello_until", 0))),
             "last_control_command": self.last_control_command,
             "observed_function_counts": dict(self.observed_function_counts),
             "unlisted_function_frames": self.unlisted_function_frames,
@@ -1233,14 +1280,14 @@ class CandidateService:
             camera_mac = getattr(self.ingress, "camera_mac", None)
             if camera_mac is None:
                 raise CandidateError("Camera identity required for multi-camera status")
-        # Only an expiring event probe may announce a temporary capability.
-        # The controller otherwise has no reason to send smart settings for a
-        # legacy camera with hasSmartDetect=false. Unpairing restores the
-        # camera's original flags in Protect.
-        smart_ready = (streaming and time.time() < (
-            self.config.get("diagnostic_pool_event_until", 0)
-            if isinstance(self.ingress, AiPortIngressPool)
-            else self.config.get("diagnostic_smart_probe_until", 0)))
+        # Smart readiness requires an explicitly configured detector. Passive
+        # pairing remains available without claiming an AI capability.
+        smart_ready = (streaming and (
+            ("live_detector" in self.config and self.detector_error is None)
+            or time.time() < (
+                self.config.get("diagnostic_pool_event_until", 0)
+                if isinstance(self.ingress, AiPortIngressPool)
+                else self.config.get("diagnostic_smart_probe_until", 0))))
         if smart_ready and isinstance(self.ingress, AiPortIngressPool):
             smart_ready = (self._inference is not None
                            and self._inference.is_available(camera_mac))
@@ -1250,7 +1297,9 @@ class CandidateService:
                 {"deviceID": camera_mac,
                  "smartDetect": (list(self._pool_smart_types())
                                  if isinstance(self.ingress, AiPortIngressPool)
-                                 else [self.config.get("diagnostic_smart_type", "person")])})
+                                 else [self.config["live_detector"]["smart_type"]]
+                                 if "live_detector" in self.config else
+                                 [self.config.get("diagnostic_smart_type", "person")])})
             self.smart_feature_probe_events += 1
         await self._send_control_event(
             ws, "EventAIPortStatus",
@@ -1488,11 +1537,11 @@ class CandidateService:
                 return
             # A disabled or unsupported policy also closes any prior event.
             await self._revoke_single_policy(ws)
-            # Accept only a one-camera, expiring, single-class object policy
-            # when a local detector or one-use wire probe is explicitly armed.
+            # Accept only this camera's validated single-class object policy.
             parsed_policy = None
             if (isinstance(self.ingress, AiPortIngress)
-                    and (time.time() < self.config.get("diagnostic_hello_until", 0)
+                    and ("live_detector" in self.config
+                         or time.time() < self.config.get("diagnostic_hello_until", 0)
                          or time.time() < self.config.get("diagnostic_smart_probe_until", 0))):
                 if time.time() < self.config.get("diagnostic_smart_probe_until", 0):
                     self._smart_settings_probe_shape = summarize_smart_request(
@@ -1507,8 +1556,11 @@ class CandidateService:
                     self.smart_settings_subset_matches += 1
             if (parsed_policy is not None
                     and parsed_policy.enabled_types == frozenset({
+                        self.config["live_detector"]["smart_type"]
+                        if "live_detector" in self.config else
                         self.config.get("diagnostic_smart_type", "person")})
-                    and time.time() < self.config.get("diagnostic_event_until", 0)
+                    and ("live_detector" in self.config and self.detector_error is None
+                         or time.time() < self.config.get("diagnostic_event_until", 0))
                     and self._tracker is not None):
                 self._smart_policy = parsed_policy
                 await self._reply_control(ws, function, request_id, 0, {})
@@ -1809,6 +1861,8 @@ class CandidateService:
                                         break
                             finally:
                                 self._current_ws = None
+                                if isinstance(self.ingress, AiPortIngress):
+                                    await self._revoke_single_policy(ws)
                                 diagnostic_expired = (
                                     expiry_task is not None and expiry_task.done()
                                     and not expiry_task.cancelled())

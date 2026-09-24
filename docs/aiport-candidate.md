@@ -56,6 +56,20 @@ The host's port 8443 is only a transport check. Protect's device management uses
 
 An adopted candidate can keep one camera paired without a diagnostic deadline by adding a private `paired_stream` object to its configuration. It must contain only `camera_mac`, `source_ip`, and `ffmpeg_path`. The MAC is the exact authorized camera, `source_ip` is the private controller address that supplies the RTSP stream, and `ffmpeg_path` is an absolute executable path inside the container. This mode accepts that camera's native stream control and decodes frames in memory at one frame per second. By itself it does not load a model, announce smart-detection readiness, or publish AI events. A complete bounded `diagnostic_detector`, `diagnostic_smart_probe_until`, and `diagnostic_event_until` overlay may run on that same paired camera; its expiry revokes the AI policy and readiness while leaving the stream connected. This overlay produced a live Person event in Protect All Detections on a paired legacy G3 camera, but did not establish a searchable Person class. `paired_stream` cannot be combined with the expiring `diagnostic_hello_until` stream profile. Keep the adopted identity and state directory when replacing the container image, then verify Protect's pairing state after the restart.
 
+An explicit `live_detector` policy keeps local detection running on that one paired camera without the ten-minute diagnostic deadline or 600-frame ceiling. It requires the detector-enabled image, a checksum-pinned local checkpoint, one advertised class, and an event-entry limit. It cannot be combined with any `diagnostic_*` field. For example, add this block to the same private config while leaving `paired_stream` and the adopted identity intact:
+
+```json
+"live_detector": {
+  "checkpoint_path": "/state/models/rf-detr-nano.pth",
+  "checkpoint_sha256": "SHA256_OF_THE_EXACT_LOCAL_CHECKPOINT",
+  "threshold": 0.3,
+  "smart_type": "person",
+  "max_events_per_hour": 12
+}
+```
+
+This opt-in mode accepts Protect's validated one-camera smart settings, including zone and reverification checks. It sends native enter, moving and leave events and offers an event snapshot through the pinned controller upload path. The budget limits new event entries in a rolling hour **within one process lifetime**; a restart resets it. A detector failure withdraws smart readiness without unpairing the camera. The paired stream remains available when the policy is removed. Multi-person tracking, simultaneous classes, durable rate limits, sustained resource use, and loaded Protect timeline/filter behavior still need native validation. Do not treat this single-camera mode as AI Port feature parity.
+
 Keep the camera paired between diagnostics. Expiring or removing an inference permit must leave `paired_stream` and the adopted identity intact; unpair only when the operator asks to remove the camera or a verified fault requires it. Verify the control connection and decoded stream after replacing the container. Neither pairing nor frame decoding alone proves Person indexing.
 
 For one diagnostic trial, start the candidate first and verify its `control_connected` health field. Then run the relay from a local Terminal, entering the macOS administrator password there, not in chat or a file:
