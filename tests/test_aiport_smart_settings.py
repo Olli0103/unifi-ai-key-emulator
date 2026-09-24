@@ -79,7 +79,7 @@ def test_accepts_camera_bound_full_frame_policy_without_retaining_raw_payload():
     assert not hasattr(policy, "zones")
 
 
-def test_person_zone_policy_matches_only_box_fully_inside_polygon():
+def test_person_zone_policy_requires_ninety_percent_box_overlap():
     raw = full_frame_policy()
     raw["enableSmartDetect"] = ["person"]
     raw["zones"] = {"7": {"coord": [100, 100, 900, 100, 900, 900, 100, 900],

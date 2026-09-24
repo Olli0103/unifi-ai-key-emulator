@@ -11,13 +11,21 @@ def square(*, x1=100, y1=100, x2=900, y2=900):
             "triggerLight": True, "triggerAccessTypes": []}
 
 
-def test_entire_person_box_must_lie_strictly_inside_zone():
+def test_person_box_needs_ninety_percent_zone_overlap():
     zone, = parse_person_zones({"7": square()})
     assert zone.zone_id == 7
     assert zone.contains_box((0.2, 0.3, 0.5, 0.8))
     assert not zone.contains_box((0.05, 0.3, 0.5, 0.8))
-    assert not zone.contains_box((0.1, 0.3, 0.5, 0.8))
+    assert zone.contains_box((0.1, 0.3, 0.5, 0.8))
+    assert zone.contains_box((0.09, 0.3, 0.2, 0.8))
+    assert not zone.contains_box((0.08, 0.3, 0.2, 0.8))
     assert not zone.contains_box((0.95, 0.3, 1.0, 0.8))
+
+
+def test_person_at_frame_bottom_still_matches_mostly_full_frame_zone():
+    zone, = parse_person_zones({"7": square(x1=25, y1=35, x2=976, y2=960)})
+    assert zone.contains_box((0.45, 0.36, 0.63, 0.995))
+    assert not zone.contains_box((0.45, 0.7, 0.63, 0.995))
 
 
 def test_concave_zone_rejects_box_crossing_cutout():
@@ -26,6 +34,8 @@ def test_concave_zone_rejects_box_crossing_cutout():
                         700, 400, 300, 400, 300, 900, 100, 900]
     zone, = parse_person_zones({"2": concave})
     assert zone.contains_box((0.15, 0.15, 0.25, 0.3))
+    assert zone.contains_box((0.2, 0.5, 0.31, 0.8))
+    assert not zone.contains_box((0.2, 0.5, 0.32, 0.8))
     assert not zone.contains_box((0.2, 0.5, 0.8, 0.8))
 
 
