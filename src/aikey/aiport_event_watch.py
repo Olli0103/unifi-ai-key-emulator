@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from copy import deepcopy
 import json
 from pathlib import Path
 import time
+from typing import Callable
 
 import aiohttp
 
@@ -82,7 +84,8 @@ def _event(raw: str, camera_ids: set[str]) -> tuple[str, str, str, str, bool, st
 
 async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
                        cert_file: Path, camera_scope: str = "legacy-only",
-                       camera_name: str | None = None, seconds: int = 60) -> dict:
+                       camera_name: str | None = None, seconds: int = 60,
+                       on_progress: Callable[[dict], None] | None = None) -> dict:
     """Watch a validated camera set for at most ten minutes without storing bodies."""
     if type(seconds) is not int or not 1 <= seconds <= 600:
         raise AiPortPlanError("Event watch must last 1 to 600 seconds")
@@ -108,6 +111,11 @@ async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
                   for action in ("add", "update")},
               "attribution_to_ai_port": "needs_evidence",
               "timeline_persistence": "needs_evidence"}
+
+    def emit_progress() -> None:
+        if on_progress is not None:
+            on_progress(deepcopy(result))
+
     if not camera_ids:
         return result
     try:
@@ -129,6 +137,7 @@ async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
                     max_msg_size=_MAX_FRAME_BYTES, compress=0, heartbeat=30,
                     autoclose=False) as ws:
                 result["subscription_opened"] = True
+                emit_progress()
                 deadline = time.monotonic() + seconds
                 seen_ids: set[tuple[str, str]] = set()
                 explicit_smart_states: dict[tuple[str, str], str] = {}
@@ -157,6 +166,7 @@ async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
                         parsed = _event(message.data, camera_ids)
                     except ValueError:
                         result["invalid_messages"] += 1
+                        emit_progress()
                         continue
                     if parsed is None:
                         continue
@@ -189,6 +199,7 @@ async def watch_events(host: str, *, api_key_file: Path, trust_file: Path,
                             result["smart_type_states"]["add"][smart_type_state] += 1
                         if is_person:
                             result["targeted_person_adds"] += 1
+                    emit_progress()
         except (aiohttp.ClientError, TimeoutError, UnicodeError) as exc:
             raise InventoryError(f"Protect event subscription failed ({type(exc).__name__})") from exc
     return result
@@ -204,16 +215,28 @@ def main(argv: list[str] | None = None) -> int:
                         default="legacy-only")
     parser.add_argument("--camera-name", help="Exact eligible Protect camera name to watch")
     parser.add_argument("--seconds", type=int, default=60)
+    parser.add_argument("--progress-jsonl", action="store_true",
+                        help="Print bounded count snapshots during the watch")
     args = parser.parse_args(argv)
+
+    def progress(report: dict) -> None:
+        print(json.dumps({"phase": "progress", "report": report},
+                         separators=(",", ":")), flush=True)
+
     try:
         report = asyncio.run(watch_events(
             args.controller, api_key_file=args.api_key_file,
             trust_file=args.web_trust_file, cert_file=args.web_cert_file,
             camera_scope=args.camera_scope, camera_name=args.camera_name,
-            seconds=args.seconds))
+            seconds=args.seconds,
+            on_progress=progress if args.progress_jsonl else None))
     except (AiPortPlanError, InventoryError, OSError) as exc:
         parser.error(str(exc))
-    print(json.dumps(report, indent=2))
+    if args.progress_jsonl:
+        print(json.dumps({"phase": "final", "report": report},
+                         separators=(",", ":")), flush=True)
+    else:
+        print(json.dumps(report, indent=2))
     return 0
 
 
