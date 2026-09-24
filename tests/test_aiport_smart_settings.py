@@ -204,15 +204,16 @@ def test_accepts_deprecated_read_only_auto_recognition_precision():
 
 @pytest.mark.parametrize("field,value,error", [
     ("deviceID", "2A1122334456", "wrong_camera"),
-    ("enableSmartDetect", ["face"], "unsupported_smart_feature"),
+    ("enableSmartDetect", ["face"], "unsupported_smart_feature:types"),
     ("enableSmartDetect", ["person", "person"], "invalid_smart_settings"),
     ("zones", {"1": {"coord": [0, 0, 1000, 0, 1000, 1000]}},
      "invalid_smart_zone"),
     ("excludeZones", {"2": {"coord": [0, 0, 1000, 0, 1000, 1000]}},
-     "unsupported_smart_feature"),
-    ("lines", {"1": {}}, "unsupported_smart_feature"),
-    ("enableTamperDetection", True, "unsupported_smart_feature"),
-    ("enableTamperDetection", 0, "unsupported_smart_feature"),
+     "unsupported_smart_feature:regions"),
+    ("lines", {"1": {}}, "unsupported_smart_feature:regions"),
+    ("accessTrigger", True, "unsupported_smart_feature:advanced"),
+    ("enableTamperDetection", True, "unsupported_smart_feature:tamper"),
+    ("enableTamperDetection", 0, "unsupported_smart_feature:tamper"),
     ("eventStartMSec", True, "invalid_smart_settings"),
     ("eventStopMSec", 120_001, "invalid_smart_settings"),
     ("recognitionAccuracy", {"face": float("nan")}, "invalid_smart_settings"),
@@ -220,8 +221,9 @@ def test_accepts_deprecated_read_only_auto_recognition_precision():
 def test_rejects_wrong_camera_or_unenforced_policy(field, value, error):
     raw = full_frame_policy()
     raw[field] = value
-    with pytest.raises(SmartSettingsError, match=error):
+    with pytest.raises(SmartSettingsError) as caught:
         parse_smart_settings(raw, camera_mac=CAMERA)
+    assert str(caught.value) == error
 
 
 def test_rejects_unknown_fields_and_nested_nonempty_features():

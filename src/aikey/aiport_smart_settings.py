@@ -196,23 +196,23 @@ def _reverification_ceilings(value: object, requested: list[str]
     class; it does not perform a second inference pass.
     """
     if not isinstance(value, dict) or set(value) != _OBJECT_TYPES:
-        raise SmartSettingsError("unsupported_smart_feature")
+        raise SmartSettingsError("unsupported_smart_feature:reverification")
     ceilings = []
     for kind, item in value.items():
         if not isinstance(item, dict) or type(item.get("enable")) is not bool:
-            raise SmartSettingsError("unsupported_smart_feature")
+            raise SmartSettingsError("unsupported_smart_feature:reverification")
         if not item["enable"]:
             if set(item) != {"enable"}:
-                raise SmartSettingsError("unsupported_smart_feature")
+                raise SmartSettingsError("unsupported_smart_feature:reverification")
             continue
         if set(item) != {"enable", "mode", "minPresenceProbability",
                          "maxPresenceProbability"} or item["mode"] != "custom":
-            raise SmartSettingsError("unsupported_smart_feature")
+            raise SmartSettingsError("unsupported_smart_feature:reverification")
         minimum = item["minPresenceProbability"]
         maximum = item["maxPresenceProbability"]
         if (type(minimum) is not int or type(maximum) is not int
                 or not 0 <= minimum <= maximum <= 100):
-            raise SmartSettingsError("unsupported_smart_feature")
+            raise SmartSettingsError("unsupported_smart_feature:reverification")
         if kind in requested:
             ceilings.append((kind, maximum / 100))
     return tuple(sorted(ceilings))
@@ -248,7 +248,7 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
             or len(set(requested)) != len(requested)):
         raise SmartSettingsError("invalid_smart_settings")
     if not set(requested) <= _OBJECT_TYPES:
-        raise SmartSettingsError("unsupported_smart_feature")
+        raise SmartSettingsError("unsupported_smart_feature:types")
     start_ms = _timing(payload["eventStartMSec"])
     stop_ms = _timing(payload["eventStopMSec"])
 
@@ -269,18 +269,18 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
         if not isinstance(value, dict):
             raise SmartSettingsError("invalid_smart_settings")
         if value:
-            raise SmartSettingsError("unsupported_smart_feature")
+            raise SmartSettingsError("unsupported_smart_feature:regions")
     for name in _OPTIONAL_ADVANCED - {"reVerificationPolicy"}:
         value = payload.get(name)
         if value is not None and value is not False and not (
                 type(value) is dict and not value):
-            raise SmartSettingsError("unsupported_smart_feature")
+            raise SmartSettingsError("unsupported_smart_feature:advanced")
     reverify = payload.get("reVerificationPolicy")
     ceilings = (_reverification_ceilings(reverify, requested)
                 if reverify not in (None, {}) else ())
     tamper = payload.get("enableTamperDetection")
     if tamper is not None and tamper is not False:
-        raise SmartSettingsError("unsupported_smart_feature")
+        raise SmartSettingsError("unsupported_smart_feature:tamper")
 
     accuracy = payload.get("recognitionAccuracy")
     if accuracy is not None:

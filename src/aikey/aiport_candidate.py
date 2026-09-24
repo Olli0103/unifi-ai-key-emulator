@@ -814,7 +814,7 @@ class CandidateService:
             await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 0, {})
             self.smart_settings_probe_acks += 1
             return
-        if rejection_reason not in {
+        if (rejection_reason or "").split(":", 1)[0] not in {
                 "invalid_smart_settings", "wrong_camera", "unsupported_smart_feature",
                 "invalid_smart_zone", "unsupported_smart_zone"}:
             rejection_reason = None

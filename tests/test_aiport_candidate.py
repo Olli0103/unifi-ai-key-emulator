@@ -1898,7 +1898,7 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
                     "enableTamperDetection": True},
     }).encode())
     camera_health = json.loads((await service._health(None)).text)["pool_cameras"]
-    assert camera_health[0]["policy_rejection"] == "unsupported_smart_feature"
+    assert camera_health[0]["policy_rejection"] == "unsupported_smart_feature:tamper"
     assert camera_health[1]["policy_rejection"] is None
 
     await service._handle_diagnostic_frame(sink, json.dumps({
