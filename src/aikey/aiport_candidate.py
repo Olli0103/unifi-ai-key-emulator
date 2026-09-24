@@ -120,7 +120,7 @@ def load_config(path: Path) -> dict:
                           "diagnostic_event_until",
                           "diagnostic_native_event_probe",
                           "diagnostic_recorded_event_probe",
-                          "diagnostic_smart_type",
+                          "diagnostic_smart_type", "diagnostic_pool_smart_types",
                           "diagnostic_adoption_until", "diagnostic_resume_until",
                           "diagnostic_function_fingerprints_until"}
     if not isinstance(value, dict) or not required <= set(value) or not set(value) <= allowed:
@@ -276,6 +276,15 @@ def load_config(path: Path) -> dict:
                 or not ("diagnostic_event_until" in value
                         or "diagnostic_pool_event_until" in value)):
             raise CandidateError("Smart type requires a bounded event diagnostic")
+    if "diagnostic_pool_smart_types" in value:
+        kinds = value["diagnostic_pool_smart_types"]
+        if ("diagnostic_pool_event_until" not in value
+                or "diagnostic_smart_type" in value
+                or not isinstance(kinds, list) or not 1 <= len(kinds) <= 3
+                or any(type(kind) is not str or kind not in {
+                    "person", "vehicle", "animal"} for kind in kinds)
+                or len(set(kinds)) != len(kinds)):
+            raise CandidateError("Pool smart types require a bounded multi-camera event diagnostic")
     value["controller_ip"] = _private_ipv4(value["controller_ip"])
     value["device_ip"] = _private_ipv4(value["device_ip"])
     mac = value["mac"]
@@ -415,7 +424,8 @@ class CandidateService:
         if "diagnostic_pool_detector" in config:
             detector = config["diagnostic_pool_detector"]
             cameras = [stream["camera_mac"] for stream in config["diagnostic_streams"]]
-            self._camera_engine = CameraPolicyEngine(cameras)
+            self._camera_engine = CameraPolicyEngine(
+                cameras, max_events_per_camera=len(self._pool_smart_types()))
             self._inference = FairInference(
                 cameras,
                 load_detector=lambda: RFDetrNanoDetector.from_checkpoint(
@@ -537,8 +547,8 @@ class CandidateService:
         else:
             self.smart_settings_subset_matches += 1
         active = {stream["deviceID"] for stream in self.ingress.list_streams()}
-        if (parsed is not None and parsed.enabled_types == frozenset({
-                self.config.get("diagnostic_smart_type", "person")})
+        if (parsed is not None and parsed.enabled_types
+                and parsed.enabled_types <= set(self._pool_smart_types())
                 and camera in active and self._inference is not None
                 and time.time() < self.config.get("diagnostic_pool_event_until", 0)):
             engine.replace_policy(camera, parsed)
@@ -548,6 +558,10 @@ class CandidateService:
         await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
                                   {"description": "smart_detection_unavailable"})
         self.smart_settings_requests_rejected += 1
+
+    def _pool_smart_types(self) -> tuple[str, ...]:
+        return tuple(self.config.get("diagnostic_pool_smart_types", [
+            self.config.get("diagnostic_smart_type", "person")]))
 
     async def _revoke_pool_policy(self, camera_mac: str) -> None:
         engine = self._camera_engine
@@ -1087,7 +1101,9 @@ class CandidateService:
             await self._send_control_event(
                 ws, "EventFeatureFlagsUpdated",
                 {"deviceID": camera_mac,
-                 "smartDetect": [self.config.get("diagnostic_smart_type", "person")]})
+                 "smartDetect": (list(self._pool_smart_types())
+                                 if isinstance(self.ingress, AiPortIngressPool)
+                                 else [self.config.get("diagnostic_smart_type", "person")])})
             self.smart_feature_probe_events += 1
         await self._send_control_event(
             ws, "EventAIPortStatus",
