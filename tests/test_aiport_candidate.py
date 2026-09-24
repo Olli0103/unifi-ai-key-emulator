@@ -116,6 +116,57 @@ def test_multi_camera_event_policy_requires_same_expiry_and_bounded_local_model(
         load_config(tmp_path / "config.json")
 
 
+@pytest.mark.parametrize("kinds", [
+    [], ["person", "person"], ["person", "vehicle", "animal", "person"],
+    ["person", "face"], "person", [True],
+])
+def test_pool_smart_types_reject_invalid_or_duplicate_classes(tmp_path, kinds):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    config["diagnostic_pool_event_until"] = config["diagnostic_hello_until"]
+    config["diagnostic_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1",
+         "ffmpeg_path": sys.executable}
+        for mac in ("2A1122334455", "2A1122334456")]
+    config["diagnostic_pool_detector"] = {
+        "checkpoint_path": "/tmp/nano.pth", "checkpoint_sha256": "a" * 64,
+        "threshold": 0.5, "max_frames_per_camera": 3}
+    config["diagnostic_pool_smart_types"] = kinds
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="Pool smart types"):
+        load_config(tmp_path / "config.json")
+
+
+def test_pool_smart_types_require_pool_event_permit_without_single_type(tmp_path):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    config["diagnostic_pool_event_until"] = config["diagnostic_hello_until"]
+    config["diagnostic_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1",
+         "ffmpeg_path": sys.executable}
+        for mac in ("2A1122334455", "2A1122334456")]
+    config["diagnostic_pool_detector"] = {
+        "checkpoint_path": "/tmp/nano.pth", "checkpoint_sha256": "a" * 64,
+        "threshold": 0.5, "max_frames_per_camera": 3}
+    config["diagnostic_pool_smart_types"] = ["person", "vehicle", "animal"]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["diagnostic_pool_smart_types"] == [
+        "person", "vehicle", "animal"]
+    del config["diagnostic_pool_event_until"]
+    del config["diagnostic_pool_detector"]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="Pool smart types"):
+        load_config(tmp_path / "config.json")
+    config["diagnostic_pool_event_until"] = config["diagnostic_hello_until"]
+    config["diagnostic_pool_detector"] = {
+        "checkpoint_path": "/tmp/nano.pth", "checkpoint_sha256": "a" * 64,
+        "threshold": 0.5, "max_frames_per_camera": 3}
+    config["diagnostic_smart_type"] = "person"
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="Pool smart types"):
+        load_config(tmp_path / "config.json")
+
+
 @pytest.mark.parametrize("until", [True, -1, "beyond_window"])
 def test_function_fingerprint_probe_rejects_unbounded_config(tmp_path, until):
     config = fixture_state(tmp_path)
@@ -1331,6 +1382,112 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
     assert health["pool_inference"]["successes"] == 5
     assert health["smart_events_entered"] == 2
     assert "private-pool-frame" not in json.dumps(health)
+    await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_pool_multiclass_probe_keeps_camera_policies_and_tracks_separate(
+        tmp_path, monkeypatch):
+    config = fixture_state(tmp_path)
+    config["diagnostic_hello_until"] = int(time.time()) + 60
+    config["diagnostic_pool_event_until"] = config["diagnostic_hello_until"]
+    config["diagnostic_pool_smart_types"] = ["person", "vehicle", "animal"]
+    cameras = ("2A1122334455", "2A1122334456")
+    config["diagnostic_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1",
+         "ffmpeg_path": sys.executable} for mac in cameras]
+    config["diagnostic_pool_detector"] = {
+        "checkpoint_path": "/tmp/nano.pth", "checkpoint_sha256": "a" * 64,
+        "threshold": 0.5, "max_frames_per_camera": 3}
+
+    observations = (
+        ObjectObservation("person", "person", 0.91, (0.1, 0.1, 0.3, 0.7)),
+        ObjectObservation("vehicle", "car", 0.92, (0.35, 0.2, 0.65, 0.7)),
+        ObjectObservation("animal", "dog", 0.93, (0.7, 0.2, 0.9, 0.7)),
+    )
+
+    class Model:
+        def detect(self, frame):
+            return observations
+
+    monkeypatch.setattr(RFDetrNanoDetector, "from_checkpoint", lambda *a, **k: Model())
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": mac} for mac in cameras]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    for mac in cameras:
+        await service._send_stream_status(sink, streaming=True, camera_mac=mac)
+    flags = [message for message in sink.messages
+             if message["functionName"] == "EventFeatureFlagsUpdated"]
+    assert len(flags) == 2
+    assert all(message["payload"]["smartDetect"] == [
+        "person", "vehicle", "animal"] for message in flags)
+
+    for index, (mac, kinds) in enumerate(zip(cameras, (
+            ["person", "vehicle", "animal"], ["person"])), 1):
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "ChangeSmartDetectSettings", "messageId": index,
+            "payload": {"deviceID": mac, "enableSmartDetect": kinds,
+                        "eventStartMSec": 1000, "eventStopMSec": 3000},
+        }).encode())
+        assert sink.messages[-1]["statusCode"] == 0
+
+    for _ in range(2):
+        for mac in cameras:
+            await service._observe_pool_frame(mac, b"bounded-test-frame")
+        await service._inference.join()
+    enters = [message["payload"] for message in sink.messages
+              if message["functionName"] == "EventSmartDetect"
+              and message["payload"]["edgeType"] == "enter"]
+    assert [(event["deviceID"], event["objectTypes"][0]) for event in enters] == [
+        (cameras[0], "person"), (cameras[0], "vehicle"),
+        (cameras[0], "animal"), (cameras[1], "person")]
+    assert len({event["descriptors"][0]["trackerID"]
+                for event in enters if event["deviceID"] == cameras[0]}) == 3
+    assert service.smart_events_entered == 4
+
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 3,
+        "payload": {"deviceID": cameras[0], "enableSmartDetect": ["person"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000},
+    }).encode())
+    assert sink.messages[-1]["statusCode"] == 0
+    leaves = [message["payload"] for message in sink.messages
+              if message["functionName"] == "EventSmartDetect"
+              and message["payload"]["edgeType"] == "leave"]
+    assert [(event["deviceID"], event["objectTypes"][0]) for event in leaves] == [
+        (cameras[0], "person"), (cameras[0], "vehicle"),
+        (cameras[0], "animal")]
+    assert service._camera_engine.has_policy(cameras[1])
+
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 5,
+        "payload": {"deviceID": cameras[0], "enableSmartDetect": ["face"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000},
+    }).encode())
+    assert sink.messages[-1]["statusCode"] == 501
+    assert not service._camera_engine.has_policy(cameras[0])
+    assert service._camera_engine.has_policy(cameras[1])
+
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "UiStreamControl", "messageId": 4,
+        "payload": {"streaming": False, "deviceID": cameras[1]},
+    }).encode())
+    assert not service._camera_engine.has_policy(cameras[1])
+    leaves = [message["payload"] for message in sink.messages
+              if message["functionName"] == "EventSmartDetect"
+              and message["payload"]["edgeType"] == "leave"]
+    assert (leaves[-1]["deviceID"], leaves[-1]["objectTypes"]) == (
+        cameras[1], ["person"])
     await service.stop()
 
 
