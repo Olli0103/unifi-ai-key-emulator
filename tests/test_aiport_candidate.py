@@ -17,6 +17,7 @@ from aiohttp.test_utils import TestServer
 import pytest
 from PIL import Image
 
+from aikey.aiport_api_detection import ApiObjectDetector
 from aikey.aiport_candidate import CandidateError, CandidateService, load_config
 from aikey.aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
 from aikey.aiport_snapshots import SmartSnapshot
@@ -66,6 +67,78 @@ def test_live_pool_accepts_explicit_capped_api_provider(tmp_path):
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     with pytest.raises(CandidateError, match="API detector"):
         load_config(tmp_path / "config.json")
+
+
+@pytest.mark.asyncio
+async def test_live_api_frames_publish_native_person_event_without_network(
+        tmp_path, monkeypatch):
+    """Exercise the full API-frame-to-native-event path with a fake reply."""
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{
+        "camera_mac": camera, "source_ip": "192.168.10.1",
+        "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person"], "max_events_per_hour": 12,
+        "max_requests_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    calls = []
+
+    def fake_provider(_url, _headers, payload):
+        calls.append(payload)
+        return {"status": "completed", "output": [{
+            "type": "message", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": json.dumps({
+                "detections": [{"kind": "person", "label": "person",
+                                "score": 0.95, "box": [0.2, 0.1, 0.4, 0.8]}]})}],
+        }]}
+
+    monkeypatch.setattr(
+        "aikey.aiport_candidate.ApiObjectDetector",
+        lambda provider, state_dir, **options: ApiObjectDetector(
+            provider, state_dir, transport=fake_provider, **options))
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    frame_io = BytesIO()
+    Image.new("RGB", (640, 360), "gray").save(frame_io, format="JPEG")
+    frame = frame_io.getvalue()
+    try:
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "ChangeSmartDetectSettings", "messageId": 1,
+            "payload": {"deviceID": camera, "enableSmartDetect": ["person"],
+                        "eventStartMSec": 1000, "eventStopMSec": 3000,
+                        "zones": {}}}).encode())
+        assert sink.messages[-1]["statusCode"] == 0
+        for _ in range(2):
+            await service._observe_pool_frame(camera, frame)
+            await service._inference.join()
+        enters = [message for message in sink.messages
+                  if message.get("functionName") == "EventSmartDetect"
+                  and message["payload"]["edgeType"] == "enter"]
+        assert len(calls) == 2
+        assert len(enters) == 1
+        assert enters[0]["payload"]["deviceID"] == camera
+        assert enters[0]["payload"]["objectTypes"] == ["person"]
+        assert service._inference.camera_snapshot()[0]["observations"]["person"] == 2
+    finally:
+        await service.stop()
 
 
 @pytest.mark.asyncio
