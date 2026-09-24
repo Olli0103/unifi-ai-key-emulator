@@ -81,6 +81,7 @@ async def test_round_robin_coalesces_busy_camera_and_keeps_results_separate():
         "camera_count": 3, "attempts": 4, "successes": 4,
         "dropped_frames": 1, "failed_cameras": 0,
         "api_failures": 0,
+        "last_api_error_code": None,
         "pending_cameras": 0, "model_load_failed": False, "closed": False,
     }
     camera_status = scheduler.camera_snapshot()
@@ -153,7 +154,9 @@ async def test_provider_failure_keeps_camera_available_for_next_frame():
     assert calls[0] == (FIRST, b"fail")
     assert set(calls[1:]) == {(FIRST, b"next"), (SECOND, b"other")}
     assert scheduler.snapshot()["api_failures"] == 1
+    assert scheduler.snapshot()["last_api_error_code"] == "api_detection_request_failed"
     assert scheduler.camera_snapshot()[0]["api_failures"] == 1
+    assert scheduler.camera_snapshot()[0]["last_api_error_code"] == "api_detection_request_failed"
     assert scheduler.snapshot()["failed_cameras"] == 0
     await scheduler.close()
 

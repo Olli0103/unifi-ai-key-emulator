@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import stat
 from typing import Any, Callable
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
@@ -53,6 +54,8 @@ class _MotionGate:
     def __init__(self):
         self._previous: dict[str, bytes] = {}
         self._pending: dict[str, int] = {}
+        self._quiet: dict[str, int] = {}
+        self._armed: dict[str, bool] = {}
 
     def should_request(self, camera: str, frame: bytes) -> bool:
         try:
@@ -69,8 +72,17 @@ class _MotionGate:
         if previous is None:
             return False
         changed = sum(abs(a - b) >= 24 for a, b in zip(previous, thumbnail, strict=True))
-        if changed >= _MOTION_CHANGED_CELLS and self._pending.get(camera, 0) == 0:
+        if changed < _MOTION_CHANGED_CELLS:
+            self._quiet[camera] = min(3, self._quiet.get(camera, 0) + 1)
+            if self._quiet[camera] == 3:
+                self._armed[camera] = True
+        else:
+            self._quiet[camera] = 0
+        if (changed >= _MOTION_CHANGED_CELLS
+                and self._armed.get(camera, True)
+                and self._pending.get(camera, 0) == 0):
             self._pending[camera] = 2
+            self._armed[camera] = False
         if self._pending.get(camera, 0):
             self._pending[camera] -= 1
             return True
@@ -147,6 +159,12 @@ def _post(url: str, headers: dict, payload: dict) -> dict:
             return result
     except ApiDetectionError:
         raise
+    except HTTPError as exc:
+        code = ("api_detection_http_429" if exc.code == 429 else
+                "api_detection_http_4xx" if 400 <= exc.code < 500 else
+                "api_detection_http_5xx" if 500 <= exc.code < 600 else
+                "api_detection_http_failure")
+        raise ApiDetectionError(code) from exc
     except Exception as exc:
         raise ApiDetectionError("api_detection_request_failed") from exc
 
@@ -203,5 +221,7 @@ class ApiObjectDetector:
             return parse_detections(text, threshold=self.threshold)
         except ApiDetectionError:
             raise
-        except (ProviderError, TypeError, ValueError) as exc:
+        except ProviderError as exc:
+            raise ApiDetectionError("api_detection_provider_response_invalid") from exc
+        except (TypeError, ValueError) as exc:
             raise ApiDetectionError("api_detection_request_failed") from exc

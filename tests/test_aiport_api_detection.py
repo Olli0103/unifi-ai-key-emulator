@@ -2,12 +2,13 @@
 
 import json
 from io import BytesIO
+from urllib.error import HTTPError
 
 import pytest
 from PIL import Image, ImageDraw
 
 from aikey.aiport_api_detection import (
-    ApiDetectionError, ApiObjectDetector, parse_detections,
+    ApiDetectionError, ApiObjectDetector, _post, parse_detections,
 )
 
 
@@ -83,6 +84,41 @@ def test_motion_gate_detects_person_sized_change(tmp_path):
     assert detector.detect_for_camera(FIRST, scene(False)) == ()
     assert detector.detect_for_camera(FIRST, scene(True)) == ()
     assert len(requests) == 1
+
+
+def test_continuous_motion_is_one_burst_until_three_quiet_frames(tmp_path):
+    calls = []
+
+    def transport(*_args):
+        calls.append(1)
+        return _response('{"detections":[]}')
+
+    detector = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.8,
+                                 max_requests_per_hour=4, transport=transport)
+    detector.detect_for_camera(FIRST, STILL)
+    detector.detect_for_camera(FIRST, FRAME)
+    detector.detect_for_camera(FIRST, STILL)
+    for image in (FRAME, STILL) * 5:
+        detector.detect_for_camera(FIRST, image)
+    assert len(calls) == 2
+    for _ in range(3):
+        detector.detect_for_camera(FIRST, STILL)
+    detector.detect_for_camera(FIRST, FRAME)
+    assert len(calls) == 3
+
+
+def test_http_error_exposes_only_status_class(monkeypatch):
+    class Opener:
+        def open(self, *_args, **_kwargs):
+            raise HTTPError("https://api.openai.com/v1/responses", 429,
+                            "private provider response", {},
+                            BytesIO(b"private provider response"))
+
+    monkeypatch.setattr("aikey.aiport_api_detection.build_opener",
+                        lambda *_args: Opener())
+    with pytest.raises(ApiDetectionError, match="api_detection_http_429") as failure:
+        _post("https://api.openai.com/v1/responses", {}, {})
+    assert "private" not in str(failure.value)
 
 
 @pytest.mark.parametrize("text", [

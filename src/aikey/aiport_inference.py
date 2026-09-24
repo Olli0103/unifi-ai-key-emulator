@@ -30,6 +30,16 @@ class FairInference:
     them. An inference or observer failure disables only that camera.
     """
 
+    _SAFE_API_ERRORS = frozenset({
+        "invalid_api_detection_frame", "invalid_api_detection_response",
+        "invalid_api_detection_policy", "invalid_api_detection_provider",
+        "api_detection_endpoint_not_approved", "api_detection_http_failure",
+        "api_detection_http_4xx", "api_detection_http_429",
+        "api_detection_http_5xx", "api_detection_response_too_large",
+        "api_detection_request_failed", "api_detection_provider_response_invalid",
+        "invalid_api_key_file", "inline_api_key_forbidden",
+    })
+
     def __init__(self, camera_macs: list[str], *,
                  load_detector: Callable[[], Detector],
                  on_result: Callable[[str, tuple[ObjectObservation, ...], int, bytes], Awaitable[None]],
@@ -66,7 +76,9 @@ class FairInference:
         self.dropped_frames = 0
         self.failed_cameras = 0
         self.api_failures = 0
+        self.last_api_error_code: str | None = None
         self._api_failures_by_camera = dict.fromkeys(cameras, 0)
+        self._last_api_error_by_camera: dict[str, str | None] = dict.fromkeys(cameras)
 
     async def observe(self, camera_mac: str, frame: bytes, *, generation: int) -> None:
         camera = normalize_mac(camera_mac)
@@ -130,12 +142,18 @@ class FairInference:
                 for observation in result:
                     self._observations[camera][observation.kind] += 1
                 await self._on_result(camera, result, generation, frame)
-            except ApiDetectionError:
+            except ApiDetectionError as exc:
                 # A remote API can fail for one frame without making the
                 # camera or its Protect smart policy permanently unavailable.
                 # The detector's durable request budget still bounds retries.
                 self.api_failures += 1
                 self._api_failures_by_camera[camera] += 1
+                raw_code = exc.args[0] if len(exc.args) == 1 else None
+                safe_code = (raw_code if isinstance(raw_code, str)
+                             and raw_code in self._SAFE_API_ERRORS
+                             else "api_detection_failure")
+                self._last_api_error_by_camera[camera] = safe_code
+                self.last_api_error_code = safe_code
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -205,6 +223,7 @@ class FairInference:
             "dropped_frames": self.dropped_frames,
             "failed_cameras": self.failed_cameras,
             "api_failures": self.api_failures,
+            "last_api_error_code": self.last_api_error_code,
             "pending_cameras": len(self._pending),
             "model_load_failed": self._global_failure,
             "closed": self._closed,
@@ -228,6 +247,7 @@ class FairInference:
                 "observations": dict(self._observations[camera]),
                 "disabled": camera in self._disabled or self._global_failure,
                 "api_failures": self._api_failures_by_camera[camera],
+                "last_api_error_code": self._last_api_error_by_camera[camera],
                 "pending": camera in self._pending,
                 "api_requests_remaining": remaining,
                 "api_request_budget_healthy": budget_healthy,
