@@ -216,3 +216,19 @@ def test_live_event_budget_rolls_forward_without_affecting_other_camera():
     assert status[0]["event_budget_remaining"] == 0
     assert status[0]["eligible_observations"] >= 2
     assert FIRST not in str(status)
+
+
+def test_camera_counters_separate_score_zone_and_tracking_gates():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=2,
+                                event_window_seconds=3600)
+    engine.replace_policy(FIRST, policy(FIRST, zone=True, reverify=True))
+    # Below Protect's 80% reverification ceiling.
+    assert engine.observe(FIRST, (person(score=0.7),), now=1) == ()
+    # Above the score gate, outside the validated zone.
+    assert engine.observe(FIRST, (person(box=OUTSIDE),), now=2) == ()
+    assert engine.observe(FIRST, (person(),), now=3) == ()
+    status, = engine.camera_snapshot(now=3)
+    assert status["score_eligible_observations"] == 2
+    assert status["eligible_observations"] == 1
+    assert status["eligible_frames"] == 1
+    assert status["events_entered"] == 0

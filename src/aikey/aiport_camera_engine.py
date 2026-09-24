@@ -56,6 +56,8 @@ class CameraPolicyEngine:
         self._event_times: dict[str, deque[float]] = {
             camera: deque() for camera in cameras}
         self._eligible_observations = dict.fromkeys(cameras, 0)
+        self._score_eligible_observations = dict.fromkeys(cameras, 0)
+        self._eligible_frames = dict.fromkeys(cameras, 0)
         self._last_moving: dict[str, dict[int, float]] = {
             camera: {} for camera in cameras}
         self._generations = dict.fromkeys(cameras, 0)
@@ -102,10 +104,13 @@ class CameraPolicyEngine:
         policy = self._policies[camera]
         if policy is None:
             return ()
-        selected = tuple(value for value in observations
-                         if policy.allows_score(value.kind, value.score)
-                         and policy.zone_ids(value.kind, value.box) is not None)
+        score_selected = tuple(value for value in observations
+                               if policy.allows_score(value.kind, value.score))
+        self._score_eligible_observations[camera] += len(score_selected)
+        selected = tuple(value for value in score_selected
+                         if policy.zone_ids(value.kind, value.box) is not None)
         self._eligible_observations[camera] += len(selected)
+        self._eligible_frames[camera] += bool(selected)
         changes = self._trackers[camera].update(selected, now=now)
         if self._event_window_seconds is not None:
             cutoff = now - self._event_window_seconds
@@ -165,7 +170,9 @@ class CameraPolicyEngine:
                 used = sum(at > cutoff for at in self._event_times[camera])
             result.append({
                 "policy_enabled": self._policies[camera] is not None,
+                "score_eligible_observations": self._score_eligible_observations[camera],
                 "eligible_observations": self._eligible_observations[camera],
+                "eligible_frames": self._eligible_frames[camera],
                 "events_entered": self._event_counts[camera],
                 "active_tracks": len(self._active[camera]),
                 "event_budget_remaining": max(0, self._max_events - used),
