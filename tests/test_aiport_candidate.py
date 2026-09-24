@@ -132,7 +132,7 @@ def test_paired_stream_accepts_bounded_live_detector_without_hello_expiry(tmp_pa
     config["diagnostic_event_until"] = until
     config["diagnostic_detector"] = {
         "checkpoint_path": str(tmp_path / "model.pt"),
-        "checkpoint_sha256": "a" * 64, "threshold": 0.3, "max_frames": 120}
+        "checkpoint_sha256": "a" * 64, "threshold": 0.3, "max_frames": 600}
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     loaded = load_config(tmp_path / "config.json")
     service = CandidateService(loaded, tmp_path)
@@ -140,6 +140,11 @@ def test_paired_stream_accepts_bounded_live_detector_without_hello_expiry(tmp_pa
     assert service.ingress.frame_observer is not None
     assert service._tracker is not None
     assert service._inference is None
+
+    config["diagnostic_detector"]["max_frames"] = 601
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="bounded detector"):
+        load_config(tmp_path / "config.json")
 
 
 @pytest.mark.asyncio

@@ -233,6 +233,8 @@ def load_config(path: Path) -> dict:
                 or not _PIN.fullmatch(detector["checkpoint_sha256"])
                 or type(detector["max_frames"]) is not int
                 or not 1 <= detector["max_frames"] <= (
+                    600 if "paired_stream" in value
+                    and "diagnostic_event_until" in value else
                     120 if "diagnostic_event_until" in value else 3)):
             raise CandidateError("Invalid bounded detector policy")
         try:
