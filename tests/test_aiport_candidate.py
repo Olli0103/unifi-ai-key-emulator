@@ -400,6 +400,13 @@ async def test_recorded_event_probe_sends_original_time_once(tmp_path, monkeypat
             assert events[0]["payload"]["descriptors"][0]["zones"] == [7]
             assert events[0]["payload"]["zonesStatus"] == {
                 "7": {"status": "enter", "level": 94}}
+            assert [event["payload"]["objectTypes"] for event in events] == [
+                ["person"], ["person"], ["person"]]
+            assert [event["payload"]["descriptors"][0]["trackerID"]
+                    for event in events] == [1, 1, 1]
+            assert events[2]["payload"]["descriptors"][0]["coord"] == (
+                events[1]["payload"]["descriptors"][0]["coord"])
+            assert events[2]["payload"]["descriptors"][0]["zones"] == [7]
             assert [event["payload"]["clockWall"] for event in events] == [
                 config["diagnostic_recorded_event_probe"]["frames"][0]["captured_ms"],
                 config["diagnostic_recorded_event_probe"]["frames"][1]["captured_ms"],

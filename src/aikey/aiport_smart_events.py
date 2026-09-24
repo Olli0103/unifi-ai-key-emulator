@@ -44,8 +44,6 @@ def smart_event_payload(camera_mac: str, change: TrackChange, *,
                                               "level": round(change.score * 100)}
                                for zone_id in zone_ids},
                "trackerIDAttrMap": {}}
-    if edge == "leave":
-        return payload
     x1, y1, x2, y2 = change.box
     if not all(math.isfinite(v) for v in change.box) or not (
             0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):

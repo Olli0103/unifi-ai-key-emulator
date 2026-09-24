@@ -25,13 +25,21 @@ def test_enter_payload_has_camera_timestamp_and_controller_descriptor_shape():
     }]
 
 
-def test_leave_payload_closes_same_camera_without_new_object():
+def test_leave_payload_keeps_the_tracked_object_for_class_association():
     payload = smart_event_payload("2A1122334455", PERSON,
                                   edge="leave", clock_wall_ms=1_700_000_001_000)
-    assert payload == {"deviceID": "2A1122334455", "edgeType": "leave",
-                       "clockWall": 1_700_000_001_000,
-                       "displayTimeoutMSec": 1000, "zonesStatus": {},
-                       "trackerIDAttrMap": {}}
+    assert payload["deviceID"] == "2A1122334455"
+    assert payload["edgeType"] == "leave"
+    assert payload["clockWall"] == 1_700_000_001_000
+    assert payload["displayTimeoutMSec"] == 1000
+    assert payload["zonesStatus"] == {}
+    assert payload["objectTypes"] == ["person"]
+    assert payload["descriptors"][0] == {
+        "trackerID": 4, "name": "person", "confidenceLevel": 87,
+        "coord": [100, 200, 300, 500], "objectType": "person",
+        "zones": [], "lines": [], "stationary": False,
+        "attributes": {}, "coord3d": [],
+    }
 
 
 def test_moving_payload_updates_track_and_preserves_zone_status():
@@ -57,7 +65,8 @@ def test_zone_enter_and_leave_keep_same_numeric_zone_id():
                                 clock_wall_ms=1_700_000_001_000, zone_ids=(7,))
     assert leave["zonesStatus"] == {"7": {"status": "leave", "level": 87}}
     assert leave["displayTimeoutMSec"] == 1000
-    assert "descriptors" not in leave
+    assert leave["descriptors"][0]["zones"] == [7]
+    assert leave["descriptors"][0]["trackerID"] == enter["descriptors"][0]["trackerID"]
 
 
 @pytest.mark.parametrize("kind,label,expected_name", [
@@ -81,6 +90,8 @@ def test_other_object_events_never_claim_a_recognized_plate(kind, label, expecte
     (PERSON, "enter", True),
     (TrackChange("enter", 4, "person", "person", 0.87,
                  (-0.1, 0.2, 0.4, 0.7)), "enter", 1_700_000_000_000),
+    (TrackChange("leave", 4, "person", "person", 0.87,
+                 (-0.1, 0.2, 0.4, 0.7)), "leave", 1_700_000_000_000),
 ])
 def test_event_rejects_unsupported_or_invalid_track(track, edge, clock):
     with pytest.raises(SmartEventError):
