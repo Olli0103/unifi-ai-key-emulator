@@ -158,14 +158,16 @@ class ControlSite:
                 (item.get("name") or "").casefold(), item.get("id") or "")):
             state = camera.get("state")
             model = camera.get("model") or "Unknown"
-            target = (state == "CONNECTED" and isinstance(model, str)
-                      and _G3_G5_MODEL.match(model) is not None)
+            legacy = camera.get("processing_class") == "legacy_ingress_needed"
+            g3_g5 = isinstance(model, str) and _G3_G5_MODEL.match(model) is not None
+            target = state == "CONNECTED" and (legacy or g3_g5)
             assigned = configured.get(camera.get("mac"), ())
             allowed = bool(assigned)
             target_count += int(target)
             configured_count += int(allowed)
-            scope = ("G3–G5 target" if target else "Offline" if state != "CONNECTED"
-                     else "Outside G3–G5 target scope")
+            scope = ("Offline" if state != "CONNECTED" else
+                     "Legacy camera target" if legacy else
+                     "G3–G5 target" if g3_g5 else "Outside AI Port target scope")
             cells = (camera.get("name") or "Unnamed", model, state or "Unknown", scope,
                      "Configured for " + ", ".join(assigned) if allowed
                      else ("Not configured on this AI Port" if len(self.aiports) == 1
@@ -178,7 +180,7 @@ class ControlSite:
         body = ("<h1>Protect cameras</h1><p><a href='/'>Settings</a> · "
                 "<a href='/cameras'>Refresh</a></p>"
                 f"<p>Protect {_safe(report['protect_version'])} · Fetched {_safe(fetched)}</p>"
-                f"<p>{len(rows)} cameras · {target_count} connected G3–G5 targets · "
+                f"<p>{len(rows)} cameras · {target_count} connected legacy / G3–G5 targets · "
                 f"{configured_count} configured across {len(self.aiports)} AI Port "
                 "instance(s).</p>"
                 "<p class='muted'>Protect pairing and stream health are separate. "

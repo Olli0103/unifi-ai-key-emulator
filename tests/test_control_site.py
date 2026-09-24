@@ -140,7 +140,7 @@ async def test_authenticated_camera_page_refreshes_inventory_and_marks_allowlist
         if unavailable[0]:
             raise InventoryError("Protect unavailable")
         return {"schema": "aikey-camera-preflight/1", "protect_version": "7.3.60",
-                "fetched_at": 1800000000, "summary": {"total": 3}, "cameras": [
+                "fetched_at": 1800000000, "summary": {"total": 4}, "cameras": [
                     {"name": "<Büro>", "model": "UVC G5 Flex", "state": "CONNECTED",
                      "mac": "2A1122334455", "smart_detect_types": ["person"]},
                     {"name": "Esszimmer", "model": "UVC G4 Instant",
@@ -148,7 +148,11 @@ async def test_authenticated_camera_page_refreshes_inventory_and_marks_allowlist
                      "smart_detect_types": []},
                     {"name": "Wohnzimmer", "model": "UVC G6 Instant",
                      "state": "CONNECTED", "mac": "2A1122334498",
-                     "smart_detect_types": ["person"]}]}
+                     "smart_detect_types": ["person"]},
+                    {"name": "Legacy ONVIF", "model": "ONVIF Camera",
+                     "source_kind": "onvif", "processing_class": "legacy_ingress_needed",
+                     "state": "CONNECTED", "mac": "2A1122334497",
+                     "smart_detect_types": []}]}
 
     password = "synthetic-admin-passphrase"
     site = ControlSite(key_config, port_config, signing_key=b"c" * 32,
@@ -170,6 +174,8 @@ async def test_authenticated_camera_page_refreshes_inventory_and_marks_allowlist
         assert page.status == 200 and requests == [1]
         assert "&lt;Büro&gt;" in markup and "<Büro>" not in markup
         assert "Esszimmer" in markup and "Wohnzimmer" in markup
+        assert "Legacy ONVIF" in markup and "Legacy camera target" in markup
+        assert "3 connected legacy / G3–G5 targets" in markup
         assert "Configured for this AI Port" in markup
         assert "Not configured on this AI Port" in markup
         assert "Protect pairing and stream health are separate" in markup
