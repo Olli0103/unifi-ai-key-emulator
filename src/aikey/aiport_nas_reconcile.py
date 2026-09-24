@@ -136,6 +136,8 @@ def _inspect(run: Callable[[list[str], int], str], row: dict, service: dict) -> 
     try:
         image = json.loads(run(["docker", "inspect", "--format",
                                 "{{json .Config.Image}}", container_id], 15))
+        command = json.loads(run(["docker", "inspect", "--format",
+                                  "{{json .Config.Cmd}}", container_id], 15))
         user = json.loads(run(["docker", "inspect", "--format",
                                "{{json .Config.User}}", container_id], 15))
         host = json.loads(run(["docker", "inspect", "--format",
@@ -147,8 +149,9 @@ def _inspect(run: Callable[[list[str], int], str], row: dict, service: dict) -> 
         selected = service["networks"]["aiport_lan"]
     except (ValueError, KeyError, TypeError) as exc:
         raise ReconcileError("Docker container identity or network cannot be verified") from exc
-    if image != service["image"] or not isinstance(networks, dict) or len(networks) != 1:
-        raise ReconcileError("Docker container image or network differs from the manifest")
+    if (image != service["image"] or command != service["command"]
+            or not isinstance(networks, dict) or len(networks) != 1):
+        raise ReconcileError("Docker container image, command or network differs from the manifest")
     expected_volume = service["volumes"][0]
     if (user != service["user"] or not isinstance(host, dict)
             or host.get("ReadonlyRootfs") is not True
@@ -156,6 +159,9 @@ def _inspect(run: Callable[[list[str], int], str], row: dict, service: dict) -> 
             or host.get("CapAdd") not in (None, [])
             or host.get("CapDrop") != service["cap_drop"]
             or host.get("SecurityOpt") != service["security_opt"]
+            or host.get("Sysctls") != {key: str(value) for key, value in service["sysctls"].items()}
+            or host.get("PublishAllPorts") is not False
+            or host.get("PortBindings") not in (None, {})
             or not isinstance(mounts, list) or len(mounts) != 1
             or not isinstance(mounts[0], dict)
             or mounts[0].get("Type") != "bind"

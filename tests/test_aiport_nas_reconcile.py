@@ -87,6 +87,9 @@ class FakeDocker:
             service = self.manifest["services"]["aiport_slot_2"]
             if ".Config.Image" in argv[3]:
                 return json.dumps(service["image"])
+            if ".Config.Cmd" in argv[3]:
+                return json.dumps(["--config", "/state/config.json", "--port", "8443"]
+                                  if self.unsafe_runtime == "wrong_port" else service["command"])
             if ".Config.User" in argv[3]:
                 return json.dumps("0:0" if self.unsafe_runtime == "root" else service["user"])
             if ".HostConfig" in argv[3]:
@@ -97,6 +100,11 @@ class FakeDocker:
                     "CapDrop": [] if self.unsafe_runtime == "caps" else service["cap_drop"],
                     "SecurityOpt": ([] if self.unsafe_runtime == "privileges"
                                     else service["security_opt"]),
+                    "Sysctls": ({} if self.unsafe_runtime == "missing_sysctl"
+                                else {key: str(value) for key, value in service["sysctls"].items()}),
+                    "PublishAllPorts": self.unsafe_runtime == "publish_all",
+                    "PortBindings": ({"443/tcp": [{"HostPort": "443"}]}
+                                     if self.unsafe_runtime == "host_port" else {}),
                 })
             if ".Mounts" in argv[3]:
                 volume = service["volumes"][0]
@@ -216,7 +224,7 @@ def test_running_slot_with_wrong_network_address_is_rejected(tmp_path):
 
 @pytest.mark.parametrize("unsafe_runtime", [
     "root", "writable_root", "privileged", "added_capability", "caps",
-    "privileges", "state_mount",
+    "privileges", "state_mount", "missing_sysctl", "publish_all", "host_port",
 ])
 def test_existing_slot_with_weakened_isolation_is_rejected(tmp_path, unsafe_runtime):
     _, states, _, manifest, _ = inputs(tmp_path)
@@ -224,5 +232,15 @@ def test_existing_slot_with_weakened_isolation_is_rejected(tmp_path, unsafe_runt
            "ID": "a" * 12, "Publishers": []}
     fake = FakeDocker(manifest, json.dumps(row), unsafe_runtime=unsafe_runtime)
     with pytest.raises(ReconcileError, match="user, isolation or state mount"):
+        reconcile(tmp_path / "compose.json", manifest, states, apply=True, run=fake)
+    assert not any("up" in call or "stop" in call for call in fake.calls)
+
+
+def test_existing_slot_with_wrong_port_command_is_rejected_before_start(tmp_path):
+    _, states, _, manifest, _ = inputs(tmp_path)
+    row = {"Service": "aiport_slot_2", "State": "exited",
+           "ID": "a" * 12, "Publishers": []}
+    fake = FakeDocker(manifest, json.dumps(row), unsafe_runtime="wrong_port")
+    with pytest.raises(ReconcileError, match="command"):
         reconcile(tmp_path / "compose.json", manifest, states, apply=True, run=fake)
     assert not any("up" in call or "stop" in call for call in fake.calls)
