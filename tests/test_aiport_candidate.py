@@ -427,11 +427,14 @@ async def test_live_detector_runs_past_probe_limit_and_enforces_hourly_event_bud
     await service._publish_bounded_smart_changes((replace(enter, track_id=2),))
     assert service.smart_events_entered == 1
     service._live_event_times[0] -= 3601
+    service._event_budget.clock_ns = lambda: time.time_ns() + 3_600_000_000_000
     await service._publish_bounded_smart_changes((replace(enter, track_id=3),))
     assert service.smart_events_entered == 2
     health = json.loads((await service._health(None)).text)
     assert health["detection_mode"] == "live"
     assert health["live_event_budget_remaining"] == 0
+    assert health["live_event_budget_healthy"] is True
+    assert (tmp_path / "aiport-event-budget.json").is_file()
     await service.stop()
 
 

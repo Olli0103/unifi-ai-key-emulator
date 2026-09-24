@@ -31,6 +31,7 @@ from .aiport_ingest import (
 )
 from .aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
 from .aiport_camera_engine import CameraEventCandidate, CameraPolicyEngine
+from .aiport_event_budget import EventBudget, EventBudgetError
 from .aiport_inference import FairInference
 from .aiport_tracking import TemporalTracker, TrackChange, TrackingError
 from .aiport_smart_events import SmartEventError, smart_event_payload
@@ -447,6 +448,10 @@ class CandidateService:
             raise CandidateError("Invalid diagnostic disconnect grace")
         self.config = config
         self.state_dir = Path(state_dir)
+        live_config = config.get("live_pool_detector", config.get("live_detector"))
+        self._event_budget = (EventBudget(
+            self.state_dir, limit=live_config["max_events_per_hour"])
+            if live_config is not None else None)
         self.control_port = control_port
         self.disconnect_grace_seconds = disconnect_grace_seconds
         self.runner: web.AppRunner | None = None
@@ -561,7 +566,8 @@ class CandidateService:
                 cameras,
                 max_events_per_camera=(detector["max_events_per_hour"] if live_pool
                                        else len(self._pool_smart_types())),
-                event_window_seconds=3600 if live_pool else None)
+                event_window_seconds=3600 if live_pool else None,
+                event_budget=self._event_budget if live_pool else None)
             self._inference = FairInference(
                 cameras,
                 load_detector=lambda: RFDetrNanoDetector.from_checkpoint(
@@ -899,6 +905,9 @@ class CandidateService:
                               else self._event_zone_ids))
             except SmartEventError:
                 continue
+            if (edge == "enter" and live and self._event_budget is not None
+                    and not self._event_budget.claim(self.ingress.camera_mac)):
+                continue
             if edge == "enter" and frame is not None:
                 try:
                     self._event_snapshot = await asyncio.to_thread(
@@ -1159,6 +1168,21 @@ class CandidateService:
         return app
 
     async def _health(self, request: web.Request) -> web.Response:
+        live_budget_remaining = None
+        live_budget_healthy = None
+        if "live_detector" in self.config:
+            live_budget_remaining = max(0,
+                self.config["live_detector"]["max_events_per_hour"] - sum(
+                    entered > time.monotonic() - 3600
+                    for entered in self._live_event_times))
+            try:
+                live_budget_remaining = min(
+                    live_budget_remaining,
+                    self._event_budget.remaining(self.ingress.camera_mac))
+                live_budget_healthy = True
+            except EventBudgetError:
+                live_budget_remaining = 0
+                live_budget_healthy = False
         return web.json_response({"service": "aiport-candidate", "adopted": self.adoption.adopted,
             "adoption_pending": self.adoption.pending_token is not None,
             "control_connected": self.connected, "websocket_upgrades": self.upgrades,
@@ -1242,10 +1266,8 @@ class CandidateService:
                                "diagnostic_pool" if "diagnostic_pool_detector" in self.config else
                                "diagnostic" if "diagnostic_detector" in self.config else
                                "passive"),
-            "live_event_budget_remaining": (
-                max(0, self.config["live_detector"]["max_events_per_hour"] - sum(
-                    entered > time.monotonic() - 3600 for entered in self._live_event_times))
-                if "live_detector" in self.config else None),
+            "live_event_budget_remaining": live_budget_remaining,
+            "live_event_budget_healthy": live_budget_healthy,
             "pool_inference": (self._inference.snapshot()
                                if self._inference is not None else None),
             "pool_cameras": ([dict(inference, **policy)

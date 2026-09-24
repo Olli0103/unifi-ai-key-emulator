@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import math
 
 from .aiport_detection import ObjectObservation
+from .aiport_event_budget import EventBudget, EventBudgetError
 from .aiport_ingest import IngressError, normalize_mac
 from .aiport_smart_settings import SmartPolicy
 from .aiport_tracking import (
@@ -30,14 +31,16 @@ class CameraPolicyEngine:
     """One independent policy and tracker per explicitly allowed camera."""
 
     def __init__(self, camera_macs: list[str], *, max_events_per_camera: int = 1,
-                 event_window_seconds: float | None = None):
+                 event_window_seconds: float | None = None,
+                 event_budget: EventBudget | None = None):
         if (not isinstance(camera_macs, list) or not 1 <= len(camera_macs) <= 5
                 or type(max_events_per_camera) is not int
                 or not 1 <= max_events_per_camera <= 3600
                 or event_window_seconds is not None
                 and (type(event_window_seconds) not in (int, float)
                      or not math.isfinite(event_window_seconds)
-                     or not 60 <= event_window_seconds <= 86_400)):
+                     or not 60 <= event_window_seconds <= 86_400)
+                or event_budget is not None and not isinstance(event_budget, EventBudget)):
             raise IngressError("invalid_camera_engine")
         try:
             cameras = [normalize_mac(value) for value in camera_macs]
@@ -63,6 +66,7 @@ class CameraPolicyEngine:
         self._generations = dict.fromkeys(cameras, 0)
         self._max_events = max_events_per_camera
         self._event_window_seconds = event_window_seconds
+        self._event_budget = event_budget
 
     def _camera(self, camera_mac: str) -> str:
         camera = normalize_mac(camera_mac)
@@ -128,7 +132,8 @@ class CameraPolicyEngine:
             if (change.edge == "enter" and active is None
                     and budget_used < self._max_events):
                 zones = policy.zone_ids(change.kind, change.box)
-                if zones is not None:
+                if (zones is not None and (self._event_budget is None
+                                           or self._event_budget.claim(camera))):
                     self._active[camera][change.track_id] = (change, zones)
                     self._last_moving[camera][change.track_id] = now
                     self._event_counts[camera] += 1
@@ -168,6 +173,14 @@ class CameraPolicyEngine:
             else:
                 cutoff = now - self._event_window_seconds
                 used = sum(at > cutoff for at in self._event_times[camera])
+            budget_healthy = True
+            if self._event_budget is not None:
+                try:
+                    used = max(used, self._max_events
+                               - self._event_budget.remaining(camera))
+                except EventBudgetError:
+                    used = self._max_events
+                    budget_healthy = False
             result.append({
                 "policy_enabled": self._policies[camera] is not None,
                 "score_eligible_observations": self._score_eligible_observations[camera],
@@ -176,5 +189,6 @@ class CameraPolicyEngine:
                 "events_entered": self._event_counts[camera],
                 "active_tracks": len(self._active[camera]),
                 "event_budget_remaining": max(0, self._max_events - used),
+                "event_budget_healthy": budget_healthy,
             })
         return tuple(result)

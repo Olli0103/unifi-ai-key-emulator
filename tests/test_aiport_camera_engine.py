@@ -4,6 +4,7 @@ import pytest
 
 from aikey.aiport_camera_engine import CameraPolicyEngine
 from aikey.aiport_detection import ObjectObservation
+from aikey.aiport_event_budget import EventBudget, EventBudgetError, _HOUR_NS
 from aikey.aiport_ingest import IngressError
 from aikey.aiport_smart_settings import parse_smart_settings
 from aikey.aiport_tracking import TrackingError
@@ -232,3 +233,43 @@ def test_camera_counters_separate_score_zone_and_tracking_gates():
     assert status["eligible_observations"] == 1
     assert status["eligible_frames"] == 1
     assert status["events_entered"] == 0
+
+
+def test_live_pool_event_budget_survives_engine_restart(tmp_path):
+    wall = [5 * _HOUR_NS]
+    budget = EventBudget(tmp_path, limit=1, clock_ns=lambda: wall[0])
+    first = CameraPolicyEngine([FIRST], max_events_per_camera=1,
+                               event_window_seconds=3600, event_budget=budget)
+    first.replace_policy(FIRST, policy(FIRST))
+    assert first.observe(FIRST, (person(),), now=1) == ()
+    assert first.observe(FIRST, (person(),), now=2)[0].change.edge == "enter"
+
+    restarted = CameraPolicyEngine([FIRST], max_events_per_camera=1,
+                                   event_window_seconds=3600,
+                                   event_budget=EventBudget(
+                                       tmp_path, limit=1, clock_ns=lambda: wall[0]))
+    restarted.replace_policy(FIRST, policy(FIRST))
+    assert restarted.observe(FIRST, (person(),), now=10) == ()
+    assert restarted.observe(FIRST, (person(),), now=11) == ()
+    status, = restarted.camera_snapshot(now=11)
+    assert status["event_budget_remaining"] == 0
+    assert status["event_budget_healthy"] is True
+    wall[0] += _HOUR_NS
+    restarted.replace_policy(FIRST, None)
+    restarted.replace_policy(FIRST, policy(FIRST))
+    assert restarted.observe(FIRST, (person(),), now=12) == ()
+    assert restarted.observe(FIRST, (person(),), now=13)[0].change.edge == "enter"
+
+
+def test_live_pool_budget_corruption_denies_new_enters(tmp_path):
+    budget = EventBudget(tmp_path, limit=1)
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=1,
+                                event_window_seconds=3600, event_budget=budget)
+    engine.replace_policy(FIRST, policy(FIRST))
+    budget.path.write_text("{}")
+    assert engine.observe(FIRST, (person(),), now=1) == ()
+    with pytest.raises(EventBudgetError, match="corrupt"):
+        engine.observe(FIRST, (person(),), now=2)
+    status, = engine.camera_snapshot(now=2)
+    assert status["event_budget_remaining"] == 0
+    assert status["event_budget_healthy"] is False
