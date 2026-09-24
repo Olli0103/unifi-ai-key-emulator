@@ -106,6 +106,25 @@ def test_zone_only_person_policy_is_scoped_to_that_zone():
     assert parse_smart_settings(raw, camera_mac=CAMERA).enabled_types == frozenset()
 
 
+def test_zone_only_mixed_classes_stay_bound_to_their_validated_zones():
+    raw = full_frame_policy()
+    raw["enableSmartDetect"] = []
+    polygon = [100, 100, 900, 100, 900, 900, 100, 900]
+    raw["zones"] = {
+        str(index): {"coord": polygon, "objectTypes": [kind],
+                     "triggerAccessTypes": []}
+        for index, kind in enumerate(("person", "vehicle", "animal"), 7)}
+    raw["zones"]["10"] = {"coord": polygon, "objectTypes": ["face"],
+                          "triggerAccessTypes": []}
+    policy = parse_smart_settings(raw, camera_mac=CAMERA)
+    assert policy.enabled_types == frozenset({"person", "vehicle", "animal"})
+    for index, kind in enumerate(("person", "vehicle", "animal"), 7):
+        assert policy.zone_ids(kind, (0.2, 0.2, 0.5, 0.8)) == (index,)
+        assert policy.zone_ids(kind, (0.05, 0.2, 0.5, 0.8)) is None
+    assert not policy.allows("face")
+    assert policy.zone_ids("face", (0.2, 0.2, 0.5, 0.8)) is None
+
+
 def test_accepts_only_explicitly_disabled_reverification_policy():
     raw = full_frame_policy()
     raw["reVerificationPolicy"] = {
