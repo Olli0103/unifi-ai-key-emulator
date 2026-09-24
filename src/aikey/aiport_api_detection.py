@@ -25,6 +25,7 @@ from .providers import ProviderError, image_mime, validate_inference_config
 
 _MAX_FRAME_BYTES = 1024 * 1024
 _MAX_REPLY_BYTES = 64 * 1024
+_MOTION_CHANGED_CELLS = 8
 _LABELS = {
     "person": {"person"},
     "vehicle": {"bicycle", "car", "motorcycle", "bus", "truck"},
@@ -68,7 +69,7 @@ class _MotionGate:
         if previous is None:
             return False
         changed = sum(abs(a - b) >= 24 for a, b in zip(previous, thumbnail, strict=True))
-        if changed >= 58 and self._pending.get(camera, 0) == 0:
+        if changed >= _MOTION_CHANGED_CELLS and self._pending.get(camera, 0) == 0:
             self._pending[camera] = 2
         if self._pending.get(camera, 0):
             self._pending[camera] -= 1

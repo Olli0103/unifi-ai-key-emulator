@@ -4,7 +4,7 @@ import json
 from io import BytesIO
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from aikey.aiport_api_detection import (
     ApiDetectionError, ApiObjectDetector, parse_detections,
@@ -60,6 +60,29 @@ def test_detects_only_valid_bounded_observations_and_caps_paid_calls(tmp_path):
                                   max_requests_per_hour=2, transport=transport)
     assert restarted.detect_for_camera(FIRST, FRAME) == ()
     assert len(calls) == 3
+
+
+def test_motion_gate_detects_person_sized_change(tmp_path):
+    requests = []
+
+    def scene(with_figure):
+        image = Image.new("RGB", (640, 360), (35, 35, 35))
+        if with_figure:
+            ImageDraw.Draw(image).rectangle((300, 100, 330, 200),
+                                            fill=(210, 210, 210))
+        data = BytesIO()
+        image.save(data, format="JPEG", quality=80)
+        return data.getvalue()
+
+    def transport(*_args):
+        requests.append(1)
+        return _response('{"detections":[]}')
+
+    detector = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.8,
+                                 max_requests_per_hour=2, transport=transport)
+    assert detector.detect_for_camera(FIRST, scene(False)) == ()
+    assert detector.detect_for_camera(FIRST, scene(True)) == ()
+    assert len(requests) == 1
 
 
 @pytest.mark.parametrize("text", [
