@@ -17,7 +17,9 @@ class SnapshotError(ValueError):
     """A snapshot or controller upload request failed validation."""
 
 
-_UPLOAD_PATH = re.compile(r"/internal/camera-upload/[A-Za-z0-9_-]{32}\Z")
+_UPLOAD_PATH = re.compile(
+    r"/internal/camera-upload/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 
 
 @dataclass(frozen=True)

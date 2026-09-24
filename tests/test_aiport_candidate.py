@@ -97,7 +97,8 @@ async def test_snapshot_request_keeps_image_until_matching_one_use_upload(
     sink = Sink()
     payload = {"what": "smartDetectZoneSnapshot", "filename": "other.jpg",
                "quality": "medium", "timeoutMs": 60_000,
-               "uri": "https://192.168.10.1:6666/internal/camera-upload/" + "a" * 32}
+               "uri": ("https://192.168.10.1:6666/internal/camera-upload/"
+                       "01234567-89ab-4def-8123-0123456789ab")}
     command = {"functionName": "GetRequest", "messageId": 41,
                "responseExpected": True, "payload": payload}
     await service._handle_diagnostic_frame(sink, json.dumps(command).encode())

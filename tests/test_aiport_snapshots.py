@@ -37,7 +37,8 @@ def test_smart_snapshot_is_cropped_jpeg_with_matching_track():
 
 def test_upload_request_accepts_only_exact_pinned_controller_path():
     filename = "smartdetectsnap_zone_421790000000000.jpg"
-    uri = "https://192.168.10.1:6666/internal/camera-upload/" + "a" * 32
+    uri = ("https://192.168.10.1:6666/internal/camera-upload/"
+           "01234567-89ab-4def-8123-0123456789ab")
     payload = {"what": "smartDetectZoneSnapshot", "filename": filename,
                "quality": "medium", "timeoutMs": 60_000, "uri": uri}
     assert validated_upload_url(payload, controller_ip="192.168.10.1",
@@ -45,7 +46,8 @@ def test_upload_request_accepts_only_exact_pinned_controller_path():
     for bad in (uri.replace("192.168.10.1", "192.168.10.2"),
                 uri.replace(":6666", ":443"),
                 uri.replace("https:", "http:"),
-                uri + "?next=evil", uri.replace("/internal/", "/other/")):
+                uri + "?next=evil", uri.replace("/internal/", "/other/"),
+                uri.rsplit("/", 1)[0] + "/" + "a" * 32):
         with pytest.raises(SnapshotError):
             validated_upload_url({**payload, "uri": bad},
                                  controller_ip="192.168.10.1", filename=filename)
