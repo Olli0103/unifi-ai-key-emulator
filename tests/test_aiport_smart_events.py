@@ -34,14 +34,14 @@ def test_leave_payload_closes_same_camera_without_new_object():
                        "trackerIDAttrMap": {}}
 
 
-def test_moving_payload_updates_track_without_reentering_zone():
+def test_moving_payload_updates_track_and_preserves_zone_status():
     moving = TrackChange("moving", 4, "person", "person", 0.91,
                          (0.12, 0.2, 0.42, 0.7))
     payload = smart_event_payload("2A1122334455", moving,
                                   edge="moving", clock_wall_ms=1_700_000_001_000,
                                   zone_ids=(7,))
     assert payload["edgeType"] == "moving"
-    assert payload["zonesStatus"] == {}
+    assert payload["zonesStatus"] == {"7": {"status": "moving", "level": 91}}
     assert payload["descriptors"][0]["trackerID"] == 4
     assert payload["descriptors"][0]["objectType"] == "person"
     assert payload["descriptors"][0]["zones"] == [7]
@@ -55,7 +55,7 @@ def test_zone_enter_and_leave_keep_same_numeric_zone_id():
     assert enter["descriptors"][0]["zones"] == [7]
     leave = smart_event_payload("2A1122334455", PERSON, edge="leave",
                                 clock_wall_ms=1_700_000_001_000, zone_ids=(7,))
-    assert leave["zonesStatus"] == {"7": {"status": "leave"}}
+    assert leave["zonesStatus"] == {"7": {"status": "leave", "level": 87}}
     assert leave["displayTimeoutMSec"] == 1000
     assert "descriptors" not in leave
 

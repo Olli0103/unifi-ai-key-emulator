@@ -1472,7 +1472,8 @@ async def test_event_probe_drops_outside_zone_and_uncertain_person_before_tracki
         (0.21, 0.2, 0.51, 0.8)),))
     assert service.smart_events_moved == 1
     assert sink.messages[-1]["payload"]["edgeType"] == "moving"
-    assert sink.messages[-1]["payload"]["zonesStatus"] == {}
+    assert sink.messages[-1]["payload"]["zonesStatus"] == {
+        "7": {"status": "moving", "level": 93}}
     assert sink.messages[-1]["payload"]["descriptors"][0]["confidenceLevel"] == 93
     command["messageId"] = 17
     command["payload"]["enableSmartDetect"] = []
@@ -1480,7 +1481,7 @@ async def test_event_probe_drops_outside_zone_and_uncertain_person_before_tracki
     await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
     assert sink.messages[-2]["functionName"] == "EventSmartDetect"
     assert sink.messages[-2]["payload"]["zonesStatus"] == {
-        "7": {"status": "leave"}}
+        "7": {"status": "leave", "level": 93}}
     assert sink.messages[-1]["statusCode"] == 501
     assert service.smart_events_left == 1
     assert service._event_track is None
