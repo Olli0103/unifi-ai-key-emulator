@@ -43,10 +43,11 @@ class CameraPolicyEngine:
         self._policies: dict[str, SmartPolicy | None] = {
             camera: None for camera in cameras}
         self._trackers = {camera: TemporalTracker() for camera in cameras}
-        self._active: dict[str, tuple[TrackChange, tuple[int, ...]] | None] = {
-            camera: None for camera in cameras}
+        self._active: dict[str, dict[int, tuple[TrackChange, tuple[int, ...]]]] = {
+            camera: {} for camera in cameras}
         self._event_counts = {camera: 0 for camera in cameras}
-        self._last_moving = {camera: None for camera in cameras}
+        self._last_moving: dict[str, dict[int, float]] = {
+            camera: {} for camera in cameras}
         self._generations = dict.fromkeys(cameras, 0)
         self._max_events = max_events_per_camera
 
@@ -62,18 +63,16 @@ class CameraPolicyEngine:
         camera = self._camera(camera_mac)
         if (policy is not None and (not isinstance(policy, SmartPolicy)
                 or policy.camera_mac != camera
-                or len(policy.enabled_types) != 1
+                or not 1 <= len(policy.enabled_types) <= 3
                 or not policy.enabled_types <= {"person", "vehicle", "animal"})):
             raise IngressError("invalid_camera_policy")
-        active = self._active[camera]
-        result = ()
-        if active is not None:
-            previous, zones = active
-            result = (CameraEventCandidate(camera, TrackChange(
+        result = tuple(
+            CameraEventCandidate(camera, TrackChange(
                 "leave", previous.track_id, previous.kind, previous.label,
-                previous.score, previous.box), zones),)
-        self._active[camera] = None
-        self._last_moving[camera] = None
+                previous.score, previous.box), zones)
+            for _, (previous, zones) in sorted(self._active[camera].items()))
+        self._active[camera] = {}
+        self._last_moving[camera] = {}
         self._trackers[camera] = TemporalTracker()
         self._policies[camera] = policy
         self._generations[camera] += 1
@@ -92,38 +91,35 @@ class CameraPolicyEngine:
         policy = self._policies[camera]
         if policy is None:
             return ()
-        kind = next(iter(policy.enabled_types))
         selected = tuple(value for value in observations
-                         if value.kind == kind
-                         and policy.allows_score(kind, value.score)
-                         and policy.zone_ids(kind, value.box) is not None)
+                         if policy.allows_score(value.kind, value.score)
+                         and policy.zone_ids(value.kind, value.box) is not None)
         changes = self._trackers[camera].update(selected, now=now)
         result = []
         for change in changes:
-            if change.kind != kind:
+            if change.kind not in policy.enabled_types:
                 continue
-            active = self._active[camera]
+            active = self._active[camera].get(change.track_id)
             if (change.edge == "enter" and active is None
                     and self._event_counts[camera] < self._max_events):
-                zones = policy.zone_ids(kind, change.box)
+                zones = policy.zone_ids(change.kind, change.box)
                 if zones is not None:
-                    self._active[camera] = (change, zones)
-                    self._last_moving[camera] = now
+                    self._active[camera][change.track_id] = (change, zones)
+                    self._last_moving[camera][change.track_id] = now
                     self._event_counts[camera] += 1
                     result.append(CameraEventCandidate(camera, change, zones))
             elif (change.edge == "moving" and active is not None
-                  and active[0].track_id == change.track_id
-                  and self._last_moving[camera] is not None
-                  and now - self._last_moving[camera] >= 1):
-                zones = policy.zone_ids(kind, change.box)
+                  and active[0].kind == change.kind
+                  and now - self._last_moving[camera][change.track_id] >= 1):
+                zones = policy.zone_ids(change.kind, change.box)
                 if zones == active[1]:
-                    self._active[camera] = (change, zones)
-                    self._last_moving[camera] = now
+                    self._active[camera][change.track_id] = (change, zones)
+                    self._last_moving[camera][change.track_id] = now
                     result.append(CameraEventCandidate(camera, change, zones))
             elif (change.edge == "leave" and active is not None
-                  and active[0].track_id == change.track_id):
-                self._active[camera] = None
-                self._last_moving[camera] = None
+                  and active[0].kind == change.kind):
+                del self._active[camera][change.track_id]
+                del self._last_moving[camera][change.track_id]
                 result.append(CameraEventCandidate(camera, change, active[1]))
         return tuple(result)
 
