@@ -460,6 +460,9 @@ class CandidateService:
         self.detector_frames_attempted = 0
         self.detector_frames_succeeded = 0
         self.detector_objects_seen = 0
+        self.detector_objects_enabled = 0
+        self.detector_objects_score_eligible = 0
+        self.detector_objects_zone_eligible = 0
         self.detector_tracks_entered = 0
         self.detector_tracks_left = 0
         self.detector_error: str | None = None
@@ -651,11 +654,13 @@ class CandidateService:
                 # A reverification policy cannot be silently bypassed. Only
                 # objects above its upper confidence bound reach the temporal
                 # tracker; uncertain observations are dropped, not published.
+                enabled = tuple(observation for observation in observations
+                                if observation.kind == kind)
+                scored = tuple(observation for observation in enabled
+                               if smart_policy.allows_score(kind, observation.score))
                 track_observations = tuple(
-                    observation for observation in observations
-                    if observation.kind == kind
-                    and smart_policy.allows_score(kind, observation.score)
-                    and smart_policy.zone_ids(kind, observation.box) is not None)
+                    observation for observation in scored
+                    if smart_policy.zone_ids(kind, observation.box) is not None)
             changes = self._tracker.update(track_observations,
                                            now=time.monotonic())
         except (DetectionError, TrackingError) as exc:
@@ -664,6 +669,10 @@ class CandidateService:
         if time.time() < until:
             self.detector_frames_succeeded += 1
             self.detector_objects_seen += len(observations)
+            if "diagnostic_event_until" in self.config:
+                self.detector_objects_enabled += len(enabled)
+                self.detector_objects_score_eligible += len(scored)
+                self.detector_objects_zone_eligible += len(track_observations)
             self.detector_tracks_entered += sum(change.edge == "enter" for change in changes)
             self.detector_tracks_left += sum(change.edge == "leave" for change in changes)
             if time.time() < self.config.get("diagnostic_event_until", 0):
@@ -1029,6 +1038,9 @@ class CandidateService:
             "detector_frames_attempted": self.detector_frames_attempted,
             "detector_frames_succeeded": self.detector_frames_succeeded,
             "detector_objects_seen": self.detector_objects_seen,
+            "detector_objects_enabled": self.detector_objects_enabled,
+            "detector_objects_score_eligible": self.detector_objects_score_eligible,
+            "detector_objects_zone_eligible": self.detector_objects_zone_eligible,
             "detector_tracks_entered": self.detector_tracks_entered,
             "detector_tracks_left": self.detector_tracks_left,
             "detector_error": self.detector_error,

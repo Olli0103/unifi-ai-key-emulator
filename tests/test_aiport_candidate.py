@@ -123,6 +123,71 @@ async def test_snapshot_request_keeps_image_until_matching_one_use_upload(
     await service.stop()
 
 
+@pytest.mark.asyncio
+async def test_snapshot_upload_uses_pinned_multipart_payload(tmp_path, monkeypatch):
+    config = fixture_state(tmp_path)
+    config["paired_stream"] = {"camera_mac": "2A1122334455",
+                               "source_ip": "192.168.10.1",
+                               "ffmpeg_path": sys.executable}
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"active": True}]
+    filename = "smartdetectsnap_zone_421790000000000.jpg"
+    image = BytesIO()
+    Image.new("RGB", (64, 64), "blue").save(image, format="JPEG")
+    jpeg = image.getvalue()
+    service._pending_snapshot = (SmartSnapshot(
+        filename, jpeg, {}, filename.replace(".jpg", "_fullfov.jpg"),
+        jpeg, 64, 64), time.monotonic() + 60)
+    received = []
+
+    async def upload(request):
+        assert request.content_type == "multipart/form-data"
+        assert request.transport.get_extra_info("peercert") is not None
+        reader = await request.multipart()
+        field = await reader.next()
+        assert field.name == "payload"
+        assert field.filename == filename
+        assert field.headers["Content-Type"] == "image/jpeg"
+        received.append(await field.read())
+        assert await reader.next() is None
+        return web.json_response({"success": True})
+
+    app = web.Application()
+    app.router.add_post("/internal/camera-upload/{token}", upload)
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.load_cert_chain(tmp_path / "device.crt", tmp_path / "device.key")
+    server_context.load_verify_locations(cafile=tmp_path / "device.crt")
+    server_context.verify_mode = ssl.CERT_REQUIRED
+    server = TestServer(app)
+    await server.start_server(ssl=server_context)
+    url = str(server.make_url("/internal/camera-upload/" +
+                              "01234567-89ab-4def-8123-0123456789ab"))
+    monkeypatch.setattr("aikey.aiport_candidate.validated_upload_url",
+                        lambda *_args, **_kwargs: url)
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    command = {"functionName": "GetRequest", "messageId": 44,
+               "responseExpected": True,
+               "payload": {"what": "smartDetectZoneSnapshot", "filename": filename}}
+    try:
+        await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+        assert sink.messages[-1]["statusCode"] == 0
+        assert received == [jpeg]
+        assert service.snapshot_uploads == 1
+    finally:
+        await server.close()
+        await service.stop()
+
+
 def test_candidate_requires_private_stable_identity(tmp_path):
     config = fixture_state(tmp_path)
     assert load_config(tmp_path / "config.json") == config
@@ -1920,12 +1985,18 @@ async def test_event_probe_drops_outside_zone_and_uncertain_person_before_tracki
     assert service.detector_tracks_entered == 0
     await service._observe_frame(b"ignored by fake detector")
     assert service.detector_objects_seen == 4
+    assert service.detector_objects_enabled == 4
+    assert service.detector_objects_score_eligible == 3
+    assert service.detector_objects_zone_eligible == 2
     assert service.detector_tracks_entered == 1
     assert service.smart_events_entered == 1
     assert sink.messages[-1]["functionName"] == "EventSmartDetect"
     assert sink.messages[-1]["payload"]["descriptors"][0]["confidenceLevel"] == 91
     assert sink.messages[-1]["payload"]["descriptors"][0]["zones"] == [7]
     assert sink.messages[-1]["payload"]["zonesStatus"]["7"]["status"] == "enter"
+    health = json.loads((await service._health(None)).text)
+    assert health["detector_objects_zone_eligible"] == 2
+    assert "coord" not in json.dumps(health)
     service._event_last_moving_at -= 2
     await service._publish_bounded_smart_changes((TrackChange(
         "moving", 1, "person", "person", 0.93,
