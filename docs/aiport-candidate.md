@@ -39,18 +39,21 @@ Keep the identity and TLS files private and persistent. Do not reuse the AI Key 
 
 ## Mac network test
 
-Build the dedicated image from source and run it as the state directory's owner. The container listens internally on unprivileged TCP 8443:
+Build the dedicated image from source and run it as the state directory's owner. Set `AIPORT_DNS` to a resolver reachable from inside Apple container, such as the LAN router. The default virtual gateway may not answer DNS queries. Without an explicit resolver, camera streams can decode while every remote vision request fails before reaching its provider and exhausts the per-camera request cap. The container listens internally on unprivileged TCP 8443:
 
 ```sh
+AIPORT_DNS="REACHABLE_DNS_IPV4"
 container build --platform linux/arm64 --file Dockerfile.aiport-candidate \
   --tag local-aiport:candidate .
-container run --detach --name local-aiport-candidate \
+container run --detach --name local-aiport-candidate --dns "$AIPORT_DNS" \
   --user "$(id -u):$(id -g)" --read-only \
   --tmpfs /tmp:size=64m,mode=1777 \
   --volume "${AIPORT_STATE}:/state" \
   --publish "${AIPORT_LAN_IP}:8443:8443/tcp" \
   local-aiport:candidate --config /state/config.json --port 8443
 ```
+
+Keep the same `--dns` setting when replacing the container. After a remote vision provider is configured, verify name resolution and one bounded provider request from inside the running container before treating successful stream decoding as working inference. The tested Mac's default virtual gateway did not resolve the provider; the LAN router did. This follows the [Apple container DNS guidance](apple-container.md#build-and-initialize).
 
 The host's port 8443 is only a transport check. Protect's device management uses HTTPS 443 on the advertised address. Apple container 1.4.1 refused a host 443 publish on this Mac with a privileged-port error. The optional [bounded relay](../src/aikey/aiport_relay.py) can bind host 443 after local administrator authentication, then drops to the named non-root UID/GID. It forwards raw TLS bytes to 8443 for at most ten minutes and accepts only the console's exact source IP. It does not read HTTP bodies, modify firewall rules or persist credentials. A tested NAS network mode is the alternative deployment path.
 
