@@ -36,8 +36,12 @@ from .aiport_camera_engine import CameraEventCandidate, CameraPolicyEngine
 from .aiport_inference import FairInference
 from .aiport_tracking import TemporalTracker, TrackChange, TrackingError
 from .aiport_smart_events import SmartEventError, smart_event_payload
+from .aiport_snapshots import (
+    SmartSnapshot, SnapshotError, make_smart_snapshot, validated_upload_url,
+)
 from .aiport_recorded_probe import (
     RecordedProbeError, infer_recorded_person, parse_recorded_probe,
+    read_recorded_frame,
 )
 from .aiport_smart_settings import (
     SmartPolicy, SmartSettingsError, parse_motion_probe, parse_smart_settings,
@@ -141,8 +145,14 @@ def load_config(path: Path) -> dict:
             raise CandidateError("Invalid paired stream policy") from exc
         live_probe_fields = {"diagnostic_detector", "diagnostic_smart_probe_until",
                              "diagnostic_event_until"}
-        if (set(value) & live_probe_fields
-                and not live_probe_fields <= set(value)):
+        recorded_probe_fields = {"diagnostic_recorded_event_probe",
+                                 "diagnostic_smart_probe_until",
+                                 "diagnostic_event_until"}
+        required_probe_fields = (recorded_probe_fields
+                                 if "diagnostic_recorded_event_probe" in value
+                                 else live_probe_fields)
+        if (set(value) & required_probe_fields
+                and not required_probe_fields <= set(value)):
             raise CandidateError("Paired camera AI probe requires a complete bounded policy")
     if "diagnostic_hello_until" in value:
         until = value["diagnostic_hello_until"]
@@ -266,15 +276,16 @@ def load_config(path: Path) -> dict:
     if "diagnostic_recorded_event_probe" in value:
         if ("diagnostic_detector" in value
                 or "diagnostic_native_event_probe" in value
-                or "diagnostic_stream" not in value
+                or ("diagnostic_stream" not in value
+                    and "paired_stream" not in value)
                 or "diagnostic_event_until" not in value
                 or value.get("diagnostic_smart_type", "person") != "person"):
-            raise CandidateError("Recorded event probe requires one bounded person stream")
+            raise CandidateError("Recorded event probe requires one person stream")
         try:
             parse_recorded_probe(
                 value["diagnostic_recorded_event_probe"],
                 state_dir=path.parent,
-                camera_mac=value["diagnostic_stream"]["camera_mac"])
+                camera_mac=value.get("paired_stream", value.get("diagnostic_stream"))["camera_mac"])
         except RecordedProbeError as exc:
             raise CandidateError(str(exc)) from exc
     if "diagnostic_smart_probe_until" in value:
@@ -294,7 +305,8 @@ def load_config(path: Path) -> dict:
                 or ("diagnostic_detector" in value
                     and value["diagnostic_detector"]["max_frames"] < 2)):
             raise CandidateError("Smart event probe requires a bounded source and policy")
-        if ("paired_stream" in value and "diagnostic_detector" not in value):
+        if ("paired_stream" in value and not ({"diagnostic_detector",
+                "diagnostic_recorded_event_probe"} & set(value))):
             raise CandidateError("Paired camera event probe requires a local detector")
     if "diagnostic_smart_type" in value:
         if (not isinstance(value["diagnostic_smart_type"], str)
@@ -424,6 +436,13 @@ class CandidateService:
         self._event_track: TrackChange | None = None
         self._event_last_moving_at: float | None = None
         self._event_zone_ids: tuple[int, ...] = ()
+        self._event_snapshot: SmartSnapshot | None = None
+        self._pending_snapshot: tuple[SmartSnapshot, float] | None = None
+        self._pending_full_fov: tuple[SmartSnapshot, float] | None = None
+        self.snapshot_requests = 0
+        self.snapshot_uploads = 0
+        self.snapshot_rejections = 0
+        self.snapshot_rejection_reasons: dict[str, int] = {}
         self.last_stream_error: str | None = None
         self.last_control_command: str | None = None
         self.observed_function_counts: dict[str, int] = {}
@@ -648,9 +667,10 @@ class CandidateService:
             self.detector_tracks_entered += sum(change.edge == "enter" for change in changes)
             self.detector_tracks_left += sum(change.edge == "leave" for change in changes)
             if time.time() < self.config.get("diagnostic_event_until", 0):
-                await self._publish_bounded_smart_changes(changes)
+                await self._publish_bounded_smart_changes(changes, frame=frame)
 
-    async def _publish_bounded_smart_changes(self, changes: tuple[TrackChange, ...]) -> None:
+    async def _publish_bounded_smart_changes(
+            self, changes: tuple[TrackChange, ...], *, frame: bytes | None = None) -> None:
         ws = self._current_ws
         policy = self._smart_policy
         if (ws is None or policy is None or len(policy.enabled_types) != 1
@@ -687,6 +707,16 @@ class CandidateService:
                               else self._event_zone_ids))
             except SmartEventError:
                 continue
+            if edge == "enter" and frame is not None:
+                try:
+                    self._event_snapshot = await asyncio.to_thread(
+                        make_smart_snapshot, frame, change, payload["clockWall"])
+                except SnapshotError:
+                    self._event_snapshot = None
+            if edge == "leave" and self._event_snapshot is not None:
+                self._event_snapshot.add_to_event(payload)
+                self._pending_snapshot = (self._event_snapshot, time.monotonic() + 75)
+                self._pending_full_fov = (self._event_snapshot, time.monotonic() + 75)
             await self._send_control_event(ws, "EventSmartDetect", payload)
             if edge == "enter":
                 self._event_track = change
@@ -701,6 +731,7 @@ class CandidateService:
                 self._event_track = None
                 self._event_zone_ids = ()
                 self._event_last_moving_at = None
+                self._event_snapshot = None
                 self.smart_events_left += 1
 
     async def _revoke_single_policy(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -720,6 +751,10 @@ class CandidateService:
                 except SmartEventError:
                     pass
                 else:
+                    if self._event_snapshot is not None:
+                        self._event_snapshot.add_to_event(payload)
+                        self._pending_snapshot = (self._event_snapshot, time.monotonic() + 75)
+                        self._pending_full_fov = (self._event_snapshot, time.monotonic() + 75)
                     await self._send_control_event(ws, "EventSmartDetect", payload)
                     self.smart_events_left += 1
         finally:
@@ -727,6 +762,7 @@ class CandidateService:
             self._event_track = None
             self._event_zone_ids = ()
             self._event_last_moving_at = None
+            self._event_snapshot = None
             if self._tracker is not None:
                 self._tracker = TemporalTracker()
 
@@ -818,10 +854,13 @@ class CandidateService:
             self.recorded_probe_phase = "inference_finished"
             frame_gap = (probe.frames[1].captured_ms
                          - probe.frames[0].captured_ms) / 1000
-            if (self._current_ws is not ws or self._smart_policy is not policy
-                    or not self.ingress.list_streams()):
+            if (self._current_ws is not ws or not self.ingress.list_streams()
+                    or self._smart_policy is None):
                 self.recorded_probe_phase = "control_or_stream_changed"
                 return
+            # Protect can resend the same camera policy while model inference
+            # runs. Recheck its current values rather than object identity.
+            policy = self._smart_policy
             if time.time() + frame_gap + 3 >= self.config["diagnostic_event_until"]:
                 self.recorded_probe_phase = "expired_after_inference"
                 return
@@ -857,14 +896,28 @@ class CandidateService:
                 probe.camera_mac, track.moving, edge="leave",
                 clock_wall_ms=probe.frames[1].captured_ms + 2000,
                 zone_ids=zone_ids, first_shown_ms=probe.frames[0].captured_ms)
+            try:
+                snapshot = await asyncio.to_thread(
+                    lambda: make_smart_snapshot(
+                        read_recorded_frame(probe.frames[0]), track.enter,
+                        probe.frames[0].captured_ms))
+            except (RecordedProbeError, SnapshotError):
+                snapshot = None
+            if snapshot is not None:
+                snapshot.add_to_event(leave)
             await self._send_control_event(ws, "EventSmartDetect", enter)
             self.recorded_probe_phase = "enter_sent"
             self.smart_events_entered += 1
             # Each descriptor comes from its own recorded model observation.
             # Deliver the track updates at the same spacing as the frames.
             await asyncio.sleep(frame_gap)
+            current_policy = self._smart_policy
             if (self._current_ws is not ws
-                    or self._smart_policy is not policy
+                    or current_policy is None
+                    or current_policy.enabled_types != frozenset({"person"})
+                    or current_policy.zone_ids("person", track.enter.box) != zone_ids
+                    or current_policy.zone_ids("person", track.moving.box) != zone_ids
+                    or not current_policy.allows_score("person", track.moving.score)
                     or not self.ingress.list_streams()
                     or time.time() + 2 >= self.config["diagnostic_event_until"]):
                 self.recorded_probe_errors += 1
@@ -874,9 +927,16 @@ class CandidateService:
             self.recorded_probe_phase = "moving_sent"
             self.smart_events_moved += 1
             await asyncio.sleep(2)
-            if (self._current_ws is ws and self._smart_policy is policy
+            current_policy = self._smart_policy
+            if (self._current_ws is ws and current_policy is not None
+                    and current_policy.enabled_types == frozenset({"person"})
+                    and current_policy.zone_ids("person", track.moving.box) == zone_ids
+                    and current_policy.allows_score("person", track.moving.score)
                     and self.ingress.list_streams()
                     and time.time() < self.config["diagnostic_event_until"]):
+                if snapshot is not None:
+                    self._pending_snapshot = (snapshot, time.monotonic() + 75)
+                    self._pending_full_fov = (snapshot, time.monotonic() + 75)
                 await self._send_control_event(ws, "EventSmartDetect", leave)
                 self.recorded_probe_phase = "leave_sent"
                 self.smart_events_left += 1
@@ -941,6 +1001,10 @@ class CandidateService:
             "smart_events_entered": self.smart_events_entered,
             "smart_events_moved": self.smart_events_moved,
             "smart_events_left": self.smart_events_left,
+            "snapshot_requests": self.snapshot_requests,
+            "snapshot_uploads": self.snapshot_uploads,
+            "snapshot_rejections": self.snapshot_rejections,
+            "snapshot_rejection_reasons": dict(self.snapshot_rejection_reasons),
             "synthetic_probe_claimed": self.synthetic_probe_claimed,
             "synthetic_probe_errors": self.synthetic_probe_errors,
             "recorded_probe_qualified": self.recorded_probe_qualified,
@@ -1500,6 +1564,80 @@ class CandidateService:
             return
         if function == "GetRequest":
             self.last_control_command = function
+            request_id = message.get("messageId")
+            if not self._params_agreed or type(request_id) is not int or request_id < 0:
+                return
+            if not self.adoption.adopted:
+                await self._reply_control(ws, function, request_id, 5,
+                                          {"description": "snapshot_unavailable"})
+                self.snapshot_rejections += 1
+                self.snapshot_rejection_reasons["unadopted"] = (
+                    self.snapshot_rejection_reasons.get("unadopted", 0) + 1)
+                return
+            request_payload = message.get("payload")
+            requested_filename = (request_payload.get("filename")
+                                  if isinstance(request_payload, dict) else None)
+            full_fov = (self._pending_full_fov is not None
+                        and requested_filename == self._pending_full_fov[0].full_fov_filename)
+            pending = self._pending_full_fov if full_fov else self._pending_snapshot
+            if pending is None or time.monotonic() > pending[1]:
+                await self._reply_control(ws, function, request_id, 5,
+                                          {"description": "snapshot_unavailable"})
+                self.snapshot_rejections += 1
+                self.snapshot_rejection_reasons["no_pending_snapshot"] = (
+                    self.snapshot_rejection_reasons.get("no_pending_snapshot", 0) + 1)
+                if pending is not None:
+                    if full_fov:
+                        self._pending_full_fov = None
+                    else:
+                        self._pending_snapshot = None
+                return
+            snapshot = pending[0]
+            filename = snapshot.full_fov_filename if full_fov else snapshot.filename
+            what = ("smartDetectZoneSnapshotFullFoV" if full_fov
+                    else "smartDetectZoneSnapshot")
+            try:
+                url = validated_upload_url(
+                    message.get("payload"), controller_ip=self.config["controller_ip"],
+                    filename=filename, what=what)
+            except SnapshotError as exc:
+                await self._reply_control(ws, function, request_id, 5,
+                                          {"description": "snapshot_request_invalid"})
+                self.snapshot_rejections += 1
+                reason = str(exc)
+                self.snapshot_rejection_reasons[reason] = (
+                    self.snapshot_rejection_reasons.get(reason, 0) + 1)
+                return
+            if full_fov:
+                self._pending_full_fov = None
+            else:
+                self._pending_snapshot = None
+            self.snapshot_requests += 1
+            try:
+                connector = VerifiedConnector(
+                    ssl_context=self._client_context(),
+                    expected_fingerprint=self.config["controller_pin"])
+                timeout = aiohttp.ClientTimeout(total=10, connect=5, sock_connect=5)
+                async with aiohttp.ClientSession(
+                        connector=connector, timeout=timeout, trust_env=False) as session:
+                    form = aiohttp.FormData()
+                    form.add_field("payload", (snapshot.full_fov_jpeg if full_fov
+                                               else snapshot.jpeg),
+                                   filename=filename, content_type="image/jpeg")
+                    async with session.post(url, data=form, allow_redirects=False) as response:
+                        if response.status != 200:
+                            raise aiohttp.ClientError("snapshot_upload_rejected")
+                        await response.content.read(1024)
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ssl.SSLError):
+                await self._reply_control(ws, function, request_id, 5,
+                                          {"description": "snapshot_upload_failed"})
+                self.snapshot_rejections += 1
+                self.snapshot_rejection_reasons["upload_failed"] = (
+                    self.snapshot_rejection_reasons.get("upload_failed", 0) + 1)
+            else:
+                await self._reply_control(ws, function, request_id, 0, {})
+                self.snapshot_uploads += 1
+            return
 
     @staticmethod
     async def _expire_diagnostic(ws: aiohttp.ClientWebSocketResponse, until: int) -> None:

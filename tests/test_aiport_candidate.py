@@ -1,8 +1,10 @@
 """The isolated AI Port candidate keeps camera access behind an expiring permit."""
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
+from io import BytesIO
 import json
 from pathlib import Path
 import ssl
@@ -13,9 +15,11 @@ import aiohttp
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 import pytest
+from PIL import Image
 
 from aikey.aiport_candidate import CandidateError, CandidateService, load_config
 from aikey.aiport_detection import ObjectObservation, RFDetrNanoDetector
+from aikey.aiport_snapshots import SmartSnapshot
 from aikey.aiport_smart_settings import SmartPolicy
 from aikey.aiport_tracking import TrackChange
 from aikey.tls import ensure_identity_certificate
@@ -34,6 +38,88 @@ def fixture_state(tmp_path):
                   cert.read_text())).hexdigest(), "firmware_version": "5.1.12"}
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     return config
+
+
+@pytest.mark.asyncio
+async def test_snapshot_request_keeps_image_until_matching_one_use_upload(
+        tmp_path, monkeypatch):
+    config = fixture_state(tmp_path)
+    config["paired_stream"] = {"camera_mac": "2A1122334455",
+                               "source_ip": "192.168.10.1",
+                               "ffmpeg_path": sys.executable}
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"active": True}]
+    filename = "smartdetectsnap_zone_421790000000000.jpg"
+    service._pending_snapshot = (SmartSnapshot(
+        filename, b"jpeg", {}, filename.replace(".jpg", "_fullfov.jpg"),
+        b"full-jpeg", 640, 360),
+                                 time.monotonic() + 60)
+    service._pending_full_fov = service._pending_snapshot
+    uploads = []
+
+    class Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        class content:
+            @staticmethod
+            async def read(_limit):
+                return b'{"success":true}'
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def post(self, url, *, data, allow_redirects):
+            uploads.append((url, data, allow_redirects))
+            return Response()
+
+    monkeypatch.setattr("aikey.aiport_candidate.aiohttp.ClientSession",
+                        lambda **_kwargs: Session())
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    payload = {"what": "smartDetectZoneSnapshot", "filename": "other.jpg",
+               "quality": "medium", "timeoutMs": 60_000,
+               "uri": "https://192.168.10.1:6666/internal/camera-upload/" + "a" * 32}
+    command = {"functionName": "GetRequest", "messageId": 41,
+               "responseExpected": True, "payload": payload}
+    await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+    assert sink.messages[-1]["statusCode"] == 5
+    assert service._pending_snapshot is not None
+    assert uploads == []
+    command["messageId"] = 42
+    payload["filename"] = service._pending_full_fov[0].full_fov_filename
+    payload["what"] = "smartDetectZoneSnapshotFullFoV"
+    await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+    assert sink.messages[-1]["statusCode"] == 0
+    assert service._pending_full_fov is None
+    assert service._pending_snapshot is not None
+    command["messageId"] = 43
+    payload["filename"] = filename
+    payload["what"] = "smartDetectZoneSnapshot"
+    await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+    assert sink.messages[-1]["statusCode"] == 0
+    assert service._pending_snapshot is None
+    assert service.snapshot_uploads == 2
+    assert len(uploads) == 2 and all(item[2] is False for item in uploads)
+    await service.stop()
 
 
 def test_candidate_requires_private_stable_identity(tmp_path):
@@ -515,6 +601,17 @@ def recorded_probe_config(tmp_path):
     return config
 
 
+def test_recorded_probe_can_use_existing_paired_stream(tmp_path):
+    config = recorded_probe_config(tmp_path)
+    stream = config.pop("diagnostic_stream")
+    config.pop("diagnostic_hello_until")
+    config["paired_stream"] = stream
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    loaded = load_config(tmp_path / "config.json")
+    assert loaded["paired_stream"]["camera_mac"] == stream["camera_mac"]
+    assert loaded["diagnostic_recorded_event_probe"]["camera_mac"] == stream["camera_mac"]
+
+
 @pytest.mark.asyncio
 async def test_recorded_event_probe_sends_original_time_once(tmp_path, monkeypatch):
     config = recorded_probe_config(tmp_path)
@@ -523,6 +620,8 @@ async def test_recorded_event_probe_sends_original_time_once(tmp_path, monkeypat
 
     def infer(_probe):
         model_calls.append(True)
+        # Protect may refresh an equivalent policy while inference runs.
+        service._smart_policy = replace(service._smart_policy)
         from aikey.aiport_recorded_probe import RecordedPersonTrack
         return RecordedPersonTrack(
             TrackChange("enter", 1, "person", "person", 0.94,
@@ -1668,7 +1767,9 @@ async def test_event_probe_acks_person_policy_then_sends_one_real_track_pair(tmp
     assert sink.messages[-1]["statusCode"] == 0
     track = TrackChange("enter", 1, "person", "person", 0.88,
                         (0.2, 0.2, 0.5, 0.8))
-    await service._publish_bounded_smart_changes((track,))
+    image = BytesIO()
+    Image.new("RGB", (640, 360), "blue").save(image, format="JPEG")
+    await service._publish_bounded_smart_changes((track,), frame=image.getvalue())
     await service._publish_bounded_smart_changes((track,))
     assert service.smart_events_entered == 1
     assert sink.messages[-1]["functionName"] == "EventSmartDetect"
@@ -1678,6 +1779,9 @@ async def test_event_probe_acks_person_policy_then_sends_one_real_track_pair(tmp
                     track.score, track.box),))
     assert service.smart_events_left == 1
     assert sink.messages[-1]["payload"]["edgeType"] == "leave"
+    snapshot = sink.messages[-1]["payload"]["smartDetectSnapshots"][0]
+    assert snapshot["smartDetectSnapshotType"] == "person"
+    assert service._pending_snapshot[0].filename == snapshot["smartDetectSnapshot"]
     command["messageId"] = 17
     command["payload"] = {**payload, "enableSmartDetect": []}
     await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
