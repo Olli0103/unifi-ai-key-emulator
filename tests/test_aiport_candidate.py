@@ -1697,8 +1697,7 @@ async def test_event_probe_drops_outside_zone_and_uncertain_person_before_tracki
         (0.21, 0.2, 0.51, 0.8)),))
     assert service.smart_events_moved == 1
     assert sink.messages[-1]["payload"]["edgeType"] == "moving"
-    assert sink.messages[-1]["payload"]["zonesStatus"] == {
-        "7": {"status": "moving", "level": 93}}
+    assert sink.messages[-1]["payload"]["zonesStatus"] == {}
     assert sink.messages[-1]["payload"]["descriptors"][0]["confidenceLevel"] == 93
     command["messageId"] = 17
     command["payload"]["enableSmartDetect"] = []

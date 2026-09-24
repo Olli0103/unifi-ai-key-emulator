@@ -44,14 +44,14 @@ def test_leave_payload_keeps_the_tracked_object_for_class_association():
     }
 
 
-def test_moving_payload_updates_track_and_preserves_zone_status():
+def test_moving_payload_updates_track_without_new_zone_transition():
     moving = TrackChange("moving", 4, "person", "person", 0.91,
                          (0.12, 0.2, 0.42, 0.7))
     payload = smart_event_payload("2A1122334455", moving,
                                   edge="moving", clock_wall_ms=1_700_000_001_000,
                                   zone_ids=(7,))
     assert payload["edgeType"] == "moving"
-    assert payload["zonesStatus"] == {"7": {"status": "moving", "level": 91}}
+    assert payload["zonesStatus"] == {}
     assert payload["descriptors"][0]["trackerID"] == 4
     assert payload["descriptors"][0]["objectType"] == "person"
     assert payload["descriptors"][0]["zones"] == [7]

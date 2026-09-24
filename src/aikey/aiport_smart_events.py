@@ -40,9 +40,11 @@ def smart_event_payload(camera_mac: str, change: TrackChange, *,
                "displayTimeoutMSec": 1000,
                # The local object score supplies a bounded zone level. Its
                # exact relationship to stock-camera zone levels is unverified.
+               # A moving track updates its descriptor without claiming a new
+               # zone transition. Zone status has only enter/leave edges.
                "zonesStatus": {str(zone_id): {"status": edge,
                                               "level": round(change.score * 100)}
-                               for zone_id in zone_ids},
+                               for zone_id in zone_ids if edge != "moving"},
                "trackerIDAttrMap": {}}
     x1, y1, x2, y2 = change.box
     if not all(math.isfinite(v) for v in change.box) or not (
