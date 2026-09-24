@@ -323,6 +323,8 @@ class AiPortIngress:
         self.start_timeout = start_timeout
         self.frame_observer = frame_observer
         self._session: _Session | None = None
+        self._desired_spec: StreamSpec | None = None
+        self._restart_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
         self.total_frames_decoded = 0
         self.last_decoder_exit_code: int | None = None
@@ -332,6 +334,8 @@ class AiPortIngress:
         self.total_frames_observed = 0
         self.total_frames_skipped = 0
         self.observer_failures = 0
+        self.restart_attempts = 0
+        self.restart_successes = 0
 
     async def control(self, payload: object) -> dict:
         if not isinstance(payload, dict) or "streaming" not in payload:
@@ -341,15 +345,27 @@ class AiPortIngress:
                 raise IngressError("invalid_stream_command")
             if normalize_mac(payload["deviceID"]) != self.camera_mac:
                 raise IngressError("camera_not_authorized")
+            restart_task = self._restart_task
+            if restart_task is not None:
+                restart_task.cancel()
             async with self._lock:
+                self._desired_spec = None
+                self._restart_task = None
                 await self._close_locked()
+            if restart_task is not None:
+                await asyncio.gather(restart_task, return_exceptions=True)
             return {"status": "stopped", "usedPoints": 0}
         spec = _stream_spec(payload, camera_mac=self.camera_mac, source_ip=self.source_ip)
         async with self._lock:
             if self._session is not None:
                 if self._session.spec == spec and self._session.healthy:
                     return {"status": "started", "usedPoints": spec.points}
+            if self._restart_task is not None:
+                self._restart_task.cancel()
+                self._restart_task = None
+            if self._session is not None:
                 await self._close_locked()
+            self._desired_spec = None
             session = _Session(spec, self.ffmpeg_path, self.frame_observer)
             try:
                 await session.start(self.start_timeout)
@@ -367,7 +383,45 @@ class AiPortIngress:
             self.last_decoder_error_markers = ()
             self.last_decoder_error_terms = ()
             self._session = session
+            self._desired_spec = spec
+            self._restart_task = asyncio.create_task(self._watch_decoder())
             return {"status": "started", "usedPoints": spec.points}
+
+    async def _watch_decoder(self) -> None:
+        """Restore an accepted stream after a decoder exits or stops yielding frames."""
+        delay = 1
+        while True:
+            await asyncio.sleep(delay)
+            async with self._lock:
+                spec = self._desired_spec
+                if spec is None:
+                    return
+                if self._session is not None and self._session.healthy:
+                    delay = 1
+                    continue
+                await self._close_locked()
+                session = _Session(spec, self.ffmpeg_path, self.frame_observer)
+                self.restart_attempts += 1
+                try:
+                    await session.start(self.start_timeout)
+                except asyncio.CancelledError:
+                    await session.close()
+                    raise
+                except (OSError, IngressError):
+                    self.last_decoder_exit_code = session.exit_code
+                    self.last_decoder_stderr_seen = session.stderr_seen
+                    self.last_decoder_error_markers = session.error_markers
+                    self.last_decoder_error_terms = session.error_terms
+                    await session.close()
+                    delay = min(delay * 2, 30)
+                    continue
+                self.last_decoder_exit_code = None
+                self.last_decoder_stderr_seen = False
+                self.last_decoder_error_markers = ()
+                self.last_decoder_error_terms = ()
+                self._session = session
+                self.restart_successes += 1
+                delay = 1
 
     def list_streams(self) -> list[dict]:
         session = self._session
@@ -382,7 +436,7 @@ class AiPortIngress:
     @property
     def reserved_points(self) -> int:
         """Count a decoder against capacity even if its frames have stalled."""
-        return self._session.spec.points if self._session is not None else 0
+        return self._desired_spec.points if self._desired_spec is not None else 0
 
     @property
     def frame_count(self) -> int:
@@ -417,8 +471,15 @@ class AiPortIngress:
             self._session = None
 
     async def close(self) -> None:
+        restart_task = self._restart_task
+        if restart_task is not None:
+            restart_task.cancel()
         async with self._lock:
+            self._desired_spec = None
+            self._restart_task = None
             await self._close_locked()
+        if restart_task is not None:
+            await asyncio.gather(restart_task, return_exceptions=True)
 
 
 class AiPortIngressPool:
@@ -472,6 +533,14 @@ class AiPortIngressPool:
     @property
     def reserved_points(self) -> int:
         return sum(ingress.reserved_points for ingress in self._ingresses.values())
+
+    @property
+    def restart_attempts(self) -> int:
+        return sum(ingress.restart_attempts for ingress in self._ingresses.values())
+
+    @property
+    def restart_successes(self) -> int:
+        return sum(ingress.restart_successes for ingress in self._ingresses.values())
 
     @property
     def frame_count(self) -> int:

@@ -1218,6 +1218,8 @@ class CandidateService:
                 else None),
             "stream_frames_decoded": self.ingress.frame_count if self.ingress else 0,
             "active_streams": len(self.ingress.list_streams()) if self.ingress else 0,
+            "stream_restart_attempts": self.ingress.restart_attempts if self.ingress else 0,
+            "stream_restart_successes": self.ingress.restart_successes if self.ingress else 0,
             "streams_with_decoded_frames": (
                 self.ingress.streams_with_decoded_frames if self.ingress else 0),
             "stream_frames_decoded_total": (
