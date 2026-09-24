@@ -18,11 +18,12 @@ import subprocess
 import time
 from typing import Callable
 
-from .aiport_candidate import CandidateError, _private_file
+from .aiport_candidate import CandidateError, _private_file, load_config
 from .aiport_deployment import (
     AI_PORT_CONTAINER_PORT, AiPortPlanError, _eligible, _ip, plan_ai_ports,
 )
 from .aiport_nas_compose import NasComposeError, build_nas_compose
+from .aiport_ingest import IngressError, normalize_mac
 from .camera_inventory import InventoryError, fetch_inventory
 
 
@@ -131,6 +132,37 @@ def _verify_external_slot_capacity(plan: dict, report: dict,
         raise ReconcileError("Protect camera inventory or capacity changed; review a new plan")
 
 
+def _verify_configured_cameras(plan: dict, report: dict, states: dict[int, Path],
+                               controller_ip: str) -> None:
+    """A selected slot cannot accept a camera outside its fresh plan assignment."""
+    rows = {row.get("id"): row for row in report["cameras"] if isinstance(row, dict)}
+    configured_across_slots: set[str] = set()
+    for slot, state_dir in states.items():
+        try:
+            config = load_config(Path(state_dir) / "config.json",
+                                 check_decoder_executable=False)
+            streams = ([config["paired_stream"]] if "paired_stream" in config else
+                       config.get("paired_streams", []))
+            if not streams:
+                continue
+            planned = plan["instances"][slot - 1]
+            allowed = {normalize_mac(rows[camera_id]["mac"])
+                       for camera_id in planned["camera_ids"]}
+            if len(allowed) != len(planned["camera_ids"]):
+                raise ValueError
+            for stream in streams:
+                camera = stream["camera_mac"]
+                if (camera not in allowed or camera in configured_across_slots
+                        or planned["source_kind"] == "protect"
+                        and stream["source_ip"] != controller_ip):
+                    raise ValueError
+                configured_across_slots.add(camera)
+        except (CandidateError, IngressError, KeyError, IndexError, TypeError,
+                ValueError, OSError) as exc:
+            raise ReconcileError(
+                "Configured AI Port camera is outside its verified slot") from exc
+
+
 def verify_inputs(plan: dict, manifest: dict, report: dict,
                   states: dict[int, Path], options: dict,
                   *, now: int | None = None) -> list[str]:
@@ -164,6 +196,7 @@ def verify_inputs(plan: dict, manifest: dict, report: dict,
         raise ReconcileError("Plan, camera inventory or slot identity no longer matches") from exc
     if manifest != expected:
         raise ReconcileError("Compose manifest differs from verified plan and slot identities")
+    _verify_configured_cameras(plan, report, states, options["controller_ip"])
     if not expected["services"]:
         raise ReconcileError("No NAS services selected")
     return sorted(expected["services"])

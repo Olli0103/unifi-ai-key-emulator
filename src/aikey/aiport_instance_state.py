@@ -79,7 +79,9 @@ def _verify_existing(state_dir: Path, expected: dict, pem: bytes) -> None:
     if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077:
         raise InstanceStateError("Existing AI Port state directory must be private")
     try:
-        config = load_config(state_dir / "config.json")
+        # The saved decoder path belongs to the Linux container, not the host
+        # running plan and identity verification. Runtime startup checks it.
+        config = load_config(state_dir / "config.json", check_decoder_executable=False)
         identity = json.loads(_private_file(state_dir / "identity.json", 4096))
         saved_ca = _private_file(state_dir / "controller-ca.pem", 16384)
         saved_cert = _private_file(state_dir / "device.crt", 16384)

@@ -3,7 +3,6 @@
 import hashlib
 import json
 import ssl
-import sys
 
 import pytest
 
@@ -59,7 +58,8 @@ def test_existing_slot_accepts_valid_camera_policy_without_rewriting_identity(tm
     config_path = state / "config.json"
     config = json.loads(config_path.read_text())
     config["paired_streams"] = [
-        {"camera_mac": mac, "source_ip": "192.168.10.1", "ffmpeg_path": sys.executable}
+        {"camera_mac": mac, "source_ip": "192.168.10.1",
+         "ffmpeg_path": "/usr/bin/ffmpeg"}
         for mac in ("2A1122334455", "2A1122334456")]
     config["live_pool_detector"] = {
         "inference_backend": "vision_api",

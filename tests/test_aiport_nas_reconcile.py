@@ -39,6 +39,33 @@ def test_fresh_inventory_and_exact_manifest_are_required(tmp_path):
         verify_inputs(plan, manifest, report, states, options)
 
 
+def test_selected_slot_rejects_configured_camera_outside_fresh_assignment(tmp_path):
+    plan, states, options, _, report = inputs(tmp_path)
+    for number, row in enumerate(report["cameras"], start=1):
+        row["mac"] = f"2A11000000{number:02X}"
+    state = states[2]
+    config_path = state / "config.json"
+    config = json.loads(config_path.read_text())
+    config["paired_stream"] = {"camera_mac": report["cameras"][0]["mac"],
+                               "source_ip": options["controller_ip"],
+                               "ffmpeg_path": "/usr/bin/ffmpeg"}
+    config_path.write_text(json.dumps(config) + "\n")
+    manifest = build_nas_compose(plan, states, **options)
+    with pytest.raises(ReconcileError, match="outside its verified slot"):
+        verify_inputs(plan, manifest, report, states, options)
+
+    selected_id = plan["instances"][1]["camera_ids"][0]
+    config["paired_stream"]["camera_mac"] = next(
+        row["mac"] for row in report["cameras"] if row["id"] == selected_id)
+    config_path.write_text(json.dumps(config) + "\n")
+    assert verify_inputs(plan, manifest, report, states, options) == ["aiport_slot_2"]
+
+    config["paired_stream"]["source_ip"] = "192.168.10.44"
+    config_path.write_text(json.dumps(config) + "\n")
+    with pytest.raises(ReconcileError, match="outside its verified slot"):
+        verify_inputs(plan, manifest, report, states, options)
+
+
 def test_fresh_inventory_permits_selected_slot_with_unaddressed_future_slot(tmp_path):
     plan, selected, options, _, report = inputs(tmp_path, selected_slot=1)
     plan["instances"][1]["host_ip"] = None
