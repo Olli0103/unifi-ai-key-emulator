@@ -38,10 +38,11 @@ def smart_event_payload(camera_mac: str, change: TrackChange, *,
     payload = {"deviceID": device_id, "edgeType": edge,
                "clockWall": clock_wall_ms,
                "displayTimeoutMSec": 1000,
+               # The local object score supplies a bounded zone level. Its
+               # exact relationship to stock-camera zone levels is unverified.
                "zonesStatus": {str(zone_id): {"status": edge,
-                                              **({"level": round(change.score * 100)}
-                                                 if edge == "enter" else {})}
-                               for zone_id in zone_ids if edge != "moving"},
+                                              "level": round(change.score * 100)}
+                               for zone_id in zone_ids},
                "trackerIDAttrMap": {}}
     if edge == "leave":
         return payload
