@@ -636,3 +636,14 @@ def test_provider_failures_back_off_exponentially_and_reset_on_success(tmp_path,
     now[0] += 5
     assert motion() == () and len(calls) == 5
     assert detector.provider_failures == 3 and detector.backoff_skips == 2
+
+
+def test_prompt_separates_pets_from_packages_and_people_in_night_ir(tmp_path):
+    sent = []
+    detector = ApiObjectDetector(
+        _ollama_config(), tmp_path, threshold=0.8,
+        transport=lambda _url, _headers, payload: (sent.append(json.dumps(payload))
+                                                   or _response('{"detections":[]}')))
+    detector.detect_for_camera(FIRST, STILL)
+    assert "night infrared" in sent[0]
+    assert "is kind animal, never package or person" in sent[0]

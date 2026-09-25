@@ -56,6 +56,12 @@ _PROMPT = (
     "Box values are fractions of image width and height in left, top, right, bottom order. "
     "Use kind person, vehicle, animal or package. Valid labels are person; bicycle, car, "
     "motorcycle, bus, truck; bird, cat, dog, horse, sheep, cow; package. "
+    # A cat sitting in Flur's night-IR frame came back as package and
+    # person, never animal (25 Sep 2026, user-confirmed ground truth).
+    "Frames are often grayscale night infrared from indoor cameras, where pets are common. "
+    "A person has a human body shape: head, torso and limbs. A cat or dog, even curled up, "
+    "sitting still or partly hidden, is kind animal, never package or person. A package is "
+    "an inanimate delivered box, parcel, envelope or bag with straight edges or folds. "
     "Include an object only when its full visible extent can be located. "
     "Return an empty detections array when uncertain. Do not infer off-screen objects."
 )
