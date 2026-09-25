@@ -891,6 +891,19 @@ class CandidateService:
         await self._reply_control(ws, "ChangeSmartMotionSettings", request_id, 0, {})
         self.smart_motion_settings_acks += 1
 
+    def _policy_streams(self) -> set[str]:
+        """Streams that may hold a policy: decoding, or requested and starting.
+
+        Protect pushes a camera's policy about a second after requesting its
+        stream, before the first frame is decoded; rejecting it there made
+        Protect log "Failed to handle EventAIPortStatus isSmartDetectReady"
+        (27 full-policy rejections in one evening). Events still require an
+        active stream.
+        """
+        active = {stream["deviceID"] for stream in self.ingress.list_streams()}
+        requested = getattr(self.ingress, "requested_cameras", None)
+        return active | (set(requested()) if callable(requested) else set())
+
     async def _handle_pool_smart_settings(
             self, ws: aiohttp.ClientWebSocketResponse, request_id: int,
             payload: object) -> None:
@@ -926,7 +939,7 @@ class CandidateService:
         except SmartSettingsError:
             repeat = None
         if (repeat is not None and repeat == engine.current_policy(camera)
-                and camera in {stream["deviceID"] for stream in self.ingress.list_streams()}
+                and camera in self._policy_streams()
                 and self._inference is not None
                 and self._inference.is_available(camera)
                 and self._pool_event_enabled()):
@@ -958,7 +971,7 @@ class CandidateService:
                 summarize_recognition_accuracy(payload))
         else:
             self._pool_recognition_accuracy_shapes.pop(camera, None)
-        active = {stream["deviceID"] for stream in self.ingress.list_streams()}
+        active = self._policy_streams()
         if (parsed is not None and parsed.enabled_types
                 and parsed.enabled_types <= set(self._pool_smart_types())
                 and camera in active and self._inference is not None
