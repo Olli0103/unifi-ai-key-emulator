@@ -2095,6 +2095,7 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
     assert all("observations" in item and "events_entered" in item
                and "score_eligible_observations" in item
                and "eligible_frames" in item
+               and "stream_restart_failures" in item
                for item in health["pool_cameras"])
     assert cameras[0] not in json.dumps(health["pool_cameras"])
     assert health["smart_events_entered"] == 2

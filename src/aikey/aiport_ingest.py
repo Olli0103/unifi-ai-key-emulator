@@ -343,6 +343,10 @@ class AiPortIngress:
         self.observer_failures = 0
         self.restart_attempts = 0
         self.restart_successes = 0
+        self.restart_observed_states = {"process_exited": 0,
+                                        "reader_stopped": 0,
+                                        "no_recent_frame": 0}
+        self.restart_failures: dict[str, int] = {}
 
     async def control(self, payload: object) -> dict:
         if not isinstance(payload, dict) or "streaming" not in payload:
@@ -406,6 +410,15 @@ class AiPortIngress:
                 if self._session is not None and self._session.healthy:
                     delay = 1
                     continue
+                previous = self._session
+                if previous is not None:
+                    # Record what was observable at retry time, not a root
+                    # cause. An exited decoder can also have stale frames.
+                    state = ("process_exited" if previous.process is not None
+                             and previous.process.returncode is not None else
+                             "reader_stopped" if previous.failure is not None else
+                             "no_recent_frame")
+                    self.restart_observed_states[state] += 1
                 await self._close_locked()
                 session = _Session(spec, self.ffmpeg_path, self.frame_observer)
                 self.restart_attempts += 1
@@ -414,7 +427,17 @@ class AiPortIngress:
                 except asyncio.CancelledError:
                     await session.close()
                     raise
-                except (OSError, IngressError):
+                except (OSError, IngressError) as exc:
+                    code = exc.code if isinstance(exc, IngressError) else "stream_decoder_unavailable"
+                    if code.startswith("rtsp_status_"):
+                        code = "rtsp_status"
+                    elif code not in {"stream_start_timeout", "stream_unavailable",
+                                      "stream_ended", "invalid_decoded_frame",
+                                      "stream_decoder_unavailable", "rtsp_connect_failed",
+                                      "rtsp_protocol_rejected", "rtsp_invalid_data",
+                                      "decoder_option_missing"}:
+                        code = "other"
+                    self.restart_failures[code] = self.restart_failures.get(code, 0) + 1
                     self.last_decoder_exit_code = session.exit_code
                     self.last_decoder_stderr_seen = session.stderr_seen
                     self.last_decoder_error_markers = session.error_markers
@@ -536,6 +559,25 @@ class AiPortIngressPool:
     def list_streams(self) -> list[dict]:
         return [stream for _, ingress in sorted(self._ingresses.items())
                 for stream in ingress.list_streams()]
+
+    def camera_diagnostics(self, camera_order: tuple[str, ...]
+                           ) -> tuple[dict[str, object], ...]:
+        """Fixed-code stream recovery counters in explicit camera order."""
+        if (len(camera_order) != len(self._ingresses)
+                or set(camera_order) != set(self._ingresses)):
+            raise IngressError("camera_order_mismatch")
+        result = []
+        for camera in camera_order:
+            ingress = self._ingresses[camera]
+            result.append({
+                "stream_active": bool(ingress.list_streams()),
+                "stream_restart_attempts": ingress.restart_attempts,
+                "stream_restart_successes": ingress.restart_successes,
+                "stream_restart_observed_states": dict(
+                    ingress.restart_observed_states),
+                "stream_restart_failures": dict(ingress.restart_failures),
+            })
+        return tuple(result)
 
     @property
     def reserved_points(self) -> int:

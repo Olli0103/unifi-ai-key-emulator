@@ -1375,7 +1375,7 @@ class CandidateService:
             "live_event_budget_healthy": live_budget_healthy,
             "pool_inference": (self._inference.snapshot()
                                if self._inference is not None else None),
-            "pool_cameras": ([dict(inference, **policy,
+            "pool_cameras": ([dict(inference, **policy, **stream,
                                     policy_rejection=self._pool_policy_errors.get(
                                         self._pool_camera_order[index]),
                                     secondary_lens_shape=self._pool_secondary_lens_shapes.get(
@@ -1383,12 +1383,14 @@ class CandidateService:
                                     recognition_accuracy_shape=(
                                         self._pool_recognition_accuracy_shapes.get(
                                             self._pool_camera_order[index])))
-                              for index, (inference, policy) in enumerate(zip(
+                              for index, (inference, policy, stream) in enumerate(zip(
                                   self._inference.camera_snapshot(),
                                   self._camera_engine.camera_snapshot(now=time.monotonic()),
+                                  self.ingress.camera_diagnostics(self._pool_camera_order),
                                   strict=True))]
                              if self._inference is not None
-                             and self._camera_engine is not None else None),
+                             and self._camera_engine is not None
+                             and isinstance(self.ingress, AiPortIngressPool) else None),
             "last_stream_error": self.last_stream_error,
             "last_decoder_exit_code": (self.ingress.last_decoder_exit_code
                                        if self.ingress else None),
