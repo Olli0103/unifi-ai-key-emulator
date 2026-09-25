@@ -101,3 +101,33 @@ def test_motion_payload_matches_protects_required_fields():
             "motionHeatmap", "motionSnapshot"} <= set(payload)
     assert (payload["eventType"], payload["edgeType"]) == ("motion", "start")
     assert payload["deviceID"] == CAMERA
+
+
+def test_short_gaps_keep_one_event_and_small_distant_motion_starts():
+    detector = MotionDetector(parse_motion_settings(
+        settings(start=3000, stop=3000,
+                 zones={"1": {"coord": [0, 0, 1000, 0, 1000, 1000, 0, 1000],
+                              "level": 50}}), camera_mac=CAMERA))
+    detector.observe(STILL, now=0)
+    # A small figure (about 2% of the frame) walking, with one unchanged
+    # sample in between, still completes the 3 s start linger.
+    positions = [(40, 60, 64, 110), (90, 60, 114, 110), (90, 60, 114, 110),
+                 (140, 60, 164, 110), (190, 60, 214, 110), (240, 60, 264, 110),
+                 (280, 60, 304, 110), (230, 60, 254, 110)]
+    edges = []
+    for step, box in enumerate(positions):
+        edges += detector.observe(frame(box), now=0.5 + step * 0.5)
+    assert [edge.edge for edge in edges] == ["start"]
+    # Movement that pauses for 5 s stays in the same event.
+    now = 4.5
+    for _ in range(10):
+        edges += detector.observe(frame((230, 60, 254, 110)), now=now)
+        now += 0.5
+    edges += detector.observe(frame((100, 60, 124, 110)), now=now)
+    assert [edge.edge for edge in edges] == ["start"]
+    while len(edges) < 2:
+        now += 0.5
+        edges += detector.observe(frame((100, 60, 124, 110)), now=now)
+        assert now < 40
+    assert edges[-1].edge == "stop"
+    assert sum(detector.snapshot()["change_bands"].values()) == detector.frames - 1

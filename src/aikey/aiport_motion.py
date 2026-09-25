@@ -22,9 +22,18 @@ from .aiport_ingest import IngressError, normalize_mac
 
 _GRID_W, _GRID_H = 64, 36
 _PIXEL_DELTA = 18
-# A zone at level 0 (sensitivity 100) reacts to 0.5% of its cells; level
-# 100 (sensitivity 0) needs 4%. The mapping is local, not Protect's.
-_MIN_FRACTION, _FRACTION_RANGE = 0.005, 0.035
+# A zone at level 0 (sensitivity 100) reacts to 0.2% of its cells; level
+# 100 (sensitivity 0) needs 3.2%, so sensitivity 50 needs 1.7%: roughly a
+# distant person in a full-frame zone. The mapping is local, not Protect's.
+_MIN_FRACTION, _FRACTION_RANGE = 0.002, 0.03
+# At 2 fps a moving person can leave one sample unchanged. Such a short gap
+# neither restarts the start linger nor counts as quiet time.
+_START_GAP_SECONDS = 1.0
+# Protect's own cameras merge intermittent movement into one event; a short
+# stop delay alone split a seated person into an event every few seconds.
+_MIN_STOP_HOLD_MS = 8000
+_BANDS = (("under_0_2", 0.002), ("0_2_to_1", 0.01), ("1_to_3", 0.03),
+          ("3_to_10", 0.1), ("over_10", math.inf))
 # Most of the frame changing at once is an exposure, IR or codec jump.
 _SCENE_CHANGE_FRACTION = 0.6
 _BACKGROUND_WEIGHT = 0.15
@@ -139,6 +148,8 @@ class MotionDetector:
         self._peak: dict[str, int] = {}
         self.frames = 0
         self.scene_changes = 0
+        # Count-only histogram of the largest per-zone change fraction.
+        self.change_bands = dict.fromkeys((name for name, _ in _BANDS), 0)
         self.starts = 0
         self.stops = 0
 
@@ -179,8 +190,12 @@ class MotionDetector:
             self.scene_changes += 1
             self._background = [float(value) for value in thumbnail]
         else:
-            for zone in policy.zones:
-                fraction = len(changed & zone.cells) / len(zone.cells)
+            fractions = [len(changed & zone.cells) / len(zone.cells)
+                         for zone in policy.zones]
+            peak = max(fractions)
+            self.change_bands[next(name for name, limit in _BANDS
+                                   if peak < limit)] += 1
+            for zone, fraction in zip(policy.zones, fractions):
                 if fraction >= _MIN_FRACTION + _FRACTION_RANGE * zone.level / 100:
                     moving_levels[str(zone.zone_id)] = min(
                         100, round(100 * fraction / max(_MIN_FRACTION, 0.04)))
@@ -196,11 +211,13 @@ class MotionDetector:
                 self._started_at = now
                 self.starts += 1
                 result.append(MotionEdge("start", dict(self._peak)))
-        elif not self.active:
+        elif (not self.active and self._last_motion is not None
+              and now - self._last_motion > _START_GAP_SECONDS):
             self._moving_since = None
             self._peak = {}
         if self.active and (
-                (now - self._last_motion) * 1000 >= max(policy.linger_stop_ms, 500)
+                (now - self._last_motion) * 1000
+                >= max(policy.linger_stop_ms, _MIN_STOP_HOLD_MS)
                 or (now - self._started_at) * 1000 >= policy.max_duration_ms):
             result.extend(self.stop(now=now))
         return tuple(result)
@@ -220,6 +237,7 @@ class MotionDetector:
         return {"enabled": self.policy.enabled, "zones": len(self.policy.zones),
                 "active": self.active, "frames": self.frames,
                 "scene_changes": self.scene_changes,
+                "change_bands": dict(self.change_bands),
                 "starts": self.starts, "stops": self.stops}
 
 
