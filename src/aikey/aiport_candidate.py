@@ -923,14 +923,17 @@ class CandidateService:
             # Protect 7.3.68 sends every paired camera this separate message
             # on connect. Answering 501 made Protect log "Failed to handle
             # EventAIPortStatus isSmartDetectReady". It carries no smart policy.
-            if type(payload["isLprCamera"]) is not bool:
+            # Live Protect 7.3.68 sends this flag as an integer (0 or 1).
+            if not (type(payload["isLprCamera"]) is bool
+                    or type(payload["isLprCamera"]) is int
+                    and payload["isLprCamera"] in (0, 1)):
                 self._count_policy_rejection(
                     "invalid_lpr_flag:" + type(payload["isLprCamera"]).__name__)
                 await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
                                           {"description": "smart_detection_unavailable"})
                 return
-            # Live health showed every startup rejection was this message with
-            # isLprCamera true. The AI Port never advertises plate detection,
+            # Live health showed every startup rejection was this message
+            # (an integer flag, refused as non-boolean before). The AI Port never advertises plate detection,
             # so acknowledging the flag promises no plate events; it is
             # counted so health shows plates were requested but not read.
             self.smart_settings_lpr_acks += 1
