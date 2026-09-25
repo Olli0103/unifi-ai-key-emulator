@@ -82,13 +82,20 @@ class _MotionGate:
         self._armed[camera] = True
         self._startup_probe.discard(camera)
 
-    def startup_result(self, camera: str, *, found_object: bool) -> None:
-        """Only spend the second startup request if the first found an object."""
+    def sample_result(self, camera: str, *, found_object: bool) -> None:
+        """Only spend a confirming request if the first one found an object.
+
+        One positive sample cannot confirm a track, and the next unsampled
+        frame drops it. A second request after an empty or failed first one
+        can never produce an event, so it would only spend the budget. Motion
+        stays disarmed until the scene quiets; an idle startup probe rearms.
+        """
+        if not found_object:
+            self._pending.pop(camera, None)
         if camera not in self._startup_probe:
             return
         self._startup_probe.remove(camera)
         if not found_object:
-            self._pending.pop(camera, None)
             self._armed[camera] = True
 
     def has_baseline(self, camera: str) -> bool:
@@ -325,19 +332,19 @@ class ApiObjectDetector:
             counts["empty_responses"] += not reported
             counts["below_threshold"] += len(reported) - len(accepted)
             counts["accepted_objects"] += len(accepted)
-            self.motion.startup_result(camera_mac, found_object=bool(accepted))
+            self.motion.sample_result(camera_mac, found_object=bool(accepted))
             return accepted
         except ApiDetectionError as exc:
-            self.motion.startup_result(camera_mac, found_object=False)
+            self.motion.sample_result(camera_mac, found_object=False)
             if exc.args == ("api_detection_dns_unavailable",):
                 self._dns_ok_until = 0.0
                 self._dns_retry_at = time.monotonic() + _DNS_RETRY_SECONDS
             raise
         except ProviderError as exc:
-            self.motion.startup_result(camera_mac, found_object=False)
+            self.motion.sample_result(camera_mac, found_object=False)
             raise ApiDetectionError("api_detection_provider_response_invalid") from exc
         except (TypeError, ValueError) as exc:
-            self.motion.startup_result(camera_mac, found_object=False)
+            self.motion.sample_result(camera_mac, found_object=False)
             raise ApiDetectionError("api_detection_request_failed") from exc
 
     def diagnostic_counts(self, camera_mac: str) -> dict[str, int]:

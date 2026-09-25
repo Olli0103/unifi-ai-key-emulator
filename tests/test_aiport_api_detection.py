@@ -89,7 +89,8 @@ def test_motion_gate_detects_person_sized_change(tmp_path):
         assert detector.detect_for_camera(FIRST, scene(False)) == ()
     assert detector.detect_for_camera(FIRST, scene(True)) == ()
     assert detector.detect_for_camera(FIRST, scene(True)) == ()
-    assert len(requests) == 3
+    # The empty first motion sample cancels its confirming request.
+    assert len(requests) == 2
 
 
 def test_stationary_person_is_confirmed_by_startup_probe(tmp_path):
@@ -171,13 +172,17 @@ def test_recovered_budget_accepts_continuous_motion_after_denied_probe(tmp_path,
     monkeypatch.setattr("aikey.aiport_api_detection.time.monotonic",
                         lambda: now_mono[0])
     requests = []
+    replies = iter(('{"detections":[]}',
+                    '{"detections":[{"kind":"person","label":"person",'
+                    '"score":0.92,"box":[0.1,0.2,0.4,0.8]}]}'))
     detector = ApiObjectDetector(
         _ollama_config(), tmp_path, threshold=0.8,
         max_requests_per_hour=2,
-        transport=lambda *_args: (requests.append(1) or _response('{"detections":[]}')))
+        transport=lambda *_args: (requests.append(1)
+                                  or _response(next(replies, '{"detections":[]}'))))
     detector.budget.clock_ns = lambda: now_ns[0]
     detector.detect_for_camera(FIRST, STILL)
-    detector.detect_for_camera(FIRST, FRAME)
+    detector.detect_for_camera(FIRST, FRAME)  # Positive motion sample.
     detector.detect_for_camera(FIRST, STILL)  # Confirmation denied by budget.
     assert len(requests) == 2
     now_ns[0] += _HOUR_NS
@@ -252,11 +257,11 @@ def test_continuous_motion_is_one_burst_until_three_quiet_frames(tmp_path):
     detector.detect_for_camera(FIRST, STILL)
     for image in (FRAME, STILL) * 5:
         detector.detect_for_camera(FIRST, image)
-    assert len(calls) == 3
+    assert len(calls) == 2
     for _ in range(3):
         detector.detect_for_camera(FIRST, STILL)
     detector.detect_for_camera(FIRST, FRAME)
-    assert len(calls) == 4
+    assert len(calls) == 3
 
 
 def test_http_error_exposes_only_status_class(monkeypatch):
@@ -415,3 +420,29 @@ def test_claude_adapter_uses_private_key_and_official_endpoint(tmp_path):
                        "anthropic-version": "2023-06-01"}
     assert payload["model"] == "claude-opus-5-5"
     assert "synthetic-claude-key" not in json.dumps(payload)
+
+
+def test_motion_pair_spends_confirmation_only_after_a_positive_sample(tmp_path):
+    replies = iter(('{"detections":[]}',
+                    '{"detections":[{"kind":"person","label":"person",'
+                    '"score":0.92,"box":[0.1,0.2,0.4,0.8]}]}',
+                    '{"detections":[{"kind":"person","label":"person",'
+                    '"score":0.93,"box":[0.3,0.2,0.6,0.8]}]}'))
+    calls = []
+
+    def transport(*_args):
+        calls.append(1)
+        return _response(next(replies))
+
+    detector = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.8,
+                                 max_requests_per_hour=6, transport=transport)
+    detector.detect_for_camera(FIRST, STILL)          # empty startup probe
+    detector.detect_for_camera(FIRST, STILL)
+    assert len(calls) == 1
+    for _ in range(3):
+        detector.detect_for_camera(FIRST, STILL)
+    first = detector.detect_for_camera(FIRST, FRAME)  # motion: positive
+    second = detector.detect_for_camera(FIRST, FRAME)  # confirmation
+    assert len(calls) == 3
+    assert [item.kind for item in first + second] == ["person", "person"]
+    assert detector.budget.remaining(FIRST) == 3

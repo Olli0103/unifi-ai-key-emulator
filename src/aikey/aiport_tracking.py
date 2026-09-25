@@ -77,6 +77,16 @@ def _iou(first: tuple[float, float, float, float],
     return intersection / (first_area + second_area - intersection)
 
 
+def _proximity(first: tuple[float, float, float, float],
+               second: tuple[float, float, float, float]) -> float:
+    """Center distance in units of the larger box's longest side."""
+    dx = (first[0] + first[2] - second[0] - second[2]) / 2
+    dy = (first[1] + first[3] - second[1] - second[3]) / 2
+    scale = max(first[2] - first[0], first[3] - first[1],
+                second[2] - second[0], second[3] - second[1])
+    return math.hypot(dx, dy) / scale
+
+
 class TemporalTracker:
     """Match observations by class and overlap, then require repeated evidence.
 
@@ -86,10 +96,16 @@ class TemporalTracker:
     ``max_gap_seconds``. A matching box can bridge a short inference delay,
     but not a stream outage longer than 30 seconds. Tentative tracks disappear
     on a missed frame. Nothing is persisted.
+
+    ``max_center_distance`` is for sparse samplers such as a paid vision API,
+    whose frames are seconds apart. A walking person then rarely keeps 25%
+    box overlap, so a same-class box whose center moved less than this many
+    longest box sides also matches. Overlap matches always take priority.
     """
 
     def __init__(self, *, min_hits: int = 2, max_gap_seconds: float = 3.0,
-                 iou_threshold: float = 0.25, max_tracks: int = 32):
+                 iou_threshold: float = 0.25, max_tracks: int = 32,
+                 max_center_distance: float | None = None):
         if (type(min_hits) is not int or not 2 <= min_hits <= 10
                 or type(max_gap_seconds) not in (int, float)
                 or not math.isfinite(max_gap_seconds)
@@ -97,8 +113,17 @@ class TemporalTracker:
                 or type(iou_threshold) not in (int, float)
                 or not math.isfinite(iou_threshold)
                 or not 0 < iou_threshold < 1
-                or type(max_tracks) is not int or not 1 <= max_tracks <= 100):
+                or type(max_tracks) is not int or not 1 <= max_tracks <= 100
+                or max_center_distance is not None
+                and (type(max_center_distance) not in (int, float)
+                     or not math.isfinite(max_center_distance)
+                     or not 0 < max_center_distance <= 3)):
             raise TrackingError("invalid_tracking_policy")
+        self.max_center_distance = (None if max_center_distance is None
+                                    else float(max_center_distance))
+        # Content-free association counters for private health.
+        self.stats = {"iou_matches": 0, "proximity_matches": 0,
+                      "tentative_unmatched": 0}
         self.min_hits = min_hits
         self.max_gap_seconds = float(max_gap_seconds)
         self.iou_threshold = float(iou_threshold)
@@ -135,14 +160,19 @@ class TemporalTracker:
                     continue
                 overlap = _iou(observation.box, track.observation.box)
                 if overlap >= self.iou_threshold:
-                    candidates.append((-overlap, track_id, index))
+                    candidates.append((0, -overlap, track_id, index))
+                elif self.max_center_distance is not None:
+                    distance = _proximity(observation.box, track.observation.box)
+                    if distance <= self.max_center_distance:
+                        candidates.append((1, distance, track_id, index))
         matched_tracks: set[int] = set()
         matched_observations: set[int] = set()
-        for _, track_id, index in sorted(candidates):
+        for tier, _, track_id, index in sorted(candidates):
             if track_id in matched_tracks or index in matched_observations:
                 continue
             matched_tracks.add(track_id)
             matched_observations.add(index)
+            self.stats["proximity_matches" if tier else "iou_matches"] += 1
             track = self._tracks[track_id]
             track.observation = observations[index]
             track.last_seen = now
@@ -157,6 +187,7 @@ class TemporalTracker:
             if track_id in matched_tracks:
                 continue
             if not track.active:
+                self.stats["tentative_unmatched"] += bool(observations)
                 del self._tracks[track_id]
             elif now - track.last_seen > self.max_gap_seconds:
                 changes.append(track.change("leave"))

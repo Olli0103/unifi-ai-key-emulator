@@ -20,6 +20,10 @@ from .aiport_tracking import (
 )
 
 
+_OBJECT_KINDS = frozenset({"person", "vehicle", "animal", "package"})
+_KIND_ORDER = ("person", "vehicle", "animal", "package")
+
+
 @dataclass(frozen=True)
 class CameraEventCandidate:
     camera_mac: str
@@ -33,7 +37,8 @@ class CameraPolicyEngine:
     def __init__(self, camera_macs: list[str], *, max_events_per_camera: int = 1,
                  event_window_seconds: float | None = None,
                  event_budget: EventBudget | None = None,
-                 max_track_gap_seconds: float = 3.0):
+                 max_track_gap_seconds: float = 3.0,
+                 max_center_distance: float | None = None):
         if (not isinstance(camera_macs, list) or not 1 <= len(camera_macs) <= 5
                 or type(max_events_per_camera) is not int
                 or not 1 <= max_events_per_camera <= 3600
@@ -44,7 +49,11 @@ class CameraPolicyEngine:
                 or event_budget is not None and not isinstance(event_budget, EventBudget)
                 or type(max_track_gap_seconds) not in (int, float)
                 or not math.isfinite(max_track_gap_seconds)
-                or not 0.5 <= max_track_gap_seconds <= 30):
+                or not 0.5 <= max_track_gap_seconds <= 30
+                or max_center_distance is not None
+                and (type(max_center_distance) not in (int, float)
+                     or not math.isfinite(max_center_distance)
+                     or not 0 < max_center_distance <= 3)):
             raise IngressError("invalid_camera_engine")
         try:
             cameras = [normalize_mac(value) for value in camera_macs]
@@ -57,8 +66,11 @@ class CameraPolicyEngine:
         self._policies: dict[str, SmartPolicy | None] = {
             camera: None for camera in cameras}
         self._track_gap = float(max_track_gap_seconds)
-        self._trackers = {camera: TemporalTracker(max_gap_seconds=self._track_gap)
-                          for camera in cameras}
+        self._center_distance = max_center_distance
+        self._trackers = {camera: self._new_tracker() for camera in cameras}
+        self._association_totals = {camera: {
+            "iou_matches": 0, "proximity_matches": 0, "tentative_unmatched": 0,
+        } for camera in cameras}
         self._active: dict[str, dict[int, tuple[TrackChange, tuple[int, ...]]]] = {
             camera: {} for camera in cameras}
         self._event_counts = {camera: 0 for camera in cameras}
@@ -82,6 +94,10 @@ class CameraPolicyEngine:
         self._event_window_seconds = event_window_seconds
         self._event_budget = event_budget
 
+    def _new_tracker(self) -> TemporalTracker:
+        return TemporalTracker(max_gap_seconds=self._track_gap,
+                               max_center_distance=self._center_distance)
+
     def _camera(self, camera_mac: str) -> str:
         camera = normalize_mac(camera_mac)
         if camera not in self._cameras:
@@ -94,8 +110,8 @@ class CameraPolicyEngine:
         camera = self._camera(camera_mac)
         if (policy is not None and (not isinstance(policy, SmartPolicy)
                 or policy.camera_mac != camera
-                or not 1 <= len(policy.enabled_types) <= 3
-                or not policy.enabled_types <= {"person", "vehicle", "animal", "package"})):
+                or not policy.enabled_types
+                or not policy.enabled_types <= _OBJECT_KINDS)):
             raise IngressError("invalid_camera_policy")
         result = tuple(
             CameraEventCandidate(camera, TrackChange(
@@ -104,7 +120,9 @@ class CameraPolicyEngine:
             for _, (previous, zones) in sorted(self._active[camera].items()))
         self._active[camera] = {}
         self._last_moving[camera] = {}
-        self._trackers[camera] = TemporalTracker(max_gap_seconds=self._track_gap)
+        for name, count in self._trackers[camera].stats.items():
+            self._association_totals[camera][name] += count
+        self._trackers[camera] = self._new_tracker()
         self._policies[camera] = policy
         self._generations[camera] += 1
         return result
@@ -218,13 +236,20 @@ class CameraPolicyEngine:
                 except EventBudgetError:
                     used = self._max_events
                     budget_healthy = False
+            policy = self._policies[camera]
             result.append({
-                "policy_enabled": self._policies[camera] is not None,
+                "policy_enabled": policy is not None,
+                "policy_enabled_types": ([kind for kind in _KIND_ORDER
+                                          if kind in policy.enabled_types]
+                                         if policy is not None else []),
                 "score_eligible_observations": self._score_eligible_observations[camera],
                 "eligible_observations": self._eligible_observations[camera],
                 "eligible_frames": self._eligible_frames[camera],
                 "zone_rejections": dict(self._zone_rejections[camera]),
                 "zone_overlap_bands": dict(self._zone_overlap_bands[camera]),
+                "track_associations": {
+                    name: count + self._trackers[camera].stats[name]
+                    for name, count in self._association_totals[camera].items()},
                 "events_entered": self._event_counts[camera],
                 "active_tracks": len(self._active[camera]),
                 "event_budget_remaining": max(0, self._max_events - used),

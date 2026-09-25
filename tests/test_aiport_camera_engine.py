@@ -172,6 +172,19 @@ def test_one_camera_tracks_person_vehicle_and_animal_independently():
     assert all(item.change.edge == "leave" for item in left)
 
 
+def test_four_class_policy_accepts_package_with_other_object_classes():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=4)
+    kinds = ("person", "vehicle", "animal", "package")
+    engine.replace_policy(FIRST, multiclass_policy(FIRST, kinds))
+    observations = (person(), ObjectObservation("vehicle", "car", 0.91, INSIDE),
+                    ObjectObservation("animal", "dog", 0.92, INSIDE),
+                    ObjectObservation("package", "package", 0.93, INSIDE))
+    assert engine.observe(FIRST, observations, now=1) == ()
+    entered = engine.observe(FIRST, observations, now=2)
+    assert {item.change.kind for item in entered} == set(kinds)
+    assert engine.camera_snapshot(now=2)[0]["policy_enabled_types"] == list(kinds)
+
+
 def test_multiclass_revoke_closes_only_its_camera_tracks():
     engine = CameraPolicyEngine([FIRST, SECOND], max_events_per_camera=3)
     engine.replace_policy(FIRST, multiclass_policy(FIRST))
@@ -336,3 +349,44 @@ def test_live_pool_budget_corruption_denies_new_enters(tmp_path):
     status, = engine.camera_snapshot(now=2)
     assert status["event_budget_remaining"] == 0
     assert status["event_budget_healthy"] is False
+
+
+WALK_START = (0.10, 0.30, 0.25, 0.90)
+WALK_NEXT = (0.32, 0.28, 0.47, 0.92)
+
+
+def test_sparse_api_samples_confirm_a_walking_person_without_box_overlap():
+    # Flur regression: two paid samples ~2 s apart both report one in-zone
+    # person, but the walking person's boxes do not overlap at all.
+    strict = CameraPolicyEngine([FIRST], max_track_gap_seconds=20)
+    strict.replace_policy(FIRST, policy(FIRST))
+    assert strict.observe(FIRST, (person(box=WALK_START),), now=1) == ()
+    assert strict.observe(FIRST, (person(box=WALK_NEXT),), now=3.2) == ()
+    assert strict.camera_snapshot(now=4)[0]["track_associations"] == {
+        "iou_matches": 0, "proximity_matches": 0, "tentative_unmatched": 1}
+
+    sparse = CameraPolicyEngine([FIRST], max_track_gap_seconds=20,
+                                max_center_distance=1.5)
+    sparse.replace_policy(FIRST, policy(FIRST))
+    assert sparse.observe(FIRST, (person(box=WALK_START),), now=1) == ()
+    entered, = sparse.observe(FIRST, (person(box=WALK_NEXT),), now=3.2)
+    assert entered.change.edge == "enter"
+    assert sparse.camera_snapshot(now=4)[0]["track_associations"] == {
+        "iou_matches": 0, "proximity_matches": 1, "tentative_unmatched": 0}
+
+
+def test_sparse_association_still_rejects_distant_or_other_class_objects():
+    engine = CameraPolicyEngine([FIRST], max_track_gap_seconds=20,
+                                max_center_distance=1.5)
+    engine.replace_policy(FIRST, multiclass_policy(FIRST))
+    small_left = (0.02, 0.02, 0.10, 0.20)
+    small_right = (0.85, 0.75, 0.95, 0.95)
+    assert engine.observe(FIRST, (person(box=small_left),), now=1) == ()
+    assert engine.observe(FIRST, (person(box=small_right),), now=3) == ()
+    assert engine.observe(FIRST, (ObjectObservation(
+        "animal", "dog", 0.9, small_right),), now=5) == ()
+    # Overlap wins over proximity when both people are near the track.
+    assert engine.observe(FIRST, (person(box=INSIDE),), now=7) == ()
+    entered, = engine.observe(FIRST, (person(box=(0.21, 0.2, 0.51, 0.8)),
+                                      person(box=(0.55, 0.2, 0.85, 0.8))), now=9)
+    assert entered.change.box == (0.21, 0.2, 0.51, 0.8)

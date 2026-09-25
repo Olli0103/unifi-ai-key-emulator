@@ -629,7 +629,12 @@ class CandidateService:
                 event_budget=self._event_budget if live_pool else None,
                 max_track_gap_seconds=(20 if live_pool and
                                        detector.get("inference_backend") == "vision_api"
-                                       else 3))
+                                       else 3),
+                # Paid API frames are seconds apart; a walking person rarely
+                # keeps box overlap between the two confirming samples.
+                max_center_distance=(1.5 if live_pool and
+                                     detector.get("inference_backend") == "vision_api"
+                                     else None))
             self._inference = FairInference(
                 cameras,
                 load_detector=(
