@@ -74,11 +74,12 @@ class _MotionGate:
         """After a full budget, preserve the scene but cancel automatic probes.
 
         Resetting the gate here would spend each newly freed hourly request on
-        an idle startup frame. The next burst must have a quiet baseline first.
+        an idle startup frame. Keep motion armed so a continuously changing
+        scene can still use a later recovered allowance.
         """
         self._pending.pop(camera, None)
         self._quiet[camera] = 0
-        self._armed[camera] = False
+        self._armed[camera] = True
         self._startup_probe.discard(camera)
 
     def startup_result(self, camera: str, *, found_object: bool) -> None:
@@ -316,13 +317,16 @@ class ApiObjectDetector:
             self.motion.startup_result(camera_mac, found_object=bool(accepted))
             return accepted
         except ApiDetectionError as exc:
+            self.motion.startup_result(camera_mac, found_object=False)
             if exc.args == ("api_detection_dns_unavailable",):
                 self._dns_ok_until = 0.0
                 self._dns_retry_at = time.monotonic() + _DNS_RETRY_SECONDS
             raise
         except ProviderError as exc:
+            self.motion.startup_result(camera_mac, found_object=False)
             raise ApiDetectionError("api_detection_provider_response_invalid") from exc
         except (TypeError, ValueError) as exc:
+            self.motion.startup_result(camera_mac, found_object=False)
             raise ApiDetectionError("api_detection_request_failed") from exc
 
     def diagnostic_counts(self, camera_mac: str) -> dict[str, int]:

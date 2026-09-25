@@ -164,6 +164,47 @@ def test_recovered_hourly_budget_waits_for_fresh_motion(tmp_path, monkeypatch):
     assert detector.budget.remaining(FIRST) == 1
 
 
+def test_recovered_budget_accepts_continuous_motion_after_denied_probe(tmp_path,
+                                                                        monkeypatch):
+    now_ns = [10 * _HOUR_NS]
+    now_mono = [100.0]
+    monkeypatch.setattr("aikey.aiport_api_detection.time.monotonic",
+                        lambda: now_mono[0])
+    requests = []
+    detector = ApiObjectDetector(
+        _ollama_config(), tmp_path, threshold=0.8,
+        max_requests_per_hour=2,
+        transport=lambda *_args: (requests.append(1) or _response('{"detections":[]}')))
+    detector.budget.clock_ns = lambda: now_ns[0]
+    detector.detect_for_camera(FIRST, STILL)
+    detector.detect_for_camera(FIRST, FRAME)
+    detector.detect_for_camera(FIRST, STILL)  # Confirmation denied by budget.
+    assert len(requests) == 2
+    now_ns[0] += _HOUR_NS
+    now_mono[0] += 3600
+    detector.detect_for_camera(FIRST, FRAME)
+    assert len(requests) == 3
+
+
+def test_failed_first_startup_probe_does_not_spend_confirmation_request(tmp_path):
+    calls = []
+
+    def transport(*_args):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ApiDetectionError("api_detection_request_failed")
+        return _response('{"detections":[]}')
+
+    detector = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.8,
+                                 max_requests_per_hour=3, transport=transport)
+    with pytest.raises(ApiDetectionError, match="api_detection_request_failed"):
+        detector.detect_for_camera(FIRST, STILL)
+    detector.detect_for_camera(FIRST, STILL)
+    assert len(calls) == 1
+    detector.detect_for_camera(FIRST, FRAME)
+    assert len(calls) == 2
+
+
 def test_package_observation_requires_exact_class_label_and_bounded_box():
     result = parse_detections(json.dumps({"detections": [{
         "kind": "package", "label": "package", "score": 0.91,
