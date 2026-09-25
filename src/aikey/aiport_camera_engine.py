@@ -41,7 +41,8 @@ class CameraPolicyEngine:
                  event_window_seconds: float | None = None,
                  event_budget: EventBudget | None = None,
                  max_track_gap_seconds: float = 3.0,
-                 max_center_distance: float | None = None):
+                 max_center_distance: float | None = None,
+                 package_cooldown: EventBudget | None = None):
         if (not isinstance(camera_macs, list) or not 1 <= len(camera_macs) <= 5
                 or type(max_events_per_camera) is not int
                 or not 1 <= max_events_per_camera <= 3600
@@ -50,6 +51,8 @@ class CameraPolicyEngine:
                      or not math.isfinite(event_window_seconds)
                      or not 60 <= event_window_seconds <= 86_400)
                 or event_budget is not None and not isinstance(event_budget, EventBudget)
+                or package_cooldown is not None
+                and not isinstance(package_cooldown, EventBudget)
                 or type(max_track_gap_seconds) not in (int, float)
                 or not math.isfinite(max_track_gap_seconds)
                 or not 0.5 <= max_track_gap_seconds <= 30
@@ -101,9 +104,11 @@ class CameraPolicyEngine:
             camera: {} for camera in cameras}
         self._generations = dict.fromkeys(cameras, 0)
         self.policy_repeats = 0
+        self.package_cooldown_skips = 0
         self._max_events = max_events_per_camera
         self._event_window_seconds = event_window_seconds
         self._event_budget = event_budget
+        self._package_cooldown = package_cooldown
 
     def _new_tracker(self) -> TemporalTracker:
         return TemporalTracker(max_gap_seconds=self._track_gap,
@@ -213,6 +218,14 @@ class CameraPolicyEngine:
                 last = self._last_package_at.get(camera)
                 if last is not None and now - last < _PACKAGE_COOLDOWN_SECONDS:
                     continue
+                if self._package_cooldown is not None:
+                    try:
+                        cooling = self._package_cooldown.remaining(camera) == 0
+                    except EventBudgetError:
+                        cooling = True  # fail closed: no duplicate parcel event
+                    if cooling:
+                        self.package_cooldown_skips += 1
+                        continue
             if (change.edge == "enter" and active is None
                     and budget_used < self._max_events):
                 zones = policy.zone_ids(change.kind, change.box)
@@ -224,6 +237,11 @@ class CameraPolicyEngine:
                     self._entered_by_kind[camera][change.kind] += 1
                     if change.kind == "package":
                         self._last_package_at[camera] = now
+                        if self._package_cooldown is not None:
+                            try:
+                                self._package_cooldown.claim(camera)
+                            except EventBudgetError:
+                                pass  # the in-memory cooldown still holds
                     if self._event_window_seconds is not None:
                         self._event_times[camera].append(now)
                     result.append(CameraEventCandidate(camera, change, zones))

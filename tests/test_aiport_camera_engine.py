@@ -517,3 +517,33 @@ def test_identical_policy_resend_keeps_tentative_track_and_generation():
     left, = engine.replace_policy(FIRST, policy(FIRST))
     assert left.change.edge == "leave"
     assert engine.policy_generation(FIRST) == generation + 1
+
+
+def test_package_cooldown_survives_an_engine_restart(tmp_path):
+    wall = [10 * _HOUR_NS]
+
+    def store():
+        return EventBudget(tmp_path, limit=1, namespace="package-cooldown",
+                           window_seconds=1800, clock_ns=lambda: wall[0])
+
+    package = ObjectObservation("package", "package", 0.93, INSIDE)
+    first = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                               package_cooldown=store())
+    first.replace_policy(FIRST, policy(FIRST, zone=True, kind="package"))
+    first.observe(FIRST, (package,), now=1)
+    assert first.observe(FIRST, (package,), now=2)[0].change.edge == "enter"
+    # A restarted process has a new monotonic clock and an empty memory.
+    wall[0] += 60 * 1_000_000_000
+    restarted = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                                   package_cooldown=store())
+    restarted.replace_policy(FIRST, policy(FIRST, zone=True, kind="package"))
+    restarted.observe(FIRST, (package,), now=1)
+    assert restarted.observe(FIRST, (package,), now=2) == ()
+    assert restarted.package_cooldown_skips == 1
+    # After the durable window a new delivery is announced again.
+    wall[0] += 1800 * 1_000_000_000
+    later = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                               package_cooldown=store())
+    later.replace_policy(FIRST, policy(FIRST, zone=True, kind="package"))
+    later.observe(FIRST, (package,), now=1)
+    assert later.observe(FIRST, (package,), now=2)[0].change.edge == "enter"

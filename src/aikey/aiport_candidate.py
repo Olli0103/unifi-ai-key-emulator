@@ -34,7 +34,9 @@ from .aiport_api_detection import ApiObjectDetector
 from .aiport_motion import (MotionDetector, MotionSettingsError,
                             motion_event_payload, parse_motion_settings)
 from .aiport_onnx_detection import OnnxRFDetrNanoDetector
-from .aiport_camera_engine import CameraEventCandidate, CameraPolicyEngine
+from .aiport_camera_engine import (
+    _PACKAGE_COOLDOWN_SECONDS, CameraEventCandidate, CameraPolicyEngine,
+)
 from .aiport_event_budget import EventBudget, EventBudgetError
 from .aiport_inference import FairInference
 from .aiport_tracking import TemporalTracker, TrackChange, TrackingError
@@ -511,6 +513,11 @@ class CandidateService:
         self._event_budget = (EventBudget(
             self.state_dir, limit=live_config["max_events_per_hour"])
             if live_config is not None else None)
+        # One Package event per camera per 30 minutes, across restarts.
+        self._package_cooldown = (EventBudget(
+            self.state_dir, limit=1, namespace="package-cooldown",
+            window_seconds=int(_PACKAGE_COOLDOWN_SECONDS))
+            if live_config is not None else None)
         self.control_port = control_port
         self.disconnect_grace_seconds = disconnect_grace_seconds
         self.runner: web.AppRunner | None = None
@@ -642,6 +649,7 @@ class CandidateService:
                                        else len(self._pool_smart_types())),
                 event_window_seconds=3600 if live_pool else None,
                 event_budget=self._event_budget if live_pool else None,
+                package_cooldown=self._package_cooldown if live_pool else None,
                 max_track_gap_seconds=(20 if live_pool and
                                        detector.get("inference_backend") == "vision_api"
                                        else 3),
@@ -1466,6 +1474,8 @@ class CandidateService:
             "smart_feature_probe_events": self.smart_feature_probe_events,
             "smart_settings_probe_acks": self.smart_settings_probe_acks,
             "smart_settings_repeats": self.smart_settings_repeats,
+            "package_cooldown_skips": (self._camera_engine.package_cooldown_skips
+                                       if self._camera_engine is not None else 0),
             "smart_events_entered": self.smart_events_entered,
             "smart_events_moved": self.smart_events_moved,
             "smart_events_left": self.smart_events_left,

@@ -3082,3 +3082,81 @@ async def test_pool_keeps_one_protect_event_until_the_last_object_leaves(tmp_pat
                          ("moving", ["vehicle"]), ("leave", ["person", "vehicle"])]
     finally:
         await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_restart_does_not_reannounce_a_parked_package(tmp_path, monkeypatch):
+    """The package cooldown survives an AI Port restart on the same state."""
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{
+        "camera_mac": camera, "source_ip": "192.168.10.1",
+        "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {   # uncapped default: no request cap
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person", "package"], "max_events_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+
+    def fake_provider(_url, _headers, payload):
+        answer = ({"kind": "package", "label": "package"}
+                  if "close-up crop" in json.dumps(payload) else
+                  {"detections": [{"kind": "package", "label": "package",
+                                   "score": 0.93, "box": [0.3, 0.6, 0.45, 0.8]}]})
+        return {"status": "completed", "output": [{
+            "type": "message", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": json.dumps(answer)}],
+        }]}
+
+    monkeypatch.setattr(
+        "aikey.aiport_candidate.ApiObjectDetector",
+        lambda provider, state_dir, **options: ApiObjectDetector(
+            provider, state_dir, transport=fake_provider, **options))
+    frame_io = BytesIO()
+    Image.new("RGB", (640, 360), "gray").save(frame_io, format="JPEG")
+    frame = frame_io.getvalue()
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    async def run_once():
+        service = CandidateService(config, tmp_path)
+        service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+        service._params_agreed = True
+        service.ingress.list_streams = lambda: [{"deviceID": camera}]
+        sink = Sink()
+        service._current_ws = sink
+        try:
+            await service._send_stream_status(sink, streaming=True, camera_mac=camera)
+            await service._handle_diagnostic_frame(sink, json.dumps({
+                "functionName": "ChangeSmartDetectSettings", "messageId": 1,
+                "payload": {"deviceID": camera, "algoVersion": "beta",
+                            "enableSmartDetect": ["person", "package"],
+                            "eventStartMSec": 1000, "eventStopMSec": 3000,
+                            "zones": {"4": {"coord": [0, 0, 1000, 0, 1000, 1000, 0, 1000],
+                                            "objectTypes": ["person"]}}}}).encode())
+            assert sink.messages[-1]["statusCode"] == 0
+            for _ in range(2):   # the startup pair samples the parked parcel
+                await service._observe_pool_frame(camera, frame)
+                await service._inference.join()
+            health = json.loads((await service._health(None)).text)
+            enters = [m["payload"] for m in sink.messages
+                      if m.get("functionName") == "EventSmartDetect"
+                      and m["payload"]["edgeType"] == "enter"]
+            return enters, health
+        finally:
+            await service.stop()
+
+    first, _ = await run_once()
+    assert [event["objectTypes"] for event in first] == [["package"]]
+    second, health = await run_once()          # same state dir: a restart
+    assert second == []
+    assert health["package_cooldown_skips"] == 1
+    assert health["pool_cameras"][0]["events_entered_by_kind"]["package"] == 0

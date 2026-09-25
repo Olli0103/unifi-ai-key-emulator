@@ -89,3 +89,19 @@ def test_parallel_processes_cannot_exceed_one_camera_limit(tmp_path):
         admitted = list(pool.map(_claim_in_process, [(tmp_path, 7 * _HOUR_NS)] * 16))
     assert admitted.count(True) == 3
     assert admitted.count(False) == 13
+
+
+def test_package_cooldown_namespace_uses_its_own_window_and_file(tmp_path):
+    now = [10 * _HOUR_NS]
+    cooldown = EventBudget(tmp_path, limit=1, namespace="package-cooldown",
+                           window_seconds=1800, clock_ns=lambda: now[0])
+    events = EventBudget(tmp_path, limit=1, clock_ns=lambda: now[0])
+    assert cooldown.claim(FIRST) and not cooldown.claim(FIRST)
+    assert events.claim(FIRST)               # separate state file
+    now[0] += 1801 * 1_000_000_000
+    assert cooldown.remaining(FIRST) == 1    # 30-minute window, not an hour
+    assert events.remaining(FIRST) == 0
+    for bad in (59, 86_401, 1800.0):
+        with pytest.raises(EventBudgetError, match="window"):
+            EventBudget(tmp_path, limit=1, namespace="package-cooldown",
+                        window_seconds=bad)

@@ -35,11 +35,17 @@ class EventBudget:
 
     def __init__(self, state_dir: Path, *, limit: int,
                  clock_ns: Callable[[], int] = time.time_ns,
-                 namespace: str = "event"):
+                 namespace: str = "event", window_seconds: int = 3600):
         if type(limit) is not int or not 1 <= limit <= _MAX_EVENTS_PER_CAMERA:
             raise EventBudgetError("invalid_event_limit")
-        if type(namespace) is not str or namespace not in {"event", "vision-request"}:
+        if type(namespace) is not str or namespace not in {
+                "event", "vision-request", "package-cooldown"}:
             raise EventBudgetError("invalid_budget_namespace")
+        if type(window_seconds) is not int or not 60 <= window_seconds <= 86_400:
+            raise EventBudgetError("invalid_event_window")
+        # A package cooldown is one admission per camera per window. It must
+        # outlive the process: a restart re-samples a parked parcel at once.
+        self.window_ns = window_seconds * 1_000_000_000
         self.directory = Path(state_dir)
         self.path = self.directory / f"aiport-{namespace}-budget.json"
         self.lock_path = self.directory / f".aiport-{namespace}-budget.lock"
@@ -54,7 +60,7 @@ class EventBudget:
             state = self._read()
             if now < state["high_water_ns"]:
                 raise EventBudgetError("event_clock_rollback")
-            events = self._recent(state["events"], now)
+            events = self._recent(state["events"], now, self.window_ns)
             if camera not in events and len(events) >= _MAX_CAMERAS:
                 raise EventBudgetError("event_state_full")
             camera_events = events.setdefault(camera, [])
@@ -72,7 +78,7 @@ class EventBudget:
             state = self._read()
             if now < state["high_water_ns"]:
                 raise EventBudgetError("event_clock_rollback")
-            recent = self._recent(state["events"], now)
+            recent = self._recent(state["events"], now, self.window_ns)
             return max(0, self.limit - len(recent.get(camera, ())))
 
     @staticmethod
@@ -89,8 +95,9 @@ class EventBudget:
         return now
 
     @staticmethod
-    def _recent(events: dict[str, list[int]], now: int) -> dict[str, list[int]]:
-        cutoff = now - _HOUR_NS
+    def _recent(events: dict[str, list[int]], now: int,
+                window_ns: int = _HOUR_NS) -> dict[str, list[int]]:
+        cutoff = now - window_ns
         return {camera: kept for camera, values in events.items()
                 if (kept := [at for at in values if cutoff < at <= now])}
 
