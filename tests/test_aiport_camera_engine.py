@@ -127,11 +127,49 @@ def test_package_candidate_keeps_its_camera_and_zone():
     package = ObjectObservation("package", "package", 0.93, INSIDE)
     assert engine.observe(FIRST, (package,), now=1) == ()
     entered, = engine.observe(FIRST, (package,), now=2)
-    assert (entered.camera_mac, entered.change.kind, entered.zone_ids) == (
-        FIRST, "package", (7,))
+    assert (entered.camera_mac, entered.change.kind, entered.change.edge,
+            entered.zone_ids) == (FIRST, "package", "packageDetected", (7,))
     assert engine.observe(SECOND, (package,), now=1) == ()
-    closed, = engine.replace_policy(FIRST, None)
-    assert (closed.change.kind, closed.change.edge) == ("package", "leave")
+    # Protect saves a package as a one-shot event: no moving or leave edge.
+    assert engine.observe(FIRST, (package,), now=3) == ()
+    assert engine.replace_policy(FIRST, None) == ()
+
+
+def test_package_is_one_shot_per_track_with_camera_cooldown():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                                max_track_gap_seconds=20)
+    engine.replace_policy(FIRST, policy(FIRST, zone=True, kind="package"))
+    package = ObjectObservation("package", "package", 0.93, INSIDE)
+    assert engine.observe(FIRST, (package,), now=1) == ()
+    assert len(engine.observe(FIRST, (package,), now=2)) == 1
+    assert engine.observe(FIRST, (), now=60) == ()      # local track ends
+    # A later sparse sample of the same parcel is not a new delivery.
+    assert engine.observe(FIRST, (package,), now=100) == ()
+    assert engine.observe(FIRST, (package,), now=101) == ()
+    assert engine.observe(FIRST, (), now=200) == ()
+    assert engine.observe(FIRST, (package,), now=1900) == ()
+    again, = engine.observe(FIRST, (package,), now=1901)
+    assert again.change.edge == "packageDetected"
+    snapshot = engine.camera_snapshot(now=1902)[0]
+    assert snapshot["events_entered_by_kind"]["package"] == 2
+
+
+def test_package_needs_an_explicit_package_zone_when_zones_exist():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=4)
+    engine.replace_policy(FIRST, parse_smart_settings({
+        "deviceID": FIRST, "algoVersion": "beta",
+        "enableSmartDetect": ["person", "package"],
+        "eventStartMSec": 1000, "eventStopMSec": 3000,
+        "zones": {"7": {"coord": [100, 100, 900, 100, 900, 900, 100, 900],
+                        "objectTypes": ["person"], "sensitivity": 50}}},
+        camera_mac=FIRST))
+    package = ObjectObservation("package", "package", 0.93, INSIDE)
+    assert engine.observe(FIRST, (package,), now=1) == ()
+    assert engine.observe(FIRST, (package,), now=2) == ()
+    snapshot = engine.camera_snapshot(now=3)[0]
+    assert snapshot["zone_rejections"]["no_class_zone"] == 2
+    assert snapshot["zone_rejections_by_kind"]["package"] == 2
+    assert snapshot["events_entered_by_kind"]["package"] == 0
 
 
 def test_unknown_camera_or_cross_camera_policy_is_rejected():

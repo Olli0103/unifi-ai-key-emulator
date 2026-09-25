@@ -2842,3 +2842,90 @@ async def test_bounded_hello_answers_readonly_and_rejects_stream_control(tmp_pat
                 await task
     finally:
         await server.close()
+
+
+@pytest.mark.asyncio
+async def test_live_api_package_uses_package_edge_zone_and_camera_owned_lens(
+        tmp_path, monkeypatch):
+    """Package is advertised for primary zones and sent as a one-shot edge."""
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{
+        "camera_mac": camera, "source_ip": "192.168.10.1",
+        "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person", "vehicle", "animal", "package"],
+        "max_events_per_hour": 12, "max_requests_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+
+    def fake_provider(_url, _headers, _payload):
+        return {"status": "completed", "output": [{
+            "type": "message", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": json.dumps({
+                "detections": [{"kind": "package", "label": "package",
+                                "score": 0.93, "box": [0.3, 0.6, 0.45, 0.8]}]})}],
+        }]}
+
+    monkeypatch.setattr(
+        "aikey.aiport_candidate.ApiObjectDetector",
+        lambda provider, state_dir, **options: ApiObjectDetector(
+            provider, state_dir, transport=fake_provider, **options))
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    await service._send_stream_status(sink, streaming=True, camera_mac=camera)
+    flags, = [message for message in sink.messages
+              if message["functionName"] == "EventFeatureFlagsUpdated"]
+    assert flags["payload"]["smartDetect"] == [
+        "person", "vehicle", "animal", "package", "packageMaincam"]
+    frame_io = BytesIO()
+    Image.new("RGB", (640, 360), "gray").save(frame_io, format="JPEG")
+    frame = frame_io.getvalue()
+    try:
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "ChangeSmartDetectSettings", "messageId": 1,
+            "payload": {"deviceID": camera, "algoVersion": "beta",
+                        "enableSmartDetect": ["person", "package"],
+                        "eventStartMSec": 1000, "eventStopMSec": 3000,
+                        "zones": {"4": {"coord": [0, 0, 1000, 0, 1000, 1000, 0, 1000],
+                                        "objectTypes": ["person", "package"]}},
+                        "secondLensZones": {"9": {
+                            "coord": [100, 100, 900, 100, 900, 900],
+                            "objectTypes": ["package"]}}}}).encode())
+        assert sink.messages[-1]["statusCode"] == 0
+        for _ in range(2):
+            await service._observe_pool_frame(camera, frame)
+            await service._inference.join()
+        events = [message["payload"] for message in sink.messages
+                  if message.get("functionName") == "EventSmartDetect"]
+        assert [event["edgeType"] for event in events] == ["packageDetected"]
+        package = events[0]
+        assert package["zonesStatus"] == {"4": {"status": "enter", "level": 93}}
+        snapshot = package["smartDetectSnapshots"][0]
+        assert snapshot["smartDetectSnapshotType"] == "package"
+        assert snapshot["smartDetectSnapshot"] in service._pool_pending_snapshots
+        health = json.loads((await service._health(None)).text)
+        camera_health = health["pool_cameras"][0]
+        assert health["smart_package_events"] == 1
+        assert camera_health["events_entered_by_kind"]["package"] == 1
+        assert camera_health["secondary_lens"] == {
+            "zones": 1, "classes": ["package"], "processed_by": "camera"}
+        assert "coord" not in json.dumps(camera_health)
+    finally:
+        await service.stop()

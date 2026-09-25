@@ -22,6 +22,9 @@ from .aiport_tracking import (
 
 _OBJECT_KINDS = frozenset({"person", "vehicle", "animal", "package"})
 _KIND_ORDER = ("person", "vehicle", "animal", "package")
+# A package stays put, so a later sparse sample would re-detect it as a new
+# track. Protect saves each package as its own one-shot event.
+_PACKAGE_COOLDOWN_SECONDS = 1800.0
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,11 @@ class CameraPolicyEngine:
         self._eligible_observations = dict.fromkeys(cameras, 0)
         self._score_eligible_observations = dict.fromkeys(cameras, 0)
         self._eligible_frames = dict.fromkeys(cameras, 0)
+        self._entered_by_kind = {camera: dict.fromkeys(_KIND_ORDER, 0)
+                                 for camera in cameras}
+        self._rejected_by_kind = {camera: dict.fromkeys(_KIND_ORDER, 0)
+                                  for camera in cameras}
+        self._last_package_at: dict[str, float] = {}
         self._zone_rejections = {camera: {
             "excluded": 0, "no_class_zone": 0, "outside_zone": 0,
             "below_overlap": 0,
@@ -117,7 +125,8 @@ class CameraPolicyEngine:
             CameraEventCandidate(camera, TrackChange(
                 "leave", previous.track_id, previous.kind, previous.label,
                 previous.score, previous.box), zones)
-            for _, (previous, zones) in sorted(self._active[camera].items()))
+            for _, (previous, zones) in sorted(self._active[camera].items())
+            if previous.kind != "package")
         self._active[camera] = {}
         self._last_moving[camera] = {}
         for name, count in self._trackers[camera].stats.items():
@@ -167,6 +176,7 @@ class CameraPolicyEngine:
                                 "trace_under_50")
                         self._zone_overlap_bands[camera][band] += 1
             self._zone_rejections[camera][reason] += 1
+            self._rejected_by_kind[camera][value.kind] += 1
         selected = tuple(selected_values)
         self._eligible_observations[camera] += len(selected)
         self._eligible_frames[camera] += bool(selected)
@@ -184,6 +194,33 @@ class CameraPolicyEngine:
             budget_used = (len(self._event_times[camera])
                            if self._event_window_seconds is not None
                            else self._event_counts[camera])
+            if change.kind == "package":
+                # Package has no enter/moving/leave lifecycle in Protect. A
+                # confirmed track produces one packageDetected edge; later
+                # edges of the same track only close the local track.
+                if change.edge == "leave":
+                    self._active[camera].pop(change.track_id, None)
+                    self._last_moving[camera].pop(change.track_id, None)
+                    continue
+                if change.edge != "enter" or active is not None:
+                    continue
+                last = self._last_package_at.get(camera)
+                zones = policy.zone_ids(change.kind, change.box)
+                if (zones is not None and budget_used < self._max_events
+                        and (last is None or now - last >= _PACKAGE_COOLDOWN_SECONDS)
+                        and (self._event_budget is None
+                             or self._event_budget.claim(camera))):
+                    self._active[camera][change.track_id] = (change, zones)
+                    self._last_moving[camera][change.track_id] = now
+                    self._last_package_at[camera] = now
+                    self._event_counts[camera] += 1
+                    self._entered_by_kind[camera]["package"] += 1
+                    if self._event_window_seconds is not None:
+                        self._event_times[camera].append(now)
+                    result.append(CameraEventCandidate(camera, TrackChange(
+                        "packageDetected", change.track_id, change.kind,
+                        change.label, change.score, change.box), zones))
+                continue
             if (change.edge == "enter" and active is None
                     and budget_used < self._max_events):
                 zones = policy.zone_ids(change.kind, change.box)
@@ -192,6 +229,7 @@ class CameraPolicyEngine:
                     self._active[camera][change.track_id] = (change, zones)
                     self._last_moving[camera][change.track_id] = now
                     self._event_counts[camera] += 1
+                    self._entered_by_kind[camera][change.kind] += 1
                     if self._event_window_seconds is not None:
                         self._event_times[camera].append(now)
                     result.append(CameraEventCandidate(camera, change, zones))
@@ -247,6 +285,14 @@ class CameraPolicyEngine:
                 "eligible_frames": self._eligible_frames[camera],
                 "zone_rejections": dict(self._zone_rejections[camera]),
                 "zone_overlap_bands": dict(self._zone_overlap_bands[camera]),
+                "events_entered_by_kind": dict(self._entered_by_kind[camera]),
+                "zone_rejections_by_kind": dict(self._rejected_by_kind[camera]),
+                "secondary_lens": ({
+                    "zones": len(policy.secondary_lens_zones),
+                    "classes": sorted(set().union(*(
+                        zone.object_types for zone in policy.secondary_lens_zones))),
+                    "processed_by": "camera",
+                } if policy is not None and policy.secondary_lens_zones else None),
                 "track_associations": {
                     name: count + self._trackers[camera].stats[name]
                     for name, count in self._association_totals[camera].items()},

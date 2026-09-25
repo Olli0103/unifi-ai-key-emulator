@@ -23,7 +23,8 @@ def smart_event_payload(camera_mac: str, change: TrackChange, *,
     """Encode one bounded object track edge, without recognition claims."""
     if (not isinstance(change, TrackChange)
             or change.kind not in {"person", "vehicle", "animal", "package"}
-            or edge not in {"enter", "moving", "leave"}
+            or edge not in {"enter", "moving", "leave", "packageDetected"}
+            or (edge == "packageDetected") != (change.kind == "package")
             or type(clock_wall_ms) is not int or clock_wall_ms <= 0
             or type(change.track_id) is not int or change.track_id <= 0
             or (first_shown_ms is not None
@@ -46,9 +47,12 @@ def smart_event_payload(camera_mac: str, change: TrackChange, *,
                # exact relationship to stock-camera zone levels is unverified.
                # A moving track updates its descriptor without claiming a new
                # zone transition. Zone status has only enter/leave edges.
-               "zonesStatus": {str(zone_id): {"status": edge,
-                                              "level": round(change.score * 100)}
-                               for zone_id in zone_ids if edge != "moving"},
+               # Protect saves a package as a one-shot event; its zone status
+               # only carries the score, so report it as a zone entry.
+               "zonesStatus": {str(zone_id): {
+                   "status": "enter" if edge == "packageDetected" else edge,
+                   "level": round(change.score * 100)}
+                   for zone_id in zone_ids if edge != "moving"},
                "trackerIDAttrMap": {}}
     x1, y1, x2, y2 = change.box
     if not all(math.isfinite(v) for v in change.box) or not (

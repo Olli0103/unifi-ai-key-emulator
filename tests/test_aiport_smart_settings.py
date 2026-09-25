@@ -131,7 +131,7 @@ def test_ignores_valid_empty_secondary_lens_placeholder_only():
 
 
 @pytest.mark.parametrize("classes", [
-    ["person"], ["package"], ["face"], ["licensePlate"],
+    ["person"], ["face"], ["licensePlate"], ["package", "person"],
 ])
 def test_rejects_secondary_lens_requested_classes(classes):
     raw = full_frame_policy()
@@ -173,7 +173,7 @@ def test_secondary_lens_placeholder_does_not_change_primary_person_zone():
     assert policy.zone_ids("person", (0.2, 0.2, 0.5, 0.8)) == (3,)
 
 
-@pytest.mark.parametrize("other", [["face"], ["package"]])
+@pytest.mark.parametrize("other", [["face"], ["person"]])
 def test_rejects_mixed_secondary_lens_placeholders_and_requests(other):
     raw = full_frame_policy()
     raw["secondLensZones"] = {
@@ -366,4 +366,30 @@ def test_rejects_unknown_fields_and_nested_nonempty_features():
     raw.pop("privateURL")
     raw["reVerificationPolicy"] = {"enable": True}
     with pytest.raises(SmartSettingsError, match="unsupported_smart_feature"):
+        parse_smart_settings(raw, camera_mac=CAMERA)
+
+
+def test_package_lens_zones_stay_with_the_doorbell():
+    # Protect sends one payload to both the AI Port and a package-lens
+    # doorbell, and accepts the doorbell's own packageDetected while paired.
+    raw = full_frame_policy()
+    raw["enableSmartDetect"] = ["person", "package"]
+    raw["zones"] = {"3": {"coord": [0, 0, 1000, 0, 1000, 1000, 0, 1000],
+                          "objectTypes": ["person"]}}
+    raw["secondLensZones"] = {
+        "7": {"coord": [0, 0, 1000, 0, 1000, 1000], "objectTypes": []},
+        "8": {"coord": [100, 100, 900, 100, 900, 900], "objectTypes": ["package"]},
+    }
+    policy = parse_smart_settings(raw, camera_mac=CAMERA)
+    assert [zone.object_types for zone in policy.secondary_lens_zones] == [
+        frozenset({"package"})]
+    assert policy.zone_ids("person", (0.2, 0.2, 0.5, 0.8)) == (3,)
+    # The secondary lens never scopes a primary-stream package.
+    assert policy.zone_ids("package", (0.2, 0.2, 0.5, 0.8)) is None
+
+
+def test_malformed_package_lens_zone_still_rejects_policy():
+    raw = full_frame_policy()
+    raw["secondLensZones"] = {"8": {"coord": [100, 100], "objectTypes": ["package"]}}
+    with pytest.raises(SmartSettingsError, match="^unsupported_smart_feature:regions:secondLensZones$"):
         parse_smart_settings(raw, camera_mac=CAMERA)

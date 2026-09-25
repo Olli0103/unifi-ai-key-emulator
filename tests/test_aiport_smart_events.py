@@ -95,7 +95,6 @@ def test_zone_enter_and_leave_keep_same_numeric_zone_id():
 @pytest.mark.parametrize("kind,label,expected_name", [
     ("vehicle", "car", ""),
     ("animal", "dog", "animal"),
-    ("package", "package", "package"),
 ])
 def test_other_object_events_never_claim_a_recognized_plate(kind, label, expected_name):
     track = TrackChange("enter", 2, kind, label, 0.9, (0.1, 0.2, 0.4, 0.5))
@@ -125,3 +124,19 @@ def test_other_object_events_never_claim_a_recognized_plate(kind, label, expecte
 def test_event_rejects_unsupported_or_invalid_track(track, edge, clock):
     with pytest.raises(SmartEventError):
         smart_event_payload("2A1122334455", track, edge=edge, clock_wall_ms=clock)
+
+
+def test_package_uses_protects_one_shot_package_edge():
+    track = TrackChange("enter", 5, "package", "package", 0.91, (0.1, 0.2, 0.4, 0.5))
+    payload = smart_event_payload("2A1122334455", track, edge="packageDetected",
+                                  clock_wall_ms=1_700_000_000_000, zone_ids=(3,))
+    assert payload["edgeType"] == "packageDetected"
+    assert payload["objectTypes"] == ["package"]
+    assert payload["zonesStatus"] == {"3": {"status": "enter", "level": 91}}
+    with pytest.raises(SmartEventError):
+        smart_event_payload("2A1122334455", track, edge="enter",
+                            clock_wall_ms=1_700_000_000_000, zone_ids=(3,))
+    person = TrackChange("enter", 6, "person", "person", 0.9, (0.1, 0.2, 0.4, 0.5))
+    with pytest.raises(SmartEventError):
+        smart_event_payload("2A1122334455", person, edge="packageDetected",
+                            clock_wall_ms=1_700_000_000_000)

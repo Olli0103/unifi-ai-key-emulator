@@ -544,6 +544,7 @@ class CandidateService:
         self.smart_settings_subset_matches = 0
         self.smart_settings_probe_requests = 0
         self._smart_settings_probe_shape: dict[str, int | bool] | None = None
+        self.smart_package_events = 0
         self.smart_motion_probe_requests = 0
         self.smart_motion_probe_acks = 0
         self.smart_motion_probe_zones = 0
@@ -740,7 +741,7 @@ class CandidateService:
             return
         active = {stream["deviceID"] for stream in self.ingress.list_streams()}
         for candidate in candidates:
-            if (candidate.change.edge in {"enter", "moving"}
+            if (candidate.change.edge in {"enter", "moving", "packageDetected"}
                     and candidate.camera_mac not in active):
                 continue
             try:
@@ -766,8 +767,22 @@ class CandidateService:
                         self._pool_event_snapshots.pop(next(iter(self._pool_event_snapshots)))
                     self._pool_event_snapshots[snapshot_key] = (
                         snapshot, time.monotonic() + 180)
-            elif candidate.change.edge == "leave":
-                pending_event = self._pool_event_snapshots.pop(snapshot_key, None)
+            elif candidate.change.edge in {"leave", "packageDetected"}:
+                if candidate.change.edge == "leave":
+                    pending_event = self._pool_event_snapshots.pop(snapshot_key, None)
+                elif frame is None:
+                    pending_event = None
+                else:
+                    # A package event is one-shot: attach its crop now.
+                    try:
+                        self._pool_snapshot_number += 1
+                        pending_event = (await asyncio.to_thread(
+                            make_smart_snapshot, frame, candidate.change,
+                            payload["clockWall"],
+                            filename_track_id=self._pool_snapshot_number),
+                            time.monotonic() + 180)
+                    except SnapshotError:
+                        pending_event = None
                 if pending_event is not None and pending_event[1] > time.monotonic():
                     snapshot = pending_event[0]
                     snapshot.add_to_event(payload)
@@ -783,6 +798,8 @@ class CandidateService:
             await self._send_control_event(ws, "EventSmartDetect", payload)
             if candidate.change.edge == "enter":
                 self.smart_events_entered += 1
+            elif candidate.change.edge == "packageDetected":
+                self.smart_package_events += 1
             elif candidate.change.edge == "moving":
                 self.smart_events_moved += 1
             else:
@@ -892,6 +909,17 @@ class CandidateService:
         while True:
             await asyncio.sleep(15)
             self._prune_snapshots()
+
+    def _pool_feature_types(self) -> list[str]:
+        """Advertised pool capabilities.
+
+        Protect offers Package as a primary-lens zone class only for a device
+        that reports ``packageMaincam``. Without it, Package cannot be scoped
+        by a detection zone. ``packageSecondcam`` is not reported: a doorbell
+        keeps its own package lens, which this device never receives.
+        """
+        kinds = list(self._pool_smart_types())
+        return kinds + ["packageMaincam"] if "package" in kinds else kinds
 
     def _pool_smart_types(self) -> tuple[str, ...]:
         if "live_pool_detector" in self.config:
@@ -1327,6 +1355,7 @@ class CandidateService:
             "smart_settings_requests_rejected": self.smart_settings_requests_rejected,
             "smart_settings_subset_matches": self.smart_settings_subset_matches,
             "smart_settings_probe_requests": self.smart_settings_probe_requests,
+            "smart_package_events": self.smart_package_events,
             "smart_motion_probe_requests": self.smart_motion_probe_requests,
             "smart_motion_probe_acks": self.smart_motion_probe_acks,
             "smart_motion_probe_zones": self.smart_motion_probe_zones,
@@ -1600,7 +1629,7 @@ class CandidateService:
             await self._send_control_event(
                 ws, "EventFeatureFlagsUpdated",
                 {"deviceID": camera_mac,
-                 "smartDetect": (list(self._pool_smart_types())
+                 "smartDetect": (self._pool_feature_types()
                                  if isinstance(self.ingress, AiPortIngressPool)
                                  else [self.config["live_detector"]["smart_type"]]
                                  if "live_detector" in self.config else

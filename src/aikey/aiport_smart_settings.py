@@ -197,6 +197,11 @@ class SmartPolicy:
     smart_zones: tuple[SmartZone, ...]
     zones_configured: bool
     exclude_zones: tuple[SmartZone, ...] = ()
+    # Validated zones for a camera's own secondary (package) lens. The AI Port
+    # never receives that lens; Protect routes its packageDetected events from
+    # the camera itself. They are kept only for private health, never applied
+    # to the primary stream.
+    secondary_lens_zones: tuple[SmartZone, ...] = ()
 
     def allows(self, kind: str) -> bool:
         return kind in self.enabled_types
@@ -333,22 +338,30 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
     if not requested and smart_zones:
         zone_types = set().union(*(zone.object_types for zone in smart_zones))
         requested = sorted(zone_types)
+    secondary_lens_zones: tuple[SmartZone, ...] = ()
     for name in sorted(_REGION_MAPS - {"zones", "excludeZones"}):
         value = payload.get(name, {})
         if not isinstance(value, dict):
             raise SmartSettingsError("invalid_smart_settings:region_map")
         if value:
             if name == "secondLensZones":
+                # Protect sends the same payload to the AI Port and to a
+                # package-lens doorbell. The doorbell keeps its own package
+                # lens and Protect accepts its packageDetected edge while
+                # paired. A validated map therefore belongs to the camera;
+                # a malformed one still rejects the whole policy.
                 try:
-                    parse_smart_zones(value)
+                    secondary_lens_zones = parse_smart_zones(value)
                 except ZoneError:
                     pass
                 else:
-                    if all(zone["objectTypes"] == [] for zone in value.values()):
-                        # Protect can send a dormant secondary-lens placeholder
-                        # for a single-lens camera. It grants no class and
-                        # cannot affect primary-lens zones or enabled types.
+                    # Only the doorbell's own package lens is delegated. A
+                    # person or recognition class there would be a request
+                    # this device cannot honor.
+                    if all(set(zone["objectTypes"]) <= {"package"}
+                           for zone in value.values()):
                         continue
+                    secondary_lens_zones = ()
             # A fixed, known field name is safe to expose in private health.
             # It identifies the first unsupported region map without logging
             # zone coordinates or other controller policy content.
@@ -380,4 +393,5 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
                     or not math.isfinite(value)):
                 raise SmartSettingsError("invalid_smart_settings:recognition_accuracy")
     return SmartPolicy(expected, frozenset(requested), start_ms, stop_ms,
-                       ceilings, smart_zones, bool(raw_zones), exclude_zones)
+                       ceilings, smart_zones, bool(raw_zones), exclude_zones,
+                       secondary_lens_zones)
