@@ -2034,6 +2034,43 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
     assert camera_health[1]["secondary_lens_shape"] is None
 
     await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 10,
+        "payload": {"deviceID": cameras[1], "enableSmartDetect": ["person"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000,
+                    "recognitionAccuracy": {"face": "private-setting",
+                                            "licensePlate": None}},
+    }).encode())
+    health_text = (await service._health(None)).text
+    camera_health = json.loads(health_text)["pool_cameras"]
+    assert sink.messages[-1]["statusCode"] == 501
+    assert camera_health[1]["policy_rejection"] == (
+        "invalid_smart_settings:recognition_accuracy")
+    assert camera_health[1]["recognition_accuracy_shape"] == {
+        "object": True, "key_count": 2, "unknown_key_count": 0,
+        "face": "other_string", "licensePlate": "null"}
+    assert "private-setting" not in health_text
+
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 11,
+        "payload": {"deviceID": cameras[1], "enableSmartDetect": ["person"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000},
+    }).encode())
+    camera_health = json.loads((await service._health(None)).text)["pool_cameras"]
+    assert camera_health[1]["recognition_accuracy_shape"] is None
+    assert camera_health[1]["policy_enabled"] is True
+
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 12,
+        "payload": {"deviceID": cameras[0], "enableSmartDetect": ["person"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000,
+                    "excludeZones": {"9": {
+                        "coord": [0, 0], "objectTypes": ["person"]}}},
+    }).encode())
+    camera_health = json.loads((await service._health(None)).text)["pool_cameras"]
+    assert camera_health[0]["policy_rejection"] == "invalid_exclude_zone"
+    assert camera_health[1]["policy_enabled"] is True
+
+    await service._handle_diagnostic_frame(sink, json.dumps({
         "functionName": "ChangeSmartDetectSettings", "messageId": 4,
         "payload": {"deviceID": "2A1122334457", "enableSmartDetect": ["person"],
                     "eventStartMSec": 1000, "eventStopMSec": 3000},

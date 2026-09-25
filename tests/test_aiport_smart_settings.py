@@ -4,7 +4,8 @@ import pytest
 
 from aikey.aiport_smart_settings import (
     SmartSettingsError, parse_motion_probe, parse_smart_settings,
-    summarize_secondary_lens_zones, summarize_smart_request,
+    summarize_recognition_accuracy, summarize_secondary_lens_zones,
+    summarize_smart_request,
 )
 
 
@@ -45,6 +46,30 @@ def test_secondary_lens_summary_keeps_only_bounded_shape_and_classes():
     assert private_id not in str(shape)
     assert "private-value" not in str(shape)
     assert "1000" not in str(shape)
+
+
+def test_accuracy_summary_keeps_only_bounded_value_categories():
+    private_key = "private-accuracy-key"
+    private_value = "private-accuracy-value"
+    shape = summarize_recognition_accuracy({"recognitionAccuracy": {
+        "face": private_value, "licensePlate": None, private_key: {"secret": 99}}})
+    assert shape == {"object": True, "key_count": 3,
+                     "unknown_key_count": 1, "face": "other_string",
+                     "licensePlate": "null"}
+    assert private_key not in str(shape)
+    assert private_value not in str(shape)
+    assert "99" not in str(shape)
+
+
+@pytest.mark.parametrize("value,category", [
+    (True, "bool"), (float("nan"), "number_out_of_range"),
+    (float("inf"), "number_out_of_range"),
+    (10 ** 1000, "number_out_of_range"),
+    ([], "other"), (None, "null"),
+])
+def test_accuracy_summary_handles_invalid_values_without_raising(value, category):
+    shape = summarize_recognition_accuracy({"recognitionAccuracy": {"face": value}})
+    assert shape["face"] == category
 
 
 def test_motion_probe_accepts_only_bound_old_envelope():
@@ -302,14 +327,16 @@ def test_accepts_deprecated_read_only_auto_recognition_precision():
     raw["recognitionAccuracy"] = {"face": "auto", "licensePlate": "auto"}
     assert parse_smart_settings(raw, camera_mac=CAMERA).allows("person")
     raw["recognitionAccuracy"]["face"] = "high"
-    with pytest.raises(SmartSettingsError, match="invalid_smart_settings"):
+    with pytest.raises(SmartSettingsError,
+                       match="^invalid_smart_settings:recognition_accuracy$"):
         parse_smart_settings(raw, camera_mac=CAMERA)
 
 
 @pytest.mark.parametrize("field,value,error", [
     ("deviceID", "2A1122334456", "wrong_camera"),
     ("enableSmartDetect", ["face"], "unsupported_smart_feature:types"),
-    ("enableSmartDetect", ["person", "person"], "invalid_smart_settings"),
+    ("enableSmartDetect", ["person", "person"],
+     "invalid_smart_settings:enabled_types"),
     ("zones", {"1": {"coord": [0, 0, 1000, 0, 1000, 1000]}},
      "invalid_smart_zone"),
     ("excludeZones", {"2": {"coord": [0, 0, 1000, 0, 1000, 1000]}},
@@ -318,9 +345,10 @@ def test_accepts_deprecated_read_only_auto_recognition_precision():
     ("accessTrigger", True, "unsupported_smart_feature:advanced"),
     ("enableTamperDetection", True, "unsupported_smart_feature:tamper"),
     ("enableTamperDetection", 0, "unsupported_smart_feature:tamper"),
-    ("eventStartMSec", True, "invalid_smart_settings"),
-    ("eventStopMSec", 120_001, "invalid_smart_settings"),
-    ("recognitionAccuracy", {"face": float("nan")}, "invalid_smart_settings"),
+    ("eventStartMSec", True, "invalid_smart_settings:timing"),
+    ("eventStopMSec", 120_001, "invalid_smart_settings:timing"),
+    ("recognitionAccuracy", {"face": float("nan")},
+     "invalid_smart_settings:recognition_accuracy"),
 ])
 def test_rejects_wrong_camera_or_unenforced_policy(field, value, error):
     raw = full_frame_policy()

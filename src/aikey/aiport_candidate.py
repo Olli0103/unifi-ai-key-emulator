@@ -46,7 +46,8 @@ from .aiport_recorded_probe import (
 )
 from .aiport_smart_settings import (
     SmartPolicy, SmartSettingsError, parse_motion_probe, parse_smart_settings,
-    summarize_secondary_lens_zones, summarize_smart_request,
+    summarize_recognition_accuracy, summarize_secondary_lens_zones,
+    summarize_smart_request,
 )
 from .aiport_credentials import CredentialError, CredentialStore
 from .aiport_adoption import AdoptionError, AdoptionStore, validate_management
@@ -611,6 +612,8 @@ class CandidateService:
         self._pool_camera_order: tuple[str, ...] = ()
         self._pool_policy_errors: dict[str, str] = {}
         self._pool_secondary_lens_shapes: dict[str, dict[str, int | bool]] = {}
+        self._pool_recognition_accuracy_shapes: dict[
+            str, dict[str, int | bool | str]] = {}
         if "diagnostic_pool_detector" in config or "live_pool_detector" in config:
             live_pool = "live_pool_detector" in config
             detector = config["live_pool_detector" if live_pool
@@ -812,6 +815,11 @@ class CandidateService:
             self._pool_secondary_lens_shapes[camera] = summarize_secondary_lens_zones(payload)
         else:
             self._pool_secondary_lens_shapes.pop(camera, None)
+        if rejection_reason == "invalid_smart_settings:recognition_accuracy":
+            self._pool_recognition_accuracy_shapes[camera] = (
+                summarize_recognition_accuracy(payload))
+        else:
+            self._pool_recognition_accuracy_shapes.pop(camera, None)
         active = {stream["deviceID"] for stream in self.ingress.list_streams()}
         if (parsed is not None and parsed.enabled_types
                 and parsed.enabled_types <= set(self._pool_smart_types())
@@ -825,11 +833,12 @@ class CandidateService:
             return
         if (rejection_reason or "").split(":", 1)[0] not in {
                 "invalid_smart_settings", "wrong_camera", "unsupported_smart_feature",
-                "invalid_smart_zone", "unsupported_smart_zone"}:
+                "invalid_smart_zone", "unsupported_smart_zone",
+                "invalid_exclude_zone"}:
             rejection_reason = None
         if rejection_reason is None:
             if parsed is None:
-                rejection_reason = "invalid_smart_settings"
+                rejection_reason = "invalid_smart_settings:unclassified"
             elif not parsed.enabled_types:
                 rejection_reason = "disabled_policy"
             elif not parsed.enabled_types <= set(self._pool_smart_types()):
@@ -1370,7 +1379,10 @@ class CandidateService:
                                     policy_rejection=self._pool_policy_errors.get(
                                         self._pool_camera_order[index]),
                                     secondary_lens_shape=self._pool_secondary_lens_shapes.get(
-                                        self._pool_camera_order[index]))
+                                        self._pool_camera_order[index]),
+                                    recognition_accuracy_shape=(
+                                        self._pool_recognition_accuracy_shapes.get(
+                                            self._pool_camera_order[index])))
                               for index, (inference, policy) in enumerate(zip(
                                   self._inference.camera_snapshot(),
                                   self._camera_engine.camera_snapshot(now=time.monotonic()),

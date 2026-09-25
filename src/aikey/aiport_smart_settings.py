@@ -75,7 +75,7 @@ def summarize_smart_request(payload: object, *, camera_mac: str) -> dict[str, in
         accuracy is None or isinstance(accuracy, dict)
         and set(accuracy) <= {"face", "licensePlate"}
         and all(value == "auto" or type(value) in (int, float)
-                and math.isfinite(value) and 0 <= value <= 100
+                and 0 <= value <= 100 and math.isfinite(value)
                 for value in accuracy.values()))
     for name in sorted(_REGION_MAPS):
         value = payload.get(name)
@@ -95,6 +95,39 @@ def summarize_smart_request(payload: object, *, camera_mac: str) -> dict[str, in
             isinstance(item, dict) and item.get("enable") is True)
         result["reverification_" + kind + "_enable_boolean"] = (
             isinstance(item, dict) and type(item.get("enable")) is bool)
+    return result
+
+
+def summarize_recognition_accuracy(payload: object) -> dict[str, int | bool | str]:
+    """Describe a rejected accuracy hint without retaining its values or keys."""
+    value = payload.get("recognitionAccuracy") if isinstance(payload, dict) else None
+    if not isinstance(value, dict):
+        return {"object": False}
+    known = {"face", "licensePlate"}
+    result: dict[str, int | bool | str] = {
+        "object": True,
+        "key_count": min(len(value), 64),
+        "unknown_key_count": min(len(set(value) - known), 64),
+    }
+    for name in sorted(known):
+        if name not in value:
+            result[name] = "absent"
+            continue
+        item = value[name]
+        if item is None:
+            category = "null"
+        elif type(item) is bool:
+            category = "bool"
+        elif item == "auto":
+            category = "auto"
+        elif type(item) in (int, float):
+            category = ("number_in_range" if 0 <= item <= 100 and math.isfinite(item)
+                        else "number_out_of_range")
+        elif isinstance(item, str):
+            category = "other_string"
+        else:
+            category = "other"
+        result[name] = category
     return result
 
 
@@ -207,7 +240,7 @@ class SmartPolicy:
 
 def _timing(value: object) -> int:
     if type(value) is not int or not 0 <= value <= 120_000:
-        raise SmartSettingsError("invalid_smart_settings")
+        raise SmartSettingsError("invalid_smart_settings:timing")
     return value
 
 
@@ -264,24 +297,24 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
     if (not isinstance(payload, dict) or not set(payload) <= _ALLOWED
             or not {"deviceID", "enableSmartDetect", "eventStartMSec",
                     "eventStopMSec"} <= set(payload)):
-        raise SmartSettingsError("invalid_smart_settings")
+        raise SmartSettingsError("invalid_smart_settings:envelope")
     try:
         expected = normalize_mac(camera_mac)
         received = normalize_mac(payload["deviceID"])
     except IngressError as exc:
-        raise SmartSettingsError("invalid_smart_settings") from exc
+        raise SmartSettingsError("invalid_smart_settings:device_id") from exc
     if received != expected:
         raise SmartSettingsError("wrong_camera")
     if payload.get("algoVersion", "beta") != "beta":
-        raise SmartSettingsError("invalid_smart_settings")
+        raise SmartSettingsError("invalid_smart_settings:algorithm")
     region = payload.get("region")
     if region is not None and (not isinstance(region, str) or len(region) > 8):
-        raise SmartSettingsError("invalid_smart_settings")
+        raise SmartSettingsError("invalid_smart_settings:region")
     requested = payload["enableSmartDetect"]
     if (not isinstance(requested, list) or len(requested) > len(_OBJECT_TYPES)
             or any(type(kind) is not str for kind in requested)
             or len(set(requested)) != len(requested)):
-        raise SmartSettingsError("invalid_smart_settings")
+        raise SmartSettingsError("invalid_smart_settings:enabled_types")
     if not set(requested) <= _OBJECT_TYPES:
         raise SmartSettingsError("unsupported_smart_feature:types")
     start_ms = _timing(payload["eventStartMSec"])
@@ -303,7 +336,7 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
     for name in sorted(_REGION_MAPS - {"zones", "excludeZones"}):
         value = payload.get(name, {})
         if not isinstance(value, dict):
-            raise SmartSettingsError("invalid_smart_settings")
+            raise SmartSettingsError("invalid_smart_settings:region_map")
         if value:
             if name == "secondLensZones":
                 try:
@@ -336,15 +369,15 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
     if accuracy is not None:
         if not isinstance(accuracy, dict) or not set(accuracy) <= {
                 "face", "licensePlate"}:
-            raise SmartSettingsError("invalid_smart_settings")
+            raise SmartSettingsError("invalid_smart_settings:recognition_accuracy")
         for value in accuracy.values():
             # Protect's deprecated precision setting is a read-only string
             # whose current value is "auto". It does not request a face or
             # plate recognizer from this candidate.
             if value == "auto":
                 continue
-            if (type(value) not in (int, float) or not math.isfinite(value)
-                    or not 0 <= value <= 100):
-                raise SmartSettingsError("invalid_smart_settings")
+            if (type(value) not in (int, float) or not 0 <= value <= 100
+                    or not math.isfinite(value)):
+                raise SmartSettingsError("invalid_smart_settings:recognition_accuracy")
     return SmartPolicy(expected, frozenset(requested), start_ms, stop_ms,
                        ceilings, smart_zones, bool(raw_zones), exclude_zones)
