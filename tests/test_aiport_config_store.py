@@ -69,6 +69,20 @@ def test_preview_and_apply_change_only_detector_and_redact_key_path(tmp_path):
     assert (tmp_path / ".aiport-config-history" / f"{snapshot.revision}.json").read_bytes() == before
 
 
+def test_request_cap_is_optional_and_off_by_default(tmp_path):
+    store, path, _ = fixture(tmp_path)
+    uncapped = settings(tmp_path)
+    del uncapped["max_requests_per_hour"]
+    after = store.apply(store.snapshot().revision, uncapped)
+    assert after.max_requests_per_hour is None
+    assert "max_requests_per_hour" not in json.loads(path.read_text())["live_pool_detector"]
+    capped = store.apply(after.revision, settings(tmp_path))
+    assert capped.max_requests_per_hour == 24
+    cleared = store.apply(capped.revision, {**settings(tmp_path),
+                                            "max_requests_per_hour": None})
+    assert cleared.max_requests_per_hour is None
+
+
 def test_stale_revision_and_invalid_provider_do_not_change_config(tmp_path):
     store, path, _ = fixture(tmp_path)
     revision = store.snapshot().revision

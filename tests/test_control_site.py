@@ -110,6 +110,15 @@ async def test_browser_login_provider_save_and_csrf_preserve_pairing(tmp_path):
         assert updated["live_pool_detector"]["inference_backend"] == "vision_api"
         assert updated["live_pool_detector"]["smart_types"] == ["package"]
         assert site.aiport.snapshot().max_requests_per_hour == 24
+        uncapped = await client.post("/provider", data={
+            **data, "revision": site.aiport.snapshot().revision,
+            "max_requests_per_hour": ""},
+            headers={"Origin": site.origin}, allow_redirects=False)
+        assert uncapped.status == 303
+        assert site.aiport.snapshot().max_requests_per_hour is None
+        assert "max_requests_per_hour" not in json.loads(
+            port_config.read_text())["live_pool_detector"]
+        assert "empty = no cap" in await (await client.get("/")).text()
         key_saved = await client.post("/provider", data={
             "csrf": csrf, "profile": "aikey", "revision": site.aikey.snapshot().revision,
             "provider": "openai", "model": "gpt-6-luna",

@@ -196,7 +196,10 @@ def test_recovered_budget_accepts_continuous_motion_after_denied_probe(tmp_path,
     assert len(requests) == 3
 
 
-def test_failed_first_startup_probe_does_not_spend_confirmation_request(tmp_path):
+def test_failed_first_startup_probe_does_not_spend_confirmation_request(tmp_path,
+                                                                       monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("aikey.aiport_api_detection.time.monotonic", lambda: now[0])
     calls = []
 
     def transport(*_args):
@@ -211,6 +214,7 @@ def test_failed_first_startup_probe_does_not_spend_confirmation_request(tmp_path
         detector.detect_for_camera(FIRST, STILL)
     detector.detect_for_camera(FIRST, STILL)
     assert len(calls) == 1
+    now[0] += 5  # past the first provider-failure backoff
     detector.detect_for_camera(FIRST, FRAME)
     assert len(calls) == 2
 
@@ -538,3 +542,79 @@ def test_ongoing_presence_leaves_reserve_for_an_animal_in_a_quiet_scene(
     assert [item.kind for item in first + second] == ["animal", "animal"]
     assert len(calls) == spent + 2
     assert detector.budget.remaining(FIRST) == 0
+
+
+
+def test_without_a_request_cap_motion_pairs_are_never_suppressed(tmp_path, monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("aikey.aiport_api_detection.time.monotonic", lambda: now[0])
+    calls = []
+
+    def transport(*_args):
+        calls.append(1)
+        return _response('{"detections":[{"kind":"person","label":"person",'
+                         '"score":0.92,"box":[0.1,0.2,0.4,0.8]}]}')
+
+    detector = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.8,
+                                 transport=transport)
+    assert detector.budget is None and detector.fresh_reserve is None
+    frames = (STILL, FRAME)
+    for burst in range(30):
+        for _ in range(3):  # quiet samples rearm the gate
+            now[0] += 0.5
+            detector.detect_for_camera(FIRST, frames[burst % 2])
+        now[0] += 0.5
+        detector.detect_for_camera(FIRST, frames[(burst + 1) % 2])
+        now[0] += 0.5
+        detector.detect_for_camera(FIRST, frames[(burst + 1) % 2])
+    # The startup pair uses the first quiet samples; each of the other 29
+    # bursts is one motion pair. That is far above any former hourly cap and
+    # still motion-triggered, never one request per frame (150 frames).
+    assert len(calls) == 60
+    assert "refreshes_deferred" not in detector.diagnostic_counts(FIRST)
+    assert not list(tmp_path.glob("*vision-request*"))
+
+
+def test_provider_failures_back_off_exponentially_and_reset_on_success(tmp_path,
+                                                                        monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("aikey.aiport_api_detection.time.monotonic", lambda: now[0])
+    outcomes = ["429", "5xx", "ok", "429", "ok"]
+    calls = []
+
+    def transport(*_args):
+        calls.append(1)
+        outcome = outcomes.pop(0)
+        if outcome != "ok":
+            raise ApiDetectionError(f"api_detection_http_{outcome}")
+        return _response('{"detections":[]}')
+
+    detector = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.8,
+                                 transport=transport)
+    last = [STILL]
+
+    def motion():
+        """Three quiet samples rearm the gate; then the scene changes."""
+        for _ in range(3):
+            now[0] += 0.1
+            detector.detect_for_camera(FIRST, last[0])
+        last[0] = FRAME if last[0] is STILL else STILL
+        now[0] += 0.1
+        return detector.detect_for_camera(FIRST, last[0])
+
+    with pytest.raises(ApiDetectionError, match="429"):
+        detector.detect_for_camera(FIRST, STILL)    # startup probe: 5 s pause
+    assert motion() == () and len(calls) == 1 and detector.backoff_skips == 1
+    now[0] += 5
+    with pytest.raises(ApiDetectionError, match="5xx"):
+        motion()                                    # second failure: 10 s pause
+    assert len(calls) == 2
+    now[0] += 6
+    assert motion() == () and len(calls) == 2
+    now[0] += 5
+    assert motion() == () and len(calls) == 3      # success resets the backoff
+    with pytest.raises(ApiDetectionError, match="429"):
+        motion()                                    # first failure again: 5 s
+    now[0] += 5
+    assert motion() == () and len(calls) == 5
+    assert detector.provider_failures == 3 and detector.backoff_skips == 2

@@ -34,10 +34,15 @@ _DNS_RETRY_SECONDS = 60
 # quiet room. Shorter gaps are the same presence moving on (a person walking
 # about); matches the motion stop hold in aiport_motion.
 _FRESH_QUIET_SECONDS = 8.0
-# Share of each camera's unchanged hourly cap kept for new scenes. Without it
-# people moving through Flur spent 16 requests in one visit and left the
-# camera blind for the next 12 motion events of the hour.
+# With an optional request cap, the share of each camera's hourly cap kept
+# for new scenes. Without it people moving through Flur spent 16 of 20
+# requests in one visit and left the camera blind for 12 motion events.
 _FRESH_RESERVE_DIVISOR = 3
+# Without a request cap, provider failures (HTTP errors, timeouts, invalid
+# envelopes) pause every camera of this detector, since they share one
+# provider and key: 5 s after the first failure, doubling to five minutes.
+_BACKOFF_FIRST_SECONDS = 5.0
+_BACKOFF_MAX_SECONDS = 300.0
 _LABELS = {
     "person": {"person"},
     "vehicle": {"bicycle", "car", "motorcycle", "bus", "truck"},
@@ -289,14 +294,21 @@ def _post(url: str, headers: dict, payload: dict) -> dict:
 
 
 class ApiObjectDetector:
-    """One paid request per sampled frame, with a durable per-camera hourly cap."""
+    """One paid request per motion-sampled frame.
+
+    Requests are bounded by the motion gate (pairs, rearmed only after the
+    scene quiets), the caller's single worker and a provider-wide failure
+    backoff. A durable per-camera hourly request cap is an optional cost
+    control and is off unless ``max_requests_per_hour`` is set.
+    """
 
     def __init__(self, provider_config: dict[str, Any], state_dir: Path, *,
-                 threshold: float, max_requests_per_hour: int,
+                 threshold: float, max_requests_per_hour: int | None = None,
                  transport: Callable[[str, dict, dict], dict] = _post):
         if (type(threshold) not in (float, int) or not 0 < threshold <= 1
-                or type(max_requests_per_hour) is not int
-                or not 2 <= max_requests_per_hour <= 3600):
+                or max_requests_per_hour is not None
+                and (type(max_requests_per_hour) is not int
+                     or not 2 <= max_requests_per_hour <= 3600)):
             raise ApiDetectionError("invalid_api_detection_policy")
         config = dict(provider_config)
         if "api_key" in config:
@@ -313,9 +325,15 @@ class ApiObjectDetector:
                 or endpoint.hostname in {"localhost", "127.0.0.1", "::1"}):
             raise ApiDetectionError("api_detection_endpoint_not_approved")
         self.threshold = float(threshold)
-        self.budget = EventBudget(
-            state_dir, limit=max_requests_per_hour, namespace="vision-request")
-        self.fresh_reserve = max_requests_per_hour // _FRESH_RESERVE_DIVISOR
+        self.budget = (EventBudget(state_dir, limit=max_requests_per_hour,
+                                   namespace="vision-request")
+                       if max_requests_per_hour is not None else None)
+        self.fresh_reserve = (max_requests_per_hour // _FRESH_RESERVE_DIVISOR
+                              if max_requests_per_hour is not None else None)
+        self.provider_failures = 0
+        self.backoff_skips = 0
+        self._consecutive_failures = 0
+        self._provider_retry_at = 0.0
         self.transport = transport
         self.motion = _MotionGate()
         self._camera_counts: dict[str, dict[str, int]] = {}
@@ -357,12 +375,17 @@ class ApiObjectDetector:
             raise ApiDetectionError("invalid_api_detection_frame") from exc
         if time.monotonic() < self._budget_retry_at.get(camera_mac, 0):
             return ()
-        allow_startup_probe = (self.motion.has_baseline(camera_mac)
+        allow_startup_probe = (self.budget is None or self.motion.has_baseline(camera_mac)
                                or self.budget.remaining(camera_mac) == self.budget.limit)
         if not self.motion.should_request(camera_mac, frame,
                                           allow_startup_probe=allow_startup_probe):
             return ()
-        if (self.motion.is_refresh(camera_mac)
+        if time.monotonic() < self._provider_retry_at:
+            # Drop this pair; the gate rearms on later motion after the pause.
+            self.motion.defer(camera_mac)
+            self.backoff_skips += 1
+            return ()
+        if (self.budget is not None and self.motion.is_refresh(camera_mac)
                 and self.budget.remaining(camera_mac) <= self.fresh_reserve):
             # Keep the last part of the unchanged hourly cap for motion that
             # starts in a quiet scene, e.g. an animal after people left.
@@ -378,7 +401,7 @@ class ApiObjectDetector:
         except ApiDetectionError:
             self.motion.reset(camera_mac)
             raise
-        if not self.budget.claim(camera_mac):
+        if self.budget is not None and not self.budget.claim(camera_mac):
             # Preserve the current scene. Otherwise a denied request resets
             # startup sampling and burns each newly freed allowance on an
             # idle frame, keeping a busy camera at zero budget indefinitely.
@@ -389,8 +412,15 @@ class ApiObjectDetector:
             url, headers, payload = self.provider.build_request([frame], _PROMPT)
             if self.provider.provider == "openai" and self.provider.model == "gpt-6-luna":
                 payload["reasoning"] = {"effort": "none"}
-            reply = self.transport(url, headers, payload)
-            text = self.provider.parse_response(reply)
+            try:
+                reply = self.transport(url, headers, payload)
+                text = self.provider.parse_response(reply)
+            except (ApiDetectionError, ProviderError, TypeError, ValueError) as exc:
+                if not (isinstance(exc, ApiDetectionError)
+                        and exc.args == ("api_detection_dns_unavailable",)):
+                    self._provider_failed()
+                raise
+            self._consecutive_failures = 0
             # Keep only counts. This distinguishes a real empty provider
             # response from an object rejected by the configured score gate.
             rejected: dict[str, int] = {}
@@ -427,6 +457,13 @@ class ApiObjectDetector:
         except (TypeError, ValueError) as exc:
             self.motion.sample_result(camera_mac, found_object=False)
             raise ApiDetectionError("api_detection_request_failed") from exc
+
+    def _provider_failed(self) -> None:
+        self.provider_failures += 1
+        self._consecutive_failures += 1
+        delay = min(_BACKOFF_MAX_SECONDS,
+                    _BACKOFF_FIRST_SECONDS * 2 ** (self._consecutive_failures - 1))
+        self._provider_retry_at = time.monotonic() + delay
 
     def skip_confirmation(self, camera_mac: str) -> None:
         """Every sampled object is already confirmed: keep the request."""

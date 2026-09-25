@@ -238,8 +238,10 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
         supported_types = ({"person", "vehicle", "animal", "package"} if is_api
                            else {"person", "vehicle", "animal"})
         if ("paired_streams" not in value or not isinstance(detector, dict)
-                or set(detector) != (api_fields if is_api else
-                                    onnx_fields if is_onnx else pytorch_fields)
+                or not (set(detector) == (api_fields if is_api else
+                                          onnx_fields if is_onnx else pytorch_fields)
+                        # The API request cap is an optional cost control.
+                        or is_api and set(detector) == api_fields - {"max_requests_per_hour"})
                 or backend is not None and not (is_api or is_onnx)
                 or not is_api and (
                     not isinstance(detector["model_path" if is_onnx else
@@ -269,8 +271,9 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
                                        "max_output_tokens"}
             if (not isinstance(provider, dict) or not set(provider) <= allowed_provider_fields
                     or "api_key" in provider
-                    or type(detector["max_requests_per_hour"]) is not int
-                    or not 2 <= detector["max_requests_per_hour"] <= 3600
+                    or detector.get("max_requests_per_hour") is not None
+                    and (type(detector["max_requests_per_hour"]) is not int
+                         or not 2 <= detector["max_requests_per_hour"] <= 3600)
                     or type(provider.get("max_output_tokens", 256)) is not int
                     or not 1 <= provider.get("max_output_tokens", 256) <= 512):
                 raise CandidateError("Invalid live API detector policy")
@@ -652,7 +655,7 @@ class CandidateService:
                     (lambda: ApiObjectDetector(
                         detector["provider_config"], self.state_dir,
                         threshold=detector["threshold"],
-                        max_requests_per_hour=detector["max_requests_per_hour"]))
+                        max_requests_per_hour=detector.get("max_requests_per_hour")))
                     if live_pool and detector.get("inference_backend") == "vision_api" else
                     (lambda: OnnxRFDetrNanoDetector.from_model(
                         detector["model_path"], detector["model_sha256"],

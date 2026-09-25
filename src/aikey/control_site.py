@@ -286,7 +286,7 @@ class ControlSite:
                            "threshold": port.threshold if port.threshold is not None else .8,
                            "smart_types": port.smart_types or ("person",),
                            "max_events_per_hour": port.max_events_per_hour or 12,
-                           "max_requests_per_hour": port.max_requests_per_hour or 24}
+                           "max_requests_per_hour": port.max_requests_per_hour}
                 body += self._provider_form(title, profile, port.revision, current,
                                             port.key_configured, csrf,
                                             camera_count=port.camera_count,
@@ -346,9 +346,11 @@ class ControlSite:
                          for kind in ("person", "vehicle", "animal", "package")) + "</div>"
                      f"<label>Maximum events per camera per hour<input name='max_events_per_hour' "
                      f"type='number' min='1' max='3600' value='{_safe(current['max_events_per_hour'])}'></label>"
-                     f"<label>Maximum API requests per camera per hour<input "
-                     f"name='max_requests_per_hour' type='number' min='2' max='3600' "
-                     f"value='{_safe(current['max_requests_per_hour'])}'></label>")
+                     "<label>Optional API request cost cap per camera per hour "
+                     "(empty = no cap)<input name='max_requests_per_hour' type='number' "
+                     "min='2' max='3600' value='"
+                     + ("" if current.get("max_requests_per_hour") is None
+                        else _safe(current["max_requests_per_hour"])) + "'></label>")
         return form + "<button>Save provider settings</button></form></section>"
 
     async def save_provider(self, request: web.Request) -> web.Response:
@@ -377,7 +379,9 @@ class ControlSite:
                     "threshold": float(fields["threshold"]),
                     "smart_types": fields.getall("smart_types", []),
                     "max_events_per_hour": int(fields["max_events_per_hour"]),
-                    "max_requests_per_hour": int(fields["max_requests_per_hour"]),
+                    "max_requests_per_hour": (
+                        int(fields["max_requests_per_hour"])
+                        if fields.get("max_requests_per_hour", "").strip() else None),
                 })
             key_value = fields.get("api_key", "")
             if key_value:

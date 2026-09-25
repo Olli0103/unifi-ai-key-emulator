@@ -25,6 +25,7 @@ _FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
                      "allow_insecure_http", "max_output_tokens", "api_key_file",
                      "threshold", "smart_types", "max_events_per_hour",
                      "max_requests_per_hour"})
+_OPTIONAL_FIELDS = frozenset({"api_key_file", "max_requests_per_hour"})
 _PROVIDER_FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
                               "allow_insecure_http", "max_output_tokens", "api_key_file"})
 
@@ -151,8 +152,9 @@ class AiPortConfigurationStore:
             return self._public(persisted, checked)
 
     def _candidate(self, current: dict, settings: dict[str, Any]) -> dict:
+        # The API request cap is an optional cost control, off when absent or null.
         if ("paired_streams" not in current or not isinstance(settings, dict)
-                or set(settings) not in (_FIELDS - {"api_key_file"}, _FIELDS)):
+                or not _FIELDS - _OPTIONAL_FIELDS <= set(settings) <= _FIELDS):
             raise AiPortConfigurationError("aiport_provider_settings_incomplete")
         if "api_key_file" in settings:
             path = settings["api_key_file"]
@@ -172,8 +174,10 @@ class AiPortConfigurationStore:
             "threshold": settings["threshold"],
             "smart_types": settings["smart_types"],
             "max_events_per_hour": settings["max_events_per_hour"],
-            "max_requests_per_hour": settings["max_requests_per_hour"],
         }
+        if settings.get("max_requests_per_hour") is not None:
+            candidate["live_pool_detector"]["max_requests_per_hour"] = (
+                settings["max_requests_per_hour"])
         return candidate
 
     def _validate(self, candidate: dict) -> None:

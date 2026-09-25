@@ -69,6 +69,15 @@ def test_live_pool_accepts_explicit_capped_api_provider(tmp_path):
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     with pytest.raises(CandidateError, match="API detector"):
         load_config(tmp_path / "config.json")
+    # The request cap is an optional cost control: absent or null means off.
+    del config["live_pool_detector"]["max_requests_per_hour"]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert "max_requests_per_hour" not in load_config(
+        tmp_path / "config.json")["live_pool_detector"]
+    config["live_pool_detector"]["max_requests_per_hour"] = None
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["live_pool_detector"][
+        "max_requests_per_hour"] is None
 
 
 @pytest.mark.asyncio

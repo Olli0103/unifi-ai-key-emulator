@@ -183,7 +183,8 @@ class FairInference:
             except ApiDetectionError as exc:
                 # A remote API can fail for one frame without making the
                 # camera or its Protect smart policy permanently unavailable.
-                # The detector's durable request budget still bounds retries.
+                # The detector's provider backoff (and optional request cap)
+                # bounds retries.
                 self.api_failures += 1
                 self._api_failures_by_camera[camera] += 1
                 raw_code = exc.args[0] if len(exc.args) == 1 else None
@@ -270,9 +271,9 @@ class FairInference:
                 pass
         self._model = None
 
-    def snapshot(self) -> dict[str, int | bool]:
+    def snapshot(self) -> dict[str, int | bool | None]:
         """Aggregate, content-free counters safe for a private health page."""
-        return {
+        result: dict[str, int | bool | None] = {
             "camera_count": len(self._cameras),
             "attempts": sum(self._attempts.values()),
             "successes": sum(self._successes.values()),
@@ -284,6 +285,15 @@ class FairInference:
             "model_load_failed": self._global_failure,
             "closed": self._closed,
         }
+        if isinstance(getattr(self._model, "provider_failures", None), int):
+            # API detector only: None means no request cap is configured.
+            budget = getattr(self._model, "budget", None)
+            result.update({
+                "api_request_cap": getattr(budget, "limit", None),
+                "api_provider_failures": self._model.provider_failures,
+                "api_backoff_skips": self._model.backoff_skips,
+            })
+        return result
 
     def camera_snapshot(self) -> tuple[dict[str, object], ...]:
         """Content-free counters in config order, without camera identifiers."""
