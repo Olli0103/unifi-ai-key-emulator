@@ -1967,7 +1967,7 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
         assert sink.messages[-1]["statusCode"] == status
     assert service.smart_settings_lpr_acks == 2
     assert service.smart_settings_lpr_requested == 1
-    assert service.smart_settings_rejection_reasons == {"invalid_lpr_flag": 1}
+    assert service.smart_settings_rejection_reasons == {"invalid_lpr_flag:str": 1}
     assert service.smart_settings_requests_rejected == rejected + 1
     assert service._camera_engine.has_policy(cameras[0])
     assert service._camera_engine.policy_generation(cameras[0]) == stale_generation

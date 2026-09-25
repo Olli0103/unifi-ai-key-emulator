@@ -924,7 +924,8 @@ class CandidateService:
             # on connect. Answering 501 made Protect log "Failed to handle
             # EventAIPortStatus isSmartDetectReady". It carries no smart policy.
             if type(payload["isLprCamera"]) is not bool:
-                self._count_policy_rejection("invalid_lpr_flag")
+                self._count_policy_rejection(
+                    "invalid_lpr_flag:" + type(payload["isLprCamera"]).__name__)
                 await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
                                           {"description": "smart_detection_unavailable"})
                 return
