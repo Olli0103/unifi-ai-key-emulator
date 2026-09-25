@@ -384,8 +384,10 @@ def test_package_lens_zones_stay_with_the_doorbell():
     assert [zone.object_types for zone in policy.secondary_lens_zones] == [
         frozenset({"package"})]
     assert policy.zone_ids("person", (0.2, 0.2, 0.5, 0.8)) == (3,)
-    # The secondary lens never scopes a primary-stream package.
-    assert policy.zone_ids("package", (0.2, 0.2, 0.5, 0.8)) is None
+    # The secondary lens never scopes a primary-stream package: that is
+    # bounded by the primary detection area (zone 3), never by zone 8.
+    assert policy.package_scope == "detection_area"
+    assert policy.zone_ids("package", (0.2, 0.2, 0.5, 0.8)) == (3,)
 
 
 def test_malformed_package_lens_zone_still_rejects_policy():

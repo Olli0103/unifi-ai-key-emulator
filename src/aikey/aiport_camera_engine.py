@@ -162,8 +162,7 @@ class CameraPolicyEngine:
                    for zone in policy.exclude_zones):
                 reason = "excluded"
             else:
-                matching = tuple(zone for zone in policy.smart_zones
-                                 if value.kind in zone.object_types)
+                matching = policy.zones_for(value.kind)
                 if not matching:
                     reason = "no_class_zone"
                 else:
@@ -287,6 +286,7 @@ class CameraPolicyEngine:
                 "zone_overlap_bands": dict(self._zone_overlap_bands[camera]),
                 "events_entered_by_kind": dict(self._entered_by_kind[camera]),
                 "zone_rejections_by_kind": dict(self._rejected_by_kind[camera]),
+                "package_scope": policy.package_scope if policy is not None else None,
                 "secondary_lens": ({
                     "zones": len(policy.secondary_lens_zones),
                     "classes": sorted(set().union(*(

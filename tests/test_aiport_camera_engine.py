@@ -154,7 +154,47 @@ def test_package_is_one_shot_per_track_with_camera_cooldown():
     assert snapshot["events_entered_by_kind"]["package"] == 2
 
 
-def test_package_needs_an_explicit_package_zone_when_zones_exist():
+def _package_policy(zones):
+    return parse_smart_settings({
+        "deviceID": FIRST, "algoVersion": "beta",
+        "enableSmartDetect": ["person", "package"],
+        "eventStartMSec": 1000, "eventStopMSec": 3000, "zones": zones,
+        "excludeZones": {"9": {"coord": [0, 0, 100, 0, 100, 100, 0, 100],
+                                "objectTypes": ["person", "package"], "patrolSetID": -1}}},
+        camera_mac=FIRST)
+
+
+def test_package_stays_inside_detection_area_when_protect_cannot_zone_it():
+    # Paired first-party cameras never get Package in a primary zone.
+    area = {"7": {"coord": [100, 100, 900, 100, 900, 900, 100, 900],
+                  "objectTypes": ["person"], "sensitivity": 50}}
+    policy = _package_policy(area)
+    assert policy.package_scope == "detection_area"
+    assert policy.zone_ids("package", INSIDE) == (7,)
+    assert policy.zone_ids("package", OUTSIDE) is None     # zones still apply
+    assert policy.zone_ids("package", (0.01, 0.01, 0.08, 0.08)) is None  # excluded
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=4)
+    engine.replace_policy(FIRST, policy)
+    package = ObjectObservation("package", "package", 0.93, INSIDE)
+    engine.observe(FIRST, (package,), now=1)
+    entered, = engine.observe(FIRST, (package,), now=2)
+    assert (entered.change.edge, entered.zone_ids) == ("packageDetected", (7,))
+    assert engine.camera_snapshot(now=3)[0]["package_scope"] == "detection_area"
+
+
+def test_explicit_package_zone_keeps_exact_zone_semantics():
+    policy = _package_policy({
+        "7": {"coord": [100, 100, 900, 100, 900, 900, 100, 900],
+              "objectTypes": ["person"]},
+        "8": {"coord": [500, 500, 1000, 500, 1000, 1000, 500, 1000],
+              "objectTypes": ["package"]}})
+    assert policy.package_scope == "package_zone"
+    assert policy.zone_ids("package", INSIDE) is None
+    assert policy.zone_ids("package", (0.6, 0.6, 0.8, 0.8)) == (8,)
+    assert _package_policy({}).package_scope == "full_frame"
+
+
+def test_package_rejected_outside_any_zone():
     engine = CameraPolicyEngine([FIRST], max_events_per_camera=4)
     engine.replace_policy(FIRST, parse_smart_settings({
         "deviceID": FIRST, "algoVersion": "beta",
@@ -163,11 +203,11 @@ def test_package_needs_an_explicit_package_zone_when_zones_exist():
         "zones": {"7": {"coord": [100, 100, 900, 100, 900, 900, 100, 900],
                         "objectTypes": ["person"], "sensitivity": 50}}},
         camera_mac=FIRST))
-    package = ObjectObservation("package", "package", 0.93, INSIDE)
+    package = ObjectObservation("package", "package", 0.93, OUTSIDE)
     assert engine.observe(FIRST, (package,), now=1) == ()
     assert engine.observe(FIRST, (package,), now=2) == ()
     snapshot = engine.camera_snapshot(now=3)[0]
-    assert snapshot["zone_rejections"]["no_class_zone"] == 2
+    assert snapshot["zone_rejections"]["below_overlap"] == 2
     assert snapshot["zone_rejections_by_kind"]["package"] == 2
     assert snapshot["events_entered_by_kind"]["package"] == 0
 

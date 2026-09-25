@@ -228,9 +228,33 @@ class SmartPolicy:
             return None
         if not self.zones_configured:
             return ()
-        matches = tuple(zone.zone_id for zone in self.smart_zones
-                        if kind in zone.object_types and zone.contains_box(box))
+        matches = tuple(zone.zone_id for zone in self.zones_for(kind)
+                        if zone.contains_box(box))
         return matches or None
+
+    @property
+    def package_scope(self) -> str | None:
+        """How Package is bounded on this camera; ``None`` if disabled.
+
+        Protect copies only an allowlist of AI Port capability flags onto a
+        paired first-party camera, and package-zone support is not in it, so
+        Protect strips Package from every primary zone of such a camera.
+        Package then stays inside the drawn detection area instead of
+        becoming full-frame: zones are still never ignored.
+        """
+        if not self.allows("package"):
+            return None
+        if not self.zones_configured:
+            return "full_frame"
+        if any("package" in zone.object_types for zone in self.smart_zones):
+            return "package_zone"
+        return "detection_area" if self.smart_zones else "no_zone"
+
+    def zones_for(self, kind: str) -> tuple[SmartZone, ...]:
+        """Zones that bound ``kind``: its class zones, or Package's area."""
+        if kind == "package" and self.package_scope == "detection_area":
+            return self.smart_zones
+        return tuple(zone for zone in self.smart_zones if kind in zone.object_types)
 
     @property
     def person_reverification_ceiling(self) -> float | None:
