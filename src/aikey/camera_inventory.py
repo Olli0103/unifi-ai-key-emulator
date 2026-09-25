@@ -38,6 +38,7 @@ _SMART_TYPES = {"person", "vehicle", "package", "licensePlate", "face", "animal"
 _AUDIO_TYPES = {"alrmSmoke", "alrmCmonx", "alrmSiren", "alrmBabyCry", "alrmSpeak",
                 "alrmBark", "alrmBurglar", "alrmCarHorn", "alrmGlassBreak",
                 "smoke_cmonx"}  # Seen in a 7.3.60 inventory, absent from its published enum.
+_VALIDATED_VERSIONS = frozenset({"7.3.60", "7.3.68"})
 
 
 class InventoryError(RuntimeError):
@@ -116,7 +117,7 @@ def _types(value, allowed: set[str], field: str) -> tuple[str, ...]:
 
 
 def parse_cameras(value) -> tuple[Camera, ...]:
-    """Validate a complete 7.3.60 integration response before publishing it."""
+    """Validate a complete observed integration response before publishing it."""
     if not isinstance(value, list) or len(value) > _MAX_CAMERAS:
         raise InventoryError("Invalid camera inventory list")
     cameras = []
@@ -280,11 +281,13 @@ async def fetch_inventory(host: str, *, api_key_file: Path, trust_file: Path,
                                     trust_env=False, headers={"X-API-Key": key,
                                                               "Accept": "application/json"}) as session:
         meta = await _get_json(session, base + "/meta/info")
-        if not isinstance(meta, dict) or meta.get("applicationVersion") != "7.3.60":
+        if (not isinstance(meta, dict)
+                or meta.get("applicationVersion") not in _VALIDATED_VERSIONS):
             raise InventoryError("Protect version has no validated camera inventory contract")
         rows = await _get_json(session, base + "/cameras")
     cameras = parse_cameras(rows)
-    return {"schema": "aikey-camera-preflight/1", "protect_version": "7.3.60",
+    return {"schema": "aikey-camera-preflight/1",
+            "protect_version": meta["applicationVersion"],
             "fetched_at": int(time.time()), "source": "local_protect_integration_api",
             "processing_enabled": False,
             "summary": {"total": len(cameras),

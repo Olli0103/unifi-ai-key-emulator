@@ -118,11 +118,14 @@ def test_invalid_inventory_fails_as_a_whole(rows):
 
 
 @pytest.mark.asyncio
-async def test_pinned_read_only_inventory_has_no_processing_scope(tmp_path, monkeypatch):
-    async with synthetic_protect(tmp_path, monkeypatch, rows=[camera(1), camera(2, smart=())]) as env:
+@pytest.mark.parametrize("version", ["7.3.60", "7.3.68"])
+async def test_pinned_read_only_inventory_has_no_processing_scope(tmp_path, monkeypatch,
+                                                                   version):
+    async with synthetic_protect(tmp_path, monkeypatch, meta_version=version,
+                                 rows=[camera(1), camera(2, smart=())]) as env:
         report = await fetch_inventory("127.0.0.1", api_key_file=env["key"],
                                        trust_file=env["trust"], cert_file=env["ca"])
-        assert report["protect_version"] == "7.3.60"
+        assert report["protect_version"] == version
         assert report["summary"] == {"total": 2, "smart_event_candidates": 1,
                                      "legacy_ingress_needed": 1, "offline": 0}
         assert report["processing_enabled"] is False
