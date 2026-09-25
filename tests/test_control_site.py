@@ -334,3 +334,75 @@ async def test_named_aiport_provider_change_targets_only_that_instance(tmp_path)
     finally:
         await client.close()
         await server.close()
+
+
+@pytest.mark.asyncio
+async def test_rollout_page_shows_the_diff_and_applies_only_local_allowlist(
+        tmp_path, monkeypatch):
+    key_config, port_config = fixture(tmp_path)
+    paired = {"2A1122334455", "2A1122334456"}
+
+    def health(state_dir, port):   # Protect paired the two configured cameras
+        config = json.loads((Path(state_dir) / "config.json").read_text())
+        return {"pool_cameras": [{"policy_enabled": s["camera_mac"] in paired}
+                                 for s in config["paired_streams"]]}
+
+    monkeypatch.setattr("aikey.aiport_rollout.read_slot_health", health)
+    cameras = [("2A1122334455", "Flur"), ("2A1122334456", "Büro")]
+
+    async def inventory():
+        return {"schema": "aikey-camera-preflight/1", "fetched_at": 1, "protect_version": "7.3.68",
+                "cameras": [{"id": f"{i:024x}", "mac": mac, "name": name,
+                             "model": "UVC G3 Instant", "state": "CONNECTED",
+                             "processing_class": "smart_event_candidate"}
+                            for i, (mac, name) in enumerate(cameras, 1)]}
+
+    rollout = tmp_path / "rollout.json"
+    rollout.write_text(json.dumps({
+        "schema": "aikey-aiport-rollout/1",
+        "slots": [{"label": "mac", "target": "mac", "state_dir": str(port_config.parent),
+                   "health_port": 8443}],
+        "new_slots": {"target": "nas", "state_parent": str(tmp_path), "addresses": []}}))
+    password = "synthetic-admin-passphrase"
+    site = ControlSite(key_config, port_config, signing_key=b"s" * 32,
+                       password_record=AdminSecurity.create_password_record(password),
+                       port=8765, inventory_loader=inventory, rollout_path=rollout)
+    server = TestServer(site.app(), host="127.0.0.1")
+    await server.start_server()
+    site.origin = f"http://127.0.0.1:{server.port}"
+    site.security = AdminSecurity(b"s" * 32, site.origin, allow_loopback_http=True)
+    client = TestClient(server, cookie_jar=aiohttp.CookieJar(unsafe=True))
+    await client.start_server()
+    try:
+        assert (await client.get("/aiport-rollout", allow_redirects=False)).status == 303
+        await client.post("/login", data={"password": password},
+                          headers={"Origin": site.origin}, allow_redirects=False)
+        cookie = client.session.cookie_jar.filter_cookies(URL(site.origin))[_COOKIE].value
+        csrf = site.security.csrf_token(cookie)
+        page = await (await client.get("/aiport-rollout")).text()
+        assert "this plan is a no-op" in page and "Apply local changes" not in page
+        assert "2A1122" not in page and "192.168" not in page
+        cameras.append(("2A1122334457", "Keller"))          # a new eligible camera
+        before = port_config.read_text()
+        page = await (await client.get("/aiport-rollout")).text()
+        assert "Apply local changes" in page and "Keller" in page and "pair_in_protect" in page
+        revision = page.split("name='revision' value='")[1].split("'")[0]
+        denied = await client.post("/aiport-rollout", data={"revision": revision},
+                                   headers={"Origin": site.origin}, allow_redirects=False)
+        assert denied.status == 403 and port_config.read_text() == before
+        stale = await client.post("/aiport-rollout", data={"csrf": csrf, "revision": "0" * 64},
+                                  headers={"Origin": site.origin}, allow_redirects=False)
+        assert "The plan changed" in await stale.text() and port_config.read_text() == before
+        applied = await client.post("/aiport-rollout", data={"csrf": csrf, "revision": revision},
+                                    headers={"Origin": site.origin}, allow_redirects=False)
+        assert applied.status == 303
+        saved = json.loads(port_config.read_text())
+        assert [s["camera_mac"] for s in saved["paired_streams"]] == [
+            "2A1122334455", "2A1122334456", "2A1122334457"]
+        assert saved["mac"] == "2A1100F0A55E"                  # slot identity unchanged
+        page = await (await client.get("/aiport-rollout")).text()
+        assert "this plan is a no-op" in page                  # only pairing remains
+        assert "pair_in_protect · mac · Keller" in page
+    finally:
+        await client.close()
+        await server.close()

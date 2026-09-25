@@ -23,6 +23,10 @@ from .aiport_config_store import (
     AiPortConfigurationError, AiPortConfigurationStore, AiPortRevisionConflict,
 )
 from .aiport_deployment import AiPortPlanError, plan_ai_ports
+from .aiport_rollout import (
+    RolloutError, apply_and_register, load_rollout_config,
+    compute as compute_rollout, public as public_rollout,
+)
 from .camera_inventory import InventoryError, fetch_inventory
 from .config import atomic_private, load_config
 from .config_store import (
@@ -94,7 +98,8 @@ class ControlSite:
                  signing_key: bytes, password_record: str, port: int,
                  aiport_runtime_state_dir: Path | None = None,
                  aiport_instances: dict[str, Path] | None = None,
-                 inventory_loader: Callable[[], Awaitable[dict]] | None = None):
+                 inventory_loader: Callable[[], Awaitable[dict]] | None = None,
+                 rollout_path: Path | None = None):
         if type(port) is not int or not 1024 <= port <= 65535:
             raise ValueError("Invalid control-site port")
         self.origin = f"http://127.0.0.1:{port}"
@@ -116,11 +121,14 @@ class ControlSite:
             paths.add(store.path)
             self.aiports[f"aiport:{name}"] = store
         self.inventory_loader = inventory_loader
+        self.rollout_path = rollout_path
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=8192)
         app.router.add_get("/", self.index)
         app.router.add_get("/cameras", self.cameras)
+        app.router.add_get("/aiport-rollout", self.rollout_page)
+        app.router.add_post("/aiport-rollout", self.rollout_apply)
         app.router.add_get("/login", self.login_page)
         app.router.add_post("/login", self.login)
         app.router.add_post("/provider", self.save_provider)
@@ -130,6 +138,81 @@ class ControlSite:
 
     async def health(self, _: web.Request) -> web.Response:
         return web.json_response({"service": "control-site"})
+
+    async def _rollout_plan(self) -> tuple[dict, dict]:
+        report = await self.inventory_loader()
+        rollout = load_rollout_config(self.rollout_path)
+        plan, _ = await asyncio.to_thread(compute_rollout, rollout, report)
+        return rollout, plan
+
+    async def rollout_page(self, request: web.Request) -> web.Response:
+        cookie = self._session(request)
+        if cookie is None:
+            raise web.HTTPSeeOther("/login")
+        if self.inventory_loader is None or self.rollout_path is None:
+            raise web.HTTPNotFound()
+        csrf = self.security.csrf_token(cookie)
+        try:
+            _, plan = await self._rollout_plan()
+        except (InventoryError, RolloutError, OSError, ValueError):
+            return _page("AI Port rollout unavailable", "<h1>AI Port rollout unavailable</h1>"
+                         "<p class='error'>Check Protect connectivity, the rollout file and "
+                         "the slot state directories.</p><p><a href='/'>Settings</a></p>")
+        view = public_rollout(plan)
+        rows = "".join(
+            "<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in (
+                label, slot["target"], slot["load"],
+                "yes" if slot.get("observed") else "no — unchanged",
+                ", ".join(slot["keep"]) or "—", ", ".join(slot["add"]) or "—",
+                ", ".join(slot["remove"]) or "—",
+                ", ".join(slot["awaiting_pairing"]) or "—")) + "</tr>"
+            for label, slot in sorted(view["slots"].items()))
+        rows += "".join(
+            "<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in (
+                slot["label"] + " (new)", slot["target"], slot["load"], "not deployed",
+                "—", ", ".join(slot["add"]), "—", "—")) + "</tr>"
+            for slot in view["new_slots"])
+        local = [a for a in view["actions"] if a["automated"]]
+        manual = [a for a in view["actions"] if not a["automated"]]
+
+        def items(actions: list[dict]) -> str:
+            return "".join("<li>" + _safe(" · ".join(str(a[k]) for k in (
+                "kind", "slot", "camera", "target") if a.get(k))) + "</li>"
+                for a in actions) or "<li>None</li>"
+        form = ("<form method='post' action='/aiport-rollout'>"
+                f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
+                f"<input type='hidden' name='revision' value='{_safe(view['revision'])}'>"
+                "<button>Apply local changes</button></form>" if local else
+                "<p>No local change is needed: this plan is a no-op.</p>")
+        body = ("<h1>AI Port rollout</h1><p><a href='/'>Settings</a> · "
+                "<a href='/aiport-rollout'>Refresh</a></p>"
+                "<p class='muted'>Derived from Protect's eligible cameras and each slot's "
+                "pinned health. Paired cameras and slot identities never move. Nothing is "
+                "paired, adopted, uploaded or restarted from here.</p>"
+                "<table><tr><th>Slot</th><th>Target</th><th>Load</th><th>Observed</th>"
+                "<th>Keep</th><th>Add</th><th>Remove</th><th>Awaiting pairing</th></tr>"
+                + rows + "</table><h2>Applied by this page (local files only)</h2><ul>"
+                + items(local) + "</ul><h2>Requires you</h2><ul>" + items(manual) + "</ul>"
+                + form + f"<p class='muted'>Plan revision {_safe(view['revision'][:12])}</p>")
+        return _page("AI Port rollout", body)
+
+    async def rollout_apply(self, request: web.Request) -> web.Response:
+        fields = await request.post()
+        if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
+            raise web.HTTPForbidden()
+        if self.inventory_loader is None or self.rollout_path is None:
+            raise web.HTTPNotFound()
+        try:
+            rollout, plan = await self._rollout_plan()
+            if fields.get("revision") != plan["revision"]:
+                return _page("Plan changed", "<h1>The plan changed</h1><p>Review the "
+                             "refreshed plan before applying.</p>"
+                             "<p><a href='/aiport-rollout'>Review</a></p>")
+            await asyncio.to_thread(apply_and_register, self.rollout_path, rollout, plan)
+        except (InventoryError, RolloutError, OSError, ValueError):
+            return _page("Rollout not applied", "<h1>Rollout not applied</h1>"
+                         "<p class='error'>No pairing was changed. Check the slot files.</p>")
+        raise web.HTTPSeeOther("/aiport-rollout")
 
     async def cameras(self, request: web.Request) -> web.Response:
         if self._session(request) is None:
@@ -451,6 +534,8 @@ def _cli() -> argparse.ArgumentParser:
     run.add_argument("--aiport-instance", action="append", default=[], metavar="NAME=CONFIG",
                      help="Add another AI Port instance with a private host config path")
     run.add_argument("--port", type=int, default=8765)
+    run.add_argument("--aiport-rollout", type=Path,
+                     help="Private AI Port rollout slot file (needs the inventory settings)")
     run.add_argument("--inventory-controller")
     run.add_argument("--inventory-api-key-file", type=Path)
     run.add_argument("--inventory-web-trust-file", type=Path)
@@ -524,7 +609,8 @@ def main(argv: list[str] | None = None) -> int:
                            signing_key=signing_key, password_record=record, port=args.port,
                            aiport_runtime_state_dir=args.aiport_runtime_state_dir,
                            aiport_instances=instances,
-                           inventory_loader=inventory_loader)
+                           inventory_loader=inventory_loader,
+                           rollout_path=args.aiport_rollout)
         site.aikey.snapshot()
         for port_store in site.aiports.values():
             port_store.snapshot()

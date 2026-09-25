@@ -73,3 +73,33 @@ No real smart event from these six cameras has yet been shown to persist on a Pr
 | `over_capacity`, `missing_ai_port`, `unmanaged_ai_port` | no | Reported for review. |
 
 A second run after `--apply-local` reports no safe action, so the diff is idempotent. Changed files take effect after that instance restarts. NAS copies must be uploaded as described above.
+
+## Automatic slot rollout (dry run first)
+
+`local-aiport-rollout` and the control site's **AI Port rollout** page plan slots from Protect's eligible cameras. It needs no Protect administrator session:
+
+- **Eligibility** (connected legacy and G3–G5 Protect cameras) and capacity weights come from the pinned integration inventory, with the planner's rules.
+- **Pairing** comes from each slot's pinned `/healthz`. Protect sends a camera's policy and stream only to the AI Port it paired, so a camera with a policy or stream on a slot is paired there.
+
+The plan never moves a paired camera and never renames or re-addresses a slot. A slot whose health cannot be read is left unchanged, and an offline camera keeps its allowlist entry. Applying requires the revision of the dry run that was reviewed, and changes only local files:
+
+| Action | Applied locally | Still needs you |
+|---|---|---|
+| `add_to_allowlist` for a new eligible camera (existing slot with capacity) | yes | `pair_in_protect` |
+| `remove_from_allowlist` (paired to another slot, or no longer eligible) | yes, backup `config.json.before-rollout` | — |
+| `create_slot` from `new_slots.addresses` (identity via `provision_slot`, detector copied from the template slot, no request cap) | yes, and registered in the rollout file | `deploy_nas_service` or `start_mac_container`, `adopt_in_protect`, `pair_in_protect` |
+| `address_needed`, `slot_unobserved`, `idle_slot`, `capacity_estimate_exceeded` | no | review |
+
+A second run after applying reports no local action; only pending Protect or NAS steps remain. Capacity uses the planner's conservative model-maximum weights, so the existing four slots count as full and new cameras get a new slot.
+
+The rollout file is private (mode 600):
+
+```json
+{"schema": "aikey-aiport-rollout/1",
+ "slots": [{"label": "mac", "target": "mac", "state_dir": "/…/aiport-mac", "health_port": 8443},
+           {"label": "nas-slot-2", "target": "nas", "state_dir": "/…/aiport-slots/slot-2", "health_port": 443}],
+ "new_slots": {"target": "nas", "label_prefix": "nas-slot-", "state_parent": "/…/aiport-slots",
+               "addresses": [], "health_port": 443, "template": "nas-slot-2"}}
+```
+
+The control site shows the page when it is started with `--aiport-rollout` and the `--inventory-*` settings.

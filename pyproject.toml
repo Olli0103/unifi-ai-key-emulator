@@ -33,6 +33,7 @@ local-aiport-host-relay = "aikey.aiport_host_relay:main"
 local-aiport-nas-compose = "aikey.aiport_nas_compose:main"
 local-aiport-nas-reconcile = "aikey.aiport_nas_reconcile:main"
 local-aiport-slot-diff = "aikey.aiport_slot_diff:main"
+local-aiport-rollout = "aikey.aiport_rollout:main"
 local-aiport-onnx-export = "aikey.aiport_onnx_export:main"
 local-aikey-control = "aikey.control_site:main"
 
