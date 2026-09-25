@@ -468,3 +468,15 @@ def test_sparse_association_still_rejects_distant_or_other_class_objects():
     entered, = engine.observe(FIRST, (person(box=(0.21, 0.2, 0.51, 0.8)),
                                       person(box=(0.55, 0.2, 0.85, 0.8))), now=9)
     assert entered.change.box == (0.21, 0.2, 0.51, 0.8)
+
+
+def test_single_animal_sighting_is_counted_as_unconfirmed():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=4,
+                                max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, multiclass_policy(FIRST))
+    cat = ObjectObservation("animal", "cat", 0.9, (0.1, 0.6, 0.2, 0.7))
+    assert engine.observe(FIRST, (cat,), now=1) == ()
+    assert engine.observe(FIRST, (person(),), now=3) == ()
+    snapshot = engine.camera_snapshot(now=4)[0]
+    assert snapshot["unconfirmed_by_kind"]["animal"] == 1
+    assert snapshot["events_entered_by_kind"]["animal"] == 0

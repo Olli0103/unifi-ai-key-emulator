@@ -144,7 +144,19 @@ class _MotionGate:
         return False
 
 
-def parse_detections(text: str, *, threshold: float) -> tuple[ObjectObservation, ...]:
+_ITEM_REJECTIONS = ("shape", "kind", "label:person", "label:vehicle", "label:animal",
+                    "label:package", "score", "box")
+
+
+def parse_detections(text: str, *, threshold: float,
+                     rejected: dict[str, int] | None = None
+                     ) -> tuple[ObjectObservation, ...]:
+    """Parse one provider reply; malformed items are dropped, never accepted.
+
+    A malformed reply envelope fails closed. A single malformed item used to
+    discard every valid object in the same reply; it is now skipped and
+    counted under a fixed reason in ``rejected`` (no content is retained).
+    """
     try:
         result = json.loads(text)
         if not isinstance(result, dict) or set(result) != {"detections"}:
@@ -152,25 +164,37 @@ def parse_detections(text: str, *, threshold: float) -> tuple[ObjectObservation,
         entries = result["detections"]
         if not isinstance(entries, list) or len(entries) > 20:
             raise ValueError
-        observations = []
-        for item in entries:
-            if not isinstance(item, dict) or set(item) != {"kind", "label", "score", "box"}:
-                raise ValueError
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ApiDetectionError("invalid_api_detection_response") from exc
+    observations = []
+    for item in entries:
+        reason = None
+        if not isinstance(item, dict) or set(item) != {"kind", "label", "score", "box"}:
+            reason = "shape"
+        else:
             kind, label, score, box = (item[name] for name in
                                        ("kind", "label", "score", "box"))
-            if (not isinstance(kind, str) or kind not in _LABELS
-                    or not isinstance(label, str) or label not in _LABELS[kind]
-                    or type(score) not in (float, int)
-                    or not isinstance(box, list) or len(box) != 4
+            if not isinstance(kind, str) or kind not in _LABELS:
+                reason = "kind"
+            elif not isinstance(label, str) or label not in _LABELS[kind]:
+                reason = "label:" + kind
+            elif type(score) not in (float, int):
+                reason = "score"
+            elif (not isinstance(box, list) or len(box) != 4
                     or any(type(point) not in (float, int) for point in box)):
-                raise ValueError
-            observation = ObjectObservation(kind, label, score, tuple(box))
-            validate_observation(observation)
-            if score >= threshold:
-                observations.append(observation)
-        return tuple(observations)
-    except (ValueError, KeyError, TypeError, TrackingError) as exc:
-        raise ApiDetectionError("invalid_api_detection_response") from exc
+                reason = "box"
+            else:
+                observation = ObjectObservation(kind, label, score, tuple(box))
+                try:
+                    validate_observation(observation)
+                except TrackingError:
+                    reason = "score" if not 0 <= score <= 1 else "box"
+                else:
+                    if score >= threshold:
+                        observations.append(observation)
+        if reason is not None and rejected is not None:
+            rejected[reason] = rejected.get(reason, 0) + 1
+    return tuple(observations)
 
 
 def _read_private_key(path: str) -> str:
@@ -259,6 +283,7 @@ class ApiObjectDetector:
         self.transport = transport
         self.motion = _MotionGate()
         self._camera_counts: dict[str, dict[str, int]] = {}
+        self._kind_counts: dict[str, dict[str, dict[str, int]]] = {}
         self._budget_retry_at: dict[str, float] = {}
         self._remote_host = (endpoint.hostname if transport is _post
                              and self.provider.provider in {"openai", "anthropic"}
@@ -321,7 +346,8 @@ class ApiObjectDetector:
             text = self.provider.parse_response(reply)
             # Keep only counts. This distinguishes a real empty provider
             # response from an object rejected by the configured score gate.
-            reported = parse_detections(text, threshold=0)
+            rejected: dict[str, int] = {}
+            reported = parse_detections(text, threshold=0, rejected=rejected)
             accepted = tuple(item for item in reported
                              if item.score >= self.threshold)
             counts = self._camera_counts.setdefault(camera_mac, {
@@ -329,9 +355,17 @@ class ApiObjectDetector:
                 "below_threshold": 0, "accepted_objects": 0,
             })
             counts["responses"] += 1
-            counts["empty_responses"] += not reported
+            counts["empty_responses"] += not reported and not rejected
             counts["below_threshold"] += len(reported) - len(accepted)
             counts["accepted_objects"] += len(accepted)
+            kinds = self._kind_counts.setdefault(camera_mac, {
+                "below_threshold": dict.fromkeys(_LABELS, 0),
+                "rejected_items": dict.fromkeys(_ITEM_REJECTIONS, 0)})
+            for item in reported:
+                if item.score < self.threshold:
+                    kinds["below_threshold"][item.kind] += 1
+            for reason, count in rejected.items():
+                kinds["rejected_items"][reason] += count
             self.motion.sample_result(camera_mac, found_object=bool(accepted))
             return accepted
         except ApiDetectionError as exc:
@@ -347,9 +381,15 @@ class ApiObjectDetector:
             self.motion.sample_result(camera_mac, found_object=False)
             raise ApiDetectionError("api_detection_request_failed") from exc
 
-    def diagnostic_counts(self, camera_mac: str) -> dict[str, int]:
+    def diagnostic_counts(self, camera_mac: str) -> dict[str, object]:
         """Return content-free response counts for one configured camera."""
-        return dict(self._camera_counts.get(camera_mac, {
+        result: dict[str, object] = dict(self._camera_counts.get(camera_mac, {
             "responses": 0, "empty_responses": 0,
             "below_threshold": 0, "accepted_objects": 0,
         }))
+        kinds = self._kind_counts.get(camera_mac, {
+            "below_threshold": dict.fromkeys(_LABELS, 0),
+            "rejected_items": dict.fromkeys(_ITEM_REJECTIONS, 0)})
+        result["below_threshold_by_kind"] = dict(kinds["below_threshold"])
+        result["rejected_items"] = dict(kinds["rejected_items"])
+        return result

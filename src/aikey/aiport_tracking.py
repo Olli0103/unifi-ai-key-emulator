@@ -124,6 +124,8 @@ class TemporalTracker:
         # Content-free association counters for private health.
         self.stats = {"iou_matches": 0, "proximity_matches": 0,
                       "tentative_unmatched": 0}
+        # One unconfirmed sighting per class, e.g. a cat seen only once.
+        self.tentative_by_kind = dict.fromkeys(sorted(_KINDS), 0)
         self.min_hits = min_hits
         self.max_gap_seconds = float(max_gap_seconds)
         self.iou_threshold = float(iou_threshold)
@@ -188,6 +190,7 @@ class TemporalTracker:
                 continue
             if not track.active:
                 self.stats["tentative_unmatched"] += bool(observations)
+                self.tentative_by_kind[track.observation.kind] += 1
                 del self._tracks[track_id]
             elif now - track.last_seen > self.max_gap_seconds:
                 changes.append(track.change("leave"))

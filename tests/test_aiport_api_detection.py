@@ -128,13 +128,18 @@ def test_response_counts_distinguish_empty_from_score_rejection(tmp_path):
     assert detector.detect_for_camera(FIRST, STILL) == ()
     assert len(detector.detect_for_camera(FIRST, FRAME)) == 1
     assert detector.detect_for_camera(FIRST, FRAME) == ()
-    assert detector.diagnostic_counts(FIRST) == {
+    first = detector.diagnostic_counts(FIRST)
+    assert {k: first[k] for k in ("responses", "empty_responses",
+                                  "below_threshold", "accepted_objects")} == {
         "responses": 3, "empty_responses": 1,
         "below_threshold": 1, "accepted_objects": 1,
     }
+    assert first["below_threshold_by_kind"]["person"] == 1
     assert detector.diagnostic_counts(SECOND) == {
         "responses": 0, "empty_responses": 0,
         "below_threshold": 0, "accepted_objects": 0,
+        "below_threshold_by_kind": {"person": 0, "vehicle": 0, "animal": 0, "package": 0},
+        "rejected_items": {"shape": 0, "kind": 0, "label:person": 0, "label:vehicle": 0, "label:animal": 0, "label:package": 0, "score": 0, "box": 0},
     }
 
 
@@ -236,11 +241,12 @@ def test_package_observation_requires_exact_class_label_and_bounded_box():
         "box": [0.2, 0.3, 0.5, 0.7],
     }]}), threshold=0.8)
     assert [(item.kind, item.label) for item in result] == [("package", "package")]
-    with pytest.raises(ApiDetectionError, match="invalid_api_detection_response"):
-        parse_detections(json.dumps({"detections": [{
-            "kind": "package", "label": "person", "score": 0.91,
-            "box": [0.2, 0.3, 0.5, 0.7],
-        }]}), threshold=0.8)
+    rejected = {}
+    assert parse_detections(json.dumps({"detections": [{
+        "kind": "package", "label": "person", "score": 0.91,
+        "box": [0.2, 0.3, 0.5, 0.7],
+    }]}), threshold=0.8, rejected=rejected) == ()
+    assert rejected == {"label:package": 1}
 
 
 def test_continuous_motion_is_one_burst_until_three_quiet_frames(tmp_path):
@@ -335,14 +341,31 @@ def test_dns_outage_preserves_budget_and_recovers_without_restart(tmp_path, monk
 
 @pytest.mark.parametrize("text", [
     "not json",
-    '{"detections":[{"kind":"person","label":"person","score":1,"box":[0,0,2,1]}]}',
-    '{"detections":[{"kind":"person","label":"car","score":1,"box":[0,0,1,1]}]}',
-    '{"detections":[{"kind":"person","label":"person","score":true,"box":[0,0,1,1]}]}',
     '{"detections":[],"private":"extra"}',
+    '{"detections":{}}',
 ])
 def test_malformed_or_untrusted_model_output_fails_closed(text):
     with pytest.raises(ApiDetectionError, match="invalid_api_detection_response"):
         parse_detections(text, threshold=0.7)
+
+
+@pytest.mark.parametrize("item,reason", [
+    ({"kind": "person", "label": "person", "score": 1, "box": [0, 0, 2, 1]}, "box"),
+    ({"kind": "person", "label": "car", "score": 1, "box": [0, 0, 1, 1]}, "label:person"),
+    ({"kind": "person", "label": "person", "score": True, "box": [0, 0, 1, 1]}, "score"),
+    ({"kind": "animal", "label": "kitten", "score": 0.9, "box": [0, 0, 1, 1]}, "label:animal"),
+    ({"kind": "pet", "label": "cat", "score": 0.9, "box": [0, 0, 1, 1]}, "kind"),
+    ({"kind": "animal", "label": "cat", "score": 1.4, "box": [0.1, 0.1, 0.2, 0.2]}, "score"),
+    ({"kind": "animal", "label": "cat", "score": 0.9, "box": [0.1, 0.1, 0.2, 0.2],
+      "private": 1}, "shape"),
+])
+def test_malformed_item_is_dropped_without_discarding_valid_objects(item, reason):
+    cat = {"kind": "animal", "label": "cat", "score": 0.9, "box": [0.2, 0.3, 0.4, 0.6]}
+    rejected = {}
+    result = parse_detections(json.dumps({"detections": [item, cat]}),
+                              threshold=0.7, rejected=rejected)
+    assert [(o.kind, o.label) for o in result] == [("animal", "cat")]
+    assert rejected == {reason: 1}
 
 
 def test_key_and_endpoint_boundaries_are_checked_before_requests(tmp_path):

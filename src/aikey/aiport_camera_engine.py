@@ -74,6 +74,8 @@ class CameraPolicyEngine:
         self._association_totals = {camera: {
             "iou_matches": 0, "proximity_matches": 0, "tentative_unmatched": 0,
         } for camera in cameras}
+        self._tentative_totals = {camera: dict.fromkeys(_KIND_ORDER, 0)
+                                  for camera in cameras}
         self._active: dict[str, dict[int, tuple[TrackChange, tuple[int, ...]]]] = {
             camera: {} for camera in cameras}
         self._event_counts = {camera: 0 for camera in cameras}
@@ -131,6 +133,8 @@ class CameraPolicyEngine:
         self._last_moving[camera] = {}
         for name, count in self._trackers[camera].stats.items():
             self._association_totals[camera][name] += count
+        for kind, count in self._trackers[camera].tentative_by_kind.items():
+            self._tentative_totals[camera][kind] += count
         self._trackers[camera] = self._new_tracker()
         self._policies[camera] = policy
         self._generations[camera] += 1
@@ -285,6 +289,9 @@ class CameraPolicyEngine:
                 "zone_rejections": dict(self._zone_rejections[camera]),
                 "zone_overlap_bands": dict(self._zone_overlap_bands[camera]),
                 "events_entered_by_kind": dict(self._entered_by_kind[camera]),
+                "unconfirmed_by_kind": {
+                    kind: count + self._trackers[camera].tentative_by_kind[kind]
+                    for kind, count in self._tentative_totals[camera].items()},
                 "zone_rejections_by_kind": dict(self._rejected_by_kind[camera]),
                 "package_scope": policy.package_scope if policy is not None else None,
                 "secondary_lens": ({
