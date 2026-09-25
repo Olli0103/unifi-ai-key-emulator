@@ -142,6 +142,7 @@ class _MotionGate:
                 if (image.format != "JPEG" or not 16 <= width <= 8192
                         or not 16 <= height <= 4320 or width * height > 4_000_000):
                     raise ValueError
+                image.draft("L", (64, 36))
                 thumbnail = image.convert("L").resize((32, 18)).tobytes()
         except (OSError, ValueError, UnidentifiedImageError) as exc:
             raise ApiDetectionError("invalid_api_detection_frame") from exc
@@ -182,6 +183,28 @@ class _MotionGate:
             self._pending[camera] -= 1
             return True
         return False
+
+
+# Content-free profile of each paid request: IR (no chroma) or colour frame,
+# and whether the reply was empty, below the score gate or accepted.
+_PROFILE_KEYS = tuple(f"{mode}_{outcome}" for mode in ("color", "ir")
+                      for outcome in ("empty", "low", "objects"))
+_IR_CHROMA = 3.0
+
+
+def _frame_mode(frame: bytes) -> str:
+    """'ir' when the frame carries no colour (night IR), else 'color'."""
+    try:
+        with Image.open(BytesIO(frame)) as image:
+            image.draft("YCbCr", (64, 36))
+            small = image.convert("YCbCr").resize((64, 36))
+    except (OSError, ValueError, UnidentifiedImageError):
+        return "color"
+    _, cb, cr = small.split()
+    pixels = small.width * small.height
+    chroma = (sum(abs(v - 128) for v in cb.tobytes())
+              + sum(abs(v - 128) for v in cr.tobytes())) / (2 * pixels)
+    return "ir" if chroma < _IR_CHROMA else "color"
 
 
 _ITEM_REJECTIONS = ("shape", "kind", "label:person", "label:vehicle", "label:animal",
@@ -338,6 +361,8 @@ class ApiObjectDetector:
         self.motion = _MotionGate()
         self._camera_counts: dict[str, dict[str, int]] = {}
         self._kind_counts: dict[str, dict[str, dict[str, int]]] = {}
+        self._profiles: dict[str, dict[str, int]] = {}
+        self._frame_width: dict[str, int] = {}
         self._budget_retry_at: dict[str, float] = {}
         self._remote_host = (endpoint.hostname if transport is _post
                              and self.provider.provider in {"openai", "anthropic"}
@@ -433,6 +458,15 @@ class ApiObjectDetector:
             })
             counts["responses"] += 1
             counts["empty_responses"] += not reported and not rejected
+            outcome = ("objects" if accepted else "low" if reported or rejected
+                       else "empty")
+            profile = self._profiles.setdefault(camera_mac, dict.fromkeys(_PROFILE_KEYS, 0))
+            profile[f"{_frame_mode(frame)}_{outcome}"] += 1
+            try:
+                with Image.open(BytesIO(frame)) as sized:
+                    self._frame_width[camera_mac] = sized.width
+            except (OSError, ValueError, UnidentifiedImageError):
+                pass
             counts["below_threshold"] += len(reported) - len(accepted)
             counts["accepted_objects"] += len(accepted)
             kinds = self._kind_counts.setdefault(camera_mac, {
@@ -485,4 +519,7 @@ class ApiObjectDetector:
             "rejected_items": dict.fromkeys(_ITEM_REJECTIONS, 0)})
         result["below_threshold_by_kind"] = dict(kinds["below_threshold"])
         result["rejected_items"] = dict(kinds["rejected_items"])
+        result["request_profile"] = dict(self._profiles.get(
+            camera_mac, dict.fromkeys(_PROFILE_KEYS, 0)))
+        result["last_frame_width"] = self._frame_width.get(camera_mac)
         return result

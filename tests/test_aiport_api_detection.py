@@ -140,7 +140,25 @@ def test_response_counts_distinguish_empty_from_score_rejection(tmp_path):
         "below_threshold": 0, "accepted_objects": 0,
         "below_threshold_by_kind": {"person": 0, "vehicle": 0, "animal": 0, "package": 0},
         "rejected_items": {"shape": 0, "kind": 0, "label:person": 0, "label:vehicle": 0, "label:animal": 0, "label:package": 0, "score": 0, "box": 0},
+        "request_profile": {"color_empty": 0, "color_low": 0, "color_objects": 0,
+                            "ir_empty": 0, "ir_low": 0, "ir_objects": 0},
+        "last_frame_width": None,
     }
+    # Black and white synthetic frames carry no chroma, like night IR.
+    assert first["request_profile"] == {
+        "color_empty": 0, "color_low": 0, "color_objects": 0,
+        "ir_empty": 1, "ir_low": 1, "ir_objects": 1}
+    assert first["last_frame_width"] == 64
+
+
+def test_request_profile_separates_colour_from_ir_frames(tmp_path):
+    detector = ApiObjectDetector(
+        _ollama_config(), tmp_path, threshold=0.8,
+        transport=lambda *_args: _response('{"detections":[]}'))
+    detector.detect_for_camera(FIRST, _frame((200, 40, 40)))  # colour startup probe
+    detector.detect_for_camera(SECOND, STILL)                 # grey startup probe
+    assert detector.diagnostic_counts(FIRST)["request_profile"]["color_empty"] == 1
+    assert detector.diagnostic_counts(SECOND)["request_profile"]["ir_empty"] == 1
 
 
 def test_recovered_hourly_budget_waits_for_fresh_motion(tmp_path, monkeypatch):

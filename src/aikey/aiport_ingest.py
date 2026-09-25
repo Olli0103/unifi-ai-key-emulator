@@ -201,7 +201,9 @@ class _Session:
             self.ffmpeg_path, "-hide_banner", "-nostdin", "-loglevel", "error",
             "-rtsp_transport", "tcp", "-timeout", "5000000", "-i", self.spec.url,
             "-map", "0:v:0", "-an", "-sn", "-dn", "-filter_threads", "1",
-            "-vf", "fps=2,scale=320:-2", "-threads", "1", "-f", "image2pipe",
+            # Up to 1280 px wide (native when smaller). 320 px left a cat in a
+            # night IR frame a few dozen pixels, which vision replies saw as empty.
+            "-vf", "fps=2,scale=w='min(iw,1280)':h=-2", "-threads", "1", "-f", "image2pipe",
             "-vcodec", "mjpeg", "-q:v", "5", "pipe:1",
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, limit=_MAX_FRAME + 2,
