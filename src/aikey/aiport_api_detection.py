@@ -91,7 +91,11 @@ class _MotionGate:
             self._pending.pop(camera, None)
             self._armed[camera] = True
 
-    def should_request(self, camera: str, frame: bytes) -> bool:
+    def has_baseline(self, camera: str) -> bool:
+        return camera in self._previous
+
+    def should_request(self, camera: str, frame: bytes, *,
+                       allow_startup_probe: bool = True) -> bool:
         try:
             with Image.open(BytesIO(frame)) as image:
                 width, height = image.size
@@ -106,10 +110,14 @@ class _MotionGate:
         if previous is None:
             # A stationary object already in view would never pass a
             # frame-difference gate. Only a positive first probe needs a
-            # second observation for tracker confirmation.
-            self._pending[camera] = 2
-            self._armed[camera] = False
-            self._startup_probe.add(camera)
+            # second observation for tracker confirmation. A restart with a
+            # partly used durable budget waits for fresh motion instead.
+            if allow_startup_probe:
+                self._pending[camera] = 2
+                self._armed[camera] = False
+                self._startup_probe.add(camera)
+            else:
+                self._armed[camera] = True
         else:
             changed = sum(abs(a - b) >= 24 for a, b in zip(previous, thumbnail, strict=True))
             if changed < _MOTION_CHANGED_CELLS:
@@ -281,7 +289,10 @@ class ApiObjectDetector:
             raise ApiDetectionError("invalid_api_detection_frame") from exc
         if time.monotonic() < self._budget_retry_at.get(camera_mac, 0):
             return ()
-        if not self.motion.should_request(camera_mac, frame):
+        allow_startup_probe = (self.motion.has_baseline(camera_mac)
+                               or self.budget.remaining(camera_mac) == self.budget.limit)
+        if not self.motion.should_request(camera_mac, frame,
+                                          allow_startup_probe=allow_startup_probe):
             return ()
         try:
             self._check_remote_dns()

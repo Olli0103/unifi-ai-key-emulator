@@ -205,6 +205,26 @@ def test_failed_first_startup_probe_does_not_spend_confirmation_request(tmp_path
     assert len(calls) == 2
 
 
+def test_restart_with_recent_requests_waits_for_motion(tmp_path):
+    calls = []
+
+    def transport(*_args):
+        calls.append(1)
+        return _response('{"detections":[]}')
+
+    first = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.8,
+                              max_requests_per_hour=3, transport=transport)
+    first.detect_for_camera(FIRST, STILL)
+    assert first.budget.remaining(FIRST) == 2
+    restarted = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.8,
+                                  max_requests_per_hour=3, transport=transport)
+    restarted.detect_for_camera(FIRST, STILL)
+    assert len(calls) == 1
+    assert restarted.budget.remaining(FIRST) == 2
+    restarted.detect_for_camera(FIRST, FRAME)
+    assert len(calls) == 2
+
+
 def test_package_observation_requires_exact_class_label_and_bounded_box():
     result = parse_detections(json.dumps({"detections": [{
         "kind": "package", "label": "package", "score": 0.91,
