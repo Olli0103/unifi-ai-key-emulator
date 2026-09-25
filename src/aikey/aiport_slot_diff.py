@@ -56,6 +56,10 @@ def _rows(value: object, kind: str) -> list[dict]:
     return rows
 
 
+def _name(row: dict) -> str:
+    return row.get("name") if isinstance(row.get("name"), str) else "unnamed"
+
+
 def diff_slots(slots: dict[str, dict], protect_aiports: object,
                protect_cameras: object) -> dict:
     """Compare deployed slot configs (label -> config) with Protect state."""
@@ -73,7 +77,6 @@ def diff_slots(slots: dict[str, dict], protect_aiports: object,
             raise SlotDiffError("Invalid AI Port pairing list")
         paired_anywhere.update(ids)
 
-    name = lambda row: row.get("name") if isinstance(row.get("name"), str) else "unnamed"
     actions: list[dict] = []
     report: dict[str, dict] = {}
     seen_ports: set[str] = set()
@@ -99,8 +102,8 @@ def diff_slots(slots: dict[str, dict], protect_aiports: object,
         points = sum((Fraction(str(camera.get("aiPortCapacityPoints", 0)))
                       for camera in paired.values()), Fraction())
         report[label] = {
-            "paired": sorted(name(camera) for camera in paired.values()),
-            "allowlisted": sorted(name(by_mac[mac]) if mac in by_mac else "unknown"
+            "paired": sorted(_name(camera) for camera in paired.values()),
+            "allowlisted": sorted(_name(by_mac[mac]) if mac in by_mac else "unknown"
                                   for mac in allow),
             "capacity_points": float(points),
         }
@@ -108,22 +111,22 @@ def diff_slots(slots: dict[str, dict], protect_aiports: object,
             actions.append({"action": "over_capacity", "slot": label})
         for mac in sorted(set(allow) - set(paired)):
             actions.append({"action": "remove_from_allowlist", "slot": label,
-                            "camera": name(by_mac[mac]) if mac in by_mac else "unknown",
+                            "camera": _name(by_mac[mac]) if mac in by_mac else "unknown",
                             "_mac": mac})
         for mac in sorted(set(paired) - set(allow)):
             actions.append({"action": "add_to_allowlist", "slot": label,
-                            "camera": name(paired[mac]), "_mac": mac,
+                            "camera": _name(paired[mac]), "_mac": mac,
                             "_source_ip": paired[mac].get("host")})
     for port_mac in sorted(set(ports) - seen_ports):
         actions.append({"action": "unmanaged_ai_port",
-                        "cameras": sorted(name(cameras[i]) for i in ports[port_mac]["pairedCameras"]
+                        "cameras": sorted(_name(cameras[i]) for i in ports[port_mac]["pairedCameras"]
                                           if i in cameras)})
-    for camera in sorted(cameras.values(), key=name):
+    for camera in sorted(cameras.values(), key=_name):
         eligible = (isinstance(camera.get("type"), str)
                     and _G3_G5_MODEL.match(camera["type"]) is not None
                     and camera.get("state") == "CONNECTED")
         if eligible and camera["id"] not in paired_anywhere:
-            actions.append({"action": "manual_pairing", "camera": name(camera)})
+            actions.append({"action": "manual_pairing", "camera": _name(camera)})
     return {"schema": "aikey-aiport-slot-diff/1", "slots": report, "actions": actions}
 
 
