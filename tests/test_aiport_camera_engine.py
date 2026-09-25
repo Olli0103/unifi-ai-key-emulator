@@ -128,28 +128,29 @@ def test_package_candidate_keeps_its_camera_and_zone():
     assert engine.observe(FIRST, (package,), now=1) == ()
     entered, = engine.observe(FIRST, (package,), now=2)
     assert (entered.camera_mac, entered.change.kind, entered.change.edge,
-            entered.zone_ids) == (FIRST, "package", "packageDetected", (7,))
+            entered.zone_ids) == (FIRST, "package", "enter", (7,))
     assert engine.observe(SECOND, (package,), now=1) == ()
-    # Protect saves a package as a one-shot event: no moving or leave edge.
-    assert engine.observe(FIRST, (package,), now=3) == ()
-    assert engine.replace_policy(FIRST, None) == ()
+    # A package now has the normal lifecycle: revoking the policy closes it.
+    closed, = engine.replace_policy(FIRST, None)
+    assert (closed.change.kind, closed.change.edge) == ("package", "leave")
 
 
-def test_package_is_one_shot_per_track_with_camera_cooldown():
+def test_package_reenters_only_after_camera_cooldown():
     engine = CameraPolicyEngine([FIRST], max_events_per_camera=5,
                                 max_track_gap_seconds=20)
     engine.replace_policy(FIRST, policy(FIRST, zone=True, kind="package"))
     package = ObjectObservation("package", "package", 0.93, INSIDE)
     assert engine.observe(FIRST, (package,), now=1) == ()
     assert len(engine.observe(FIRST, (package,), now=2)) == 1
-    assert engine.observe(FIRST, (), now=60) == ()      # local track ends
+    left, = engine.observe(FIRST, (), now=60)           # track ends: leave
+    assert left.change.edge == "leave"
     # A later sparse sample of the same parcel is not a new delivery.
     assert engine.observe(FIRST, (package,), now=100) == ()
     assert engine.observe(FIRST, (package,), now=101) == ()
     assert engine.observe(FIRST, (), now=200) == ()
     assert engine.observe(FIRST, (package,), now=1900) == ()
     again, = engine.observe(FIRST, (package,), now=1901)
-    assert again.change.edge == "packageDetected"
+    assert again.change.edge == "enter"
     snapshot = engine.camera_snapshot(now=1902)[0]
     assert snapshot["events_entered_by_kind"]["package"] == 2
 
@@ -178,7 +179,7 @@ def test_package_stays_inside_detection_area_when_protect_cannot_zone_it():
     package = ObjectObservation("package", "package", 0.93, INSIDE)
     engine.observe(FIRST, (package,), now=1)
     entered, = engine.observe(FIRST, (package,), now=2)
-    assert (entered.change.edge, entered.zone_ids) == ("packageDetected", (7,))
+    assert (entered.change.edge, entered.zone_ids) == ("enter", (7,))
     assert engine.camera_snapshot(now=3)[0]["package_scope"] == "detection_area"
 
 

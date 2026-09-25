@@ -135,8 +135,7 @@ class CameraPolicyEngine:
             CameraEventCandidate(camera, TrackChange(
                 "leave", previous.track_id, previous.kind, previous.label,
                 previous.score, previous.box), zones)
-            for _, (previous, zones) in sorted(self._active[camera].items())
-            if previous.kind != "package")
+            for _, (previous, zones) in sorted(self._active[camera].items()))
         self._active[camera] = {}
         self._last_moving[camera] = {}
         for name, count in self._trackers[camera].stats.items():
@@ -205,33 +204,15 @@ class CameraPolicyEngine:
             budget_used = (len(self._event_times[camera])
                            if self._event_window_seconds is not None
                            else self._event_counts[camera])
-            if change.kind == "package":
-                # Package has no enter/moving/leave lifecycle in Protect. A
-                # confirmed track produces one packageDetected edge; later
-                # edges of the same track only close the local track.
-                if change.edge == "leave":
-                    self._active[camera].pop(change.track_id, None)
-                    self._last_moving[camera].pop(change.track_id, None)
-                    continue
-                if change.edge != "enter" or active is not None:
-                    continue
+            if (change.kind == "package" and change.edge == "enter"
+                    and active is None):
+                # Protect 7.3.68 resolves an AI Port's packageDetected edge by
+                # the AI Port's own MAC ("Camera not found"); only the
+                # enter/moving/leave lifecycle is routed by deviceID. A parcel
+                # re-sampled later is not a new delivery.
                 last = self._last_package_at.get(camera)
-                zones = policy.zone_ids(change.kind, change.box)
-                if (zones is not None and budget_used < self._max_events
-                        and (last is None or now - last >= _PACKAGE_COOLDOWN_SECONDS)
-                        and (self._event_budget is None
-                             or self._event_budget.claim(camera))):
-                    self._active[camera][change.track_id] = (change, zones)
-                    self._last_moving[camera][change.track_id] = now
-                    self._last_package_at[camera] = now
-                    self._event_counts[camera] += 1
-                    self._entered_by_kind[camera]["package"] += 1
-                    if self._event_window_seconds is not None:
-                        self._event_times[camera].append(now)
-                    result.append(CameraEventCandidate(camera, TrackChange(
-                        "packageDetected", change.track_id, change.kind,
-                        change.label, change.score, change.box), zones))
-                continue
+                if last is not None and now - last < _PACKAGE_COOLDOWN_SECONDS:
+                    continue
             if (change.edge == "enter" and active is None
                     and budget_used < self._max_events):
                 zones = policy.zone_ids(change.kind, change.box)
@@ -241,6 +222,8 @@ class CameraPolicyEngine:
                     self._last_moving[camera][change.track_id] = now
                     self._event_counts[camera] += 1
                     self._entered_by_kind[camera][change.kind] += 1
+                    if change.kind == "package":
+                        self._last_package_at[camera] = now
                     if self._event_window_seconds is not None:
                         self._event_times[camera].append(now)
                     result.append(CameraEventCandidate(camera, change, zones))

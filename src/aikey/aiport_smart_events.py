@@ -119,7 +119,7 @@ def camera_event_payload(camera_mac: str, edge: str,
     descriptors, kinds, levels = [], [], {}
     for change, zone_ids in tracks:
         if (not isinstance(change, TrackChange)
-                or change.kind not in {"person", "vehicle", "animal"}
+                or change.kind not in {"person", "vehicle", "animal", "package"}
                 or type(change.track_id) is not int or change.track_id <= 0
                 or not math.isfinite(change.score) or not 0 <= change.score <= 1
                 or not isinstance(zone_ids, tuple) or len(zone_ids) > 32

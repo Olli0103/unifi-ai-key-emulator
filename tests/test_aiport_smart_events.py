@@ -161,8 +161,13 @@ def test_camera_event_carries_every_object_and_closes_once():
     assert leave["trackerIDAttrMap"] == {
         "1": {"objectType": "person", "zone": [3]},
         "2": {"objectType": "vehicle", "zone": [3, 4]}}
+    # Protect 7.3.68 routes only this lifecycle by deviceID for an AI Port,
+    # so a package joins the camera's event like any other class.
     package = TrackChange("enter", 3, "package", "package", 0.9, (0.1, 0.2, 0.3, 0.4))
-    for bad in ((), ((package, ()),)):
-        with pytest.raises(SmartEventError):
-            camera_event_payload("2A1122334455", "enter", bad,
-                                 clock_wall_ms=1_700_000_000_000)
+    parcel = camera_event_payload("2A1122334455", "enter", ((package, (5,)),),
+                                  clock_wall_ms=1_700_000_000_000)
+    assert (parcel["edgeType"], parcel["objectTypes"],
+            parcel["descriptors"][0]["objectType"]) == ("enter", ["package"], "package")
+    with pytest.raises(SmartEventError):
+        camera_event_payload("2A1122334455", "enter", (),
+                             clock_wall_ms=1_700_000_000_000)

@@ -786,10 +786,7 @@ class CandidateService:
         active = {stream["deviceID"] for stream in self.ingress.list_streams()}
         for candidate in candidates:
             camera, change = candidate.camera_mac, candidate.change
-            if change.edge in {"enter", "moving", "packageDetected"} and camera not in active:
-                continue
-            if change.edge == "packageDetected":
-                await self._publish_package(ws, candidate, frame)
+            if change.edge in {"enter", "moving"} and camera not in active:
                 continue
             # Protect keeps one ongoing smart event per camera: a second
             # enter is dropped and any leave closes the event. Report every
@@ -844,6 +841,8 @@ class CandidateService:
                     for item in snapshots:
                         self._remember_pool_snapshot(camera, item)
             await self._send_control_event(ws, "EventSmartDetect", payload)
+            if change.kind == "package" and change.edge == "enter":
+                self.smart_package_events += 1
             if edge == "enter":
                 self.smart_events_entered += 1
             elif edge == "moving":
@@ -860,29 +859,6 @@ class CandidateService:
             self._pool_pending_snapshots.pop(next(iter(self._pool_pending_snapshots)))
         self._pool_pending_snapshots[snapshot.filename] = (
             _PendingPoolSnapshot(camera, snapshot, now + 75))
-
-    async def _publish_package(self, ws, candidate: CameraEventCandidate,
-                               frame: bytes | None) -> None:
-        """Protect saves a package from its own one-shot edge."""
-        try:
-            payload = smart_event_payload(
-                candidate.camera_mac, candidate.change, edge="packageDetected",
-                clock_wall_ms=int(time.time() * 1000), zone_ids=candidate.zone_ids)
-        except SmartEventError:
-            return
-        if frame is not None:
-            try:
-                self._pool_snapshot_number += 1
-                snapshot = await asyncio.to_thread(
-                    make_smart_snapshot, frame, candidate.change, payload["clockWall"],
-                    filename_track_id=self._pool_snapshot_number)
-            except SnapshotError:
-                pass
-            else:
-                snapshot.add_to_event(payload)
-                self._remember_pool_snapshot(candidate.camera_mac, snapshot)
-        await self._send_control_event(ws, "EventSmartDetect", payload)
-        self.smart_package_events += 1
 
     async def _handle_pool_motion_settings(
             self, ws: aiohttp.ClientWebSocketResponse, request_id: int,

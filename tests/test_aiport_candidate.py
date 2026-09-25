@@ -2874,7 +2874,7 @@ async def test_bounded_hello_answers_readonly_and_rejects_stream_control(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_live_api_package_uses_package_edge_zone_and_camera_owned_lens(
+async def test_live_api_package_enters_camera_event_with_zone_and_camera_owned_lens(
         tmp_path, monkeypatch):
     """Package is advertised for primary zones and sent as a one-shot edge."""
     camera = "2A1122334455"
@@ -2943,12 +2943,14 @@ async def test_live_api_package_uses_package_edge_zone_and_camera_owned_lens(
             await service._inference.join()
         events = [message["payload"] for message in sink.messages
                   if message.get("functionName") == "EventSmartDetect"]
-        assert [event["edgeType"] for event in events] == ["packageDetected"]
+        # Protect 7.3.68 resolved an AI Port packageDetected by the AI Port's
+        # own MAC and dropped it; the enter lifecycle is routed by deviceID.
+        assert [event["edgeType"] for event in events] == ["enter"]
         package = events[0]
+        assert package["deviceID"] == camera
+        assert package["objectTypes"] == ["package"]
         assert package["zonesStatus"] == {"4": {"status": "enter", "level": 93}}
-        snapshot = package["smartDetectSnapshots"][0]
-        assert snapshot["smartDetectSnapshotType"] == "package"
-        assert snapshot["smartDetectSnapshot"] in service._pool_pending_snapshots
+        assert package["descriptors"][0]["objectType"] == "package"
         health = json.loads((await service._health(None)).text)
         camera_health = health["pool_cameras"][0]
         assert health["smart_package_events"] == 1
