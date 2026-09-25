@@ -489,3 +489,52 @@ def test_skipped_confirmation_saves_the_paid_request(tmp_path):
     assert detector.diagnostic_counts(FIRST)["confirmations_saved"] == 1
     detector.skip_confirmation(FIRST)             # nothing pending: no-op
     assert detector.diagnostic_counts(FIRST)["confirmations_saved"] == 1
+
+
+def test_ongoing_presence_leaves_reserve_for_an_animal_in_a_quiet_scene(
+        tmp_path, monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("aikey.aiport_api_detection.time.monotonic",
+                        lambda: now[0])
+    person = ('{"detections":[{"kind":"person","label":"person",'
+              '"score":0.92,"box":[0.1,0.2,0.4,0.8]}]}')
+    cat = ('{"detections":[{"kind":"animal","label":"cat",'
+           '"score":0.9,"box":[0.5,0.6,0.7,0.9]}]}')
+    replies = []
+    calls = []
+
+    def transport(*_args):
+        calls.append(1)
+        return _response(replies.pop(0) if replies else person)
+
+    detector = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.8,
+                                 max_requests_per_hour=6, transport=transport)
+    assert detector.fresh_reserve == 2
+    frames = (STILL, FRAME)
+
+    def step(index, seconds=0.5):
+        now[0] += seconds
+        return detector.detect_for_camera(FIRST, frames[index % 2])
+
+    # A person keeps moving: each burst after a short pause re-arms the gate.
+    tick = 0
+    for _ in range(12):
+        for _ in range(4):  # three quiet samples rearm the gate
+            now[0] += 0.5
+            detector.detect_for_camera(FIRST, frames[tick % 2])
+        tick += 1
+        step(tick)
+        step(tick)
+    assert detector.budget.remaining(FIRST) == 2
+    assert detector.diagnostic_counts(FIRST)["refreshes_deferred"] >= 1
+    spent = len(calls)
+    # The scene is still for eight seconds, then a cat walks in.
+    for _ in range(18):
+        now[0] += 0.5
+        detector.detect_for_camera(FIRST, frames[tick % 2])
+    replies[:] = [cat, cat]
+    first = step(tick + 1)
+    second = step(tick + 1)
+    assert [item.kind for item in first + second] == ["animal", "animal"]
+    assert len(calls) == spent + 2
+    assert detector.budget.remaining(FIRST) == 0

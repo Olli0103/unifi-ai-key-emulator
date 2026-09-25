@@ -30,6 +30,14 @@ _MAX_FRAME_BYTES = 1024 * 1024
 _MAX_REPLY_BYTES = 64 * 1024
 _MOTION_CHANGED_CELLS = 8
 _DNS_RETRY_SECONDS = 60
+# Motion after this much stillness starts a new scene, e.g. a cat entering a
+# quiet room. Shorter gaps are the same presence moving on (a person walking
+# about); matches the motion stop hold in aiport_motion.
+_FRESH_QUIET_SECONDS = 8.0
+# Share of each camera's unchanged hourly cap kept for new scenes. Without it
+# people moving through Flur spent 16 requests in one visit and left the
+# camera blind for the next 12 motion events of the hour.
+_FRESH_RESERVE_DIVISOR = 3
 _LABELS = {
     "person": {"person"},
     "vehicle": {"bicycle", "car", "motorcycle", "bus", "truck"},
@@ -61,6 +69,8 @@ class _MotionGate:
         self._quiet: dict[str, int] = {}
         self._armed: dict[str, bool] = {}
         self._startup_probe: set[str] = set()
+        self._last_change: dict[str, float] = {}
+        self._fresh: dict[str, bool] = {}
 
     def reset(self, camera: str) -> None:
         """Rearm startup sampling after a request was blocked before inference."""
@@ -69,6 +79,8 @@ class _MotionGate:
         self._quiet.pop(camera, None)
         self._armed.pop(camera, None)
         self._startup_probe.discard(camera)
+        self._last_change.pop(camera, None)
+        self._fresh.pop(camera, None)
 
     def wait_for_motion(self, camera: str) -> None:
         """After a full budget, preserve the scene but cancel automatic probes.
@@ -85,6 +97,18 @@ class _MotionGate:
     def cancel_confirmation(self, camera: str) -> bool:
         """Drop a pending confirming request; the scene stays disarmed."""
         return self._pending.pop(camera, 0) > 0
+
+    def is_refresh(self, camera: str) -> bool:
+        """The request about to be sent re-samples an ongoing presence.
+
+        Only the first request of a motion pair qualifies; a confirming
+        request for a newly seen object is never deferred.
+        """
+        return self._pending.get(camera, 0) == 1 and not self._fresh.get(camera, True)
+
+    def defer(self, camera: str) -> None:
+        """Skip a refresh pair; motion rearms after the scene quiets."""
+        self._pending.pop(camera, None)
 
     def sample_result(self, camera: str, *, found_object: bool) -> None:
         """Only spend a confirming request if the first one found an object.
@@ -116,6 +140,7 @@ class _MotionGate:
                 thumbnail = image.convert("L").resize((32, 18)).tobytes()
         except (OSError, ValueError, UnidentifiedImageError) as exc:
             raise ApiDetectionError("invalid_api_detection_frame") from exc
+        now = time.monotonic()
         previous = self._previous.get(camera)
         self._previous[camera] = thumbnail
         if previous is None:
@@ -126,6 +151,7 @@ class _MotionGate:
             if allow_startup_probe:
                 self._pending[camera] = 2
                 self._armed[camera] = False
+                self._fresh[camera] = True
                 self._startup_probe.add(camera)
             else:
                 self._armed[camera] = True
@@ -142,6 +168,11 @@ class _MotionGate:
                     and self._pending.get(camera, 0) == 0):
                 self._pending[camera] = 2
                 self._armed[camera] = False
+                last = self._last_change.get(camera)
+                self._fresh[camera] = (last is None
+                                       or now - last >= _FRESH_QUIET_SECONDS)
+            if changed >= _MOTION_CHANGED_CELLS:
+                self._last_change[camera] = now
         if self._pending.get(camera, 0):
             self._pending[camera] -= 1
             return True
@@ -284,6 +315,7 @@ class ApiObjectDetector:
         self.threshold = float(threshold)
         self.budget = EventBudget(
             state_dir, limit=max_requests_per_hour, namespace="vision-request")
+        self.fresh_reserve = max_requests_per_hour // _FRESH_RESERVE_DIVISOR
         self.transport = transport
         self.motion = _MotionGate()
         self._camera_counts: dict[str, dict[str, int]] = {}
@@ -329,6 +361,17 @@ class ApiObjectDetector:
                                or self.budget.remaining(camera_mac) == self.budget.limit)
         if not self.motion.should_request(camera_mac, frame,
                                           allow_startup_probe=allow_startup_probe):
+            return ()
+        if (self.motion.is_refresh(camera_mac)
+                and self.budget.remaining(camera_mac) <= self.fresh_reserve):
+            # Keep the last part of the unchanged hourly cap for motion that
+            # starts in a quiet scene, e.g. an animal after people left.
+            self.motion.defer(camera_mac)
+            counts = self._camera_counts.setdefault(camera_mac, {
+                "responses": 0, "empty_responses": 0,
+                "below_threshold": 0, "accepted_objects": 0,
+            })
+            counts["refreshes_deferred"] = counts.get("refreshes_deferred", 0) + 1
             return ()
         try:
             self._check_remote_dns()
