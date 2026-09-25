@@ -60,3 +60,16 @@ Separately, the Mac ran `ApiObjectDetector` against OpenAI `gpt-6-luna` using tw
 An offline replay of the two saved Flur frames found that the previous motion gate skipped the first frame and saw no qualifying change in the second. The detector now makes two startup observations per active camera, still subject to its durable 12-request-per-camera rolling-hour cap. Replaying those frames with a synthetic Person response produced two observations and one tracker `enter` candidate without contacting a provider. The new image was deployed on all three NAS instances. A pinned post-deploy health read showed the two accepted `.137` camera policies each at 10 of 12 vision requests remaining, and the accepted `.138` policy at 8 of 12. It reported no API failures, accepted object observations, emitted smart events, or snapshot uploads. The budget counters evidence admitted provider requests, but they do not prove a particular response or native Protect event.
 
 No real smart event from these six cameras has yet been shown to persist on a Protect timeline. The next protocol work is to identify the unsupported type and region *shapes* without retaining private policy contents, then implement only settings the detector can actually enforce. A live frame containing a target object is still needed to test the accepted policies end to end. This is evidence of adoption, pairing, stream ingress, bounded provider requests, and specific policy blockers, not AI Port feature parity. The existing Mac instance remained paired to three other legacy cameras in Protect, but its stream health was not reverified in this run.
+
+## Slot allowlist diff against Protect pairings
+
+`local-aiport-slot-diff` compares each deployed slot's `paired_streams` allowlist with Protect's authoritative pairing (`aiports[].pairedCameras`). It uses private exports of Protect's `aiports` and `cameras` lists. The Protect integration API does not expose AI Port pairing. It never pairs, unpairs or restarts anything, and its output names cameras and slots without MAC or IP addresses.
+
+| Action | Automated | Meaning |
+|---|---|---|
+| `remove_from_allowlist` | yes, with `--apply-local` | A stream Protect never starts on this slot (stale entry). The original file is kept as `config.json.before-slot-diff`. |
+| `add_to_allowlist` | review only | Protect paired a camera that the slot would reject. Its Protect host becomes the stream source. |
+| `manual_pairing` | no | An eligible G3–G5 camera that no AI Port has paired. Pair it in Protect. |
+| `over_capacity`, `missing_ai_port`, `unmanaged_ai_port` | no | Reported for review. |
+
+A second run after `--apply-local` reports no safe action, so the diff is idempotent. Changed files take effect after that instance restarts. NAS copies must be uploaded as described above.
