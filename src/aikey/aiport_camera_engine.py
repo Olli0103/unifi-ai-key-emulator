@@ -100,6 +100,7 @@ class CameraPolicyEngine:
         self._last_moving: dict[str, dict[int, float]] = {
             camera: {} for camera in cameras}
         self._generations = dict.fromkeys(cameras, 0)
+        self.policy_repeats = 0
         self._max_events = max_events_per_camera
         self._event_window_seconds = event_window_seconds
         self._event_budget = event_budget
@@ -123,6 +124,13 @@ class CameraPolicyEngine:
                 or not policy.enabled_types
                 or not policy.enabled_types <= _OBJECT_KINDS)):
             raise IngressError("invalid_camera_policy")
+        if policy is not None and policy == self._policies[camera]:
+            # Protect re-sends identical settings several times after an AI
+            # Port connects, while the startup pair samples the scene. That
+            # pair is the only sample a stationary object (a package, a
+            # sleeping cat) gets; resetting here lost its confirmation.
+            self.policy_repeats += 1
+            return ()
         result = tuple(
             CameraEventCandidate(camera, TrackChange(
                 "leave", previous.track_id, previous.kind, previous.label,

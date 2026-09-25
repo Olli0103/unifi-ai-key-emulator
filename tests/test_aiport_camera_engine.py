@@ -495,3 +495,24 @@ def test_confirmation_is_needed_only_for_new_unconfirmed_objects():
     cat = ObjectObservation("animal", "cat", 0.9, (0.6, 0.6, 0.7, 0.7))
     engine.observe(FIRST, (person(), cat), now=12)      # a cat arrives
     assert engine.needs_confirmation(FIRST)
+
+
+
+def test_identical_policy_resend_keeps_tentative_track_and_generation():
+    engine = CameraPolicyEngine([FIRST])
+    engine.replace_policy(FIRST, policy(FIRST, zone=True))
+    generation = engine.policy_generation(FIRST)
+    assert engine.observe(FIRST, (person(),), now=1) == ()   # startup sample
+    assert engine.replace_policy(FIRST, policy(FIRST, zone=True)) == ()
+    assert engine.policy_generation(FIRST) == generation
+    assert engine.policy_repeats == 1
+    entered, = engine.observe(FIRST, (person(),), now=2)     # confirmation
+    assert entered.change.edge == "enter"
+    # An identical re-send does not close the open event either.
+    assert engine.replace_policy(FIRST, policy(FIRST, zone=True)) == ()
+    moving = engine.observe(FIRST, (person(),), now=3)
+    assert all(item.change.edge != "enter" for item in moving)
+    # A changed policy still closes the event and restarts tracking.
+    left, = engine.replace_policy(FIRST, policy(FIRST))
+    assert left.change.edge == "leave"
+    assert engine.policy_generation(FIRST) == generation + 1
