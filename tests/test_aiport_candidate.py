@@ -16,7 +16,7 @@ import aiohttp
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from aikey.aiport_api_detection import ApiObjectDetector
 from aikey.aiport_candidate import CandidateError, CandidateService, load_config
@@ -2927,5 +2927,80 @@ async def test_live_api_package_uses_package_edge_zone_and_camera_owned_lens(
         assert camera_health["secondary_lens"] == {
             "zones": 1, "classes": ["package"], "processed_by": "camera"}
         assert "coord" not in json.dumps(camera_health)
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_live_pool_advertises_enhanced_motion_and_sends_zone_motion(tmp_path):
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{
+        "camera_mac": camera, "source_ip": "192.168.10.1",
+        "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person"], "max_events_per_hour": 12,
+        "max_requests_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    await service._send_stream_status(sink, streaming=True, camera_mac=camera)
+    flags, = [message for message in sink.messages
+              if message["functionName"] == "EventFeatureFlagsUpdated"]
+    assert flags["payload"]["motionDetect"] == ["enhanced"]
+
+    def picture(box=None):
+        image = Image.new("RGB", (320, 180), (40, 40, 40))
+        if box is not None:
+            ImageDraw.Draw(image).rectangle(box, fill=(230, 230, 230))
+        data = BytesIO()
+        image.save(data, format="JPEG", quality=85)
+        return data.getvalue()
+
+    try:
+        command = {"functionName": "ChangeSmartMotionSettings", "messageId": 7,
+                   "payload": {"algoVersion": "beta", "deviceID": "2A1122334456",
+                               "enable": True, "eventMaxDurationMSec": 300000,
+                               "bgmodel": "default", "lingerEventStartMSec": 0,
+                               "lingerEventStopMSec": 1000,
+                               "zones": {"1": {"coord": [0, 0, 500, 0, 500, 1000, 0, 1000],
+                                               "level": 50, "triggerLight": True}}}}
+        await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+        assert sink.messages[-1]["statusCode"] == 5     # not an allowlisted camera
+        command["payload"]["deviceID"] = camera
+        command["messageId"] = 8
+        await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+        assert sink.messages[-1]["statusCode"] == 0
+        await service._observe_pool_frame(camera, picture())
+        await service._observe_pool_frame(camera, picture((40, 40, 110, 160)))
+        motion = [message for message in sink.messages
+                  if message["functionName"] == "EventSmartMotion"]
+        assert [m["payload"]["edgeType"] for m in motion] == ["start"]
+        assert motion[0]["payload"]["deviceID"] == camera
+        assert motion[0]["timeStamp"].endswith("Z")
+        await service._revoke_pool_policy(camera)
+        motion = [message for message in sink.messages
+                  if message["functionName"] == "EventSmartMotion"]
+        assert [m["payload"]["edgeType"] for m in motion] == ["start", "stop"]
+        health = json.loads((await service._health(None)).text)
+        assert health["smart_motion_settings_acks"] == 1
+        assert health["smart_motion_settings_rejected"] == 1
+        assert health["pool_cameras"][0]["motion"]["starts"] == 1
     finally:
         await service.stop()

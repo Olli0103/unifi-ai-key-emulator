@@ -31,6 +31,8 @@ from .aiport_ingest import (
 )
 from .aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
 from .aiport_api_detection import ApiObjectDetector
+from .aiport_motion import (MotionDetector, MotionSettingsError,
+                            motion_event_payload, parse_motion_settings)
 from .aiport_onnx_detection import OnnxRFDetrNanoDetector
 from .aiport_camera_engine import CameraEventCandidate, CameraPolicyEngine
 from .aiport_event_budget import EventBudget, EventBudgetError
@@ -545,6 +547,11 @@ class CandidateService:
         self.smart_settings_probe_requests = 0
         self._smart_settings_probe_shape: dict[str, int | bool] | None = None
         self.smart_package_events = 0
+        self.smart_motion_settings_acks = 0
+        self.smart_motion_settings_rejected = 0
+        self.smart_motion_events_started = 0
+        self.smart_motion_events_stopped = 0
+        self._pool_motion: dict[str, MotionDetector] = {}
         self.smart_motion_probe_requests = 0
         self.smart_motion_probe_acks = 0
         self.smart_motion_probe_zones = 0
@@ -698,6 +705,14 @@ class CandidateService:
                 or time.time() < self.config.get("diagnostic_pool_event_until", 0))
 
     async def _observe_pool_frame(self, camera_mac: str, frame: bytes) -> None:
+        detector = self._pool_motion.get(camera_mac)
+        if detector is not None and self._pool_event_enabled():
+            try:
+                edges = await asyncio.to_thread(
+                    detector.observe, frame, now=time.monotonic())
+            except MotionSettingsError:
+                edges = ()
+            await self._publish_motion_edges(camera_mac, edges)
         engine, inference = self._camera_engine, self._inference
         if (engine is None or inference is None
                 or not self._pool_event_enabled()
@@ -705,6 +720,22 @@ class CandidateService:
             return
         await inference.observe(
             camera_mac, frame, generation=engine.policy_generation(camera_mac))
+
+    async def _publish_motion_edges(self, camera_mac: str, edges: tuple) -> None:
+        ws = self._current_ws
+        if (not edges or ws is None or not self._params_agreed
+                or not isinstance(self.ingress, AiPortIngressPool)):
+            return
+        active = {stream["deviceID"] for stream in self.ingress.list_streams()}
+        for edge in edges:
+            if edge.edge == "start" and camera_mac not in active:
+                continue
+            await self._send_control_event(ws, "EventSmartMotion", motion_event_payload(
+                camera_mac, edge, clock_wall_ms=int(time.time() * 1000)))
+            if edge.edge == "start":
+                self.smart_motion_events_started += 1
+            else:
+                self.smart_motion_events_stopped += 1
 
     async def _pool_camera_unavailable(self, camera_mac: str) -> None:
         # A failed or exhausted model cannot keep an event open. Revoke only
@@ -804,6 +835,28 @@ class CandidateService:
                 self.smart_events_moved += 1
             else:
                 self.smart_events_left += 1
+
+    async def _handle_pool_motion_settings(
+            self, ws: aiohttp.ClientWebSocketResponse, request_id: int,
+            payload: object) -> None:
+        """Replace one allowlisted camera's motion zones and timings."""
+        engine = self._camera_engine
+        try:
+            camera = normalize_mac(payload.get("deviceID")
+                                   if isinstance(payload, dict) else None)
+            engine.has_policy(camera)  # Enforces the private camera allowlist.
+            policy = parse_motion_settings(payload, camera_mac=camera)
+        except (IngressError, MotionSettingsError):
+            await self._reply_control(ws, "ChangeSmartMotionSettings", request_id, 5,
+                                      {"description": "invalid_motion_settings"})
+            self.smart_motion_settings_rejected += 1
+            return
+        previous = self._pool_motion.get(camera)
+        if previous is not None:
+            await self._publish_motion_edges(camera, previous.stop(now=time.monotonic()))
+        self._pool_motion[camera] = MotionDetector(policy)
+        await self._reply_control(ws, "ChangeSmartMotionSettings", request_id, 0, {})
+        self.smart_motion_settings_acks += 1
 
     async def _handle_pool_smart_settings(
             self, ws: aiohttp.ClientWebSocketResponse, request_id: int,
@@ -928,6 +981,10 @@ class CandidateService:
             self.config.get("diagnostic_smart_type", "person")]))
 
     async def _revoke_pool_policy(self, camera_mac: str) -> None:
+        detector = self._pool_motion.get(camera_mac)
+        if detector is not None:
+            await self._publish_motion_edges(
+                camera_mac, detector.stop(now=time.monotonic()))
         engine = self._camera_engine
         if engine is None:
             return
@@ -1356,6 +1413,10 @@ class CandidateService:
             "smart_settings_subset_matches": self.smart_settings_subset_matches,
             "smart_settings_probe_requests": self.smart_settings_probe_requests,
             "smart_package_events": self.smart_package_events,
+            "smart_motion_settings_acks": self.smart_motion_settings_acks,
+            "smart_motion_settings_rejected": self.smart_motion_settings_rejected,
+            "smart_motion_events_started": self.smart_motion_events_started,
+            "smart_motion_events_stopped": self.smart_motion_events_stopped,
             "smart_motion_probe_requests": self.smart_motion_probe_requests,
             "smart_motion_probe_acks": self.smart_motion_probe_acks,
             "smart_motion_probe_zones": self.smart_motion_probe_zones,
@@ -1416,7 +1477,11 @@ class CandidateService:
                                         self._pool_camera_order[index]),
                                     recognition_accuracy_shape=(
                                         self._pool_recognition_accuracy_shapes.get(
-                                            self._pool_camera_order[index])))
+                                            self._pool_camera_order[index])),
+                                    motion=(self._pool_motion[
+                                        self._pool_camera_order[index]].snapshot()
+                                        if self._pool_camera_order[index]
+                                        in self._pool_motion else None))
                               for index, (inference, policy, stream) in enumerate(zip(
                                   self._inference.camera_snapshot(),
                                   self._camera_engine.camera_snapshot(now=time.monotonic()),
@@ -1596,7 +1661,7 @@ class CandidateService:
                      "responseExpected": False, "functionName": function,
                      "messageId": self._next_message_id, "inResponseTo": 0,
                      "payload": payload}
-            if function == "EventSmartDetect":
+            if function in {"EventSmartDetect", "EventSmartMotion"}:
                 # Protect reads this envelope field when routing a smart
                 # detection; keep it aligned with the payload's clockWall.
                 event["timeStamp"] = datetime.fromtimestamp(
@@ -1626,14 +1691,20 @@ class CandidateService:
             smart_ready = (self._inference is not None
                            and self._inference.is_available(camera_mac))
         if smart_ready:
-            await self._send_control_event(
-                ws, "EventFeatureFlagsUpdated",
-                {"deviceID": camera_mac,
-                 "smartDetect": (self._pool_feature_types()
-                                 if isinstance(self.ingress, AiPortIngressPool)
-                                 else [self.config["live_detector"]["smart_type"]]
-                                 if "live_detector" in self.config else
-                                 [self.config.get("diagnostic_smart_type", "person")])})
+            flags: dict[str, object] = {
+                "deviceID": camera_mac,
+                "smartDetect": (self._pool_feature_types()
+                                if isinstance(self.ingress, AiPortIngressPool)
+                                else [self.config["live_detector"]["smart_type"]]
+                                if "live_detector" in self.config else
+                                [self.config.get("diagnostic_smart_type", "person")])}
+            if (isinstance(self.ingress, AiPortIngressPool)
+                    and "live_pool_detector" in self.config):
+                # Protect drops a paired camera's own motion events. Reporting
+                # enhanced motion lets Protect send the camera's motion zones
+                # so this device can send zone-scoped motion instead.
+                flags["motionDetect"] = ["enhanced"]
+            await self._send_control_event(ws, "EventFeatureFlagsUpdated", flags)
             self.smart_feature_probe_events += 1
         await self._send_control_event(
             ws, "EventAIPortStatus",
@@ -1841,6 +1912,12 @@ class CandidateService:
             if not self._params_agreed or type(request_id) is not int or request_id < 0:
                 return
             self.smart_motion_probe_requests += 1
+            if (isinstance(self.ingress, AiPortIngressPool)
+                    and self._camera_engine is not None
+                    and "live_pool_detector" in self.config):
+                await self._handle_pool_motion_settings(
+                    ws, request_id, message.get("payload"))
+                return
             if (not isinstance(self.ingress, AiPortIngress)
                     or time.time() >= self.config.get(
                     "diagnostic_smart_probe_until", 0)):
