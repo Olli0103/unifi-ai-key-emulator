@@ -2,7 +2,8 @@
 
 import pytest
 
-from aikey.aiport_smart_events import SmartEventError, smart_event_payload
+from aikey.aiport_smart_events import (SmartEventError, camera_event_payload,
+                                      smart_event_payload)
 from aikey.aiport_tracking import TrackChange
 
 
@@ -140,3 +141,28 @@ def test_package_uses_protects_one_shot_package_edge():
     with pytest.raises(SmartEventError):
         smart_event_payload("2A1122334455", person, edge="packageDetected",
                             clock_wall_ms=1_700_000_000_000)
+
+
+def test_camera_event_carries_every_object_and_closes_once():
+    person = TrackChange("moving", 1, "person", "person", 0.9, (0.1, 0.2, 0.3, 0.8))
+    car = TrackChange("enter", 2, "vehicle", "car", 0.8, (0.5, 0.5, 0.9, 0.9))
+    moving = camera_event_payload("2A1122334455", "moving",
+                                  ((person, (3,)), (car, (3, 4))),
+                                  clock_wall_ms=1_700_000_000_000)
+    assert moving["objectTypes"] == ["person", "vehicle"]
+    assert [d["trackerID"] for d in moving["descriptors"]] == [1, 2]
+    assert moving["descriptors"][1]["name"] == ""   # no plate claim
+    assert moving["zonesStatus"] == {} and moving["trackerIDAttrMap"] == {}
+    leave = camera_event_payload("2A1122334455", "leave",
+                                 ((person, (3,)), (car, (3, 4))),
+                                 clock_wall_ms=1_700_000_001_000)
+    assert leave["zonesStatus"] == {"3": {"status": "leave", "level": 90},
+                                    "4": {"status": "leave", "level": 80}}
+    assert leave["trackerIDAttrMap"] == {
+        "1": {"objectType": "person", "zone": [3]},
+        "2": {"objectType": "vehicle", "zone": [3, 4]}}
+    package = TrackChange("enter", 3, "package", "package", 0.9, (0.1, 0.2, 0.3, 0.4))
+    for bad in ((), ((package, ()),)):
+        with pytest.raises(SmartEventError):
+            camera_event_payload("2A1122334455", "enter", bad,
+                                 clock_wall_ms=1_700_000_000_000)

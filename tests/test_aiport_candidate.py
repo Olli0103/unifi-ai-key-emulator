@@ -23,6 +23,7 @@ from aikey.aiport_candidate import CandidateError, CandidateService, load_config
 from aikey.aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
 from aikey.aiport_snapshots import SmartSnapshot
 from aikey.aiport_smart_settings import SmartPolicy
+from aikey.aiport_camera_engine import CameraEventCandidate
 from aikey.aiport_tracking import TrackChange
 from aikey.tls import ensure_identity_certificate
 
@@ -2174,14 +2175,20 @@ async def test_pool_multiclass_probe_keeps_camera_policies_and_tracks_separate(
     enters = [message["payload"] for message in sink.messages
               if message["functionName"] == "EventSmartDetect"
               and message["payload"]["edgeType"] == "enter"]
-    assert [(event["deviceID"], event["objectTypes"][0]) for event in enters] == [
-        (cameras[0], "person"), (cameras[0], "vehicle"),
-        (cameras[0], "animal"), (cameras[1], "person")]
-    assert [event["descriptors"][0]["zones"] for event in enters] == [
-        [7], [8], [9], []]
-    assert len({event["descriptors"][0]["trackerID"]
-                for event in enters if event["deviceID"] == cameras[0]}) == 3
-    assert service.smart_events_entered == 4
+    # Protect keeps one smart event per camera, so the first object opens
+    # it and later objects join through moving updates with all objects.
+    assert [(event["deviceID"], event["objectTypes"]) for event in enters] == [
+        (cameras[0], ["person"]), (cameras[1], ["person"])]
+    assert [event["descriptors"][0]["zones"] for event in enters] == [[7], []]
+    joined = [message["payload"] for message in sink.messages
+              if message["functionName"] == "EventSmartDetect"
+              and message["payload"]["edgeType"] == "moving"
+              and message["payload"]["deviceID"] == cameras[0]]
+    assert joined[-1]["objectTypes"] == ["person", "vehicle", "animal"]
+    assert [d["zones"] for d in joined[-1]["descriptors"]] == [[7], [8], [9]]
+    assert len({d["trackerID"] for d in joined[-1]["descriptors"]}) == 3
+    assert service.smart_events_entered == 2
+    assert service.smart_objects_joined == 2
 
     await service._handle_diagnostic_frame(sink, json.dumps({
         "functionName": "ChangeSmartDetectSettings", "messageId": 3,
@@ -2192,9 +2199,12 @@ async def test_pool_multiclass_probe_keeps_camera_policies_and_tracks_separate(
     leaves = [message["payload"] for message in sink.messages
               if message["functionName"] == "EventSmartDetect"
               and message["payload"]["edgeType"] == "leave"]
-    assert [(event["deviceID"], event["objectTypes"][0]) for event in leaves] == [
-        (cameras[0], "person"), (cameras[0], "vehicle"),
-        (cameras[0], "animal")]
+    assert [(event["deviceID"], event["objectTypes"]) for event in leaves] == [
+        (cameras[0], ["person", "vehicle", "animal"])]
+    assert sorted(leaves[0]["trackerIDAttrMap"].values(), key=lambda v: v["zone"]) == [
+        {"objectType": "person", "zone": [7]},
+        {"objectType": "vehicle", "zone": [8]},
+        {"objectType": "animal", "zone": [9]}]
     assert service._camera_engine.has_policy(cameras[1])
 
     await service._handle_diagnostic_frame(sink, json.dumps({
@@ -3002,5 +3012,49 @@ async def test_live_pool_advertises_enhanced_motion_and_sends_zone_motion(tmp_pa
         assert health["smart_motion_settings_acks"] == 1
         assert health["smart_motion_settings_rejected"] == 1
         assert health["pool_cameras"][0]["motion"]["starts"] == 1
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_pool_keeps_one_protect_event_until_the_last_object_leaves(tmp_path):
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{"camera_mac": camera, "source_ip": "192.168.10.1",
+                                 "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person", "vehicle"], "max_events_per_hour": 12,
+        "max_requests_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    person = TrackChange("enter", 1, "person", "person", 0.9, (0.1, 0.2, 0.3, 0.8))
+    car = TrackChange("enter", 2, "vehicle", "car", 0.9, (0.5, 0.5, 0.9, 0.9))
+    try:
+        for change in (person, car,
+                       TrackChange("leave", 1, "person", "person", 0.9, person.box),
+                       TrackChange("leave", 2, "vehicle", "car", 0.9, car.box)):
+            await service._publish_pool_candidates(
+                (CameraEventCandidate(camera, change, ()),))
+        edges = [(m["payload"]["edgeType"], m["payload"]["objectTypes"])
+                 for m in sink.messages if m["functionName"] == "EventSmartDetect"]
+        assert edges == [("enter", ["person"]), ("moving", ["person", "vehicle"]),
+                         ("moving", ["vehicle"]), ("leave", ["person", "vehicle"])]
     finally:
         await service.stop()

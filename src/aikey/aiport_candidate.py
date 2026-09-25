@@ -38,7 +38,8 @@ from .aiport_camera_engine import CameraEventCandidate, CameraPolicyEngine
 from .aiport_event_budget import EventBudget, EventBudgetError
 from .aiport_inference import FairInference
 from .aiport_tracking import TemporalTracker, TrackChange, TrackingError
-from .aiport_smart_events import SmartEventError, smart_event_payload
+from .aiport_smart_events import (SmartEventError, camera_event_payload,
+                                  smart_event_payload)
 from .aiport_snapshots import (
     SmartSnapshot, SnapshotError, make_smart_snapshot, validated_upload_url,
 )
@@ -547,6 +548,8 @@ class CandidateService:
         self.smart_settings_probe_requests = 0
         self._smart_settings_probe_shape: dict[str, int | bool] | None = None
         self.smart_package_events = 0
+        self.smart_objects_joined = 0
+        self._pool_sessions: dict[str, dict] = {}
         self.smart_motion_settings_acks = 0
         self.smart_motion_settings_rejected = 0
         self.smart_motion_events_started = 0
@@ -772,69 +775,104 @@ class CandidateService:
             return
         active = {stream["deviceID"] for stream in self.ingress.list_streams()}
         for candidate in candidates:
-            if (candidate.change.edge in {"enter", "moving", "packageDetected"}
-                    and candidate.camera_mac not in active):
+            camera, change = candidate.camera_mac, candidate.change
+            if change.edge in {"enter", "moving", "packageDetected"} and camera not in active:
                 continue
-            try:
-                payload = smart_event_payload(
-                    candidate.camera_mac, candidate.change,
-                    edge=candidate.change.edge,
-                    clock_wall_ms=int(time.time() * 1000),
-                    zone_ids=candidate.zone_ids)
-            except SmartEventError:
+            if change.edge == "packageDetected":
+                await self._publish_package(ws, candidate, frame)
                 continue
-            snapshot_key = (candidate.camera_mac, candidate.change.track_id)
-            if candidate.change.edge == "enter" and frame is not None:
-                try:
-                    self._pool_snapshot_number += 1
-                    snapshot = await asyncio.to_thread(
-                        make_smart_snapshot, frame, candidate.change,
-                        payload["clockWall"],
-                        filename_track_id=self._pool_snapshot_number)
-                except SnapshotError:
-                    pass
-                else:
-                    if len(self._pool_event_snapshots) >= 16:
-                        self._pool_event_snapshots.pop(next(iter(self._pool_event_snapshots)))
-                    self._pool_event_snapshots[snapshot_key] = (
-                        snapshot, time.monotonic() + 180)
-            elif candidate.change.edge in {"leave", "packageDetected"}:
-                if candidate.change.edge == "leave":
-                    pending_event = self._pool_event_snapshots.pop(snapshot_key, None)
-                elif frame is None:
-                    pending_event = None
-                else:
-                    # A package event is one-shot: attach its crop now.
+            # Protect keeps one ongoing smart event per camera: a second
+            # enter is dropped and any leave closes the event. Report every
+            # object of a camera inside one event instead.
+            session = self._pool_sessions.setdefault(
+                camera, {"active": {}, "seen": {}, "snapshots": []})
+            track = (change, candidate.zone_ids)
+            if change.edge == "enter":
+                opening = not session["active"]
+                if opening:
+                    session["seen"], session["snapshots"] = {}, []
+                session["active"][change.track_id] = track
+                session["seen"][change.track_id] = track
+                if frame is not None and len(session["snapshots"]) < 4:
                     try:
                         self._pool_snapshot_number += 1
-                        pending_event = (await asyncio.to_thread(
-                            make_smart_snapshot, frame, candidate.change,
-                            payload["clockWall"],
-                            filename_track_id=self._pool_snapshot_number),
-                            time.monotonic() + 180)
+                        session["snapshots"].append(await asyncio.to_thread(
+                            make_smart_snapshot, frame, change, int(time.time() * 1000),
+                            filename_track_id=self._pool_snapshot_number))
                     except SnapshotError:
-                        pending_event = None
-                if pending_event is not None and pending_event[1] > time.monotonic():
-                    snapshot = pending_event[0]
-                    snapshot.add_to_event(payload)
-                    now = time.monotonic()
-                    for filename, pending in tuple(self._pool_pending_snapshots.items()):
-                        if pending.expires <= now:
-                            del self._pool_pending_snapshots[filename]
-                    if len(self._pool_pending_snapshots) >= 16:
-                        self._pool_pending_snapshots.pop(
-                            next(iter(self._pool_pending_snapshots)))
-                    self._pool_pending_snapshots[snapshot.filename] = (
-                        _PendingPoolSnapshot(candidate.camera_mac, snapshot, now + 75))
+                        pass
+                edge = "enter" if opening else "moving"
+                tracks = tuple(session["active"].values())
+                if not opening:
+                    self.smart_objects_joined += 1
+            elif change.edge == "moving":
+                if change.track_id not in session["active"]:
+                    continue
+                session["active"][change.track_id] = track
+                session["seen"][change.track_id] = track
+                edge, tracks = "moving", tuple(session["active"].values())
+            else:
+                if change.track_id not in session["seen"]:
+                    continue
+                session["active"].pop(change.track_id, None)
+                session["seen"][change.track_id] = track
+                if session["active"]:
+                    edge, tracks = "moving", tuple(session["active"].values())
+                else:
+                    edge, tracks = "leave", tuple(session["seen"].values())
+            try:
+                payload = camera_event_payload(
+                    camera, edge, tracks, clock_wall_ms=int(time.time() * 1000))
+            except SmartEventError:
+                continue
+            if edge == "leave":
+                snapshots = session["snapshots"]
+                self._pool_sessions.pop(camera, None)
+                if snapshots:
+                    snapshots[0].add_to_event(payload)
+                    payload["smartDetectSnapshots"] = [item.metadata for item in snapshots]
+                    for item in snapshots:
+                        self._remember_pool_snapshot(camera, item)
             await self._send_control_event(ws, "EventSmartDetect", payload)
-            if candidate.change.edge == "enter":
+            if edge == "enter":
                 self.smart_events_entered += 1
-            elif candidate.change.edge == "packageDetected":
-                self.smart_package_events += 1
-            elif candidate.change.edge == "moving":
+            elif edge == "moving":
                 self.smart_events_moved += 1
             else:
                 self.smart_events_left += 1
+
+    def _remember_pool_snapshot(self, camera: str, snapshot) -> None:
+        now = time.monotonic()
+        for filename, pending in tuple(self._pool_pending_snapshots.items()):
+            if pending.expires <= now:
+                del self._pool_pending_snapshots[filename]
+        if len(self._pool_pending_snapshots) >= 16:
+            self._pool_pending_snapshots.pop(next(iter(self._pool_pending_snapshots)))
+        self._pool_pending_snapshots[snapshot.filename] = (
+            _PendingPoolSnapshot(camera, snapshot, now + 75))
+
+    async def _publish_package(self, ws, candidate: CameraEventCandidate,
+                               frame: bytes | None) -> None:
+        """Protect saves a package from its own one-shot edge."""
+        try:
+            payload = smart_event_payload(
+                candidate.camera_mac, candidate.change, edge="packageDetected",
+                clock_wall_ms=int(time.time() * 1000), zone_ids=candidate.zone_ids)
+        except SmartEventError:
+            return
+        if frame is not None:
+            try:
+                self._pool_snapshot_number += 1
+                snapshot = await asyncio.to_thread(
+                    make_smart_snapshot, frame, candidate.change, payload["clockWall"],
+                    filename_track_id=self._pool_snapshot_number)
+            except SnapshotError:
+                pass
+            else:
+                snapshot.add_to_event(payload)
+                self._remember_pool_snapshot(candidate.camera_mac, snapshot)
+        await self._send_control_event(ws, "EventSmartDetect", payload)
+        self.smart_package_events += 1
 
     async def _handle_pool_motion_settings(
             self, ws: aiohttp.ClientWebSocketResponse, request_id: int,
@@ -991,6 +1029,7 @@ class CandidateService:
         if self._inference is not None:
             self._inference.discard_pending(camera_mac)
         await self._publish_pool_candidates(engine.replace_policy(camera_mac, None))
+        self._pool_sessions.pop(camera_mac, None)
         for key in tuple(self._pool_event_snapshots):
             if key[0] == camera_mac:
                 del self._pool_event_snapshots[key]
@@ -1413,6 +1452,7 @@ class CandidateService:
             "smart_settings_subset_matches": self.smart_settings_subset_matches,
             "smart_settings_probe_requests": self.smart_settings_probe_requests,
             "smart_package_events": self.smart_package_events,
+            "smart_objects_joined": self.smart_objects_joined,
             "smart_motion_settings_acks": self.smart_motion_settings_acks,
             "smart_motion_settings_rejected": self.smart_motion_settings_rejected,
             "smart_motion_events_started": self.smart_motion_events_started,
