@@ -1957,15 +1957,17 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
     assert sink.messages[-1]["statusCode"] == 0
     assert service._camera_engine.policy_generation(cameras[0]) == stale_generation
     assert service.smart_settings_repeats == 1
-    # Protect's separate plate-reader flag carries no policy: acknowledge a
-    # non-LPR camera without touching its policy, refuse an LPR request.
+    # Protect's separate plate-reader flag carries no policy: acknowledge it
+    # without touching the policy; count requests for plates that are not read.
     rejected = service.smart_settings_requests_rejected
-    for message_id, lpr, status in ((20, False, 0), (21, True, 501)):
+    for message_id, lpr, status in ((20, False, 0), (21, True, 0), (22, "yes", 501)):
         await service._handle_diagnostic_frame(sink, json.dumps({
             "functionName": "ChangeSmartDetectSettings", "messageId": message_id,
             "payload": {"deviceID": cameras[0], "isLprCamera": lpr}}).encode())
         assert sink.messages[-1]["statusCode"] == status
-    assert service.smart_settings_lpr_acks == 1
+    assert service.smart_settings_lpr_acks == 2
+    assert service.smart_settings_lpr_requested == 1
+    assert service.smart_settings_rejection_reasons == {"invalid_lpr_flag": 1}
     assert service.smart_settings_requests_rejected == rejected + 1
     assert service._camera_engine.has_policy(cameras[0])
     assert service._camera_engine.policy_generation(cameras[0]) == stale_generation
@@ -3172,53 +3174,3 @@ async def test_restart_does_not_reannounce_a_parked_package(tmp_path, monkeypatc
     assert second == []
     assert health["package_cooldown_skips"] == 1
     assert health["pool_cameras"][0]["events_entered_by_kind"]["package"] == 0
-
-
-@pytest.mark.asyncio
-async def test_policy_for_a_starting_stream_is_accepted(tmp_path):
-    """Protect sends the policy before the requested stream's first frame."""
-    camera = "2A1122334455"
-    config = fixture_state(tmp_path)
-    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
-    config["paired_streams"] = [{
-        "camera_mac": camera, "source_ip": "192.168.10.1",
-        "ffmpeg_path": sys.executable}]
-    config["live_pool_detector"] = {
-        "inference_backend": "vision_api", "threshold": 0.8,
-        "smart_types": ["person"], "max_events_per_hour": 12,
-        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
-                            "base_url": "https://api.openai.com/v1",
-                            "allow_remote": True, "max_output_tokens": 256,
-                            "api_key_file": str(tmp_path / "api-key")}}
-    service = CandidateService(config, tmp_path)
-    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
-    service._params_agreed = True
-    service.ingress.list_streams = lambda: []           # no frame decoded yet
-
-    class Sink:
-        def __init__(self):
-            self.messages = []
-
-        async def send_bytes(self, raw):
-            self.messages.append(json.loads(raw))
-
-    sink = Sink()
-    service._current_ws = sink
-    policy = {"deviceID": camera, "algoVersion": "beta",
-              "enableSmartDetect": ["person"],
-              "eventStartMSec": 1000, "eventStopMSec": 3000}
-    try:
-        await service._handle_diagnostic_frame(sink, json.dumps({
-            "functionName": "ChangeSmartDetectSettings", "messageId": 1,
-            "payload": policy}).encode())
-        assert sink.messages[-1]["statusCode"] == 501    # not requested at all
-        assert service._pool_policy_errors[camera] == "inactive_stream"
-        assert service.smart_settings_rejection_reasons == {"inactive_stream": 1}
-        service.ingress.requested_cameras = lambda: frozenset({camera})
-        await service._handle_diagnostic_frame(sink, json.dumps({
-            "functionName": "ChangeSmartDetectSettings", "messageId": 2,
-            "payload": policy}).encode())
-        assert sink.messages[-1]["statusCode"] == 0
-        assert service._camera_engine.has_policy(camera)
-    finally:
-        await service.stop()

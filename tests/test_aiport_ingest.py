@@ -395,34 +395,3 @@ async def test_new_websocket_requires_fresh_parameter_agreement(tmp_path):
         "functionName": "UiStreamControl", "messageId": 6,
         "payload": {"streaming": False, "deviceID": CAMERA_MAC}}).encode())
     assert len(sink.messages) == before
-
-
-@pytest.mark.asyncio
-async def test_pool_marks_a_stream_requested_while_its_start_is_pending(monkeypatch):
-    other_mac = "2A1122334466"
-    pool = AiPortIngressPool([
-        {"camera_mac": CAMERA_MAC, "source_ip": SOURCE_IP, "ffmpeg_path": sys.executable},
-        {"camera_mac": other_mac, "source_ip": SOURCE_IP, "ffmpeg_path": sys.executable},
-    ])
-    seen = []
-    release = asyncio.Event()
-
-    async def slow_start(self, payload):
-        seen.append(pool.requested_cameras())
-        if payload.get("deviceID") == other_mac:
-            raise IngressError("stream_start_timeout")
-        await release.wait()
-        return {"status": "started", "usedPoints": 2}
-
-    monkeypatch.setattr(AiPortIngress, "control", slow_start)
-    starting = asyncio.create_task(pool.control(start_payload()))
-    await asyncio.sleep(0)
-    assert seen == [frozenset({CAMERA_MAC})]          # requested before a frame
-    assert pool.list_streams() == []
-    release.set()
-    await starting
-    with pytest.raises(IngressError):
-        await pool.control(start_payload(deviceID=other_mac))
-    assert pool.requested_cameras() == frozenset({CAMERA_MAC})   # failed start cleared
-    await pool.control({"deviceID": CAMERA_MAC, "streaming": False})
-    assert pool.requested_cameras() == frozenset()

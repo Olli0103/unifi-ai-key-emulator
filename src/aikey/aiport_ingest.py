@@ -541,7 +541,6 @@ class AiPortIngressPool:
                 camera_mac=camera_mac, source_ip=policy["source_ip"],
                 ffmpeg_path=policy["ffmpeg_path"], frame_observer=observer)
         self._lock = asyncio.Lock()
-        self._requested: set[str] = set()
 
     async def control(self, payload: object) -> dict:
         if not isinstance(payload, dict):
@@ -557,20 +556,7 @@ class AiPortIngressPool:
                 used = sum(item.reserved_points for item in self._ingresses.values())
                 if used - ingress.reserved_points + spec.points > 10:
                     raise IngressError("stream_capacity_exceeded")
-                # Protect sends the camera's smart policy while the decoder
-                # waits for its first frame; the stream is already requested.
-                self._requested.add(camera_mac)
-            else:
-                self._requested.discard(camera_mac)
-            try:
-                return await ingress.control(payload)
-            except Exception:
-                self._requested.discard(camera_mac)
-                raise
-
-    def requested_cameras(self) -> frozenset[str]:
-        """Cameras Protect asked to stream, including a start in progress."""
-        return frozenset(self._requested)
+            return await ingress.control(payload)
 
     def list_streams(self) -> list[dict]:
         return [stream for _, ingress in sorted(self._ingresses.items())

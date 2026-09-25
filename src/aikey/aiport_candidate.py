@@ -572,6 +572,7 @@ class CandidateService:
         self.smart_settings_probe_acks = 0
         self.smart_settings_repeats = 0
         self.smart_settings_lpr_acks = 0
+        self.smart_settings_lpr_requested = 0
         self.smart_settings_rejection_reasons: dict[str, int] = {}
         self.smart_events_entered = 0
         self.smart_events_moved = 0
@@ -892,19 +893,6 @@ class CandidateService:
         await self._reply_control(ws, "ChangeSmartMotionSettings", request_id, 0, {})
         self.smart_motion_settings_acks += 1
 
-    def _policy_streams(self) -> set[str]:
-        """Streams that may hold a policy: decoding, or requested and starting.
-
-        Protect pushes a camera's policy about a second after requesting its
-        stream, before the first frame is decoded; rejecting it there made
-        Protect log "Failed to handle EventAIPortStatus isSmartDetectReady"
-        (27 full-policy rejections in one evening). Events still require an
-        active stream.
-        """
-        active = {stream["deviceID"] for stream in self.ingress.list_streams()}
-        requested = getattr(self.ingress, "requested_cameras", None)
-        return active | (set(requested()) if callable(requested) else set())
-
     def _count_policy_rejection(self, reason: str) -> None:
         """Fixed-code reasons only; never the controller's policy content."""
         self.smart_settings_requests_rejected += 1
@@ -933,23 +921,28 @@ class CandidateService:
             return
         if set(payload) == {"deviceID", "isLprCamera"}:
             # Protect 7.3.68 sends every paired camera this separate message
-            # on connect (support log: 27 since 20:00, each answered 501, then
-            # "Failed to handle EventAIPortStatus isSmartDetectReady"). It
-            # carries no smart policy; this device offers no plate reading.
-            if payload["isLprCamera"] is False:
-                self.smart_settings_lpr_acks += 1
-                await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 0, {})
-            else:
-                self._count_policy_rejection("lpr_requested")
+            # on connect. Answering 501 made Protect log "Failed to handle
+            # EventAIPortStatus isSmartDetectReady". It carries no smart policy.
+            if type(payload["isLprCamera"]) is not bool:
+                self._count_policy_rejection("invalid_lpr_flag")
                 await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
                                           {"description": "smart_detection_unavailable"})
+                return
+            # Live health showed every startup rejection was this message with
+            # isLprCamera true. The AI Port never advertises plate detection,
+            # so acknowledging the flag promises no plate events; it is
+            # counted so health shows plates were requested but not read.
+            self.smart_settings_lpr_acks += 1
+            if payload["isLprCamera"]:
+                self.smart_settings_lpr_requested += 1
+            await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 0, {})
             return
         try:
             repeat = parse_smart_settings(payload, camera_mac=camera)
         except SmartSettingsError:
             repeat = None
         if (repeat is not None and repeat == engine.current_policy(camera)
-                and camera in self._policy_streams()
+                and camera in {stream["deviceID"] for stream in self.ingress.list_streams()}
                 and self._inference is not None
                 and self._inference.is_available(camera)
                 and self._pool_event_enabled()):
@@ -981,7 +974,7 @@ class CandidateService:
                 summarize_recognition_accuracy(payload))
         else:
             self._pool_recognition_accuracy_shapes.pop(camera, None)
-        active = self._policy_streams()
+        active = {stream["deviceID"] for stream in self.ingress.list_streams()}
         if (parsed is not None and parsed.enabled_types
                 and parsed.enabled_types <= set(self._pool_smart_types())
                 and camera in active and self._inference is not None
@@ -1513,6 +1506,7 @@ class CandidateService:
             "smart_settings_probe_acks": self.smart_settings_probe_acks,
             "smart_settings_repeats": self.smart_settings_repeats,
             "smart_settings_lpr_acks": self.smart_settings_lpr_acks,
+            "smart_settings_lpr_requested": self.smart_settings_lpr_requested,
             "smart_settings_rejection_reasons": dict(self.smart_settings_rejection_reasons),
             "package_cooldown_skips": (self._camera_engine.package_cooldown_skips
                                        if self._camera_engine is not None else 0),
