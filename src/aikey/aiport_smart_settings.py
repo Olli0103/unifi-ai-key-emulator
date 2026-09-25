@@ -254,8 +254,9 @@ def _reverification_ceilings(value: object, requested: list[str]
 def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
     """Accept bounded primary zones or full-frame object settings.
 
-    Secondary-lens zones, lines, tamper, PTZ and access triggers remain
-    unsupported. Validated exclusions conservatively suppress overlapping
+    Secondary-lens requests, lines, tamper, PTZ and access triggers remain
+    unsupported. A validated secondary-lens zone with no selected classes is
+    only a placeholder. Validated exclusions conservatively suppress overlapping
     objects. Enabled reverification suppresses uncertain
     observations; it is not a second-stage inference implementation. The
     returned policy cannot enable native events by itself.
@@ -304,6 +305,17 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
         if not isinstance(value, dict):
             raise SmartSettingsError("invalid_smart_settings")
         if value:
+            if name == "secondLensZones":
+                try:
+                    parse_smart_zones(value)
+                except ZoneError:
+                    pass
+                else:
+                    if all(zone["objectTypes"] == [] for zone in value.values()):
+                        # Protect can send a dormant secondary-lens placeholder
+                        # for a single-lens camera. It grants no class and
+                        # cannot affect primary-lens zones or enabled types.
+                        continue
             # A fixed, known field name is safe to expose in private health.
             # It identifies the first unsupported region map without logging
             # zone coordinates or other controller policy content.

@@ -94,6 +94,71 @@ def test_accepts_camera_bound_full_frame_policy_without_retaining_raw_payload():
     assert not hasattr(policy, "zones")
 
 
+def test_ignores_valid_empty_secondary_lens_placeholder_only():
+    raw = full_frame_policy()
+    raw["enableSmartDetect"] = ["person", "vehicle", "animal"]
+    raw["secondLensZones"] = {"7": {
+        "coord": [0, 0, 1000, 0, 1000, 1000], "objectTypes": []}}
+    policy = parse_smart_settings(raw, camera_mac=CAMERA)
+    assert policy.enabled_types == frozenset({"person", "vehicle", "animal"})
+    assert not policy.zones_configured
+    assert policy.smart_zones == ()
+
+
+@pytest.mark.parametrize("classes", [
+    ["person"], ["package"], ["face"], ["licensePlate"],
+])
+def test_rejects_secondary_lens_requested_classes(classes):
+    raw = full_frame_policy()
+    raw["secondLensZones"] = {"7": {
+        "coord": [0, 0, 1000, 0, 1000, 1000], "objectTypes": classes}}
+    with pytest.raises(SmartSettingsError, match="^unsupported_smart_feature:regions:secondLensZones$"):
+        parse_smart_settings(raw, camera_mac=CAMERA)
+
+
+@pytest.mark.parametrize("zone", [
+    None,
+    {"coord": [0, 0, 1000, 0, 1000, 1000], "objectTypes": "person"},
+    {"coord": [0, 0, 1000, 0, 1000, 1000], "objectTypes": [], "unknown": True},
+])
+def test_rejects_malformed_secondary_lens_placeholder(zone):
+    raw = full_frame_policy()
+    raw["secondLensZones"] = {"7": zone}
+    with pytest.raises(SmartSettingsError, match="^unsupported_smart_feature:regions:secondLensZones$"):
+        parse_smart_settings(raw, camera_mac=CAMERA)
+
+
+def test_secondary_lens_placeholder_never_enables_empty_policy():
+    raw = full_frame_policy()
+    raw["enableSmartDetect"] = []
+    raw["secondLensZones"] = {"7": {
+        "coord": [0, 0, 1000, 0, 1000, 1000], "objectTypes": []}}
+    assert not parse_smart_settings(raw, camera_mac=CAMERA).enabled_types
+
+
+def test_secondary_lens_placeholder_does_not_change_primary_person_zone():
+    raw = full_frame_policy()
+    raw["enableSmartDetect"] = ["person"]
+    raw["zones"] = {"3": {
+        "coord": [0, 0, 1000, 0, 1000, 1000, 0, 1000],
+        "objectTypes": ["person"]}}
+    raw["secondLensZones"] = {"7": {
+        "coord": [0, 0, 1000, 0, 1000, 1000], "objectTypes": []}}
+    policy = parse_smart_settings(raw, camera_mac=CAMERA)
+    assert policy.zone_ids("person", (0.2, 0.2, 0.5, 0.8)) == (3,)
+
+
+@pytest.mark.parametrize("other", [["face"], ["package"]])
+def test_rejects_mixed_secondary_lens_placeholders_and_requests(other):
+    raw = full_frame_policy()
+    raw["secondLensZones"] = {
+        "7": {"coord": [0, 0, 1000, 0, 1000, 1000], "objectTypes": []},
+        "8": {"coord": [0, 0, 1000, 0, 1000, 1000], "objectTypes": other},
+    }
+    with pytest.raises(SmartSettingsError, match="^unsupported_smart_feature:regions:secondLensZones$"):
+        parse_smart_settings(raw, camera_mac=CAMERA)
+
+
 def test_person_zone_policy_requires_ninety_percent_box_overlap():
     raw = full_frame_policy()
     raw["enableSmartDetect"] = ["person"]
