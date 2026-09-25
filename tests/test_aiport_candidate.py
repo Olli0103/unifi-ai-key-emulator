@@ -3213,6 +3213,7 @@ async def test_policy_for_a_starting_stream_is_accepted(tmp_path):
             "payload": policy}).encode())
         assert sink.messages[-1]["statusCode"] == 501    # not requested at all
         assert service._pool_policy_errors[camera] == "inactive_stream"
+        assert service.smart_settings_rejection_reasons == {"inactive_stream": 1}
         service.ingress.requested_cameras = lambda: frozenset({camera})
         await service._handle_diagnostic_frame(sink, json.dumps({
             "functionName": "ChangeSmartDetectSettings", "messageId": 2,

@@ -572,6 +572,7 @@ class CandidateService:
         self.smart_settings_probe_acks = 0
         self.smart_settings_repeats = 0
         self.smart_settings_lpr_acks = 0
+        self.smart_settings_rejection_reasons: dict[str, int] = {}
         self.smart_events_entered = 0
         self.smart_events_moved = 0
         self.smart_events_left = 0
@@ -904,6 +905,15 @@ class CandidateService:
         requested = getattr(self.ingress, "requested_cameras", None)
         return active | (set(requested()) if callable(requested) else set())
 
+    def _count_policy_rejection(self, reason: str) -> None:
+        """Fixed-code reasons only; never the controller's policy content."""
+        self.smart_settings_requests_rejected += 1
+        key = reason if len(reason) <= 64 else "other"
+        if key in self.smart_settings_rejection_reasons or len(
+                self.smart_settings_rejection_reasons) < 16:
+            self.smart_settings_rejection_reasons[key] = (
+                self.smart_settings_rejection_reasons.get(key, 0) + 1)
+
     async def _handle_pool_smart_settings(
             self, ws: aiohttp.ClientWebSocketResponse, request_id: int,
             payload: object) -> None:
@@ -911,7 +921,7 @@ class CandidateService:
         if engine is None or not isinstance(payload, dict):
             await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
                                       {"description": "smart_detection_unavailable"})
-            self.smart_settings_requests_rejected += 1
+            self._count_policy_rejection("engine_or_payload")
             return
         try:
             camera = normalize_mac(payload.get("deviceID"))
@@ -919,7 +929,7 @@ class CandidateService:
         except IngressError:
             await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
                                       {"description": "smart_detection_unavailable"})
-            self.smart_settings_requests_rejected += 1
+            self._count_policy_rejection("not_allowlisted")
             return
         if set(payload) == {"deviceID", "isLprCamera"}:
             # Protect 7.3.68 sends every paired camera this separate message
@@ -930,7 +940,7 @@ class CandidateService:
                 self.smart_settings_lpr_acks += 1
                 await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 0, {})
             else:
-                self.smart_settings_requests_rejected += 1
+                self._count_policy_rejection("lpr_requested")
                 await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
                                           {"description": "smart_detection_unavailable"})
             return
@@ -1003,7 +1013,8 @@ class CandidateService:
         self._pool_policy_errors[camera] = rejection_reason
         await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
                                   {"description": "smart_detection_unavailable"})
-        self.smart_settings_requests_rejected += 1
+        self._count_policy_rejection(rejection_reason.split(":", 1)[0] + (
+            ":" + rejection_reason.split(":")[1] if rejection_reason.count(":") else ""))
 
     def _select_pool_snapshot(self, filename: object) -> tuple[_PendingPoolSnapshot | None, bool]:
         if not isinstance(filename, str):
@@ -1502,6 +1513,7 @@ class CandidateService:
             "smart_settings_probe_acks": self.smart_settings_probe_acks,
             "smart_settings_repeats": self.smart_settings_repeats,
             "smart_settings_lpr_acks": self.smart_settings_lpr_acks,
+            "smart_settings_rejection_reasons": dict(self.smart_settings_rejection_reasons),
             "package_cooldown_skips": (self._camera_engine.package_cooldown_skips
                                        if self._camera_engine is not None else 0),
             "smart_events_entered": self.smart_events_entered,
