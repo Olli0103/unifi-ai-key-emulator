@@ -1,5 +1,6 @@
 """The API detector uses synthetic responses and never sends private footage."""
 
+import base64
 import json
 from io import BytesIO
 import socket
@@ -143,6 +144,8 @@ def test_response_counts_distinguish_empty_from_score_rejection(tmp_path):
         "request_profile": {"color_empty": 0, "color_low": 0, "color_objects": 0,
                             "ir_empty": 0, "ir_low": 0, "ir_objects": 0},
         "last_frame_width": None,
+        "package_checks": {"confirmed": 0, "relabelled_animal": 0,
+                           "rejected": 0, "failed": 0},
     }
     # Black and white synthetic frames carry no chroma, like night IR.
     assert first["request_profile"] == {
@@ -647,3 +650,52 @@ def test_prompt_separates_pets_from_packages_and_people_in_night_ir(tmp_path):
     detector.detect_for_camera(FIRST, STILL)
     assert "night infrared" in sent[0]
     assert "is kind animal, never package or person" in sent[0]
+
+
+def _scene_frame():
+    data = BytesIO()
+    Image.new("RGB", (640, 360), (40, 40, 40)).save(data, format="JPEG")
+    return data.getvalue()
+
+
+@pytest.mark.parametrize("verdict, expected, counter", [
+    ('{"kind":"package","label":"package"}', ("package", "package"), "confirmed"),
+    ('{"kind":"animal","label":"cat"}', ("animal", "cat"), "relabelled_animal"),
+    ('{"kind":"none","label":"none"}', None, "rejected"),
+    ('{"kind":"animal","label":"package"}', None, "failed"),
+    ("not json", None, "failed"),
+])
+def test_package_is_verified_on_a_close_up_crop(tmp_path, verdict, expected, counter):
+    sent = []
+    replies = iter((
+        '{"detections":[{"kind":"package","label":"package","score":0.86,'
+        '"box":[0.6,0.8,0.7,0.95]},{"kind":"person","label":"person","score":0.95,'
+        '"box":[0.4,0.2,0.6,0.9]}]}',
+        verdict))
+
+    def transport(_url, _headers, payload):
+        sent.append(payload)
+        return _response(next(replies))
+
+    detector = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.8,
+                                 transport=transport)
+    result = detector.detect_for_camera(FIRST, _scene_frame())
+    assert len(sent) == 2  # one detection request, one package check
+    crop = Image.open(BytesIO(base64.b64decode(sent[1]["messages"][0]["images"][0])))
+    assert max(crop.size) == 512
+    kinds = [(item.kind, item.label) for item in result]
+    assert ("person", "person") in kinds
+    assert [pair for pair in kinds if pair[0] != "person"] == ([expected] if expected else [])
+    checks = detector.diagnostic_counts(FIRST)["package_checks"]
+    assert checks[counter] == 1 and sum(checks.values()) == 1
+
+
+def test_objects_other_than_package_need_no_second_request(tmp_path):
+    sent = []
+    detector = ApiObjectDetector(
+        _ollama_config(), tmp_path, threshold=0.8,
+        transport=lambda _u, _h, payload: (sent.append(payload) or _response(
+            '{"detections":[{"kind":"animal","label":"cat","score":0.9,'
+            '"box":[0.6,0.8,0.7,0.95]}]}')))
+    assert [item.kind for item in detector.detect_for_camera(FIRST, _scene_frame())] == ["animal"]
+    assert len(sent) == 1

@@ -213,6 +213,18 @@ def _frame_mode(frame: bytes) -> str:
     return "ir" if chroma < _IR_CHROMA else "color"
 
 
+_PACKAGE_CHECK_KEYS = ("confirmed", "relabelled_animal", "rejected", "failed")
+_VERIFY_SIDE = 512
+_VERIFY_PROMPT = (
+    "This is a close-up crop around one object reported as a delivery package by a home "
+    "security camera; it may be grayscale night infrared. Classify the single main object. "
+    "Return only compact JSON with this exact shape: {\"kind\":\"package\",\"label\":\"package\"}. "
+    "Use kind person, vehicle, animal or package with a valid label: person; bicycle, car, "
+    "motorcycle, bus, truck; bird, cat, dog, horse, sheep, cow; package. A cat or dog, even "
+    "curled up, sitting still or partly hidden, is kind animal. A package is an inanimate "
+    "delivered box, parcel, envelope or bag. If it is none of these, return "
+    "{\"kind\":\"none\",\"label\":\"none\"}."
+)
 _ITEM_REJECTIONS = ("shape", "kind", "label:person", "label:vehicle", "label:animal",
                     "label:package", "score", "box")
 
@@ -368,6 +380,7 @@ class ApiObjectDetector:
         self._camera_counts: dict[str, dict[str, int]] = {}
         self._kind_counts: dict[str, dict[str, dict[str, int]]] = {}
         self._profiles: dict[str, dict[str, int]] = {}
+        self._package_checks: dict[str, dict[str, int]] = {}
         self._frame_width: dict[str, int] = {}
         self._budget_retry_at: dict[str, float] = {}
         self._remote_host = (endpoint.hostname if transport is _post
@@ -483,6 +496,12 @@ class ApiObjectDetector:
                     kinds["below_threshold"][item.kind] += 1
             for reason, count in rejected.items():
                 kinds["rejected_items"][reason] += count
+            if any(item.kind == "package" for item in accepted):
+                accepted = tuple(
+                    verified for item in accepted
+                    for verified in ((self._verify_package(camera_mac, frame, item),)
+                                     if item.kind == "package" else (item,))
+                    if verified is not None)
             self.motion.sample_result(camera_mac, found_object=bool(accepted))
             return accepted
         except ApiDetectionError as exc:
@@ -497,6 +516,56 @@ class ApiObjectDetector:
         except (TypeError, ValueError) as exc:
             self.motion.sample_result(camera_mac, found_object=False)
             raise ApiDetectionError("api_detection_request_failed") from exc
+
+    def _verify_package(self, camera_mac: str, frame: bytes,
+                        item: ObjectObservation) -> ObjectObservation | None:
+        """Second-stage check of one package on a close-up crop.
+
+        A cat sitting in Flur's night-IR frame was reported as a package, even
+        with pet guidance in the prompt. A package is kept only when a crop of
+        its box is again classified as a package; a pet becomes an animal and
+        anything else, or a failed check, is dropped rather than published.
+        """
+        result = self._package_checks.setdefault(
+            camera_mac, dict.fromkeys(_PACKAGE_CHECK_KEYS, 0))
+        try:
+            with Image.open(BytesIO(frame)) as image:
+                width, height = image.size
+                x1, y1, x2, y2 = item.box
+                margin_x, margin_y = (x2 - x1) * 0.25, (y2 - y1) * 0.25
+                left = max(0, int((x1 - margin_x) * width))
+                top = max(0, int((y1 - margin_y) * height))
+                right = min(width, max(left + 16, int((x2 + margin_x) * width)))
+                bottom = min(height, max(top + 16, int((y2 + margin_y) * height)))
+                crop = image.convert("RGB").crop((left, top, right, bottom))
+            scale = _VERIFY_SIDE / max(crop.size)
+            crop = crop.resize((max(1, round(crop.width * scale)),
+                                max(1, round(crop.height * scale))))
+            out = BytesIO()
+            crop.save(out, format="JPEG", quality=90)
+            url, headers, payload = self.provider.build_request(
+                [out.getvalue()], _VERIFY_PROMPT)
+            if self.provider.provider == "openai" and self.provider.model == "gpt-6-luna":
+                payload["reasoning"] = {"effort": "none"}
+            answer = json.loads(self.provider.parse_response(
+                self.transport(url, headers, payload)))
+            if (not isinstance(answer, dict) or set(answer) != {"kind", "label"}
+                    or answer != {"kind": "none", "label": "none"}
+                    and (answer["kind"] not in _LABELS
+                         or answer["label"] not in _LABELS[answer["kind"]])):
+                raise ValueError
+        except (ApiDetectionError, ProviderError, OSError, TypeError, ValueError,
+                UnidentifiedImageError):
+            result["failed"] += 1
+            return None
+        if answer["kind"] == "package":
+            result["confirmed"] += 1
+            return item
+        if answer["kind"] == "animal":
+            result["relabelled_animal"] += 1
+            return ObjectObservation("animal", answer["label"], item.score, item.box)
+        result["rejected"] += 1
+        return None
 
     def _provider_failed(self) -> None:
         self.provider_failures += 1
@@ -528,4 +597,6 @@ class ApiObjectDetector:
         result["request_profile"] = dict(self._profiles.get(
             camera_mac, dict.fromkeys(_PROFILE_KEYS, 0)))
         result["last_frame_width"] = self._frame_width.get(camera_mac)
+        result["package_checks"] = dict(self._package_checks.get(
+            camera_mac, dict.fromkeys(_PACKAGE_CHECK_KEYS, 0)))
         return result

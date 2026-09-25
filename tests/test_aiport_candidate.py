@@ -2892,12 +2892,15 @@ async def test_live_api_package_enters_camera_event_with_zone_and_camera_owned_l
                             "allow_remote": True, "max_output_tokens": 256,
                             "api_key_file": str(tmp_path / "api-key")}}
 
-    def fake_provider(_url, _headers, _payload):
+    def fake_provider(_url, _headers, payload):
+        # The second request is the close-up package check.
+        answer = ({"kind": "package", "label": "package"}
+                  if "close-up crop" in json.dumps(payload) else
+                  {"detections": [{"kind": "package", "label": "package",
+                                   "score": 0.93, "box": [0.3, 0.6, 0.45, 0.8]}]})
         return {"status": "completed", "output": [{
             "type": "message", "role": "assistant", "status": "completed",
-            "content": [{"type": "output_text", "text": json.dumps({
-                "detections": [{"kind": "package", "label": "package",
-                                "score": 0.93, "box": [0.3, 0.6, 0.45, 0.8]}]})}],
+            "content": [{"type": "output_text", "text": json.dumps(answer)}],
         }]}
 
     monkeypatch.setattr(
