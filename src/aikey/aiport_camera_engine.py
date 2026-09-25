@@ -67,6 +67,14 @@ class CameraPolicyEngine:
         self._eligible_observations = dict.fromkeys(cameras, 0)
         self._score_eligible_observations = dict.fromkeys(cameras, 0)
         self._eligible_frames = dict.fromkeys(cameras, 0)
+        self._zone_rejections = {camera: {
+            "excluded": 0, "no_class_zone": 0, "outside_zone": 0,
+            "below_overlap": 0,
+        } for camera in cameras}
+        self._zone_overlap_bands = {camera: {
+            "trace_under_50": 0, "partial_50_to_80": 0,
+            "rejected_at_least_80": 0,
+        } for camera in cameras}
         self._last_moving: dict[str, dict[int, float]] = {
             camera: {} for camera in cameras}
         self._generations = dict.fromkeys(cameras, 0)
@@ -117,8 +125,31 @@ class CameraPolicyEngine:
         score_selected = tuple(value for value in observations
                                if policy.allows_score(value.kind, value.score))
         self._score_eligible_observations[camera] += len(score_selected)
-        selected = tuple(value for value in score_selected
-                         if policy.zone_ids(value.kind, value.box) is not None)
+        selected_values = []
+        for value in score_selected:
+            if policy.zone_ids(value.kind, value.box) is not None:
+                selected_values.append(value)
+                continue
+            if any(value.kind in zone.object_types
+                   and zone.overlaps_box(value.box)
+                   for zone in policy.exclude_zones):
+                reason = "excluded"
+            else:
+                matching = tuple(zone for zone in policy.smart_zones
+                                 if value.kind in zone.object_types)
+                if not matching:
+                    reason = "no_class_zone"
+                else:
+                    overlap = max(zone.overlap_ratio(value.box)
+                                  for zone in matching)
+                    reason = "below_overlap" if overlap > 0 else "outside_zone"
+                    if overlap > 0:
+                        band = ("rejected_at_least_80" if overlap >= 0.8 else
+                                "partial_50_to_80" if overlap >= 0.5 else
+                                "trace_under_50")
+                        self._zone_overlap_bands[camera][band] += 1
+            self._zone_rejections[camera][reason] += 1
+        selected = tuple(selected_values)
         self._eligible_observations[camera] += len(selected)
         self._eligible_frames[camera] += bool(selected)
         changes = self._trackers[camera].update(selected, now=now)
@@ -168,7 +199,7 @@ class CameraPolicyEngine:
         """Tag frames so a policy change cannot consume an older model result."""
         return self._generations[self._camera(camera_mac)]
 
-    def camera_snapshot(self, *, now: float) -> tuple[dict[str, int | bool], ...]:
+    def camera_snapshot(self, *, now: float) -> tuple[dict[str, object], ...]:
         """Policy counters in config order, without camera identifiers."""
         if type(now) not in (int, float) or not math.isfinite(now):
             raise IngressError("invalid_camera_engine")
@@ -192,6 +223,8 @@ class CameraPolicyEngine:
                 "score_eligible_observations": self._score_eligible_observations[camera],
                 "eligible_observations": self._eligible_observations[camera],
                 "eligible_frames": self._eligible_frames[camera],
+                "zone_rejections": dict(self._zone_rejections[camera]),
+                "zone_overlap_bands": dict(self._zone_overlap_bands[camera]),
                 "events_entered": self._event_counts[camera],
                 "active_tracks": len(self._active[camera]),
                 "event_budget_remaining": max(0, self._max_events - used),

@@ -248,6 +248,56 @@ def test_camera_counters_separate_score_zone_and_tracking_gates():
     assert status["events_entered"] == 0
 
 
+def test_zone_rejection_health_distinguishes_overlap_and_exclusion_without_geometry():
+    engine = CameraPolicyEngine([FIRST])
+    engine.replace_policy(FIRST, policy(FIRST, zone=True))
+    # Three score-eligible boxes in one frame: near threshold, grazing, and
+    # entirely outside. Aggregated bands retain all three distinctions.
+    engine.observe(FIRST, (person(box=OUTSIDE),
+                           person(box=(0.05, 0.2, 0.11, 0.8)),
+                           person(box=(0.95, 0.2, 1.0, 0.8))), now=1)
+    status, = engine.camera_snapshot(now=1)
+    assert status["zone_rejections"] == {
+        "excluded": 0, "no_class_zone": 0,
+        "outside_zone": 1, "below_overlap": 2,
+    }
+    assert status["zone_overlap_bands"] == {
+        "trace_under_50": 1, "partial_50_to_80": 0,
+        "rejected_at_least_80": 1,
+    }
+    assert FIRST not in str(status)
+    assert "coord" not in str(status)
+
+    excluded = {"deviceID": FIRST, "enableSmartDetect": ["person"],
+                "eventStartMSec": 1000, "eventStopMSec": 3000,
+                "zones": {"7": {"coord": [100, 100, 900, 100,
+                                         900, 900, 100, 900],
+                                "objectTypes": ["person"]}},
+                "excludeZones": {"4": {
+                    "coord": [0, 100, 100, 100, 100, 900, 0, 900],
+                    "objectTypes": ["person"], "patrolSetID": -1}}}
+    engine.replace_policy(FIRST, parse_smart_settings(excluded,
+                                                     camera_mac=FIRST))
+    # This box is both excluded and below 90% zone overlap; exclusion wins.
+    prior_bands = dict(status["zone_overlap_bands"])
+    engine.observe(FIRST, (person(box=OUTSIDE),), now=2)
+    status, = engine.camera_snapshot(now=2)
+    assert status["zone_rejections"]["excluded"] == 1
+    assert status["zone_overlap_bands"] == prior_bands
+
+    no_class = {"deviceID": FIRST, "enableSmartDetect": ["person"],
+                "eventStartMSec": 1000, "eventStopMSec": 3000,
+                "zones": {"7": {"coord": [100, 100, 900, 100,
+                                         900, 900, 100, 900],
+                                "objectTypes": ["vehicle"]}}}
+    engine.replace_policy(FIRST, parse_smart_settings(no_class,
+                                                     camera_mac=FIRST))
+    engine.observe(FIRST, (person(),), now=3)
+    status, = engine.camera_snapshot(now=3)
+    assert status["zone_rejections"]["no_class_zone"] == 1
+    assert status["eligible_observations"] == 0
+
+
 def test_live_pool_event_budget_survives_engine_restart(tmp_path):
     wall = [5 * _HOUR_NS]
     budget = EventBudget(tmp_path, limit=1, clock_ns=lambda: wall[0])
