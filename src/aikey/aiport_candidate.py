@@ -563,6 +563,7 @@ class CandidateService:
         self.smart_motion_probe_zones = 0
         self.smart_feature_probe_events = 0
         self.smart_settings_probe_acks = 0
+        self.smart_settings_repeats = 0
         self.smart_events_entered = 0
         self.smart_events_moved = 0
         self.smart_events_left = 0
@@ -921,6 +922,23 @@ class CandidateService:
             await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
                                       {"description": "smart_detection_unavailable"})
             self.smart_settings_requests_rejected += 1
+            return
+        try:
+            repeat = parse_smart_settings(payload, camera_mac=camera)
+        except SmartSettingsError:
+            repeat = None
+        if (repeat is not None and repeat == engine.current_policy(camera)
+                and camera in {stream["deviceID"] for stream in self.ingress.list_streams()}
+                and self._inference is not None
+                and self._inference.is_available(camera)
+                and self._pool_event_enabled()):
+            # Protect re-sends identical settings several times after an AI
+            # Port connects, while the startup pair samples the scene. That
+            # pair is the only sample a stationary object (a package, a
+            # sleeping cat) gets; revoking here discarded its confirmation.
+            self.smart_settings_repeats += 1
+            await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 0, {})
+            self.smart_settings_probe_acks += 1
             return
         if self._inference is not None:
             self._inference.discard_pending(camera)
@@ -1471,6 +1489,7 @@ class CandidateService:
             "smart_motion_probe_zones": self.smart_motion_probe_zones,
             "smart_feature_probe_events": self.smart_feature_probe_events,
             "smart_settings_probe_acks": self.smart_settings_probe_acks,
+            "smart_settings_repeats": self.smart_settings_repeats,
             "smart_events_entered": self.smart_events_entered,
             "smart_events_moved": self.smart_events_moved,
             "smart_events_left": self.smart_events_left,

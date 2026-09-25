@@ -267,6 +267,9 @@ class CameraPolicyEngine:
     def has_policy(self, camera_mac: str) -> bool:
         return self._policies[self._camera(camera_mac)] is not None
 
+    def current_policy(self, camera_mac: str) -> SmartPolicy | None:
+        return self._policies[self._camera(camera_mac)]
+
     def policy_generation(self, camera_mac: str) -> int:
         """Tag frames so a policy change cannot consume an older model result."""
         return self._generations[self._camera(camera_mac)]

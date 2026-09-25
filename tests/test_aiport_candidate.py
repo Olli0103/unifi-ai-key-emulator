@@ -1948,9 +1948,19 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
     assert all(service._camera_engine.has_policy(mac) for mac in cameras)
 
     stale_generation = service._camera_engine.policy_generation(cameras[0])
+    # Protect's identical re-sends after connecting keep the policy, its
+    # generation and any in-flight startup sample.
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 7,
+        "payload": policies[0],
+    }).encode())
+    assert sink.messages[-1]["statusCode"] == 0
+    assert service._camera_engine.policy_generation(cameras[0]) == stale_generation
+    assert service.smart_settings_repeats == 1
+    # A changed policy makes results of older frames stale.
     await service._handle_diagnostic_frame(sink, json.dumps({
         "functionName": "ChangeSmartDetectSettings", "messageId": 8,
-        "payload": policies[0],
+        "payload": {**policies[0], "eventStopMSec": 4000},
     }).encode())
     assert service._camera_engine.policy_generation(cameras[0]) > stale_generation
     await service._observe_pool_result(cameras[0], (
