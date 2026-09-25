@@ -88,6 +88,7 @@ def test_motion_gate_detects_person_sized_change(tmp_path):
     for _ in range(2):
         assert detector.detect_for_camera(FIRST, scene(False)) == ()
     assert detector.detect_for_camera(FIRST, scene(True)) == ()
+    assert detector.detect_for_camera(FIRST, scene(True)) == ()
     assert len(requests) == 3
 
 
@@ -123,9 +124,8 @@ def test_response_counts_distinguish_empty_from_score_rejection(tmp_path):
         _ollama_config(), tmp_path, threshold=0.8, max_requests_per_hour=3,
         transport=lambda *_args: _response(next(replies)))
     assert detector.detect_for_camera(FIRST, STILL) == ()
-    assert len(detector.detect_for_camera(FIRST, STILL)) == 1
-    for _ in range(3):
-        assert detector.detect_for_camera(FIRST, STILL) == ()
+    assert detector.detect_for_camera(FIRST, STILL) == ()
+    assert len(detector.detect_for_camera(FIRST, FRAME)) == 1
     assert detector.detect_for_camera(FIRST, FRAME) == ()
     assert detector.diagnostic_counts(FIRST) == {
         "responses": 3, "empty_responses": 1,
@@ -137,7 +137,7 @@ def test_response_counts_distinguish_empty_from_score_rejection(tmp_path):
     }
 
 
-def test_stationary_camera_resamples_when_hourly_budget_recovers(tmp_path, monkeypatch):
+def test_recovered_hourly_budget_waits_for_fresh_motion(tmp_path, monkeypatch):
     now_ns = [10 * _HOUR_NS]
     now_mono = [100.0]
     monkeypatch.setattr("aikey.aiport_api_detection.time.monotonic",
@@ -155,8 +155,13 @@ def test_stationary_camera_resamples_when_hourly_budget_recovers(tmp_path, monke
     assert requests == []
     now_ns[0] += _HOUR_NS
     now_mono[0] += 3600
-    assert detector.detect_for_camera(FIRST, STILL) == ()
+    for _ in range(3):
+        assert detector.detect_for_camera(FIRST, STILL) == ()
+    assert requests == []
+    assert detector.budget.remaining(FIRST) == 2
+    assert detector.detect_for_camera(FIRST, FRAME) == ()
     assert requests == [1]
+    assert detector.budget.remaining(FIRST) == 1
 
 
 def test_package_observation_requires_exact_class_label_and_bounded_box():
@@ -186,11 +191,11 @@ def test_continuous_motion_is_one_burst_until_three_quiet_frames(tmp_path):
     detector.detect_for_camera(FIRST, STILL)
     for image in (FRAME, STILL) * 5:
         detector.detect_for_camera(FIRST, image)
-    assert len(calls) == 2
+    assert len(calls) == 3
     for _ in range(3):
         detector.detect_for_camera(FIRST, STILL)
     detector.detect_for_camera(FIRST, FRAME)
-    assert len(calls) == 3
+    assert len(calls) == 4
 
 
 def test_http_error_exposes_only_status_class(monkeypatch):

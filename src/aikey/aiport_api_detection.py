@@ -53,13 +53,14 @@ class ApiDetectionError(ValueError):
 
 
 class _MotionGate:
-    """Probe twice at startup, then request two API frames per motion burst."""
+    """Probe once at startup and confirm positives; sample motion in pairs."""
 
     def __init__(self):
         self._previous: dict[str, bytes] = {}
         self._pending: dict[str, int] = {}
         self._quiet: dict[str, int] = {}
         self._armed: dict[str, bool] = {}
+        self._startup_probe: set[str] = set()
 
     def reset(self, camera: str) -> None:
         """Rearm startup sampling after a request was blocked before inference."""
@@ -67,6 +68,27 @@ class _MotionGate:
         self._pending.pop(camera, None)
         self._quiet.pop(camera, None)
         self._armed.pop(camera, None)
+        self._startup_probe.discard(camera)
+
+    def wait_for_motion(self, camera: str) -> None:
+        """After a full budget, preserve the scene but cancel automatic probes.
+
+        Resetting the gate here would spend each newly freed hourly request on
+        an idle startup frame. The next burst must have a quiet baseline first.
+        """
+        self._pending.pop(camera, None)
+        self._quiet[camera] = 0
+        self._armed[camera] = False
+        self._startup_probe.discard(camera)
+
+    def startup_result(self, camera: str, *, found_object: bool) -> None:
+        """Only spend the second startup request if the first found an object."""
+        if camera not in self._startup_probe:
+            return
+        self._startup_probe.remove(camera)
+        if not found_object:
+            self._pending.pop(camera, None)
+            self._armed[camera] = True
 
     def should_request(self, camera: str, frame: bytes) -> bool:
         try:
@@ -82,10 +104,11 @@ class _MotionGate:
         self._previous[camera] = thumbnail
         if previous is None:
             # A stationary object already in view would never pass a
-            # frame-difference gate. Two observations also let the tracker
-            # confirm it without accepting a single model hallucination.
+            # frame-difference gate. Only a positive first probe needs a
+            # second observation for tracker confirmation.
             self._pending[camera] = 2
             self._armed[camera] = False
+            self._startup_probe.add(camera)
         else:
             changed = sum(abs(a - b) >= 24 for a, b in zip(previous, thumbnail, strict=True))
             if changed < _MOTION_CHANGED_CELLS:
@@ -265,10 +288,10 @@ class ApiObjectDetector:
             self.motion.reset(camera_mac)
             raise
         if not self.budget.claim(camera_mac):
-            # A denied startup or motion sample must not exhaust the motion
-            # gate permanently. Poll budget availability once per minute,
-            # then sample the current scene again even if it is stationary.
-            self.motion.reset(camera_mac)
+            # Preserve the current scene. Otherwise a denied request resets
+            # startup sampling and burns each newly freed allowance on an
+            # idle frame, keeping a busy camera at zero budget indefinitely.
+            self.motion.wait_for_motion(camera_mac)
             self._budget_retry_at[camera_mac] = time.monotonic() + 60
             return ()
         try:
@@ -290,6 +313,7 @@ class ApiObjectDetector:
             counts["empty_responses"] += not reported
             counts["below_threshold"] += len(reported) - len(accepted)
             counts["accepted_objects"] += len(accepted)
+            self.motion.startup_result(camera_mac, found_object=bool(accepted))
             return accepted
         except ApiDetectionError as exc:
             if exc.args == ("api_detection_dns_unavailable",):
