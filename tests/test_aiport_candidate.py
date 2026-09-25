@@ -1957,6 +1957,18 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
     assert sink.messages[-1]["statusCode"] == 0
     assert service._camera_engine.policy_generation(cameras[0]) == stale_generation
     assert service.smart_settings_repeats == 1
+    # Protect's separate plate-reader flag carries no policy: acknowledge a
+    # non-LPR camera without touching its policy, refuse an LPR request.
+    rejected = service.smart_settings_requests_rejected
+    for message_id, lpr, status in ((20, False, 0), (21, True, 501)):
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "ChangeSmartDetectSettings", "messageId": message_id,
+            "payload": {"deviceID": cameras[0], "isLprCamera": lpr}}).encode())
+        assert sink.messages[-1]["statusCode"] == status
+    assert service.smart_settings_lpr_acks == 1
+    assert service.smart_settings_requests_rejected == rejected + 1
+    assert service._camera_engine.has_policy(cameras[0])
+    assert service._camera_engine.policy_generation(cameras[0]) == stale_generation
     # A changed policy makes results of older frames stale.
     await service._handle_diagnostic_frame(sink, json.dumps({
         "functionName": "ChangeSmartDetectSettings", "messageId": 8,

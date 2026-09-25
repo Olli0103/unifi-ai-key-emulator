@@ -571,6 +571,7 @@ class CandidateService:
         self.smart_feature_probe_events = 0
         self.smart_settings_probe_acks = 0
         self.smart_settings_repeats = 0
+        self.smart_settings_lpr_acks = 0
         self.smart_events_entered = 0
         self.smart_events_moved = 0
         self.smart_events_left = 0
@@ -906,6 +907,19 @@ class CandidateService:
             await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
                                       {"description": "smart_detection_unavailable"})
             self.smart_settings_requests_rejected += 1
+            return
+        if set(payload) == {"deviceID", "isLprCamera"}:
+            # Protect 7.3.68 sends every paired camera this separate message
+            # on connect (support log: 27 since 20:00, each answered 501, then
+            # "Failed to handle EventAIPortStatus isSmartDetectReady"). It
+            # carries no smart policy; this device offers no plate reading.
+            if payload["isLprCamera"] is False:
+                self.smart_settings_lpr_acks += 1
+                await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 0, {})
+            else:
+                self.smart_settings_requests_rejected += 1
+                await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
+                                          {"description": "smart_detection_unavailable"})
             return
         try:
             repeat = parse_smart_settings(payload, camera_mac=camera)
@@ -1474,6 +1488,7 @@ class CandidateService:
             "smart_feature_probe_events": self.smart_feature_probe_events,
             "smart_settings_probe_acks": self.smart_settings_probe_acks,
             "smart_settings_repeats": self.smart_settings_repeats,
+            "smart_settings_lpr_acks": self.smart_settings_lpr_acks,
             "package_cooldown_skips": (self._camera_engine.package_cooldown_skips
                                        if self._camera_engine is not None else 0),
             "smart_events_entered": self.smart_events_entered,
