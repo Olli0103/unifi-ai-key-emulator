@@ -82,6 +82,10 @@ class _MotionGate:
         self._armed[camera] = True
         self._startup_probe.discard(camera)
 
+    def cancel_confirmation(self, camera: str) -> bool:
+        """Drop a pending confirming request; the scene stays disarmed."""
+        return self._pending.pop(camera, 0) > 0
+
     def sample_result(self, camera: str, *, found_object: bool) -> None:
         """Only spend a confirming request if the first one found an object.
 
@@ -380,6 +384,15 @@ class ApiObjectDetector:
         except (TypeError, ValueError) as exc:
             self.motion.sample_result(camera_mac, found_object=False)
             raise ApiDetectionError("api_detection_request_failed") from exc
+
+    def skip_confirmation(self, camera_mac: str) -> None:
+        """Every sampled object is already confirmed: keep the request."""
+        if self.motion.cancel_confirmation(camera_mac):
+            counts = self._camera_counts.setdefault(camera_mac, {
+                "responses": 0, "empty_responses": 0,
+                "below_threshold": 0, "accepted_objects": 0,
+            })
+            counts["confirmations_saved"] = counts.get("confirmations_saved", 0) + 1
 
     def diagnostic_counts(self, camera_mac: str) -> dict[str, object]:
         """Return content-free response counts for one configured camera."""

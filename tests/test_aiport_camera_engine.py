@@ -480,3 +480,18 @@ def test_single_animal_sighting_is_counted_as_unconfirmed():
     snapshot = engine.camera_snapshot(now=4)[0]
     assert snapshot["unconfirmed_by_kind"]["animal"] == 1
     assert snapshot["events_entered_by_kind"]["animal"] == 0
+
+
+def test_confirmation_is_needed_only_for_new_unconfirmed_objects():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=4,
+                                max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, multiclass_policy(FIRST))
+    engine.observe(FIRST, (person(),), now=1)
+    assert engine.needs_confirmation(FIRST)            # first sighting
+    engine.observe(FIRST, (person(),), now=3)          # person confirmed
+    assert not engine.needs_confirmation(FIRST)
+    engine.observe(FIRST, (person(),), now=10)         # same active person
+    assert not engine.needs_confirmation(FIRST)
+    cat = ObjectObservation("animal", "cat", 0.9, (0.6, 0.6, 0.7, 0.7))
+    engine.observe(FIRST, (person(), cat), now=12)      # a cat arrives
+    assert engine.needs_confirmation(FIRST)

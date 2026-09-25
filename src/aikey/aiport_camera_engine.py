@@ -251,6 +251,11 @@ class CameraPolicyEngine:
                 result.append(CameraEventCandidate(camera, change, active[1]))
         return tuple(result)
 
+    def needs_confirmation(self, camera_mac: str) -> bool:
+        """Whether this camera's last sample left an unconfirmed object."""
+        camera = self._camera(camera_mac)
+        return self._policies[camera] is not None and self._trackers[camera].has_tentative
+
     def has_policy(self, camera_mac: str) -> bool:
         return self._policies[self._camera(camera_mac)] is not None
 

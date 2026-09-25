@@ -762,6 +762,12 @@ class CandidateService:
                 or generation != engine.policy_generation(camera_mac)):
             return
         candidates = engine.observe(camera_mac, observations, now=time.monotonic())
+        # A confirming paid sample only helps a new, unconfirmed object. When
+        # every sampled object already belongs to an active track, keep the
+        # bounded hourly allowance for later arrivals such as a passing cat.
+        if (observations and self._inference is not None
+                and not engine.needs_confirmation(camera_mac)):
+            self._inference.skip_confirmation(camera_mac)
         await self._publish_pool_candidates(candidates, frame=frame)
 
     async def _publish_pool_candidates(

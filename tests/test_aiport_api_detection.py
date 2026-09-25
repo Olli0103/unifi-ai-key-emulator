@@ -469,3 +469,23 @@ def test_motion_pair_spends_confirmation_only_after_a_positive_sample(tmp_path):
     assert len(calls) == 3
     assert [item.kind for item in first + second] == ["person", "person"]
     assert detector.budget.remaining(FIRST) == 3
+
+
+def test_skipped_confirmation_saves_the_paid_request(tmp_path):
+    calls = []
+
+    def transport(*_args):
+        calls.append(1)
+        return _response('{"detections":[{"kind":"person","label":"person",'
+                         '"score":0.92,"box":[0.1,0.2,0.4,0.8]}]}')
+
+    detector = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.8,
+                                 max_requests_per_hour=6, transport=transport)
+    detector.detect_for_camera(FIRST, STILL)      # positive startup probe
+    detector.skip_confirmation(FIRST)             # object already confirmed
+    assert detector.detect_for_camera(FIRST, STILL) == ()
+    assert len(calls) == 1
+    assert detector.budget.remaining(FIRST) == 5
+    assert detector.diagnostic_counts(FIRST)["confirmations_saved"] == 1
+    detector.skip_confirmation(FIRST)             # nothing pending: no-op
+    assert detector.diagnostic_counts(FIRST)["confirmations_saved"] == 1

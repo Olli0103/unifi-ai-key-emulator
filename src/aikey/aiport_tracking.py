@@ -134,6 +134,11 @@ class TemporalTracker:
         self._next_id = 1
         self._last_update: float | None = None
 
+    @property
+    def has_tentative(self) -> bool:
+        """Whether an unconfirmed sighting still needs a second sample."""
+        return any(not track.active for track in self._tracks.values())
+
     def update(self, observations: tuple[ObjectObservation, ...], *,
                now: float) -> tuple[TrackChange, ...]:
         if (type(now) not in (int, float) or not math.isfinite(now)

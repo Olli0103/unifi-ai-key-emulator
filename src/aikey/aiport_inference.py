@@ -225,6 +225,17 @@ class FairInference:
         if worker is not None:
             await worker
 
+    def skip_confirmation(self, camera_mac: str) -> None:
+        """Save a paid confirming request when nothing new needs one."""
+        camera = normalize_mac(camera_mac)
+        if camera not in self._allowed:
+            raise IngressError("camera_not_authorized")
+        skip = getattr(self._model, "skip_confirmation", None)
+        if callable(skip):
+            skip(camera)
+        if self._confirmation_camera == camera:
+            self._confirmation_camera = None
+
     def discard_pending(self, camera_mac: str) -> None:
         """Forget queued frames for a camera whose stream or policy changed."""
         camera = normalize_mac(camera_mac)
