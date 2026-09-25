@@ -4,7 +4,7 @@ import pytest
 
 from aikey.aiport_smart_settings import (
     SmartSettingsError, parse_motion_probe, parse_smart_settings,
-    summarize_smart_request,
+    summarize_secondary_lens_zones, summarize_smart_request,
 )
 
 
@@ -30,6 +30,21 @@ def test_probe_shape_omits_camera_and_nested_policy_contents():
 def test_probe_shape_handles_non_object_without_retaining_it():
     assert summarize_smart_request(["private"], camera_mac="2A1122334455") == {
         "object": False}
+
+
+def test_secondary_lens_summary_keeps_only_bounded_shape_and_classes():
+    private_id = "private-garage-zone"
+    raw = {"secondLensZones": {private_id: {
+        "coord": [0, 0, 1000, 0, 1000, 1000],
+        "objectTypes": ["person"], "secret": "private-value"}}}
+    shape = summarize_secondary_lens_zones(raw)
+    assert shape["zone_count"] == 1
+    assert shape["schema_valid"] is False
+    assert shape["person_selected"] is True
+    assert shape["vehicle_selected"] is False
+    assert private_id not in str(shape)
+    assert "private-value" not in str(shape)
+    assert "1000" not in str(shape)
 
 
 def test_motion_probe_accepts_only_bound_old_envelope():

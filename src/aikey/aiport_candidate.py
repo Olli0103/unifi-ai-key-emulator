@@ -46,7 +46,7 @@ from .aiport_recorded_probe import (
 )
 from .aiport_smart_settings import (
     SmartPolicy, SmartSettingsError, parse_motion_probe, parse_smart_settings,
-    summarize_smart_request,
+    summarize_secondary_lens_zones, summarize_smart_request,
 )
 from .aiport_credentials import CredentialError, CredentialStore
 from .aiport_adoption import AdoptionError, AdoptionStore, validate_management
@@ -610,6 +610,7 @@ class CandidateService:
         self._inference: FairInference | None = None
         self._pool_camera_order: tuple[str, ...] = ()
         self._pool_policy_errors: dict[str, str] = {}
+        self._pool_secondary_lens_shapes: dict[str, dict[str, int | bool]] = {}
         if "diagnostic_pool_detector" in config or "live_pool_detector" in config:
             live_pool = "live_pool_detector" in config
             detector = config["live_pool_detector" if live_pool
@@ -807,6 +808,10 @@ class CandidateService:
             rejection_reason = str(exc)
         else:
             self.smart_settings_subset_matches += 1
+        if rejection_reason == "unsupported_smart_feature:regions:secondLensZones":
+            self._pool_secondary_lens_shapes[camera] = summarize_secondary_lens_zones(payload)
+        else:
+            self._pool_secondary_lens_shapes.pop(camera, None)
         active = {stream["deviceID"] for stream in self.ingress.list_streams()}
         if (parsed is not None and parsed.enabled_types
                 and parsed.enabled_types <= set(self._pool_smart_types())
@@ -1363,6 +1368,8 @@ class CandidateService:
                                if self._inference is not None else None),
             "pool_cameras": ([dict(inference, **policy,
                                     policy_rejection=self._pool_policy_errors.get(
+                                        self._pool_camera_order[index]),
+                                    secondary_lens_shape=self._pool_secondary_lens_shapes.get(
                                         self._pool_camera_order[index]))
                               for index, (inference, policy) in enumerate(zip(
                                   self._inference.camera_snapshot(),

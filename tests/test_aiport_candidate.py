@@ -2002,6 +2002,24 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
     assert camera_health[1]["policy_rejection"] is None
 
     await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 7,
+        "payload": {"deviceID": cameras[0], "enableSmartDetect": ["person"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000,
+                    "secondLensZones": {"7": {
+                        "coord": [0, 0, 1000, 0, 1000, 1000],
+                        "objectTypes": ["person"]}}},
+    }).encode())
+    health_text = (await service._health(None)).text
+    camera_health = json.loads(health_text)["pool_cameras"]
+    assert camera_health[0]["policy_rejection"] == (
+        "unsupported_smart_feature:regions:secondLensZones")
+    assert camera_health[0]["secondary_lens_shape"] == {
+        "zone_count": 1, "schema_valid": True,
+        "animal_selected": False, "package_selected": False,
+        "person_selected": True, "vehicle_selected": False}
+    assert '"coord"' not in health_text
+
+    await service._handle_diagnostic_frame(sink, json.dumps({
         "functionName": "ChangeSmartDetectSettings", "messageId": 4,
         "payload": {"deviceID": "2A1122334457", "enableSmartDetect": ["person"],
                     "eventStartMSec": 1000, "eventStopMSec": 3000},

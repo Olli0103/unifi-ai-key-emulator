@@ -98,6 +98,33 @@ def summarize_smart_request(payload: object, *, camera_mac: str) -> dict[str, in
     return result
 
 
+def summarize_secondary_lens_zones(payload: object) -> dict[str, int | bool]:
+    """Describe a secondary-zone map without retaining IDs or coordinates.
+
+    The pool handler uses this only to diagnose a rejected controller policy.
+    Class-presence flags and schema validity identify whether a primary-lens
+    detector could safely ignore the map in a future compatibility fix.
+    """
+    value = payload.get("secondLensZones") if isinstance(payload, dict) else None
+    if not isinstance(value, dict):
+        return {"zone_count": -1, "schema_valid": False}
+    result: dict[str, int | bool] = {
+        "zone_count": min(len(value), 64),
+        "schema_valid": False,
+    }
+    for kind in sorted(_OBJECT_TYPES):
+        result[kind + "_selected"] = any(
+            isinstance(zone, dict) and isinstance(zone.get("objectTypes"), list)
+            and kind in zone["objectTypes"] for zone in value.values())
+    try:
+        parse_smart_zones(value)
+    except ZoneError:
+        pass
+    else:
+        result["schema_valid"] = True
+    return result
+
+
 def parse_motion_probe(payload: object, *, camera_mac: str) -> int:
     """Validate the exact old enhanced-motion envelope for a bounded probe.
 
