@@ -90,11 +90,11 @@ _WORKER_REJECTION_REASONS = {
     "Worker queue is full": "queue_full",
     "Worker journal is full; archive reviewed entries": "journal_full",
     "Worker has stopped": "worker_stopped",
-    "thumbnailMeta must list at most 256 objects": "index_metadata",
-    "thumbnailMeta entries need a tracker, ts and 0-1000 xywh coord": "index_metadata",
+    "Region metadata must list at most 256 entries": "region_metadata",
+    "Region metadata entries need a tracker, ts and 0-1000 xywh coord": "region_metadata",
     "recognizeKeyFrames has no indexable objects": "index_empty",
     "faceMeta must list 1 to 256 face regions": "face_metadata",
-    "faceMeta entries need a tracker, ts and 0-1000 xywh coord": "face_metadata",
+    "faceMeta has no regions inside the export": "face_outside_export",
 }
 
 
@@ -314,6 +314,12 @@ class DeviceService:
                 "tasks_empty", "tasks_with_objects", "objects_inside", "objects_before_start",
                 "objects_after_end", "objects_invalid", "name_hex24", "name_empty", "name_other",
                 "ts_in_thumbnail_ms", "ts_not_in_thumbnail_ms"), 0),
+            # Region shapes per metadata source (#2, #20): ranges and fit only.
+            "region_shape_counts": {source: dict.fromkeys((
+                "entries", "roi_list", "coord_not4", "max_le_1", "max_le_1000", "max_gt_1000",
+                "xywh_fits_1000", "xyxy_ordered", "type_person", "type_vehicle", "type_animal",
+                "type_package", "type_face", "type_other", "type_missing"), 0)
+                for source in ("thumbnailMeta", "roiMeta", "personMeta", "vehicleMeta", "faceMeta")},
             "key_moment_position_counts": dict.fromkeys((
                 "all_inside", "some_outside", "all_outside", "any_at_end",
                 "before_start_up_to_1s", "before_start_over_1s",
@@ -867,6 +873,33 @@ class DeviceService:
         start, end = body.get("start"), body.get("end")
         interval_valid = (type(start) is int and type(end) is int
                           and 0 <= start < end <= 2 ** 53 - 1)
+        for source, shapes in self._recognize_diagnostics["region_shape_counts"].items():
+            entries = body.get(source)
+            if not isinstance(entries, list):
+                continue
+            for item in entries[:256]:
+                _increment(shapes, "entries")
+                roi = item.get("roi") if isinstance(item, dict) else None
+                if isinstance(roi, list):
+                    _increment(shapes, "roi_list")
+                    roi = roi[0] if roi and isinstance(roi[0], dict) else None
+                if not isinstance(roi, dict):
+                    continue
+                kind = roi.get("objectType", roi.get("name"))
+                _increment(shapes, "type_missing" if not isinstance(kind, str) or not kind else
+                           f"type_{kind}" if kind in ("person", "vehicle", "animal", "package", "face")
+                           else "type_other")
+                coord = roi.get("coord")
+                if (not isinstance(coord, list) or len(coord) != 4
+                        or any(type(v) not in (int, float) for v in coord)):
+                    _increment(shapes, "coord_not4")
+                    continue
+                top = max(coord)
+                _increment(shapes, "max_le_1" if top <= 1 else "max_le_1000" if top <= 1000 else "max_gt_1000")
+                if coord[0] + coord[2] <= 1000 and coord[1] + coord[3] <= 1000:
+                    _increment(shapes, "xywh_fits_1000")
+                if coord[2] > coord[0] and coord[3] > coord[1]:
+                    _increment(shapes, "xyxy_ordered")
         meta = body.get("thumbnailMeta")
         if isinstance(meta, list):
             counts = self._recognize_diagnostics["thumbnail_meta_counts"]

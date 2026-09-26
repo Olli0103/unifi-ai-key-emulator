@@ -272,3 +272,35 @@ async def test_without_face_regions_the_face_is_searched_in_person_regions_and_l
     assert face["faceAttrs"]["1000004"]["linkedPersonTrackerID"] == 4
     assert face["faceAttrs"]["1000004"]["matchedName"] == "Synthetic Alice"
     assert face["faceSnapshots"][0]["trackerID"] == 1_000_004
+
+
+async def test_live_list_shaped_person_regions_reach_local_faces(controller, tmp_path):
+    # Live 7.3.68 (26 Sep): each personMeta entry's roi is a list of objects.
+    FaceStore(tmp_path).enroll("Synthetic Alice", ALICE)
+    command = task(face_meta=False)
+    command["payload"]["personMeta"] = [
+        {"ts": START + 1200, "roi": [{"coord": [300, 100, 200, 800], "trackerId": 4,
+                                      "objectType": "person"}]},
+        {"ts": START + 9000, "roi": [{"coord": [0, 0, 100, 100], "trackerId": 9,
+                                      "objectType": "person"}]}]          # outside the export
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        await worker.handle(command)
+    finally:
+        await worker.stop()
+    assert controller.face_requests[0]["regions"] == [[0.25, 0.01, 0.55, 0.55]]
+    face = controller.callbacks[0]["face"][1]
+    assert set(face["faceAttrs"]) == {"1000004"}
+
+
+async def test_person_regions_all_outside_the_export_are_refused_before_media(controller, tmp_path):
+    command = task(face_meta=False)
+    command["payload"]["personMeta"] = [
+        {"ts": START + 9000, "roi": [{"coord": [0, 0, 100, 100], "trackerId": 9, "objectType": "person"}]}]
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError, match="no regions inside the export"):
+            await worker.handle(command)
+    finally:
+        await worker.stop()
+    assert controller.face_requests == [] and controller.callbacks == []

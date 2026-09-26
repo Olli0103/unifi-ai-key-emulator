@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import io
 import re
+import time
 import wave
 from typing import Callable
 
@@ -45,11 +46,14 @@ def read_wav(data: bytes):
     return numpy.frombuffer(frames, dtype="<i2").astype("float32") / 32768.0
 
 
-def whisper_cpp_transcriber(model_path: str, threads: int) -> Transcriber:
+def whisper_cpp_transcriber(model_path: str, threads: int, *, fallback: bool = True) -> Transcriber:
     from pywhispercpp.model import Model
+    # Temperature fallback re-decodes an uncertain segment up to five times,
+    # hotter each time; on TV or music audio it multiplies the cost (#15).
+    extra = {} if fallback else {"temperature_inc": 0.0}
     model = Model(model_path, n_threads=threads, print_progress=False,
                   print_realtime=False, print_timestamps=False,
-                  redirect_whispercpp_logs_to=None)
+                  redirect_whispercpp_logs_to=None, **extra)
 
     def transcribe(samples, language):
         segments = model.transcribe(samples, language=language, translate=False)
@@ -61,7 +65,8 @@ def whisper_cpp_transcriber(model_path: str, threads: int) -> Transcriber:
 
 def build_app(transcribe: Transcriber, *, default_language: str = "auto") -> web.Application:
     lock = asyncio.Lock()
-    counters = {"requests": 0, "transcribed": 0, "rejected": 0, "failed": 0}
+    counters = {"requests": 0, "transcribed": 0, "rejected": 0, "failed": 0,
+                "audio_seconds": 0.0, "processing_seconds": 0.0}
 
     async def transcriptions(request: web.Request) -> web.Response:
         counters["requests"] += 1
@@ -90,12 +95,16 @@ def build_app(transcribe: Transcriber, *, default_language: str = "auto") -> web
             counters["rejected"] += 1
             return web.json_response({"error": "invalid_language"}, status=400)
         async with lock:
+            started = time.monotonic()
             try:
                 segments, detected = await asyncio.to_thread(transcribe, samples, language)
             except Exception:
                 counters["failed"] += 1
                 return web.json_response({"error": "transcription_failed"}, status=500)
+            counters["processing_seconds"] = round(counters["processing_seconds"]
+                                                   + time.monotonic() - started, 1)
         counters["transcribed"] += 1
+        counters["audio_seconds"] = round(counters["audio_seconds"] + len(samples) / 16000, 1)
         body = {"text": " ".join(text.strip() for _, _, text in segments).strip(),
                 "segments": [{"start": start, "end": end, "text": text}
                              for start, end, text in segments],
@@ -120,10 +129,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=8178)
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--language", default="auto")
+    parser.add_argument("--no-fallback", action="store_true",
+                        help="decode once at temperature 0 (no temperature fallback)")
     args = parser.parse_args(argv)
     if args.language != "auto" and not _LANGUAGE.fullmatch(args.language):
         parser.error("--language must be auto or a two-letter code")
-    app = build_app(whisper_cpp_transcriber(args.model, args.threads),
+    app = build_app(whisper_cpp_transcriber(args.model, args.threads, fallback=not args.no_fallback),
                     default_language=args.language)
     web.run_app(app, host=args.host, port=args.port, access_log=None, print=None)
     return 0

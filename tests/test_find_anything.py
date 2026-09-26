@@ -65,7 +65,9 @@ class Controller:
         reader = await request.multipart()
         parts = {}
         while (part := await reader.next()) is not None:
-            parts[part.name] = json.loads(await part.read(decode=False))
+            body = await part.read(decode=False)
+            parts[part.name] = json.loads(body) if part.name == "ram" else (
+                part.headers.get("Content-Type"), body[:3])
         self.callbacks.append(parts)
         return web.json_response({"ram": None})
 
@@ -152,7 +154,7 @@ async def test_objects_are_embedded_locally_and_posted_as_thumbnail_tags(control
         (3, START + 1500, []), (4, START + 1500, [])]
     assert all(len(t["imgEmbed"]) == 768 for t in tags)
     assert tags[0]["imgEmbed"][0] == 1.0 and tags[1]["imgEmbed"][1] == 1.0   # normalized
-    assert result["result"] == {"indexed": 2}
+    assert result["result"] == {"indexed": 2, "snapshots": 0}
     journal = "".join(p.read_text() for p in (tmp_path / "worker-jobs").glob("*.json"))
     assert "imgEmbed" not in journal
 
@@ -175,7 +177,7 @@ async def test_tasks_without_indexable_objects_are_refused_before_media(controll
         for meta in ([], [roi(3, START + 9000, [0, 0, 10, 10])]):
             with pytest.raises(WorkerError, match="no indexable objects"):
                 await worker.handle(task(meta=meta))
-        with pytest.raises(WorkerError, match="thumbnailMeta entries"):
+        with pytest.raises(WorkerError, match="Region metadata entries"):
             await worker.handle(task(meta=[roi(3, START, [0, 0, 1200, 10])]))
         with pytest.raises(WorkerError):
             await worker.handle(task(ram_type="image"))
@@ -239,6 +241,10 @@ async def test_the_device_routes_index_cameras_to_the_worker(tmp_path):
     assert {k: v for k, v in counts.items() if v} == {
         "tasks_with_objects": 1, "objects_inside": 2, "objects_after_end": 1, "name_empty": 3,
         "ts_in_thumbnail_ms": 2, "ts_not_in_thumbnail_ms": 1}
+    shapes = device.status["recognize_key_frames"]["region_shape_counts"]["thumbnailMeta"]
+    assert {k: v for k, v in shapes.items() if v} == {
+        "entries": 3, "max_le_1000": 3, "xywh_fits_1000": 3, "xyxy_ordered": 2,
+        "type_person": 2, "type_vehicle": 1}
 
 
 async def test_nl_parse_is_answered_with_a_local_clip_text_vector(controller, tmp_path):
@@ -391,3 +397,66 @@ def test_protect_error_replies_with_an_empty_string_body_decode():
     with pytest.raises(ContractError):
         decode_message(struct.pack(">BBBBI", 1, 1, 0, 0, len(header)) + header
                        + struct.pack(">BBBBI", 2, 2, 0, 0, 2) + b"hi")
+
+
+def live_roi(ts, *objects):
+    """The live 7.3.68 shape: one entry per timestamp with a list of objects."""
+    return {"ts": ts, "roi": [{"coord": coord, "trackerId": tracker, "confidence": confidence,
+                               "name": kind, "objectType": kind} for tracker, coord, kind, confidence in objects]}
+
+
+async def test_live_list_shaped_thumbnail_meta_is_indexed(controller, tmp_path):
+    meta = [live_roi(START + 1500, (3, [100, 200, 300, 400], "person", 0.9),
+                     (4, [600, 100, 200, 500], "vehicle", 0.7))]
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        await worker.handle(task(meta=meta))
+    finally:
+        await worker.stop()
+    [parts] = controller.callbacks
+    assert [(t["trackerID"], t["keyMomentMs"]) for t in parts["ram"]["thumbnailTags"]] == [
+        (3, START + 1500), (4, START + 1500)]
+
+
+async def test_key_moment_regions_become_search_snapshots_with_crops(controller, tmp_path):
+    command = task(meta=[])
+    command["payload"]["roiMeta"] = [
+        live_roi(START + 1000, (5, [100, 100, 200, 300], "person", 80), (6, [500, 500, 100, 100], "face", 99)),
+        live_roi(START + 2000, (5, [120, 100, 200, 300], "person", 60), (7, [0, 0, 400, 200], "vehicle", 70)),
+        live_roi(START + 9000, (8, [0, 0, 100, 100], "animal", 99))]            # outside the export
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        result = await worker.handle(command)
+    finally:
+        await worker.stop()
+    assert controller.vision_requests == []
+    [parts] = controller.callbacks
+    ram = parts["ram"]
+    assert ram.get("thumbnailTags") == [] and ram["description"] == ""
+    moments = ram["keyMomentsTags"]
+    # One snapshot per tracker (best confidence), faces never, outside-export never.
+    assert [(m["keyMomentMs"], m["searchSnapshots"][0]["trackerID"],
+             m["searchSnapshots"][0]["smartDetectSnapshotType"]) for m in moments] == [
+        (START + 1000, 5, "person"), (START + 2000, 7, "vehicle")]
+    snapshot = moments[0]["searchSnapshots"][0]
+    # Protect's snapshotSchema fields, exactly.
+    assert set(snapshot) == {"clockBestMonotonic", "clockBestWall", "smartDetectHeatmap",
+                             "smartDetectSnapshot", "smartDetectSnapshotName",
+                             "smartDetectSnapshotType", "trackerID"}
+    assert snapshot["clockBestWall"] == START + 1000 and snapshot["smartDetectSnapshot"] == "5.jpg"
+    assert all(len(m["imgEmbed"]) == 768 and m["tags"] == [] for m in moments)
+    assert parts["5"] == ("image/jpeg", b"\xff\xd8\xff") and parts["7"] == ("image/jpeg", b"\xff\xd8\xff")
+    assert result["result"] == {"indexed": 0, "snapshots": 2}
+
+
+async def test_existing_objects_take_precedence_over_snapshots(controller, tmp_path):
+    command = task()
+    command["payload"]["roiMeta"] = [live_roi(START + 1000, (5, [100, 100, 200, 300], "person", 80))]
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        await worker.handle(command)
+    finally:
+        await worker.stop()
+    [parts] = controller.callbacks
+    assert parts["ram"]["keyMomentsTags"] == [] and len(parts["ram"]["thumbnailTags"]) == 2
+    assert set(parts) == {"ram"}

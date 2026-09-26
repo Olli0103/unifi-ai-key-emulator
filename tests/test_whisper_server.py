@@ -61,8 +61,10 @@ async def test_language_is_validated_and_health_exposes_only_counts(client):
     assert response.status == 400
     await client.post("/v1/audio/transcriptions", data=_form(_wav()))
     health = await (await client.get("/healthz")).json()
+    processing = health.pop("processing_seconds")
     assert health == {"status": "ok", "requests": 2, "transcribed": 1, "rejected": 1,
-                      "failed": 0}
+                      "failed": 0, "audio_seconds": 1.0}
+    assert 0 <= processing < 5
     assert client.calls == [(16000, "auto")]
 
 

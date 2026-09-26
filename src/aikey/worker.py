@@ -134,6 +134,54 @@ def _origin(url):
         raise WorkerError("Invalid HTTP origin or URL") from exc
 
 
+_SNAPSHOT_TYPES = frozenset({"person", "vehicle", "animal", "package"})
+
+
+def _meta_regions(meta):
+    """Flatten Protect's region metadata into (tracker, ts, xywh, type, confidence).
+
+    Live 7.3.68 tasks carry ``[{ts, roi: [{coord, trackerId, ...}, ...]}]``:
+    ``roi`` is a list of objects per timestamp (26 Sep: every thumbnailMeta,
+    roiMeta and personMeta entry). A single ``roi`` object is also accepted.
+    Boxes are 0-1000 xywh. Only fixed fields are read.
+    """
+    if meta is None:
+        return []
+    if not isinstance(meta, list) or len(meta) > 256:
+        raise WorkerError("Region metadata must list at most 256 entries")
+    regions = []
+    for item in meta:
+        ts = item.get("ts") if isinstance(item, dict) else None
+        rois = item.get("roi") if isinstance(item, dict) else None
+        rois = rois if isinstance(rois, list) else [rois]
+        if type(ts) is not int or not 1 <= len(rois) <= 64:
+            raise WorkerError("Region metadata entries need a tracker, ts and 0-1000 xywh coord")
+        for roi in rois:
+            coord = roi.get("coord") if isinstance(roi, dict) else None
+            tracker = roi.get("trackerId", roi.get("trackerID")) if isinstance(roi, dict) else None
+            if (type(tracker) is not int or not 0 <= tracker <= 2 ** 31
+                    or not isinstance(coord, list) or len(coord) != 4
+                    or any(type(v) not in (int, float) or not math.isfinite(v) for v in coord)
+                    or not (0 <= coord[0] < 1000 and 0 <= coord[1] < 1000
+                            and 0 < coord[2] <= 1000 and 0 < coord[3] <= 1000)):
+                raise WorkerError("Region metadata entries need a tracker, ts and 0-1000 xywh coord")
+            attributes = roi.get("attributes") if isinstance(roi.get("attributes"), dict) else {}
+            kind = next((value for value in (roi.get("objectType"), attributes.get("objectType"),
+                                             roi.get("name")) if isinstance(value, str) and value), None)
+            confidence = roi.get("confidence", 0)
+            confidence = (float(confidence) if type(confidence) in (int, float) and math.isfinite(confidence)
+                          else 0.0)
+            regions.append((tracker, ts, [float(v) for v in coord], kind, confidence))
+    return regions
+
+
+def _padded(coord, fraction):
+    x, y, w, h = (v / 1000 for v in coord)
+    pad_x, pad_y = w * fraction, h * fraction
+    return [round(v, 4) for v in (max(0.0, x - pad_x), max(0.0, y - pad_y),
+                                  min(1.0, x + w + pad_x), min(1.0, y + h + pad_y))]
+
+
 @dataclass
 class _Job:
     job_id: str
@@ -659,45 +707,38 @@ class JobProcessor:
     def _index_targets(self, body):
         """Objects of a key-moment task to embed for Find Anything.
 
-        Protect saves an embedding only for a ``thumbnailTags`` entry whose
-        tracker ID and ``keyMomentMs`` equal a smart-detect object's
-        ``attributes.trackerId`` and exact ``detectedAt`` (7.3.60
-        saveEventTagging). ``thumbnailMeta`` carries exactly those: each
-        ``roi`` has the tracker and a 0-1000 xywh box, ``ts`` the detection
-        time. Objects outside the exported interval cannot be decoded and are
+        Protect saves an embedding only for an object it can match by tracker
+        ID and exact detection time (7.3.60 saveEventTagging):
+
+        * ``thumbnailMeta`` objects already exist as smart-detect objects, so
+          they are answered with ``thumbnailTags`` [tracker, ts, region, None];
+        * otherwise Protect's key-moment regions (``roiMeta``, ``personMeta``,
+          ``vehicleMeta``) are answered with ``keyMomentsTags`` search
+          snapshots [tracker, ts, region, type]: Protect stores each snapshot
+          as a thumbnail and smart-detect object of that tracker and type,
+          then attaches the embedding. Only person, vehicle, animal and
+          package regions qualify, one per tracker.
+
+        Objects outside the exported interval cannot be decoded and are
         skipped; the highest-confidence objects are kept.
         """
-        meta = body.get("thumbnailMeta")
-        if meta is None:
-            return []
-        if not isinstance(meta, list) or len(meta) > 256:
-            raise WorkerError("thumbnailMeta must list at most 256 objects")
-        chosen = {}
-        for item in meta:
-            roi = item.get("roi") if isinstance(item, dict) else None
-            ts = item.get("ts") if isinstance(item, dict) else None
-            coord = roi.get("coord") if isinstance(roi, dict) else None
-            tracker = roi.get("trackerId") if isinstance(roi, dict) else None
-            if (type(ts) is not int or type(tracker) is not int or not 0 <= tracker <= 2 ** 31
-                    or not isinstance(coord, list) or len(coord) != 4
-                    or any(type(v) not in (int, float) or not math.isfinite(v) for v in coord)
-                    or not (0 <= coord[0] < 1000 and 0 <= coord[1] < 1000
-                            and 0 < coord[2] <= 1000 and 0 < coord[3] <= 1000)):
-                raise WorkerError("thumbnailMeta entries need a tracker, ts and 0-1000 xywh coord")
-            if not body["start"] <= ts <= body["end"]:
-                continue
-            confidence = roi.get("confidence", 0)
-            confidence = float(confidence) if type(confidence) in (int, float) and math.isfinite(confidence) else 0.0
-            x, y, w, h = (float(v) / 1000 for v in coord)
-            pad_x, pad_y = w * 0.1, h * 0.1
-            region = [round(v, 4) for v in (max(0.0, x - pad_x), max(0.0, y - pad_y),
-                                            min(1.0, x + w + pad_x), min(1.0, y + h + pad_y))]
-            key = (tracker, ts)
-            if key not in chosen or confidence > chosen[key][0]:
-                chosen[key] = (confidence, region)
-        ranked = sorted(chosen.items(), key=lambda item: (-item[1][0], item[0]))
-        return [[tracker, ts, region] for (tracker, ts), (_, region)
-                in ranked[:self.find_anything["max_objects"]]]
+        start, end, limit = body["start"], body["end"], self.find_anything["max_objects"]
+        existing = {}
+        for tracker, ts, coord, _, confidence in _meta_regions(body.get("thumbnailMeta")):
+            if start <= ts <= end and ((tracker, ts) not in existing
+                                       or confidence > existing[(tracker, ts)][0]):
+                existing[(tracker, ts)] = (confidence, _padded(coord, 0.1))
+        if existing:
+            ranked = sorted(existing.items(), key=lambda item: (-item[1][0], item[0]))
+            return [[tracker, ts, region, None] for (tracker, ts), (_, region) in ranked[:limit]]
+        snapshots = {}
+        for source in ("roiMeta", "personMeta", "vehicleMeta"):
+            for tracker, ts, coord, kind, confidence in _meta_regions(body.get(source)):
+                if (start <= ts <= end and kind in _SNAPSHOT_TYPES
+                        and (tracker not in snapshots or confidence > snapshots[tracker][0])):
+                    snapshots[tracker] = (confidence, ts, _padded(coord, 0.1), kind)
+        ranked = sorted(snapshots.items(), key=lambda item: (-item[1][0], item[0]))
+        return [[tracker, ts, region, kind] for tracker, (_, ts, region, kind) in ranked[:limit]]
 
     def _normalize_index(self, command):
         """Index-only key-moment task: local CLIP embeddings, no caption.
@@ -836,25 +877,16 @@ class JobProcessor:
         linked = not body.get("faceMeta")
         if not isinstance(meta, list) or not 1 <= len(meta) <= 256:
             raise WorkerError("faceMeta must list 1 to 256 face regions")
-        for item in meta:
-            roi = item.get("roi") if isinstance(item, dict) else None
-            ts = item.get("ts") if isinstance(item, dict) else None
-            coord = roi.get("coord") if isinstance(roi, dict) else None
-            tracker = roi.get("trackerId") if isinstance(roi, dict) else None
-            if (type(ts) is not int or not body["start"] <= ts <= body["end"]
-                    or type(tracker) is not int or not 0 <= tracker <= 2 ** 31
-                    or not isinstance(coord, list) or len(coord) != 4
-                    or any(type(v) not in (int, float) or not math.isfinite(v) for v in coord)
-                    or not (0 <= coord[0] < 1000 and 0 <= coord[1] < 1000
-                            and 0 < coord[2] <= 1000 and 0 < coord[3] <= 1000)):
-                raise WorkerError("faceMeta entries need a tracker, ts and 0-1000 xywh coord")
+        for tracker, ts, coord, _, confidence in _meta_regions(meta):
+            if not body["start"] <= ts <= body["end"]:
+                continue                    # not decodable from this export
             if linked:
                 # The upper part of a person box, where the face is.
                 coord = [coord[0], coord[1], coord[2], max(1.0, coord[3] * 0.45)]
-            confidence = roi.get("confidence", 0)
-            confidence = confidence if type(confidence) in (int, float) else 0
             if tracker not in chosen or confidence > chosen[tracker][2]:
-                chosen[tracker] = (ts, [float(v) for v in coord], confidence)
+                chosen[tracker] = (ts, coord, confidence)
+        if not chosen:
+            raise WorkerError("faceMeta has no regions inside the export")
         callback, media = self._recognize_media(body)
         faces = sorted(chosen.items(), key=lambda item: -item[1][2])[:self.faces["max_faces"]]
         body["_faces"] = [[_PERSON_FACE_OFFSET + tracker if linked else tracker, ts, coord,
@@ -1327,46 +1359,72 @@ class JobProcessor:
         result["result"] = summary
         return result
 
-    async def _thumbnail_tags(self, job, data, headers, url):
-        """Local CLIP embeddings for each indexed object, one decode per frame."""
+    async def _index_objects(self, job, data, headers, url):
+        """Local CLIP embeddings per indexed object, one decode per frame.
+
+        Returns (thumbnailTags, keyMomentsTags, image parts). Search snapshots
+        carry a JPEG crop, named by tracker ID, that Protect keeps as the
+        object's thumbnail.
+        """
+        from PIL import Image
         targets = job.payload.get("_index") or []
         if not targets:
-            return []
+            return [], [], []
         if self._clip is None:
             self._clip = clip.ClipClient(self.find_anything, timeout_s=60)
         by_time = {}
-        for tracker, ts, region in targets:
-            by_time.setdefault(ts, []).append((tracker, region))
-        tags = []
+        for tracker, ts, region, kind in targets:
+            by_time.setdefault(ts, []).append((tracker, region, kind))
+        tags, moments, images = [], [], []
         for ts, objects in sorted(by_time.items()):
             frame = await self._video_frame(data, headers, url, job, timestamp=ts)
             try:
-                vectors = await self._clip.embed_regions(frame, [region for _, region in objects])
+                vectors = await self._clip.embed_regions(frame, [region for _, region, _ in objects])
             except clip.ClipError as exc:
                 raise WorkerError(str(exc)) from exc
-            for (tracker, _), vector in zip(objects, vectors):
-                tags.append({"keyMomentMs": ts, "tags": [], "trackerID": tracker,
-                             "imgEmbed": [round(value, 6) for value in vector]})
-        return tags
+            picture = None
+            for (tracker, region, kind), vector in zip(objects, vectors):
+                embedding = [round(value, 6) for value in vector]
+                if kind is None:
+                    tags.append({"keyMomentMs": ts, "tags": [], "trackerID": tracker, "imgEmbed": embedding})
+                    continue
+                if picture is None:
+                    picture = Image.open(BytesIO(frame)).convert("RGB")
+                width, height = picture.size
+                crop = picture.crop((int(region[0] * width), int(region[1] * height),
+                                     max(int(region[0] * width) + 1, round(region[2] * width)),
+                                     max(int(region[1] * height) + 1, round(region[3] * height))))
+                crop.thumbnail((512, 512))
+                out = BytesIO()
+                crop.save(out, format="JPEG", quality=85)
+                name = f"{tracker}.jpg"
+                moments.append({"keyMomentMs": ts, "tags": [], "imgEmbed": embedding,
+                                "searchSnapshots": [{
+                                    "clockBestMonotonic": ts, "clockBestWall": ts,
+                                    "smartDetectHeatmap": "", "smartDetectSnapshot": name,
+                                    "smartDetectSnapshotName": name,
+                                    "smartDetectSnapshotType": kind, "trackerID": tracker}]})
+                images.append((str(tracker), out.getvalue()))
+        return tags, moments, images
 
     async def _execute_index(self, job):
         started = time.monotonic()
         (_, url), = job.media
         data, headers = await self._fetch(url, "video")
         prepared = time.monotonic()
-        tags = await self._thumbnail_tags(job, data, headers, url)
+        tags, moments, images = await self._index_objects(job, data, headers, url)
         inferred = time.monotonic()
         payload = {"cameraId": job.payload["camera"], "eventId": job.payload["event"],
-                   "description": "", "status": "success", "keyMomentsTags": [],
+                   "description": "", "status": "success", "keyMomentsTags": moments,
                    "thumbnailTags": tags, "inferBoxMs": 0,
                    "inferTagMs": round((inferred - prepared) * 1000), "inferTxtMs": 0,
                    "preProcessMs": round((prepared - started) * 1000),
                    "timeElapsedMs": round((inferred - started) * 1000)}
-        summary = {"indexed": len(tags)}
+        summary = {"indexed": len(tags), "snapshots": len(moments)}
         if self.callback_mode == "disabled":
             return {"status": "processed", "jobId": job.job_id, "callback": "disabled", "result": summary}
-        result = await self._post_callback(job, payload)
-        # Embeddings stay out of the journal.
+        result = await self._post_callback(job, payload, images=images)
+        # Embeddings and crops stay out of the journal.
         result["result"] = summary
         return result
 
@@ -1378,11 +1436,12 @@ class JobProcessor:
         if job.operation == "recognizeFaces":
             return await self._execute_faces(job)
         started = time.monotonic()
-        images, thumbnail_tags = [], []
+        images, thumbnail_tags, key_moment_tags, snapshot_images = [], [], [], []
         for kind, url in job.media:
             data, headers = await self._fetch(url, kind)
             if job.operation == "recognizeKeyFrames":
-                thumbnail_tags = await self._thumbnail_tags(job, data, headers, url)
+                thumbnail_tags, key_moment_tags, snapshot_images = await self._index_objects(
+                    job, data, headers, url)
                 moments = sorted(set(job.payload["keyMoments"]))
                 if len(moments) > self.max_images:
                     if self.max_images == 1:
@@ -1413,6 +1472,8 @@ class JobProcessor:
                        "timeElapsedMs": round((inferred - started) * 1000)}
             if thumbnail_tags:
                 payload["thumbnailTags"] = thumbnail_tags
+            if key_moment_tags:
+                payload["keyMomentsTags"] = key_moment_tags
         elif job.callback_kind == "legacy":
             payload = {"eventId": job.payload["event"], "status": "success", "description": description}
             if self.options["legacy_profile"] == "protect-7.2.105":
@@ -1432,10 +1493,11 @@ class JobProcessor:
                 payload["descEmbedding"] = vectors[0]
         if self.callback_mode == "disabled":
             return {"status": "processed", "jobId": job.job_id, "callback": "disabled", "result": payload}
-        result = await self._post_callback(job, payload)
-        if "thumbnailTags" in payload:
+        result = await self._post_callback(job, payload, images=snapshot_images)
+        if thumbnail_tags or key_moment_tags:
             # Keep the journal's caption record but not the embeddings.
-            result["result"] = {**payload, "thumbnailTags": len(payload["thumbnailTags"])}
+            result["result"] = {**payload, "thumbnailTags": len(thumbnail_tags),
+                                "keyMomentsTags": len(key_moment_tags)}
         return result
 
     async def _post_callback(self, job, payload, *, images=()):
@@ -1453,6 +1515,9 @@ class JobProcessor:
             elif job.callback_kind in {"legacy", "legacy_tagging"}:
                 form = aiohttp.FormData()
                 form.add_field("ram", _json(payload), filename="description.json", content_type="application/json")
+                # Search snapshot crops, one part per tracker ID (saveEventTagging).
+                for name, image in images:
+                    form.add_field(name, image, filename=f"{name}.jpg", content_type="image/jpeg")
                 kwargs = {"data": form}
             else:
                 kwargs = {"json": payload}
