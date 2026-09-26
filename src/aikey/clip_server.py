@@ -77,6 +77,19 @@ def preprocess(picture):
     return pixels.transpose(2, 0, 1)
 
 
+def weights_revision(model_dir: str) -> str:
+    """SHA-256 over the exact encoder files, so an index can pin its weights."""
+    import hashlib
+    root = Path(model_dir)
+    digest = hashlib.sha256()
+    for name in ("onnx/text_model.onnx", "onnx/vision_model.onnx", "tokenizer.json"):
+        digest.update(name.encode() + b"\0")
+        with open(root / name, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
 def onnx_encoders(model_dir: str, *, threads: int = 4) -> tuple[TextEncoder, ImageEncoder]:
     import numpy
     import onnxruntime
@@ -121,13 +134,15 @@ def onnx_encoders(model_dir: str, *, threads: int = 4) -> tuple[TextEncoder, Ima
     return encode_text, encode_image
 
 
-def build_app(encode_text: TextEncoder, encode_image: ImageEncoder) -> web.Application:
+def build_app(encode_text: TextEncoder, encode_image: ImageEncoder, *,
+              revision: str | None = None) -> web.Application:
     lock = asyncio.Lock()
     counters = {"text_requests": 0, "image_requests": 0, "texts": 0, "regions": 0,
                 "rejected": 0, "failed": 0}
 
     def reply(vectors):
         return web.json_response({"model": MODEL, "dim": DIMENSIONS,
+                                  **({"revision": revision} if revision else {}),
                                   "embeddings": [[round(v, 7) for v in normalize(vector)]
                                                  for vector in vectors]})
 
@@ -186,7 +201,8 @@ def build_app(encode_text: TextEncoder, encode_image: ImageEncoder) -> web.Appli
         return reply(vectors)
 
     async def health(_request: web.Request) -> web.Response:
-        return web.json_response({"status": "ok", "model": MODEL, "dim": DIMENSIONS, **counters})
+        return web.json_response({"status": "ok", "model": MODEL, "dim": DIMENSIONS,
+                                  **({"revision": revision} if revision else {}), **counters})
 
     app = web.Application(client_max_size=_MAX_IMAGE_BYTES + 131072)
     app.router.add_post("/v1/text", text)
@@ -202,7 +218,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=8180)
     parser.add_argument("--threads", type=int, default=4)
     args = parser.parse_args(argv)
-    app = build_app(*onnx_encoders(args.models, threads=args.threads))
+    app = build_app(*onnx_encoders(args.models, threads=args.threads),
+                    revision=weights_revision(args.models))
     web.run_app(app, host=args.host, port=args.port, access_log=None, print=None)
     return 0
 

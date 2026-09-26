@@ -16,7 +16,7 @@ from aikey.clip_server import InputError, build_app, parse_regions, preprocess
 from aikey.config import ConfigError, validate_config
 from aikey.device import DeviceService
 from aikey.protocol import decode_message, encode_message
-from aikey.search import SearchService
+from aikey.search import EmbeddingError, SearchService
 from aikey.worker import JobProcessor, WorkerError
 from test_basic_descriptions import device_config, wire
 
@@ -825,3 +825,102 @@ async def test_malformed_verification_requests_are_refused_before_media(controll
     finally:
         await worker.stop()
     assert controller.reverifications == [] and controller.clip_requests == []
+
+
+class RevisionedClip:
+    """A CLIP server double that reports a weights revision (#18)."""
+
+    def __init__(self, revision):
+        self.revision = revision
+
+    async def text(self, request):
+        await request.json()
+        return web.json_response({"model": clip.MODEL, "dim": 768, "revision": self.revision,
+                                  "embeddings": [vector(5)]})
+
+    async def health(self, request):
+        return web.json_response({"status": "ok", "model": clip.MODEL, "dim": 768, "revision": self.revision})
+
+
+async def nl_parse(service):
+    return decode_message(await service.handle_message(encode_message(
+        {"id": "q", "type": "request", "action": "NL_PARSE", "timestamp": 1},
+        {"querySentence": "a dog", "model": clip.MODEL})))
+
+
+def test_the_weights_revision_covers_both_encoders_and_the_tokenizer(tmp_path):
+    from aikey.clip_server import weights_revision
+    (tmp_path / "onnx").mkdir()
+    for name in ("onnx/text_model.onnx", "onnx/vision_model.onnx", "tokenizer.json"):
+        (tmp_path / name).write_bytes(name.encode())
+    first = weights_revision(str(tmp_path))
+    assert len(first) == 64 and weights_revision(str(tmp_path)) == first
+    (tmp_path / "tokenizer.json").write_bytes(b"other")
+    assert weights_revision(str(tmp_path)) != first
+
+
+async def test_the_clip_server_reports_its_revision():
+    app = build_app(lambda texts: [vector(1) for _ in texts], lambda jpeg, regions: [vector(0)],
+                    revision="a" * 64)
+    async with TestClient(TestServer(app)) as client:
+        body = await (await client.post("/v1/text", json={"texts": ["a dog"]})).json()
+        health = await (await client.get("/healthz")).json()
+    assert body["revision"] == health["revision"] == "a" * 64
+
+
+async def test_search_pins_the_clip_revision_once_and_refuses_other_weights(tmp_path):
+    served = RevisionedClip("a" * 64)
+    app = web.Application()
+    app.router.add_post("/v1/text", served.text)
+    app.router.add_get("/healthz", served.health)
+    async with TestServer(app) as server:
+        options = {"search": {"enabled": True, "profile": clip.PROFILE},
+                   "find_anything": {"clip_server": f"http://127.0.0.1:{server.port}"}}
+        service = SearchService(options, tmp_path)
+        try:
+            service._check_profile()              # a profile from before pinning existed
+            before = (tmp_path / "search-profile.json").read_text()
+            assert "revision" not in json.loads(before)
+            await service.pin_revision()
+            profile = json.loads((tmp_path / "search-profile.json").read_text())
+            assert profile["revision"] == "a" * 64
+            assert (tmp_path / "search-profile.json.before-upgrade").read_text() == before
+            assert service.status["revision"] == "a" * 12
+            service._check_profile()              # the sync check accepts the pinned profile
+            assert (await nl_parse(service)).header["errorCode"] == 0
+            served.revision = "b" * 64            # the server's weights changed
+            assert (await nl_parse(service)).header["errorCode"] == 1
+        finally:
+            await service.stop()
+        restarted = SearchService(options, tmp_path)
+        try:
+            await restarted.pin_revision()        # the pin survives; it is not re-learned
+            assert restarted.clip.expected_revision == "a" * 64
+            assert (await nl_parse(restarted)).header["errorCode"] == 1
+        finally:
+            await restarted.stop()
+
+
+async def test_a_changed_profile_is_not_upgraded_with_a_revision(tmp_path):
+    served = RevisionedClip("a" * 64)
+    app = web.Application()
+    app.router.add_get("/healthz", served.health)
+    async with TestServer(app) as server:
+        options = {"search": {"enabled": True, "profile": clip.PROFILE},
+                   "find_anything": {"clip_server": f"http://127.0.0.1:{server.port}"}}
+        stale = {"search": options["search"], "find_anything": {"clip_server": "http://127.0.0.1:9"}}
+        SearchService(stale, tmp_path)._check_profile()
+        service = SearchService(options, tmp_path)
+        with pytest.raises(EmbeddingError):
+            await service.pin_revision()
+        assert "revision" not in json.loads((tmp_path / "search-profile.json").read_text())
+        assert not (tmp_path / "search-profile.json.before-upgrade").exists()
+        await service.stop()
+
+
+async def test_worker_clip_calls_follow_the_pinned_revision(controller, tmp_path):
+    worker = JobProcessor(config(controller), tmp_path)
+    assert worker._clip_client().expected_revision is None
+    (tmp_path / "search-profile.json").write_text(json.dumps({"revision": "c" * 64}))
+    assert worker._clip_client().expected_revision == "c" * 64
+    await worker.stop()

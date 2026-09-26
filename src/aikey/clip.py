@@ -92,10 +92,13 @@ def validate_find_anything_config(value: Any) -> dict:
 class ClipClient:
     """Talks to the local CLIP server; one shared session, bounded replies."""
 
-    def __init__(self, config: dict, *, timeout_s: float = 30):
+    def __init__(self, config: dict, *, timeout_s: float = 30, expected_revision: str | None = None):
         self.config = validate_find_anything_config(config)
         self.base = self.config["clip_server"]
         self.timeout_s = timeout_s
+        # When the index pins encoder weights, replies from other weights are
+        # refused, so an index never mixes vectors from two encoders (#18).
+        self.expected_revision = expected_revision
         self._session: aiohttp.ClientSession | None = None
 
     def _client(self) -> aiohttp.ClientSession:
@@ -116,12 +119,28 @@ class ClipClient:
             reply = json.loads(data)
             if reply.get("model") != MODEL or reply.get("dim") != DIMENSIONS:
                 raise ClipError("CLIP server reported an incompatible model")
+            if self.expected_revision is not None and reply.get("revision") != self.expected_revision:
+                raise ClipError("CLIP server weights differ from the pinned index encoder")
             vectors = reply["embeddings"]
             if not isinstance(vectors, list) or len(vectors) != count:
                 raise ValueError("wrong count")
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
             raise ClipError("CLIP server returned an invalid reply") from exc
         return [normalize(vector) for vector in vectors]
+
+    async def revision(self) -> str | None:
+        """The server's encoder weights revision, from its health route."""
+        try:
+            async with self._client().get(self.base + "/healthz", allow_redirects=False) as response:
+                if response.status != 200:
+                    raise ClipError(f"CLIP server returned HTTP {response.status}")
+                reply = json.loads((await response.content.read(65536)) or b"{}")
+        except ClipError:
+            raise
+        except (aiohttp.ClientError, TimeoutError, OSError, ValueError) as exc:
+            raise ClipError(f"CLIP server unavailable ({type(exc).__name__})") from exc
+        value = reply.get("revision") if isinstance(reply, dict) else None
+        return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else None
 
     async def embed_text(self, text: str) -> list[float]:
         if not isinstance(text, str) or not text.strip() or len(text) > 1024:

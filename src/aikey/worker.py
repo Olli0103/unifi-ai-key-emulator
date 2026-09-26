@@ -1502,8 +1502,7 @@ class JobProcessor:
         targets = job.payload.get("_index") or []
         if not targets:
             return [], [], []
-        if self._clip is None:
-            self._clip = clip.ClipClient(self.find_anything, timeout_s=60)
+        self._clip_client()
         by_time = {}
         for tracker, ts, region, kind in targets:
             by_time.setdefault(ts, []).append((tracker, region, kind))
@@ -1569,10 +1568,17 @@ class JobProcessor:
         # the original detection unchanged.
         return "none", best != "background", probs[best]
 
-    async def _execute_reverification(self, job):
-        started = time.monotonic()
+    def _clip_client(self):
+        """The CLIP client, held to the index's pinned weights revision (#18)."""
+        from aikey.embedding_profile import pinned_value
         if self._clip is None:
             self._clip = clip.ClipClient(self.find_anything, timeout_s=60)
+        self._clip.expected_revision = pinned_value(self.state_dir.parent, "revision")
+        return self._clip
+
+    async def _execute_reverification(self, job):
+        started = time.monotonic()
+        self._clip_client()
         prompts = await self._verify_vectors()
         (_, url), = job.media
         data, headers = await self._fetch(url, "video")
@@ -1610,8 +1616,7 @@ class JobProcessor:
 
     async def _execute_index_images(self, job):
         started = time.monotonic()
-        if self._clip is None:
-            self._clip = clip.ClipClient(self.find_anything, timeout_s=60)
+        self._clip_client()
         tags = []
         for (tracker, moment), (_, url) in zip(job.payload["_crops"], job.media):
             data, _ = await self._fetch(url, "image")

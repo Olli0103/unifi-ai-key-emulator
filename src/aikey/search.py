@@ -26,7 +26,7 @@ import aiohttp
 from . import clip
 from .protocol import ContractError, decode_message, encode_message
 from .device import VerifiedConnector
-from .embedding_profile import EmbeddingProfileError, ensure_embedding_profile
+from .embedding_profile import EmbeddingProfileError, ensure_embedding_profile, pinned_value
 
 
 LOG = logging.getLogger(__name__)
@@ -425,10 +425,14 @@ class SearchService:
             raise ValueError("device.mac must contain 12 hexadecimal digits")
         return mac
 
-    def _identity(self) -> dict[str, Any]:
+    def _identity(self, revision: str | None = None) -> dict[str, Any]:
         if self.clip is not None:
-            return {"profile": clip.PROFILE, "model": clip.MODEL, "dimensions": clip.DIMENSIONS,
-                    "backend": "local-clip-onnx", "source": self.clip.base}
+            identity = {"profile": clip.PROFILE, "model": clip.MODEL, "dimensions": clip.DIMENSIONS,
+                        "backend": "local-clip-onnx", "source": self.clip.base}
+            revision = revision or pinned_value(self.state_dir, "revision")
+            if revision:
+                identity["revision"] = revision
+            return identity
         return self.embeddings.identity
 
     def _check_profile(self) -> None:
@@ -436,6 +440,28 @@ class SearchService:
             ensure_embedding_profile(self.state_dir, self._identity())
         except EmbeddingProfileError as exc:
             raise EmbeddingError(str(exc)) from exc
+
+    async def pin_revision(self) -> None:
+        """Pin the CLIP weights revision in the profile and enforce it (#18).
+
+        A profile without a revision (written before pinning existed) records
+        the server's current revision once. After that, replies from other
+        weights are refused until the index is rebuilt for them.
+        """
+        if self.clip is None or self.clip.expected_revision is not None:
+            return
+        pinned = pinned_value(self.state_dir, "revision")
+        if pinned is None:
+            served = await self.clip.revision()
+            if served is None:
+                raise EmbeddingError("CLIP server does not report a weights revision")
+            try:
+                ensure_embedding_profile(self.state_dir, self._identity(served), upgradable=("revision",))
+            except EmbeddingProfileError as exc:
+                raise EmbeddingError(str(exc)) from exc
+            pinned = served
+        self.clip.expected_revision = pinned
+        self.status["revision"] = pinned[:12]
 
     def validate_configuration(self) -> None:
         """Validate the enabled query service before any controller connection."""
@@ -494,6 +520,7 @@ class SearchService:
         try:
             while not self._stopping.is_set():
                 try:
+                    await self.pin_revision()
                     async with self._session.ws_connect(
                         self._url(), headers={"x-ident": self._mac()}, protocols=("ucp4",),
                         heartbeat=30, max_msg_size=MAX_RESPONSE_BYTES,
