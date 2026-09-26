@@ -3606,7 +3606,7 @@ async def test_a_parcel_present_at_a_night_restart_is_announced_without_extra_up
 
 
 @pytest.mark.asyncio
-async def test_a_resting_cat_read_as_a_package_at_a_night_restart_gets_no_package(
+async def test_a_visibly_moving_animal_read_as_a_package_at_a_night_restart_gets_no_package(
         tmp_path, monkeypatch):
     from test_aiport_held_followup import _scene
     frames = [_scene(seed, patch=(290, 235 + (seed % 3) * 4, 60 if seed % 2 else 200))
@@ -3649,3 +3649,15 @@ def test_the_follow_up_mode_accepts_only_shadow_or_announce(tmp_path):
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     with pytest.raises(CandidateError):
         load_config(tmp_path / "config.json")
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_keeps_a_sleeping_cat_read_as_a_package_silent(tmp_path, monkeypatch):
+    from test_aiport_held_followup import _scene
+    enters, calls, _detect, health = await _night_restart_scene(
+        tmp_path, monkeypatch, [_scene(seed, cat=True) for seed in range(60)], mode=None)
+    assert [e for e in enters if "package" in e["objectTypes"]] == []
+    # The follow-up would have announced it: the live Esszimmer verdict.
+    assert health["package_ir_followup"]["mode"] == "shadow"
+    assert health["package_ir_followup"]["confirmed"] == 1
+    assert calls["detect"] == 2

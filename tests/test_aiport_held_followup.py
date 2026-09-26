@@ -12,7 +12,7 @@ BOX = (0.40, 0.60, 0.55, 0.85)          # normalized held box
 PIXELS = (256, 216, 352, 306)            # the same box on a 640x360 frame
 
 
-def _scene(seed, *, shift=0, patch=None, brightness=0):
+def _scene(seed, *, shift=0, patch=None, brightness=0, cat=False):
     """Grey hallway with an object in BOX and per-frame sensor noise."""
     rng = random.Random(seed)
     image = Image.new("L", (640, 360), 90 + brightness)
@@ -20,9 +20,15 @@ def _scene(seed, *, shift=0, patch=None, brightness=0):
     for y in range(0, 360, 8):                    # floor texture
         draw.line((0, y, 640, y), fill=80 + brightness + (y % 24))
     x1, y1, x2, y2 = PIXELS
-    draw.rectangle((x1 + shift, y1, x2 + shift, y2), fill=150 + brightness)
-    draw.line((x1 + shift, (y1 + y2) // 2, x2 + shift, (y1 + y2) // 2),
-              fill=120 + brightness, width=3)
+    if cat:   # curled body, head and ears: IR-bright fur, no box edges
+        draw.ellipse((x1 + shift, y1 + 20, x2 + shift, y2), fill=160 + brightness)
+        draw.ellipse((x2 - 38 + shift, y1, x2 - 2 + shift, y1 + 34), fill=165 + brightness)
+        draw.polygon([(x2 - 36 + shift, y1 + 6), (x2 - 30 + shift, y1 - 8),
+                      (x2 - 24 + shift, y1 + 4)], fill=165 + brightness)
+    else:
+        draw.rectangle((x1 + shift, y1, x2 + shift, y2), fill=150 + brightness)
+        draw.line((x1 + shift, (y1 + y2) // 2, x2 + shift, (y1 + y2) // 2),
+                  fill=120 + brightness, width=3)
     if patch is not None:                           # e.g. a breathing flank or an ear
         px, py, level = patch
         draw.ellipse((px, py, px + 22, py + 16), fill=level + brightness)
@@ -54,8 +60,9 @@ def test_a_parcel_that_stays_inert_is_confirmed_after_the_dwell():
     assert followup.tracking("CAM") == frozenset()
 
 
-def test_a_resting_cat_with_small_repeated_movement_is_animal_like():
-    # Same silhouette, but a flank or ear inside the box keeps changing.
+def test_a_visibly_moving_resting_animal_is_animal_like():
+    # Large repeated change inside the box (ear flick, tail). A sleeping cat
+    # does not do this: see the inert-cat control below.
     frames = [_scene(seed, patch=(290, 235 + (seed % 3) * 4, 60 if seed % 2 else 200))
               for seed in range(1, 50)]
     decision, _followup = _run(frames)
@@ -93,3 +100,13 @@ def test_follow_up_is_bounded_per_camera_and_ignores_unreadable_frames():
     assert not followup.start("CAM", 3, BOX, _scene(0), now=0.0)
     assert not followup.start("OTHER", 1, BOX, b"not a jpeg", now=0.0)
     assert followup.observe("CAM", b"not a jpeg", now=1.0) == {1: "keep", 2: "keep"}
+
+
+def test_a_sleeping_cat_without_measurable_movement_is_indistinguishable_from_a_parcel():
+    # Esszimmer 26 Sep 05:00: the real resting object gave no measurable
+    # in-box motion and the shadow verdict was "confirmed"; a Protect Animal
+    # event followed at 05:10. This local signal cannot veto such a cat, so
+    # the follow-up must stay in shadow for startup-held night-IR candidates.
+    decision, _followup = _run([_scene(seed, cat=True) for seed in range(1, 50)],
+                               start_frame=_scene(0, cat=True))
+    assert decision == "confirmed"
