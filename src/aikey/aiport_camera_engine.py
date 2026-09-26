@@ -196,7 +196,7 @@ class CameraPolicyEngine:
                 if not matching:
                     reason = "no_class_zone"
                 else:
-                    overlap = max(zone.overlap_ratio(value.box)
+                    overlap = max(zone.overlap_ratio(value.box, frame_snap=True)
                                   for zone in matching)
                     reason = "below_overlap" if overlap > 0 else "outside_zone"
                     if overlap > 0:

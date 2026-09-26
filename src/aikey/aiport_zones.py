@@ -2,7 +2,11 @@
 
 Coordinates and field names follow the observed controller interface. A
 candidate needs at least 90% of its box area inside a validated zone. This is
-a provisional compatibility rule, not a proven Protect Person threshold.
+a provisional compatibility rule, not a proven Protect Person threshold. For
+that test, zone vertices within 5% of the frame border count as on the border:
+Protect's default full-frame zone is inset by about that much, and objects
+close under a camera lie in that strip. Edges drawn further in, and exclusion
+zones, keep their exact geometry.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ _MAX_ZONES = 32
 _MAX_VERTICES = 32
 _EPSILON = 1e-9
 _MIN_BOX_OVERLAP = 0.9
+_FRAME_EDGE_SNAP = 0.05
 
 
 class ZoneError(ValueError):
@@ -32,7 +37,8 @@ class SmartZone:
     points: tuple[tuple[float, float], ...]
     object_types: frozenset[str]
 
-    def overlap_ratio(self, box: tuple[float, float, float, float]) -> float:
+    def overlap_ratio(self, box: tuple[float, float, float, float], *,
+                      frame_snap: bool = False) -> float:
         if (not isinstance(box, tuple) or len(box) != 4
                 or any(type(value) not in (int, float) or not math.isfinite(value)
                        for value in box)):
@@ -41,6 +47,8 @@ class SmartZone:
         if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
             return 0.0
         clipped = self.points
+        if frame_snap:
+            clipped = tuple((_snap(x), _snap(y)) for x, y in clipped)
         for axis, bound, keep_greater in ((0, x1, True), (0, x2, False),
                                           (1, y1, True), (1, y2, False)):
             clipped = _clip_half_plane(clipped, axis, bound, keep_greater)
@@ -50,10 +58,17 @@ class SmartZone:
         return _area(clipped) / box_area
 
     def contains_box(self, box: tuple[float, float, float, float]) -> bool:
-        return self.overlap_ratio(box) >= _MIN_BOX_OVERLAP - _EPSILON
+        return (self.overlap_ratio(box, frame_snap=True)
+                >= _MIN_BOX_OVERLAP - _EPSILON)
 
     def overlaps_box(self, box: tuple[float, float, float, float]) -> bool:
         return self.overlap_ratio(box) > 0
+
+
+def _snap(value: float) -> float:
+    if value <= _FRAME_EDGE_SNAP:
+        return 0.0
+    return 1.0 if value >= 1 - _FRAME_EDGE_SNAP else value
 
 
 def _clip_half_plane(points: tuple[tuple[float, float], ...], axis: int,

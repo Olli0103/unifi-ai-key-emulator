@@ -490,10 +490,13 @@ class ApiObjectDetector:
             counts["accepted_objects"] += len(accepted)
             kinds = self._kind_counts.setdefault(camera_mac, {
                 "below_threshold": dict.fromkeys(_LABELS, 0),
+                "near_threshold": dict.fromkeys(_LABELS, 0),
                 "rejected_items": dict.fromkeys(_ITEM_REJECTIONS, 0)})
             for item in reported:
                 if item.score < self.threshold:
                     kinds["below_threshold"][item.kind] += 1
+                    # Score evidence for the threshold without keeping scores.
+                    kinds["near_threshold"][item.kind] += item.score >= 0.5
             for reason, count in rejected.items():
                 kinds["rejected_items"][reason] += count
             if any(item.kind == "package" for item in accepted):
@@ -591,8 +594,11 @@ class ApiObjectDetector:
         }))
         kinds = self._kind_counts.get(camera_mac, {
             "below_threshold": dict.fromkeys(_LABELS, 0),
+            "near_threshold": dict.fromkeys(_LABELS, 0),
             "rejected_items": dict.fromkeys(_ITEM_REJECTIONS, 0)})
         result["below_threshold_by_kind"] = dict(kinds["below_threshold"])
+        # Of those, how many scored at least 0.5 (between 0.5 and the threshold).
+        result["near_threshold_by_kind"] = dict(kinds["near_threshold"])
         result["rejected_items"] = dict(kinds["rejected_items"])
         result["request_profile"] = dict(self._profiles.get(
             camera_mac, dict.fromkeys(_PROFILE_KEYS, 0)))

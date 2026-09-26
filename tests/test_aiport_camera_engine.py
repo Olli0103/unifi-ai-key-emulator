@@ -678,3 +678,30 @@ def test_ir_package_then_animal_still_confirms_the_animal():
     entered, = engine.observe(FIRST, (cat,), now=4, infrared=True)
     assert (entered.change.edge, entered.change.kind, entered.change.label) == (
         "enter", "animal", "cat")
+
+
+def _animal_zone_policy(camera, *, x1, y1, x2, y2):
+    return parse_smart_settings({
+        "deviceID": camera, "algoVersion": "beta",
+        "enableSmartDetect": ["person", "vehicle", "animal"],
+        "eventStartMSec": 1000, "eventStopMSec": 3000,
+        "zones": {"7": {"coord": [x1, y1, x2, y1, x2, y2, x1, y2], "sensitivity": 50,
+                        "objectTypes": ["person", "vehicle", "animal"],
+                        "triggerLight": False, "triggerAccessTypes": []}}},
+        camera_mac=camera)
+
+
+def test_cat_at_the_bottom_edge_enters_animal_on_a_default_inset_zone():
+    # Flur's only zone (Protect's inset full-frame rectangle), 26 Sep 03:25.
+    cat = ObjectObservation("animal", "cat", 0.9, (0.40, 0.93, 0.50, 1.0))
+    flur = CameraPolicyEngine([FIRST], max_track_gap_seconds=20, max_center_distance=1.5)
+    flur.replace_policy(FIRST, _animal_zone_policy(FIRST, x1=25, y1=35, x2=976, y2=960))
+    assert flur.observe(FIRST, (cat,), now=1) == ()
+    entered, = flur.observe(FIRST, (cat,), now=3)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "animal")
+    # A zone deliberately drawn 10% in from the border still excludes it.
+    inset = CameraPolicyEngine([FIRST], max_track_gap_seconds=20, max_center_distance=1.5)
+    inset.replace_policy(FIRST, _animal_zone_policy(FIRST, x1=100, y1=100, x2=900, y2=900))
+    inset.observe(FIRST, (cat,), now=1)
+    assert inset.observe(FIRST, (cat,), now=3) == ()
+    assert inset.camera_snapshot(now=4)[0]["zone_rejections"]["outside_zone"] == 2

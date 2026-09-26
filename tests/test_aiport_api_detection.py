@@ -116,6 +116,25 @@ def test_stationary_person_is_confirmed_by_startup_probe(tmp_path):
     assert detector.budget.remaining(FIRST) == 0
 
 
+def test_near_threshold_counts_only_scores_from_half_up_to_the_threshold(tmp_path):
+    replies = iter((
+        '{"detections":[{"kind":"animal","label":"cat","score":0.49,"box":[0.1,0.2,0.4,0.8]}]}',
+        '{"detections":[{"kind":"animal","label":"cat","score":0.5,"box":[0.1,0.2,0.4,0.8]}]}',
+        '{"detections":[{"kind":"animal","label":"cat","score":0.8,"box":[0.1,0.2,0.4,0.8]}]}',
+    ))
+    detector = ApiObjectDetector(
+        _ollama_config(), tmp_path, threshold=0.8,
+        transport=lambda *_args: _response(next(replies)))
+    for colour in ("red", "green", "blue"):
+        detector.motion.reset(FIRST)   # each call a fresh startup sample
+        detector.detect_for_camera(FIRST, _frame(colour))
+    counts = detector.diagnostic_counts(FIRST)
+    assert counts["responses"] == 3
+    assert counts["below_threshold_by_kind"]["animal"] == 2
+    assert counts["near_threshold_by_kind"]["animal"] == 1
+    assert counts["accepted_objects"] == 1
+
+
 def test_response_counts_distinguish_empty_from_score_rejection(tmp_path):
     replies = iter((
         '{"detections":[{"kind":"person","label":"person","score":0.79,"box":[0.1,0.2,0.4,0.8]}]}',
@@ -136,10 +155,12 @@ def test_response_counts_distinguish_empty_from_score_rejection(tmp_path):
         "below_threshold": 1, "accepted_objects": 1,
     }
     assert first["below_threshold_by_kind"]["person"] == 1
+    assert first["near_threshold_by_kind"]["person"] == 1      # 0.79 >= 0.5
     assert detector.diagnostic_counts(SECOND) == {
         "responses": 0, "empty_responses": 0,
         "below_threshold": 0, "accepted_objects": 0,
         "below_threshold_by_kind": {"person": 0, "vehicle": 0, "animal": 0, "package": 0},
+        "near_threshold_by_kind": {"person": 0, "vehicle": 0, "animal": 0, "package": 0},
         "rejected_items": {"shape": 0, "kind": 0, "label:person": 0, "label:vehicle": 0, "label:animal": 0, "label:package": 0, "score": 0, "box": 0},
         "request_profile": {"color_empty": 0, "color_low": 0, "color_objects": 0,
                             "ir_empty": 0, "ir_low": 0, "ir_objects": 0},
