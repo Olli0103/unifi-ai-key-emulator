@@ -95,5 +95,27 @@ Options for the owner:
   - **Readback after both:** Protect `detection-nls` at `minSimilarity=35`: "person" 9 hits, "a person walking in a hallway" 6, "a sailing boat on the ocean" 0, "an airplane in the sky" 0. The AI Key stays `isSearchHost: true`, and the restarted relay counted the console connections (0 upstream failures).
   - **Not done:** a real Mac reboot.
   - **Rollback:** `launchctl bootout gui/$UID/com.olli.local-aikey-pg-relay` and remove `~/Library/LaunchAgents/com.olli.local-aikey-pg-relay.plist`.
-- **Deep mode** (E5 session search), image search and hybrid search: not implemented.
+- **Deep mode** (E5 session search) and hybrid search: not implemented. Search by image: verified, see below.
 - **NAS:** the search host moves to the NAS only at the final cutover ([plan](../planning/nas-final-cutover.md)).
+
+## Search by image (26 Sep 2026, 16:33)
+
+**Contract (7.3.60 bundle).**
+- **Upload:** `POST /proxy/protect/api/detection-search/by-image/upload` (JPG or PNG, max 5 MB, needs `X-CSRF-Token`) stores a `RECOGNIZE_IMAGE` file and returns `{tempId}`.
+- **Request:** `requestImageToVector` sends `IMAGE_SEARCH {imgUri}` over the UCP4 query socket. It goes **only to an AI processor whose `featureFlags.supportImageSearch.enabled` is true**; otherwise it falls back to a built-in controller that this console lacks.
+- **Image location:** `imgUri` is `https://<console>:<cameraHttps>/internal/files/…`. `cameraHttps` is 7444, which serves the control-port certificate, not the 7443 search certificate.
+- **Reply:** exactly `{imgEmbed: 768}`.
+- **Results:** `GET /detection-search/by-image/<tempId>` runs the same vector search. Its image-mode similarity is `100 × (1 − cosine distance)`.
+
+**Implementation.**
+- **Flag:** the Key advertises `supportImageSearch` only when the CLIP search profile is enabled. An explicit `feature_flags.supportImageSearch.enabled: false` still wins.
+- **Fetch:** only an `https` URL on the configured console host, on the media port, under `/internal/files/`. It uses the control trust and pin with the device headers, is capped at 5 MB, and accepts JPEG or PNG (PNG is converted locally).
+- **Embed:** the whole image, through the same local CLIP encoder. Only fixed failure categories are counted; the image is not kept.
+
+**Native readback.**
+- **Flag:** Protect `aiprocessors` shows `featureFlags.supportImageSearch: {enabled: true}` after reconnect.
+- **Positive:** the query was Protect's own stored thumbnail of a Flur person object, fetched and re-uploaded in the browser without being viewed. The top result is **that same object, similarity 92**, followed by other Flur persons at 91 and 89. At `minSimilarity=70`: 9 hits.
+- **Negative:** a synthetic drawing (sky, sun, grass; no camera content). The best result is 67. At `minSimilarity=70`: **0 hits**.
+- **AI Key health:** `image_queries: 2`, no failures, 0 vision-provider requests.
+
+**First attempt, for the record.** The first attempt failed in `fetch`, because the Key used the 7443 search pin for the 7444 upload URL. Protect then reported `Failed to parse 'imageToVectorResponse'`.

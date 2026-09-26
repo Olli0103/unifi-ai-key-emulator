@@ -33,7 +33,8 @@ class Application:
                                     camera_registry=self.camera_registry)
         search_ca = config["controller"].get("search_ca_file")
         self.search = SearchService(config, self.state_dir,
-                                    ssl_context=client_context(config, ca_file=search_ca) if search_ca else outbound)
+                                    ssl_context=client_context(config, ca_file=search_ca) if search_ca else outbound,
+                                    media_ssl_context=outbound)
         self.discovery = DiscoveryService(config, info_provider=self.device.get_info,
                                            adopted_provider=lambda: self.device.status["adopted"])
         self.runner = None

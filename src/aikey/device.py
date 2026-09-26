@@ -500,6 +500,13 @@ class DeviceService:
                           and Path(decoder).is_file() and scope_supported)
             if not configured:
                 flags["supportAiSummary"] = {**summary, "enabled": False}
+        # Search by image is answered only by the local CLIP search profile.
+        search = self.config.get("search", {})
+        image_search = (search.get("enabled") is True and search.get("profile") == "clip-basic-v1"
+                        and isinstance(self.config.get("find_anything"), dict))
+        requested = overrides.get("supportImageSearch")
+        if not (isinstance(requested, dict) and requested.get("enabled") is False):
+            flags["supportImageSearch"] = {"enabled": image_search, "version": "v1"}
         return {"type": self.device.get("model", "UP-AI-KEY"), "sysid": self.device.get("sysid", "0xa5f0"),
                 "version": self.device.get("firmware_version", "2.2.8"), "mac": self.mac,
                 "uptime": int(time.monotonic() - self._started_at), "poeType": self.device.get("poe_type", "unknown"),

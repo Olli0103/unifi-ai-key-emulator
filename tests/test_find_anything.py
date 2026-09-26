@@ -460,3 +460,110 @@ async def test_existing_objects_take_precedence_over_snapshots(controller, tmp_p
     [parts] = controller.callbacks
     assert parts["ram"]["keyMomentsTags"] == [] and len(parts["ram"]["thumbnailTags"]) == 2
     assert set(parts) == {"ram"}
+
+
+class _FakeResponse:
+    def __init__(self, status, body):
+        self.status, self._body = status, body
+
+        class _Content:
+            async def iter_chunked(_self, size):
+                yield body
+        self.content = _Content()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeSession:
+    closed = False
+
+    def __init__(self, status=200, body=b""):
+        self.status, self.body, self.requests = status, body, []
+
+    def get(self, url, headers=None, **kwargs):
+        self.requests.append((url, headers))
+        return _FakeResponse(self.status, self.body)
+
+
+def _image(fmt):
+    from PIL import Image
+    out = io.BytesIO()
+    Image.new("RGB", (64, 48), (200, 30, 30)).save(out, fmt)
+    return out.getvalue()
+
+
+def image_search(uri, identifier="img-1"):
+    return encode_message({"id": identifier, "type": "request", "action": "IMAGE_SEARCH", "timestamp": 1},
+                          {"imgUri": uri})
+
+
+async def test_search_by_image_returns_a_local_clip_vector(controller, tmp_path):
+    options = {"search": {"enabled": True, "profile": clip.PROFILE},
+               "find_anything": {"clip_server": controller.origin},
+               "controller": {"host": "192.168.0.1"}, "device": {"mac": "02:9d:90:a5:48:ca"}}
+    service = SearchService(options, tmp_path)
+    uri = "https://192.168.0.1:7444/internal/files/recognizeImage/upload-1.jpg"
+    try:
+        for body in (_image("JPEG"), _image("PNG")):
+            service._media_session = _FakeSession(body=body)
+            response = decode_message(await service.handle_message(image_search(uri)))
+            assert response.header["errorCode"] == 0 and set(response.body) == {"imgEmbed"}
+            assert len(response.body["imgEmbed"]) == 768 and response.body["imgEmbed"][0] == 1.0
+            [(url, headers)] = service._media_session.requests
+            assert url == uri and headers["x-ident"] == "029D90A548CA"
+        assert controller.clip_requests[-1] == {"jpeg": True, "regions": [[0.0, 0.0, 1.0, 1.0]]}
+        assert service.status["image_queries"] == 2 and service.status["image_failures"] == {}
+    finally:
+        service._media_session = None
+        await service.stop()
+
+
+@pytest.mark.parametrize("uri,category", [
+    ("http://192.168.0.1:7443/internal/files/recognizeImage/a.jpg", "uri"),
+    ("https://192.168.0.2:7444/internal/files/recognizeImage/a.jpg", "uri"),
+    ("https://192.168.0.1:7444/api/cameras", "uri"),
+    ("https://192.168.0.1:7443/internal/files/recognizeImage/a.jpg", "uri"),     # not the media port
+    ("https://192.168.0.1:7444/internal/files/../api", "uri"),
+    ("https://192.168.0.1:7444/internal/files/recognizeImage/a.jpg?x=1", "uri"),
+    (None, "uri"),
+])
+async def test_search_by_image_fetches_only_the_console_upload_route(tmp_path, uri, category):
+    options = {"search": {"enabled": True, "profile": clip.PROFILE},
+               "find_anything": {"clip_server": "http://127.0.0.1:1"},
+               "controller": {"host": "192.168.0.1"}, "device": {"mac": "02:9d:90:a5:48:ca"}}
+    service = SearchService(options, tmp_path)
+    service._media_session = _FakeSession(body=_image("JPEG"))
+    response = decode_message(await service.handle_message(image_search(uri)))
+    assert response.header["errorCode"] == 1 and response.body == {}
+    assert service._media_session.requests == [] and service.status["image_failures"] == {category: 1}
+
+
+async def test_search_by_image_refuses_non_images_and_http_errors(tmp_path):
+    options = {"search": {"enabled": True, "profile": clip.PROFILE},
+               "find_anything": {"clip_server": "http://127.0.0.1:1"},
+               "controller": {"host": "192.168.0.1"}, "device": {"mac": "02:9d:90:a5:48:ca"}}
+    service = SearchService(options, tmp_path)
+    uri = "https://192.168.0.1:7444/internal/files/recognizeImage/a.jpg"
+    for session in (_FakeSession(body=b"GIF89a..."), _FakeSession(status=404)):
+        service._media_session = session
+        assert decode_message(await service.handle_message(image_search(uri))).header["errorCode"] == 1
+    assert service.status["image_failures"] == {"format": 1, "http_4xx": 1}
+
+
+def test_image_search_is_advertised_only_with_the_clip_profile(tmp_path):
+    async def admit(body):
+        return {"accepted": True}
+    options = device_config()
+    assert DeviceService(options, tmp_path / "a", admit).get_info()["featureFlags"]["supportImageSearch"] == {
+        "enabled": False, "version": "v1"}
+    options["search"] = {"enabled": True, "profile": clip.PROFILE}
+    options["find_anything"] = {"clip_server": "http://127.0.0.1:8180"}
+    assert DeviceService(options, tmp_path / "b", admit).get_info()["featureFlags"]["supportImageSearch"][
+        "enabled"] is True
+    options["device"]["feature_flags"] = {"supportImageSearch": {"enabled": False, "version": "v1"}}
+    assert DeviceService(options, tmp_path / "c", admit).get_info()["featureFlags"]["supportImageSearch"][
+        "enabled"] is False
