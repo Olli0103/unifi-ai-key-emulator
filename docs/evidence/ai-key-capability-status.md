@@ -47,3 +47,9 @@ The Key now derives these flags from what it is configured to serve. An explicit
 - `isLprDetectionSupportedViaAiprocessor` requires an unpaired G4/G5 or Doorbell Lite. Every connected G4/G5 is paired to an AI Port, and the G6 is not on the list.
 - Paired cameras get plates from the AI Port instead: the native `licensePlate` on an Einfahrt track, #19.
 - Unblocking would need Olli to unpair a G4/G5 camera, or to reconnect "Wohnzimmer alt" and select it. Only then would an AI Key plate reader be worth enabling and verifying.
+
+## Fresh native results after the fix (backlog)
+
+- **Object indexing:** fresh after the fix. Three Garage vehicle search snapshots at 17:16:36 are searchable in Protect, and "a car" ranks them above "person" and "an animal".
+- **Speech and faces:** Protect sent no Wohnzimmer speech or person tasks between 16:52 and 17:55, and Olli reports the household is away. A **fresh** indoor transcript and a fresh AI Key face after the flag change are `needs_evidence` (backlog), as is re-reading the Camera Coverage tooltip after such events. Earlier native transcripts (#15) and AI Key faces (#20) stand.
+- **Names and plate accuracy:** stay `needs_evidence` until Olli validates them.
