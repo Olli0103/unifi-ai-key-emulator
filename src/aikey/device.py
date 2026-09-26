@@ -981,6 +981,10 @@ class DeviceService:
             active = {scope["camera_id"] for scope in scopes if scope.get("kind") == "recognizeKeyFrames"}
             if self.camera_registry is not None and "continuous" in self.config.get("worker", {}):
                 active.update(self.camera_registry.allowed_ids)
+            faces = self.config.get("face_recognition")
+            if isinstance(faces, dict) and isinstance(faces.get("camera_ids"), list):
+                # Local face recognition answers recognition tasks for these cameras.
+                active.update(c for c in faces["camera_ids"] if isinstance(c, str))
             if not active:
                 _increment(phases, "scope_disabled")
                 raise CommandFailure(95, "recognizeKeyFrames is outside the configured camera policy")

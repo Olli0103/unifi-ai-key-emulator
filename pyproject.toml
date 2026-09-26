@@ -38,6 +38,9 @@ local-aiport-rollout = "aikey.aiport_rollout:main"
 local-aiport-onnx-export = "aikey.aiport_onnx_export:main"
 local-aikey-control = "aikey.control_site:main"
 local-apple-supervise = "aikey.apple_supervisor:main"
+local-whisper-server = "aikey.whisper_server:main"
+local-face-server = "aikey.face_server:main"
+local-aikey-faces = "aikey.faces:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

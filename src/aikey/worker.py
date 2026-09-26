@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import hashlib
+from io import BytesIO
 import ipaddress
 import json
 import math
@@ -26,6 +27,7 @@ import aiohttp
 from .caption_budget import CaptionBudget, CaptionBudgetError, CaptionBudgetExhausted
 from .providers import ProviderError, validate_inference_config
 from .speech import SpeechError, validate_speech_config
+from .faces import FaceStore, FaceStoreError
 
 
 class WorkerError(RuntimeError):
@@ -233,12 +235,41 @@ class JobProcessor:
         self.max_audio_ms = self._positive("max_audio_ms", 120000)
         # A local CPU Whisper needs about real time; keep speech off the caption timeout.
         self.speech_timeout_s = min(self._positive("speech_timeout_s", 300), 900)
+        self.faces = self._face_config(self.config.get("face_recognition"), Path(state_dir))
         if self.config.get("speech_to_text") is not None:
             try:
                 self.speech, self.speech_cameras = validate_speech_config(
                     self.config["speech_to_text"], lab=self.lab)
             except SpeechError as exc:
                 raise WorkerError(str(exc)) from exc
+
+    def _face_config(self, value, state_root):
+        """Local-only face recognition for explicitly listed cameras (#20)."""
+        if value is None:
+            return None
+        if (not isinstance(value, dict) or set(value) - {"server", "camera_ids", "max_faces"}
+                or not {"server", "camera_ids"} <= set(value)):
+            raise WorkerError("face_recognition needs server and camera_ids")
+        server = value["server"]
+        parsed = urlsplit(server) if isinstance(server, str) else None
+        try:
+            address = ipaddress.ip_address(parsed.hostname or "") if parsed else None
+        except ValueError:
+            address = None
+        if (parsed is None or parsed.scheme != "http" or address is None
+                or not (address.is_loopback or address.is_private) or parsed.path not in {"", "/"}):
+            # Face crops and embeddings never leave this host or its container network.
+            raise WorkerError("face_recognition.server must be a local HTTP server")
+        cameras = value["camera_ids"]
+        if (not isinstance(cameras, list) or not 1 <= len(cameras) <= 8
+                or any(not isinstance(c, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", c)
+                       for c in cameras) or len(set(cameras)) != len(cameras)):
+            raise WorkerError("face_recognition.camera_ids must list 1 to 8 camera IDs")
+        limit = value.get("max_faces", 8)
+        if type(limit) is not int or not 1 <= limit <= 16:
+            raise WorkerError("face_recognition.max_faces must be 1..16")
+        return {"url": server.rstrip("/") + "/v1/faces", "cameras": frozenset(cameras),
+                "max_faces": limit, "store": FaceStore(state_root)}
 
     def _positive(self, name, default):
         value = self.options.get(name, default)
@@ -452,6 +483,12 @@ class JobProcessor:
             raise WorkerError("Invalid or oversized RequestAI command")
         if command.get("command") == "speechToText":
             return self._normalize_speech_to_text(command)
+        if (command.get("command") == "recognizeKeyFrames" and self.faces is not None
+                and isinstance(command.get("payload"), dict)
+                and command["payload"].get("camera") in self.faces["cameras"]
+                and command["payload"].get("ramType") == "videoWithRecognition"
+                and command["payload"].get("faceMeta")):
+            return self._normalize_faces(command)
         if "command" in command:
             return self._normalize_recognize_key_frames(command)
         if self.continuous:
@@ -591,23 +628,7 @@ class JobProcessor:
                 or any(type(value) is not int or not body["start"] <= value <= body["end"]
                        for value in moments)):
             raise WorkerError("recognizeKeyFrames requires at most 128 integer timestamps inside the video")
-        callback = self._url(body["resUrl"], "callback")
-        if urlsplit(callback).path != _LEGACY_CALLBACK:
-            raise WorkerError("recognizeKeyFrames requires the observed RAM callback")
-        original_media = self._url(body["reqUrl"], "media")
-        parsed = urlsplit(original_media)
-        if parsed.path != "/internal/aiprocessors/video/export":
-            raise WorkerError("recognizeKeyFrames requires the AI processor video export route")
-        try:
-            pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
-        except ValueError as exc:
-            raise WorkerError("recognizeKeyFrames export query is malformed") from exc
-        expected = {"camera": body["camera"], "event": body["event"], "channel": "0",
-                    "start": str(body["start"]), "end": str(body["end"]), "type": "rotating",
-                    "mute": "true", "format": body["format"], "createEvent": "false"}
-        if len(pairs) != len(expected) or dict(pairs) != expected:
-            raise WorkerError("recognizeKeyFrames export must exactly match the command camera and interval")
-        media = [("video", self._mp4_export_url(original_media))]
+        callback, media = self._recognize_media(body)
         callback_kind = "legacy_tagging"
         normalized = {"operation": "recognizeKeyFrames", "payload": body,
                       "callback": callback, "callbackKind": callback_kind, "media": media}
@@ -663,6 +684,80 @@ class JobProcessor:
         return (job_id, fingerprint, "speechToText", body, callback, "speech",
                 [("audio", media)], self.speech_timeout_s)
 
+    def _recognize_media(self, body):
+        """The RAM callback and exact event export of a recognizeKeyFrames task."""
+        callback = self._url(body["resUrl"], "callback")
+        if urlsplit(callback).path != _LEGACY_CALLBACK:
+            raise WorkerError("recognizeKeyFrames requires the observed RAM callback")
+        original_media = self._url(body["reqUrl"], "media")
+        parsed = urlsplit(original_media)
+        if parsed.path != "/internal/aiprocessors/video/export":
+            raise WorkerError("recognizeKeyFrames requires the AI processor video export route")
+        try:
+            pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+        except ValueError as exc:
+            raise WorkerError("recognizeKeyFrames export query is malformed") from exc
+        expected = {"camera": body["camera"], "event": body["event"], "channel": "0",
+                    "start": str(body["start"]), "end": str(body["end"]), "type": "rotating",
+                    "mute": "true", "format": body["format"], "createEvent": "false"}
+        if len(pairs) != len(expected) or dict(pairs) != expected:
+            raise WorkerError("recognizeKeyFrames export must exactly match the command camera and interval")
+        return callback, [("video", self._mp4_export_url(original_media))]
+
+    def _normalize_faces(self, command):
+        """A recognition task with faceMeta, answered only by local face processing.
+
+        Protect 7.3.60 adds faceMeta when the camera is in the AI Key's
+        faceRecognitionSettings and saves a ``face`` multipart part of the RAM
+        callback (saveFaceRecognition). No frame or crop goes to the vision
+        provider; captions for the same task are not produced here.
+        """
+        body = command["payload"]
+        required = {"reqUrl", "resUrl", "ramType", "camera", "event", "channel", "start", "end",
+                    "type", "mute", "format", "createEvent", "keyMoments", "postVLM", "faceMeta"}
+        if (set(command) != {"command", "payload"} or not required <= set(body)
+                or set(body) - required - {"roiMeta", "thumbnailMs", "thumbnailMeta",
+                                          "personMeta", "vehicleMeta"}):
+            raise WorkerError("Unsupported recognizeKeyFrames payload fields")
+        body = json.loads(_json(body))
+        if (not isinstance(body["event"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])
+                or type(body["channel"]) is not int or body["channel"] != 0
+                or body["type"] != "rotating" or body["mute"] is not True
+                or body["format"] not in {"ubv", "mp4"} or body["createEvent"] is not False
+                or any(type(body[key]) is not int for key in ("start", "end"))
+                or not 0 <= body["start"] < body["end"] <= 2 ** 53 - 1
+                or body["end"] - body["start"] > self.max_video_duration_ms):
+            raise WorkerError("recognizeKeyFrames is limited to captioned, muted target-camera video")
+        chosen = {}
+        meta = body["faceMeta"]
+        if not isinstance(meta, list) or not 1 <= len(meta) <= 256:
+            raise WorkerError("faceMeta must list 1 to 256 face regions")
+        for item in meta:
+            roi = item.get("roi") if isinstance(item, dict) else None
+            ts = item.get("ts") if isinstance(item, dict) else None
+            coord = roi.get("coord") if isinstance(roi, dict) else None
+            tracker = roi.get("trackerId") if isinstance(roi, dict) else None
+            if (type(ts) is not int or not body["start"] <= ts <= body["end"]
+                    or type(tracker) is not int or not 0 <= tracker <= 2 ** 31
+                    or not isinstance(coord, list) or len(coord) != 4
+                    or any(type(v) not in (int, float) or not math.isfinite(v) for v in coord)
+                    or not (0 <= coord[0] < 1000 and 0 <= coord[1] < 1000
+                            and 0 < coord[2] <= 1000 and 0 < coord[3] <= 1000)):
+                raise WorkerError("faceMeta entries need a tracker, ts and 0-1000 xywh coord")
+            confidence = roi.get("confidence", 0)
+            confidence = confidence if type(confidence) in (int, float) else 0
+            if tracker not in chosen or confidence > chosen[tracker][2]:
+                chosen[tracker] = (ts, [float(v) for v in coord], confidence)
+        callback, media = self._recognize_media(body)
+        faces = sorted(chosen.items(), key=lambda item: -item[1][2])[:self.faces["max_faces"]]
+        body["_faces"] = [[tracker, ts, coord] for tracker, (ts, coord, _) in faces]
+        normalized = {"operation": "recognizeFaces", "payload": body, "callback": callback,
+                      "callbackKind": "face", "media": media}
+        fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
+        job_id = hashlib.sha256(f"recognizeKeyFrames:{body['camera']}:{body['event']}".encode()).hexdigest()
+        return (job_id, fingerprint, "recognizeFaces", body, callback, "face",
+                media, min(self.timeout_s, 60))
+
     def _read_scope_reservation(self, scope=None):
         if scope is None:
             if not self.test_scopes:
@@ -696,7 +791,7 @@ class JobProcessor:
             raise WorkerError("Invalid test scope reservation; inspect it without resetting the permit") from exc
 
     def _reserve_test_scope(self, job):
-        if not self.test_scopes or job.operation == "speechToText":
+        if not self.test_scopes or job.operation in {"speechToText", "recognizeFaces"}:
             return
         camera_id = job.payload.get("camera") if job.operation == "recognizeKeyFrames" else job.payload.get("cameraId")
         scope = self._scopes_by_camera.get(camera_id)
@@ -765,7 +860,7 @@ class JobProcessor:
         normalized = self._normalize(command)
         await self.start()
         job_id, fingerprint, operation, body, callback, kind, media, budget = normalized
-        if (self.continuous and operation != "speechToText"
+        if (self.continuous and operation not in {"speechToText", "recognizeFaces"}
                 and not self.camera_registry.allows(body["camera"])):
             raise WorkerError("Camera inventory changed before admission")
         if job_id in self._pending:
@@ -802,7 +897,7 @@ class JobProcessor:
                    time.monotonic() + budget, future)
         try:
             self._reserve_test_scope(job)
-            if self.caption_budget is not None and operation != "speechToText":
+            if self.caption_budget is not None and operation not in {"speechToText", "recognizeFaces"}:
                 try:
                     receipt = self.caption_budget.reserve(job_id, fingerprint, body["camera"])
                 except CaptionBudgetExhausted as exc:
@@ -917,7 +1012,7 @@ class JobProcessor:
         offset = 0.0
         # A key moment at the interval end is the export's last frame: seeking
         # to the very end yields no frame, so decode the final second instead.
-        at_end = (job.operation == "recognizeKeyFrames" and timestamp is not None
+        at_end = (job.operation in {"recognizeKeyFrames", "recognizeFaces"} and timestamp is not None
                   and timestamp == job.payload.get("end"))
         if job.operation == "on_demand" or timestamp is not None:
             lowered = {key.lower(): value for key, value in headers.items()}
@@ -931,7 +1026,8 @@ class JobProcessor:
                 offset = (requested - start) / 1000
             except (ValueError, TypeError) as exc:
                 raise WorkerError("Video start timestamp is missing or invalid") from exc
-            maximum_offset = self.max_video_duration_ms / 1000 if job.operation == "recognizeKeyFrames" else 3600
+            maximum_offset = (self.max_video_duration_ms / 1000
+                              if job.operation in {"recognizeKeyFrames", "recognizeFaces"} else 3600)
             if not 0 <= offset <= maximum_offset:
                 raise WorkerError("Requested video frame is outside the supported interval")
         with tempfile.TemporaryDirectory(prefix="aikey-video-", dir=self.state_dir) as temporary:
@@ -1045,9 +1141,83 @@ class JobProcessor:
         result["result"] = {"segments": len(segments)}
         return result
 
+    async def _detect_faces(self, frame, region):
+        form = aiohttp.FormData()
+        form.add_field("image", frame, filename="frame.jpg", content_type="image/jpeg")
+        form.add_field("regions", json.dumps([region]))
+        async with self._inference_session.post(self.faces["url"], data=form,
+                                                allow_redirects=False) as response:
+            if response.status != 200:
+                raise WorkerError(f"Face server returned HTTP {response.status}")
+            raw = await self._read_response(response, 1024 * 1024)
+        try:
+            faces = json.loads(raw)["faces"]
+            if not isinstance(faces, list):
+                raise ValueError
+            return faces
+        except (ValueError, KeyError, TypeError) as exc:
+            raise WorkerError("Face server returned an invalid reply") from exc
+
+    async def _execute_faces(self, job):
+        from PIL import Image
+        started = time.monotonic()
+        (_, url), = job.media
+        data, headers = await self._fetch(url, "video")
+        attrs, snapshots, images, matched = {}, [], [], 0
+        for tracker, ts, coord in job.payload["_faces"]:
+            frame = await self._video_frame(data, headers, url, job, timestamp=ts)
+            x, y, w, h = (v / 1000 for v in coord)
+            pad_x, pad_y = w * 0.25, h * 0.25
+            region = [round(v, 4) for v in (max(0.0, x - pad_x), max(0.0, y - pad_y),
+                                            min(1.0, x + w + pad_x), min(1.0, y + h + pad_y))]
+            faces = await self._detect_faces(frame, region)
+            if not faces:
+                continue
+            best = max(faces, key=lambda face: face.get("score", 0))
+            try:
+                name, top = self.faces["store"].match(best["embedding"])
+                x1, y1, x2, y2 = (float(v) for v in best["box"])
+            except (FaceStoreError, KeyError, TypeError, ValueError) as exc:
+                raise WorkerError("Face server returned an invalid face") from exc
+            with Image.open(BytesIO(frame)) as picture:
+                width, height = picture.size
+                side = max((x2 - x1) * width, (y2 - y1) * height) * 1.4
+                cx, cy = (x1 + x2) / 2 * width, (y1 + y2) / 2 * height
+                box = (int(max(0, cx - side / 2)), int(max(0, cy - side / 2)),
+                       int(min(width, cx + side / 2)), int(min(height, cy + side / 2)))
+                crop = picture.convert("RGB").crop(box)
+                crop.thumbnail((256, 256))
+                out = BytesIO()
+                crop.save(out, format="JPEG", quality=85)
+            key = str(tracker)
+            matched += name is not None
+            attrs[key] = {"faceMask": {"confidence": 0, "val": "none"},
+                          "matchedName": name or "", "namesTopK": [n for n, _ in top],
+                          "objectType": "face", "topKCandidate": []}
+            snapshots.append({"clockBestMonotonic": ts, "clockBestWall": ts,
+                              "smartDetectHeatmap": "", "smartDetectSnapshot": f"{key}.jpg",
+                              "smartDetectSnapshotName": f"{key}.jpg",
+                              "smartDetectSnapshotType": "face", "trackerID": tracker})
+            images.append((key, out.getvalue()))
+        elapsed = round((time.monotonic() - started) * 1000)
+        face = {"cameraId": job.payload["camera"], "eventId": job.payload["event"],
+                "eventTracks": [], "faceAttrs": attrs, "faceSnapshots": snapshots,
+                "inferMs": elapsed, "preProcessMs": 0, "status": "success",
+                "timeElapsedMs": elapsed}
+        summary = {"faces": len(snapshots), "matched": matched}
+        if self.callback_mode == "disabled":
+            return {"status": "processed", "jobId": job.job_id, "callback": "disabled",
+                    "result": summary}
+        result = await self._post_callback(job, face, images=images)
+        # Names, crops and embeddings stay out of the journal.
+        result["result"] = summary
+        return result
+
     async def _execute(self, job):
         if job.operation == "speechToText":
             return await self._execute_speech(job)
+        if job.operation == "recognizeFaces":
+            return await self._execute_faces(job)
         started = time.monotonic()
         images = []
         for kind, url in job.media:
@@ -1102,10 +1272,19 @@ class JobProcessor:
             return {"status": "processed", "jobId": job.job_id, "callback": "disabled", "result": payload}
         return await self._post_callback(job, payload)
 
-    async def _post_callback(self, job, payload):
+    async def _post_callback(self, job, payload, *, images=()):
         self._record(job, "callback_sending")
         try:
-            if job.callback_kind in {"legacy", "legacy_tagging"}:
+            if job.callback_kind == "face":
+                # saveFaceRecognition reads the face JSON part and one image
+                # part per snapshot, named by its tracker ID.
+                form = aiohttp.FormData()
+                form.add_field("face", _json(payload), filename="face.json",
+                               content_type="application/json")
+                for name, image in images:
+                    form.add_field(name, image, filename=f"{name}.jpg", content_type="image/jpeg")
+                kwargs = {"data": form}
+            elif job.callback_kind in {"legacy", "legacy_tagging"}:
                 form = aiohttp.FormData()
                 form.add_field("ram", _json(payload), filename="description.json", content_type="application/json")
                 kwargs = {"data": form}
