@@ -119,3 +119,29 @@ Options for the owner:
 - **AI Key health:** `image_queries: 2`, no failures, 0 vision-provider requests.
 
 **First attempt, for the record.** The first attempt failed in `fetch`, because the Key used the 7443 search pin for the 7444 upload URL. Protect then reported `Failed to parse 'imageToVectorResponse'`.
+
+## Retroactive processing (static contract and read-only history, 26 Sep 2026 18:05)
+
+**Contract (7.3.60 `runRetroactiveProcessing`).**
+- **Start:** `POST /aiprocessors/retroactive-processing/start {allCameras | cameraIds, numberOfEvents}` stores a run on the AI processors.
+- **Gate:** the runner proceeds only while a connected AI processor has `featureFlags.supportRetroactiveProcessing.enabled`. Protect defaults that flag on for Key firmware ≥ 1.3.9 only when the Key omits it; ours sends an explicit false.
+- **Event selection:** past `smartDetectZone`/`Loiter`/`Line`/`smartAudioDetect` events without an `aiprocessorTasks` row, newest first, up to 50 queued per processor.
+- **Dispatch:**
+  - smart events go out as Recognize Anything `ramType: multipleImages`, one entry per detected thumbnail with a tracker ID (`imageId`, `keyMoment` = `clockBestWall`, `trackerId`, `objectType`);
+  - audio events go through `pushAudioTask` (speech and the audio image).
+- **Caution:** while a run is active, `runTask` fails every *live* AI task with `NO_FREE_AIPROCESSORS`.
+
+**Implementation (fe0e547).**
+- **Crops:** `multipleImages` tasks for index cameras fetch each saved crop from `/internal/aiprocessors/image/<imageId>` and embed it with the **local** CLIP server only.
+- **Reply:** `thumbnailTags` keyed by tracker ID and exact detection time, so Protect attaches the embeddings to the objects it already has.
+- **No provider, no captions:** the vision provider is never contacted and no captions are produced.
+- **Tests:** covered; 1191 pass.
+- **Opt-in:** `supportRetroactiveProcessing` is advertised only with `find_anything.retroactive: true`, which is **off** in the live config.
+
+**Read-only Protect history.** The AI Key already carries a stored run:
+- `state: running`, started **22 Sep 2026 17:42 local**, `allCameras: true`, `numberOfEvents: 5000`;
+- no progress recorded, because the flag was never on.
+
+Enabling the opt-in would resume that run at once. That means backfilling up to 5000 recorded events on every camera, with live AI tasks paused for about 100 minutes by Protect's own estimate.
+
+**Status:** the live retroactive run is `needs_evidence`. It needs Olli's decision to cancel the stale run and approve a bounded one (for example a single camera and a few events). Per Olli's boundary, no recorded Flur, Garage or Esszimmer frames went to any external provider, and no run was started.
