@@ -266,7 +266,8 @@ async def test_nl_parse_is_answered_with_a_local_clip_text_vector(controller, tm
         assert response.header["errorCode"] == 0 and response.header["id"] == "q1"
         body = response.body
         assert body["model"] == clip.MODEL and body["dim"] == 768 and body["exact_match"] is False
-        assert body["keyTags"] == [] and body["objectTypes"] == []
+        assert body["keyTags"] == [] and body["objectTypes"] == ["vehicle"]      # "red car"
+        assert "startTime" not in body and "timeTag" not in body
         assert body["txtEmbed"][5] == 1.0 and len(body["txtEmbed"]) == 768
         # Protect's default model is clip-ViT-L-14 when a request omits it.
         response = decode_message(await service.handle_message(encode_message(
@@ -279,6 +280,7 @@ async def test_nl_parse_is_answered_with_a_local_clip_text_vector(controller, tm
             {"querySentence": "red car", "model": "multilingual-e5-small"})))
         assert response.header["errorCode"] == 1 and response.body == {}
         assert service.status["queries"] == 2 and service.status["query_failures"] == 1
+        assert service.status["object_filters"] == 2 and service.status["time_filters"] == 0
         assert controller.text_requests == [{"texts": ["red car"]}, {"texts": ["red car"]}]
         service._check_profile()
         profile = json.loads((tmp_path / "search-profile.json").read_text())
@@ -665,3 +667,58 @@ def test_retroactive_processing_is_advertised_only_on_opt_in(tmp_path):
     assert flags["supportRetroactiveProcessing"]["enabled"] is True
     with pytest.raises(clip.ClipError):
         clip.validate_find_anything_config({"clip_server": "http://127.0.0.1:8180", "retroactive": "yes"})
+
+
+BERLIN_EVENING = 1_790_442_000_000          # Sat 26 Sep 2026 19:00 Europe/Berlin
+
+
+def _local(ms):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.fromtimestamp(ms / 1000, ZoneInfo("Europe/Berlin")).strftime("%a %H:%M")
+
+
+@pytest.mark.parametrize("text,types,window", [
+    ("a red car", ["vehicle"], None),
+    ("Person heute", ["person"], ("today", "Sat 00:00", "Sat 19:00")),
+    ("cat last night", ["animal"], ("last_night", "Fri 18:00", "Sat 06:00")),
+    ("Paket gestern", ["package"], ("yesterday", "Fri 00:00", "Sat 00:00")),
+    ("someone at the door this morning", ["person"], ("this_morning", "Sat 05:00", "Sat 12:00")),
+    ("people in the last 3 hours", ["person"], ("last_hours", "Sat 16:00", "Sat 19:00")),
+    ("Kennzeichen", ["licensePlate"], None),
+    ("carport at dusk", [], None),                   # word boundaries: no "car"
+    ("a blue circle", [], None),
+])
+def test_query_filters_are_parsed_locally(text, types, window):
+    from aikey.search import parse_query_filters
+    result = parse_query_filters(text, BERLIN_EVENING, "Europe/Berlin")
+    assert result["objectTypes"] == types
+    if window is None:
+        assert set(result) == {"objectTypes"}
+    else:
+        tag, start, end = window
+        assert result["timeTag"] == tag
+        assert (_local(result["startTime"]), _local(result["endTime"])) == (start, end)
+
+
+def test_an_unknown_timezone_falls_back_to_utc():
+    from aikey.search import parse_query_filters
+    result = parse_query_filters("today", BERLIN_EVENING, "Not/AZone")
+    assert result["endTime"] == BERLIN_EVENING and result["startTime"] % 86_400_000 == 0
+
+
+async def test_nl_parse_reply_carries_protects_filter_fields(controller, tmp_path):
+    (tmp_path / "device-state.json").write_text(json.dumps({"timezone": "Europe/Berlin"}))
+    options = {"search": {"enabled": True, "profile": clip.PROFILE},
+               "find_anything": {"clip_server": controller.origin}}
+    service = SearchService(options, tmp_path)
+    try:
+        response = decode_message(await service.handle_message(encode_message(
+            {"id": "q1", "type": "request", "action": "NL_PARSE", "timestamp": 1},
+            {"querySentence": "Hund heute", "model": clip.MODEL})))
+    finally:
+        await service.stop()
+    body = response.body
+    assert body["objectTypes"] == ["animal"] and body["timeTag"] == "today"
+    assert body["startTime"] < body["endTime"] and len(body["txtEmbed"]) == 768
+    assert service.status["time_filters"] == 1

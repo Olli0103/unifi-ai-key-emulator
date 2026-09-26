@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-26.4). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-26.5). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-26.4` for the `ai-key` profile, based on commit `c55ffab`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-26.5` for the `ai-key` profile, based on commit `c55ffab`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -98,7 +98,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `search.e5_nl_parse`: NL_PARSE with multilingual-e5-small returns a 384-value query embedding | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105 | explicit_opt_in |
 | `search.description_embedding`: 384-value passage embedding attached to task descriptions | fixture-tested | — | — | — | Protect 7.2.105 | explicit_opt_in |
 | `search.legacy_clip_image`: 768-value CLIP ViT-L/14 NL_PARSE text vectors and IMAGE_SEARCH image vectors (basic Find Anything) | native-verified | — | — | native-verified | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
-| `search.tags_and_time_filters`: NL_PARSE tag extraction, object types and time filters | unsupported | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `search.tags_and_time_filters`: NL_PARSE objectTypes and time window from the query text (keyTags stay empty) | fixture-tested | — | — | not_observed | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
 | `search.native_retrieval`: Find Anything retrieval of processor results in Protect | native-verified | — | — | native-verified | Protect 7.3.60 bundle, Protect 7.2.105 | explicit_opt_in |
 | `index.search_snapshots`: Key-moment regions indexed as keyMomentsTags search snapshots with local CLIP crop embeddings | native-verified | — | — | native-verified | Protect 7.3.60 bundle | explicit_opt_in |
 | `index.thumbnail_tags`: thumbnailTags for existing smart-detect objects (thumbnailMeta and retroactive crops) | fixture-tested | — | — | not_observed | Protect 7.3.60 bundle | explicit_opt_in |
@@ -194,6 +194,9 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `search.legacy_clip_image`: Vectors come from the project's own local CLIP ViT-L/14 export; equivalence with the vendor encoder is not established, so only indexes built by this Key are compatible
 - `search.legacy_clip_image`: Protect 7.3.56 and 7.3.60 not observed
 - `search.legacy_clip_image`: Tag extraction and time filters remain unsupported
+- `search.tags_and_time_filters`: Native detection-nls readback with an object-word and a time-phrase query (deployed 26 Sep 19:04; skipped while no identified console browser session was available)
+- `search.tags_and_time_filters`: keyTags need Protect's ramTags vocabulary, which is not established; none are sent
+- `search.tags_and_time_filters`: Only English and German phrases; no model-based parsing
 - `search.native_retrieval`: Retrieval quality benchmark with labelled positives and negatives (issue #7)
 - `search.native_retrieval`: Persistence of the search host across a controller restart
 - `search.native_retrieval`: Deep (E5 session) and hybrid retrieval
@@ -250,3 +253,4 @@ Every live trial must record each experimental activation below that was in effe
 - **N9** (`control.continuous_caption_admission`, `worker.private_journal_rollover`): In an isolated, reviewed rollout, confirm fresh model-family inventory, Protect-side dispatch, persistence, budget exhaustion, additions/removals, reconnect and journal rollover. Keep richer native-AI models excluded until tag preservation is verified.
 - **N10** (`capability.retroactive_processing`, `control.recognize_key_frames.multiple_images`, `index.thumbnail_tags`): Owner decision: cancel the stored all-camera 5000-event retroactive run, start a bounded one (one camera, a few events), enable find_anything.retroactive, and read back new ramDetections rows and a search hit for a backfilled object; live AI tasks pause during the run.
 - **N11** (`search.native_retrieval`, `search.index_recovery`, `database.controller_migrations`): After a planned controller restart, confirm isSearchHost true, that existing ramDetections rows survive, and that a known positive text search still returns its object.
+- **N12** (`search.tags_and_time_filters`): In a signed-in console session, run detection-nls for "a car", "person today" and "person yesterday"; confirm the first returns only vehicle objects, the second reports searchCondition startTime at local midnight, and the third returns no hits for a day without indexed objects.

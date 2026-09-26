@@ -226,6 +226,84 @@ def _png_to_jpeg(data: bytes) -> bytes:
     return out.getvalue()
 
 
+# Object words Protect can filter on: each objectType becomes the label
+# smartDetectType:<type> in its vector search (7.3.60 buildVectorSearchFilters).
+_OBJECT_WORDS = {
+    "person": ("person", "persons", "people", "man", "men", "woman", "women", "child", "children",
+               "kid", "kids", "someone", "somebody", "human", "pedestrian", "personen", "mensch",
+               "menschen", "mann", "männer", "frau", "frauen", "kind", "kinder", "jemand", "leute",
+               "fußgänger"),
+    "vehicle": ("car", "cars", "vehicle", "vehicles", "truck", "trucks", "van", "vans", "bus", "suv",
+                "motorcycle", "motorbike", "auto", "autos", "fahrzeug", "fahrzeuge", "wagen", "lkw",
+                "lieferwagen", "transporter", "motorrad"),
+    "animal": ("animal", "animals", "cat", "cats", "dog", "dogs", "bird", "birds", "deer", "fox",
+               "tier", "tiere", "katze", "katzen", "kater", "hund", "hunde", "vogel", "vögel", "reh", "fuchs"),
+    "package": ("package", "packages", "parcel", "parcels", "delivery", "paket", "pakete",
+                "päckchen", "lieferung"),
+    "face": ("face", "faces", "gesicht", "gesichter"),
+}
+_OBJECT_PHRASES = {"licensePlate": ("license plate", "licence plate", "number plate", "kennzeichen",
+                                    "nummernschild")}
+_WORD = re.compile(r"[a-zäöüß]+")
+
+
+def parse_query_filters(text: str, now_ms: int, zone: str = "UTC") -> dict[str, Any]:
+    """Object types and a time window stated in a search sentence (English/German).
+
+    Deterministic and local: no model is involved. Protect applies the
+    object types as label filters (falling back to a pure vector search when
+    they match nothing) and the window as a start/end bound.
+    """
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    lowered = text.lower()
+    words = set(_WORD.findall(lowered))
+    types = [kind for kind, vocabulary in _OBJECT_WORDS.items() if words & set(vocabulary)]
+    types += [kind for kind, phrases in _OBJECT_PHRASES.items()
+              if any(re.search(rf"\b{re.escape(phrase)}\b", lowered) for phrase in phrases)]
+    result: dict[str, Any] = {"objectTypes": types}
+    try:
+        tz = ZoneInfo(zone)
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = ZoneInfo("UTC")
+    now = datetime.fromtimestamp(now_ms / 1000, tz)
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def at(day, hour):
+        return day.replace(hour=hour)
+
+    window = None
+    hours = re.search(r"\b(?:last|past|letzten|vergangenen)\s+(\d{1,2})\s+(?:hours|stunden)\b", lowered)
+    rules = [
+        ("last_hour", r"\b(?:last|past) hour\b|\bletzten? stunde\b", lambda: (now - timedelta(hours=1), now)),
+        ("last_night", r"\blast night\b|\bletzte nacht\b|\bheute nacht\b|\bvergangene nacht\b",
+         lambda: (at(midnight - timedelta(days=1), 18), at(midnight, 6))),
+        ("this_morning", r"\bthis morning\b|\bheute (?:morgen|früh|vormittag)\b",
+         lambda: (at(midnight, 5), at(midnight, 12))),
+        ("this_afternoon", r"\bthis afternoon\b|\bheute nachmittag\b",
+         lambda: (at(midnight, 12), at(midnight, 18))),
+        ("this_evening", r"\bthis evening\b|\btonight\b|\bheute abend\b",
+         lambda: (at(midnight, 18), midnight + timedelta(days=1))),
+        ("yesterday", r"\byesterday\b|\bgestern\b", lambda: (midnight - timedelta(days=1), midnight)),
+        ("today", r"\btoday\b|\bheute\b", lambda: (midnight, now)),
+        ("last_week", r"\blast week\b|\bletzte woche\b|\bvorige woche\b",
+         lambda: (midnight - timedelta(days=now.weekday() + 7), midnight - timedelta(days=now.weekday()))),
+        ("this_week", r"\bthis week\b|\bdiese woche\b", lambda: (midnight - timedelta(days=now.weekday()), now)),
+    ]
+    if hours and 1 <= int(hours.group(1)) <= 72:
+        window = ("last_hours", (now - timedelta(hours=int(hours.group(1))), now))
+    else:
+        for tag, pattern, compute in rules:
+            if re.search(pattern, lowered):
+                window = (tag, compute())
+                break
+    if window is not None:
+        tag, (start, end) = window
+        result.update(startTime=int(start.timestamp() * 1000), endTime=int(end.timestamp() * 1000),
+                      timeTag=tag)
+    return result
+
+
 class ImageSearchError(RuntimeError):
     """An IMAGE_SEARCH request failed; ``category`` is a fixed reason code."""
 
@@ -262,7 +340,8 @@ class SearchService:
         self._stopping = asyncio.Event()
         self.status: dict[str, Any] = {"connected": False, "profile": self.profile, "last_error": None,
                                        "queries": 0, "query_failures": 0, "ignored_frames": 0,
-                                       "image_queries": 0, "image_failures": {}}
+                                       "image_queries": 0, "image_failures": {},
+                                       "object_filters": 0, "time_filters": 0}
 
     def _url(self) -> str:
         controller = self.config.get("controller", {})
@@ -275,6 +354,14 @@ class SearchService:
         if not 1 <= port <= 65535:
             raise ValueError("Invalid controller search port")
         return f"wss://{host}:{port}/wss/nl-search/v1"
+
+    def _timezone(self) -> str:
+        """The console's timezone, as Protect sent it with updateTimezone."""
+        try:
+            zone = json.loads((self.state_dir / "device-state.json").read_text()).get("timezone")
+        except (OSError, ValueError, AttributeError):
+            zone = None
+        return zone if isinstance(zone, str) and re.fullmatch(r"[A-Za-z0-9_+\-/]{1,64}", zone) else "UTC"
 
     async def _image_embedding(self, uri: Any) -> list[float]:
         """CLIP embedding of an image Protect stored for search by image.
@@ -465,9 +552,13 @@ class SearchService:
                     vector = await self.clip.embed_text(body.get("querySentence"))
                 except clip.ClipError as exc:
                     raise EmbeddingError(str(exc)) from exc
-                result = {"keyTags": [], "objectTypes": [], "txtEmbed": vector, "model": clip.MODEL,
-                          "dim": clip.DIMENSIONS, "exact_match": False}
+                filters = parse_query_filters(body.get("querySentence"), int(time.time() * 1000),
+                                              self._timezone())
+                result = {"keyTags": [], "txtEmbed": vector, "model": clip.MODEL,
+                          "dim": clip.DIMENSIONS, "exact_match": False, **filters}
                 self.status["queries"] += 1
+                self.status["object_filters"] += bool(filters["objectTypes"])
+                self.status["time_filters"] += "startTime" in filters
             else:
                 if header.get("action") != "NL_PARSE" or body.get("model") != MODEL:
                     raise EmbeddingError("Only explicit multilingual-e5-small NL_PARSE is supported")

@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-26.4",
+ "manifest_version": "ai-key/2026-09-26.5",
  "processor_profile": "ai-key",
  "base_commit": "c55ffab",
  "emulated_identity": {
@@ -1971,20 +1971,31 @@
   {
    "id": "search.tags_and_time_filters",
    "area": "search",
-   "title": "NL_PARSE tag extraction, object types and time filters",
-   "status": "unsupported",
-   "live": {},
+   "title": "NL_PARSE objectTypes and time window from the query text (keyTags stay empty)",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.68": "not_observed"
+   },
    "static": [
+    "static-protect-7.3.60-bundle",
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
    ],
-   "tests": [],
+   "tests": [
+    "tests/test_find_anything.py::test_query_filters_are_parsed_locally",
+    "tests/test_find_anything.py::test_nl_parse_reply_carries_protects_filter_fields",
+    "tests/test_find_anything.py::test_an_unknown_timezone_falls_back_to_utc"
+   ],
    "implementation": [
     "src/aikey/search.py"
    ],
-   "activation": "default",
-   "missing_evidence": [],
-   "rejection": "Returned as empty arrays with exact_match false."
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Native detection-nls readback with an object-word and a time-phrase query (deployed 26 Sep 19:04; skipped while no identified console browser session was available)",
+    "keyTags need Protect's ramTags vocabulary, which is not established; none are sent",
+    "Only English and German phrases; no model-based parsing"
+   ],
+   "notes": "Protect maps each objectType to the label smartDetectType:<type> and falls back to a pure vector search (keeping the time window) when the labels match nothing (7.3.60 searchDetections)."
   },
   {
    "id": "search.native_retrieval",
@@ -2378,6 +2389,13 @@
     "database.controller_migrations"
    ],
    "procedure": "After a planned controller restart, confirm isSearchHost true, that existing ramDetections rows survive, and that a known positive text search still returns its object."
+  },
+  {
+   "id": "N12",
+   "features": [
+    "search.tags_and_time_filters"
+   ],
+   "procedure": "In a signed-in console session, run detection-nls for \"a car\", \"person today\" and \"person yesterday\"; confirm the first returns only vehicle objects, the second reports searchCondition startTime at local midnight, and the third returns no hits for a day without indexed objects."
   }
  ]
 }
