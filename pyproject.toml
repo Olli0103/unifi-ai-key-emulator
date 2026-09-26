@@ -37,6 +37,7 @@ local-aiport-slot-diff = "aikey.aiport_slot_diff:main"
 local-aiport-rollout = "aikey.aiport_rollout:main"
 local-aiport-onnx-export = "aikey.aiport_onnx_export:main"
 local-aikey-control = "aikey.control_site:main"
+local-apple-supervise = "aikey.apple_supervisor:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
