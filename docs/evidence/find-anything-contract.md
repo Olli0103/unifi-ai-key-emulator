@@ -88,7 +88,7 @@ Options for the owner:
 - **Coverage:**
   - Audio-event image tasks (`ramType: image`, one cropped thumbnail each) are not indexed yet.
   - Face-camera recognition tasks go to local faces and are not indexed.
-  - Cameras paired to our AI Ports produce no key moments of their own, because our AI Port does not send `FrameSelection` on Protect's AI console connection (#28).
+  - Key moments come from a console-local service, not from cameras or AI Ports. Protect's `/ai-feature-console/v1` socket admits only local addresses; Protect streams it `SmartDetectTrack` raw tracks, and that service sends back `FrameSelection`. AI Port-paired cameras are covered: Flur, a G3 on our Mac AI Port, was indexed and returned by search. When Protect selects a key moment is outside the Key's control.
 - **Durability:** CLIP and Postgres are pinned in the Mac supervisor. The relay runs as a plain background process and is **not** yet restarted after a reboot.
 - **Deep mode** (E5 session search), image search and hybrid search: not implemented.
 - **NAS:** the search host moves to the NAS only at the final cutover ([plan](../planning/nas-final-cutover.md)).
