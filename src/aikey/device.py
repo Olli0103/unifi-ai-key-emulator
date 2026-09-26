@@ -90,6 +90,11 @@ _WORKER_REJECTION_REASONS = {
     "Worker queue is full": "queue_full",
     "Worker journal is full; archive reviewed entries": "journal_full",
     "Worker has stopped": "worker_stopped",
+    "Region metadata must list at most 256 entries": "region_metadata",
+    "Region metadata entries need a tracker, ts and 0-1000 xywh coord": "region_metadata",
+    "recognizeKeyFrames has no indexable objects": "index_empty",
+    "faceMeta must list 1 to 256 face regions": "face_metadata",
+    "faceMeta has no regions inside the export": "face_outside_export",
 }
 
 
@@ -285,7 +290,8 @@ class DeviceService:
         self._control_diagnostics = {name: {"count": 0, "last_result_code": None,
                                            "result_code_counts": _result_counts()} for name in (
             "getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone",
-            "changeUserPassword", "RequestAI", "recognizeKeyFrames", "changeAiInferAgentSettings",
+            "changeUserPassword", "RequestAI", "recognizeKeyFrames", "speechToText",
+            "changeAiInferAgentSettings",
             "changeDescribePrompts", "networkStatus", "sshService", "unknown")}
         self._recognize_diagnostics = {
             "camera_shape_counts": dict.fromkeys(_JSON_SHAPES, 0),
@@ -293,13 +299,33 @@ class DeviceService:
             "camera_match_counts": dict.fromkeys(("matches", "different", "not_comparable"), 0),
             "cameraId_match_counts": dict.fromkeys(("matches", "different", "not_comparable"), 0),
             "ram_type_counts": dict.fromkeys((*_RAM_TYPES, "missing", "invalid_type", "other_string"), 0),
-            "metadata_presence_counts": dict.fromkeys(("personMeta", "faceMeta", "vehicleMeta"), 0),
+            "metadata_presence_counts": dict.fromkeys(("personMeta", "faceMeta", "vehicleMeta",
+                                                       "thumbnailMeta"), 0),
             "video_interval_counts": dict.fromkeys(("missing", "invalid_type", "invalid_order_or_range",
                                                     "up_to_10_seconds", "over_10_seconds"), 0),
             "duration_limit_counts": dict.fromkeys(("within", "exceeds", "not_comparable"), 0),
             "key_moments_counts": dict.fromkeys(("missing", "invalid_type", "empty", "at_or_below_sampling_limit",
                 "above_sampling_limit", "over_128_inputs", "duplicates", "non_integer", "outside_interval",
                 "interval_not_comparable"), 0),
+            # Per request, content-free: where key moments fall against the
+            # exported interval, and why an interval is unusable.
+            # Find Anything objects (#2): counts only, never IDs, times or boxes.
+            "thumbnail_meta_counts": dict.fromkeys((
+                "tasks_empty", "tasks_with_objects", "objects_inside", "objects_before_start",
+                "objects_after_end", "objects_invalid", "name_hex24", "name_empty", "name_other",
+                "ts_in_thumbnail_ms", "ts_not_in_thumbnail_ms"), 0),
+            # Region shapes per metadata source (#2, #20): ranges and fit only.
+            "region_shape_counts": {source: dict.fromkeys((
+                "entries", "roi_list", "coord_not4", "max_le_1", "max_le_1000", "max_gt_1000",
+                "xywh_fits_1000", "xyxy_ordered", "type_person", "type_vehicle", "type_animal",
+                "type_package", "type_face", "type_other", "type_missing"), 0)
+                for source in ("thumbnailMeta", "roiMeta", "personMeta", "vehicleMeta", "faceMeta")},
+            "key_moment_position_counts": dict.fromkeys((
+                "all_inside", "some_outside", "all_outside", "any_at_end",
+                "before_start_up_to_1s", "before_start_over_1s",
+                "after_end_up_to_1s", "after_end_over_1s"), 0),
+            "interval_detail_counts": dict.fromkeys((
+                "zero_length", "reversed", "over_limit_up_to_5min", "over_5min"), 0),
             "matching_camera_result_code_counts": _result_counts(),
             "matching_cameraId_result_code_counts": _result_counts(),
             "phase_counts": dict.fromkeys(("scope_disabled", "camera_mismatch", "worker_admission",
@@ -337,7 +363,35 @@ class DeviceService:
                 "clock_offset_ms": self._clock_offset_ms, "discovery": "unsupported",
                 "compatibility": self._compatibility_status(),
                 "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "changeUserPassword", "RequestAI"]
-                    + (["recognizeKeyFrames"] if basic_enabled else [])}
+                    + (["recognizeKeyFrames"] if basic_enabled else [])
+                    + (["speechToText"] if self._speech_cameras() else [])}
+
+    def _served_capabilities(self) -> dict:
+        """Which Protect AI features this configuration actually answers."""
+        search = self.config.get("search", {})
+        find_anything = self.config.get("find_anything")
+        faces = self.config.get("face_recognition")
+        image_search = (search.get("enabled") is True and search.get("profile") == "clip-basic-v1"
+                        and isinstance(find_anything, dict))
+        # Recognize Anything means object indexing; captions are supportAiSummary.
+        indexing = image_search and bool(find_anything.get("index_camera_ids"))
+        face_cameras = faces.get("camera_ids") if isinstance(faces, dict) else None
+        return {
+            "supportImageSearch": image_search,
+            "supportRecognizeAnything": indexing,
+            # Opt-in: Protect then backfills past events as multipleImages tasks.
+            "supportRetroactiveProcessing": indexing and find_anything.get("retroactive") is True,
+            "supportTts": bool(self._speech_cameras()),
+            "supportFaceRecognition": isinstance(face_cameras, list) and bool(face_cameras)
+                                      and isinstance(faces.get("server"), str),
+            # No AI Key plate reader: plates come from paired AI Ports (#19).
+            "supportLicensePlateRecognition": False,
+        }
+
+    def _speech_cameras(self) -> frozenset:
+        speech = self.config.get("speech_to_text")
+        cameras = speech.get("camera_ids") if isinstance(speech, dict) else None
+        return frozenset(c for c in cameras if isinstance(c, str)) if isinstance(cameras, list) else frozenset()
 
     def _compatibility_status(self) -> dict:
         """Fixed categories only; never echoes controller-supplied text."""
@@ -468,6 +522,15 @@ class DeviceService:
                           and Path(decoder).is_file() and scope_supported)
             if not configured:
                 flags["supportAiSummary"] = {**summary, "enabled": False}
+        # Capabilities follow what this Key is configured to serve. Protect's
+        # getInfo treats an *absent* face/LPR/RAM flag as enabled but keeps an
+        # explicit false, and shows Speech to Text from supportTts (7.3.60
+        # FEATURE_TYPE_CONFIG); its dispatcher also refuses face and LPR
+        # settings whose flag is off. An explicit false override still wins.
+        for name, available in self._served_capabilities().items():
+            requested = overrides.get(name)
+            if not (isinstance(requested, dict) and requested.get("enabled") is False):
+                flags[name] = {"enabled": available, "version": "v1"}
         return {"type": self.device.get("model", "UP-AI-KEY"), "sysid": self.device.get("sysid", "0xa5f0"),
                 "version": self.device.get("firmware_version", "2.2.8"), "mac": self.mac,
                 "uptime": int(time.monotonic() - self._started_at), "poeType": self.device.get("poe_type", "unknown"),
@@ -841,16 +904,69 @@ class DeviceService:
         start, end = body.get("start"), body.get("end")
         interval_valid = (type(start) is int and type(end) is int
                           and 0 <= start < end <= 2 ** 53 - 1)
+        for source, shapes in self._recognize_diagnostics["region_shape_counts"].items():
+            entries = body.get(source)
+            if not isinstance(entries, list):
+                continue
+            for item in entries[:256]:
+                _increment(shapes, "entries")
+                roi = item.get("roi") if isinstance(item, dict) else None
+                if isinstance(roi, list):
+                    _increment(shapes, "roi_list")
+                    roi = roi[0] if roi and isinstance(roi[0], dict) else None
+                if not isinstance(roi, dict):
+                    continue
+                kind = roi.get("objectType", roi.get("name"))
+                _increment(shapes, "type_missing" if not isinstance(kind, str) or not kind else
+                           f"type_{kind}" if kind in ("person", "vehicle", "animal", "package", "face")
+                           else "type_other")
+                coord = roi.get("coord")
+                if (not isinstance(coord, list) or len(coord) != 4
+                        or any(type(v) not in (int, float) for v in coord)):
+                    _increment(shapes, "coord_not4")
+                    continue
+                top = max(coord)
+                _increment(shapes, "max_le_1" if top <= 1 else "max_le_1000" if top <= 1000 else "max_gt_1000")
+                if coord[0] + coord[2] <= 1000 and coord[1] + coord[3] <= 1000:
+                    _increment(shapes, "xywh_fits_1000")
+                if coord[2] > coord[0] and coord[3] > coord[1]:
+                    _increment(shapes, "xyxy_ordered")
+        meta = body.get("thumbnailMeta")
+        if isinstance(meta, list):
+            counts = self._recognize_diagnostics["thumbnail_meta_counts"]
+            _increment(counts, "tasks_with_objects" if meta else "tasks_empty")
+            thumbnail_ms = body.get("thumbnailMs") if isinstance(body.get("thumbnailMs"), list) else []
+            for item in meta[:256]:
+                roi = item.get("roi") if isinstance(item, dict) else None
+                ts = item.get("ts") if isinstance(item, dict) else None
+                if not isinstance(roi, dict) or type(ts) is not int or not interval_valid:
+                    _increment(counts, "objects_invalid")
+                    continue
+                _increment(counts, "objects_before_start" if ts < start else
+                           "objects_after_end" if ts > end else "objects_inside")
+                name = roi.get("name")
+                _increment(counts, "name_empty" if name == "" else
+                           "name_hex24" if isinstance(name, str) and re.fullmatch(r"[0-9a-f]{24}", name)
+                           else "name_other")
+                _increment(counts, "ts_in_thumbnail_ms" if ts in thumbnail_ms else "ts_not_in_thumbnail_ms")
         interval_category = (
             "missing" if "start" not in body or "end" not in body else
             "invalid_type" if type(start) is not int or type(end) is not int else
             "invalid_order_or_range" if not interval_valid else
             "over_10_seconds" if end - start > 10000 else "up_to_10_seconds")
         _increment(self._recognize_diagnostics["video_interval_counts"], interval_category)
+        details = self._recognize_diagnostics["interval_detail_counts"]
+        if type(start) is int and type(end) is int:
+            if start == end:
+                _increment(details, "zero_length")
+            elif start > end:
+                _increment(details, "reversed")
         duration_limit = self.config.get("worker", {}).get("max_video_duration_ms", 120000)
         duration_limit = duration_limit if type(duration_limit) is int and duration_limit > 0 else 120000
         duration_category = ("not_comparable" if not interval_valid else
                              "exceeds" if end - start > duration_limit else "within")
+        if duration_category == "exceeds":
+            _increment(details, "over_limit_up_to_5min" if end - start <= 300000 else "over_5min")
         _increment(self._recognize_diagnostics["duration_limit_counts"], duration_category)
         moments = body.get("keyMoments")
         moment_counts = self._recognize_diagnostics["key_moments_counts"]
@@ -873,8 +989,23 @@ class DeviceService:
                     _increment(moment_counts, "duplicates")
                 if not interval_valid:
                     _increment(moment_counts, "interval_not_comparable")
-                elif any(not start <= moment < end for moment in moments):
-                    _increment(moment_counts, "outside_interval")
+                else:
+                    if any(not start <= moment < end for moment in moments):
+                        _increment(moment_counts, "outside_interval")
+                    positions = self._recognize_diagnostics["key_moment_position_counts"]
+                    inside = [start <= moment < end for moment in moments]
+                    _increment(positions, "all_inside" if all(inside) else
+                               "all_outside" if not any(inside) else "some_outside")
+                    if end in moments:
+                        _increment(positions, "any_at_end")
+                    before = [start - moment for moment in moments if moment < start]
+                    after = [moment - end for moment in moments if moment > end]
+                    if before:
+                        _increment(positions, "before_start_up_to_1s" if max(before) <= 1000
+                                   else "before_start_over_1s")
+                    if after:
+                        _increment(positions, "after_end_up_to_1s" if max(after) <= 1000
+                                   else "after_end_over_1s")
         return tuple(matches)
 
     async def _command(self, action: str, body: dict, *, _connection=None) -> dict:
@@ -922,6 +1053,20 @@ class DeviceService:
             finally:
                 self._active_admissions -= 1
             return body
+        if action == "speechToText":
+            # Protect 7.3.60 dispatches this for an alrmSpeak audio event; the
+            # worker posts the transcript to /internal/aiprocessors/speech-to-text.
+            if not isinstance(body.get("camera"), str) or body["camera"] not in self._speech_cameras():
+                raise CommandFailure(95, "speechToText is outside the configured camera policy")
+            self._active_admissions += 1
+            try:
+                async with asyncio.timeout(30):
+                    admitted = await self.job_handler({"command": action, "payload": deepcopy(body)})
+            finally:
+                self._active_admissions -= 1
+            if not isinstance(admitted, dict):
+                raise ContractError("Job admission must return an object")
+            return body
         if action == "recognizeKeyFrames":
             from .worker import WorkerError, configured_test_scopes
             phases = self._recognize_diagnostics["phase_counts"]
@@ -929,6 +1074,17 @@ class DeviceService:
             active = {scope["camera_id"] for scope in scopes if scope.get("kind") == "recognizeKeyFrames"}
             if self.camera_registry is not None and "continuous" in self.config.get("worker", {}):
                 active.update(self.camera_registry.allowed_ids)
+            faces = self.config.get("face_recognition")
+            if isinstance(faces, dict) and isinstance(faces.get("camera_ids"), list):
+                # Local face recognition answers recognition tasks for these cameras.
+                active.update(c for c in faces["camera_ids"] if isinstance(c, str))
+            search = self.config.get("search", {})
+            find_anything = self.config.get("find_anything")
+            if (search.get("enabled") is True and search.get("profile") == "clip-basic-v1"
+                    and isinstance(find_anything, dict)
+                    and isinstance(find_anything.get("index_camera_ids"), list)):
+                # Local CLIP indexing answers key-moment tasks for these cameras.
+                active.update(c for c in find_anything["index_camera_ids"] if isinstance(c, str))
             if not active:
                 _increment(phases, "scope_disabled")
                 raise CommandFailure(95, "recognizeKeyFrames is outside the configured camera policy")

@@ -149,7 +149,8 @@ async def test_native_metadata_and_video_frame_shapes_are_bucketed_without_value
             "personMeta": [{"private_id": "secret-canary"}], "faceMeta": [], "vehicleMeta": []}
     await device.handle_message(wire("recognizeKeyFrames", body))
     detail = device.status["recognize_key_frames"]
-    assert detail["metadata_presence_counts"] == {"personMeta": 1, "faceMeta": 1, "vehicleMeta": 1}
+    assert detail["metadata_presence_counts"] == {"personMeta": 1, "faceMeta": 1, "vehicleMeta": 1,
+                                                  "thumbnailMeta": 0}
     assert detail["video_interval_counts"]["over_10_seconds"] == 1
     assert detail["duration_limit_counts"]["within"] == 1
     assert detail["key_moments_counts"]["above_sampling_limit"] == 1

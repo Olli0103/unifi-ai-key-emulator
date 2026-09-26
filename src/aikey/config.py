@@ -221,6 +221,14 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
         pin = controller.get("expected_fingerprint", "").replace(":", "")
         if not re.fullmatch(r"[0-9a-fA-F]{64}", pin):
             raise ConfigError("Disabling hostname checks requires an explicit controller SHA-256 pin")
+    # Protect serves its search WebSocket port with its own certificate (7.3.x:
+    # CN=unifi.local on 7443, CN=localhost on 7442), so it may carry its own trust.
+    if ("search_ca_file" in controller) != ("search_expected_fingerprint" in controller):
+        raise ConfigError("controller.search_ca_file and search_expected_fingerprint go together")
+    if "search_expected_fingerprint" in controller:
+        pin = controller["search_expected_fingerprint"]
+        if not isinstance(pin, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", pin.replace(":", "")):
+            raise ConfigError("controller.search_expected_fingerprint must be a SHA-256 pin")
     if runtime["mode"] == "lab" and host:
         try:
             is_loopback = ipaddress.ip_address(host).is_loopback
@@ -229,6 +237,8 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
         if not is_loopback:
             raise ConfigError("Lab controller must be loopback")
     base = base or Path.cwd()
+    if controller.get("search_ca_file"):
+        controller["search_ca_file"] = str((base or Path.cwd()) / Path(controller["search_ca_file"]).expanduser())
     for section, key in ((runtime, "state_dir"), (device, "management_password_file"),
                          (controller, "ca_file")):
         raw = section.get(key)
@@ -237,8 +247,14 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
         section[key] = str((base / Path(raw).expanduser()).resolve())
     if device.get("management_password"):
         raise ConfigError("Store management credentials in management_password_file")
+    speech = config.get("speech_to_text")
+    if speech is not None and not isinstance(speech, dict):
+        raise ConfigError("speech_to_text must be a configuration object")
+    if speech is not None and speech.get("api_key"):
+        raise ConfigError("Use speech_to_text.api_key_file instead of an inline API key")
     for section, key in ((config["inference"], "api_key_file"),
-                         (config["embeddings"], "bearer_token_file")):
+                         (config["embeddings"], "bearer_token_file"),
+                         (speech or {}, "api_key_file")):
         if section.get(key):
             p = (base / Path(section[key]).expanduser()).resolve()
             section[key] = str(p)
@@ -255,7 +271,7 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
             if u.scheme not in ("http", "https") or not u.hostname or u.username or u.password:
                 raise ConfigError("Inference/embedding URLs must be HTTP(S), without credentials")
     if config["inference"].get("provider", "openai-compatible") not in {
-            "openai", "ollama", "openai-compatible"}:
+            "openai", "anthropic", "ollama", "openai-compatible"}:
         raise ConfigError("Unknown vision provider")
     if config["inference"].get("api_key"):
         raise ConfigError("Use inference.api_key_file instead of an inline API key")
@@ -269,6 +285,21 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
         validate_inference_config(inference, lab=runtime["mode"] == "lab", require_api_key=False)
     except ProviderError as exc:
         raise ConfigError(str(exc)) from None
+    if speech is not None:
+        from .speech import SpeechError, validate_speech_config
+        try:
+            validate_speech_config(speech, lab=runtime["mode"] == "lab", require_api_key=False)
+        except SpeechError as exc:
+            raise ConfigError(str(exc)) from None
+    profile = config["search"].get("profile", "e5-session-v1")
+    if profile not in ("e5-session-v1", "clip-basic-v1"):
+        raise ConfigError("search.profile must be e5-session-v1 or clip-basic-v1")
+    if config.get("find_anything") is not None or profile == "clip-basic-v1":
+        from .clip import ClipError, validate_find_anything_config
+        try:
+            config["find_anything"] = validate_find_anything_config(config.get("find_anything"))
+        except ClipError as exc:
+            raise ConfigError(str(exc)) from None
     if config["embeddings"].get("backend", "http") == "http":
         from .search import EmbeddingError, EmbeddingService
         try:
@@ -298,6 +329,9 @@ def hydrate_secrets(config: dict) -> dict:
     key_path = config["inference"].get("api_key_file")
     if key_path:
         config["inference"]["api_key"] = Path(key_path).read_text().strip()
+    speech = config.get("speech_to_text")
+    if isinstance(speech, dict) and speech.get("api_key_file"):
+        speech["api_key"] = Path(speech["api_key_file"]).read_text().strip()
     return config
 
 
@@ -313,7 +347,7 @@ def readiness(config: dict) -> dict:
         "vision_model_configured": bool(config["inference"].get("model")),
     }
     provider = config["inference"].get("provider", "openai-compatible")
-    if provider == "openai":
+    if provider in {"openai", "anthropic"}:
         checks["vision_api_key_file"] = Path(config["inference"].get("api_key_file", "")).is_file()
     errors = {}
     try:

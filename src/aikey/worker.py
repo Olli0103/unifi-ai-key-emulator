@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import hashlib
+from io import BytesIO
 import ipaddress
 import json
 import math
@@ -25,6 +26,9 @@ import aiohttp
 
 from .caption_budget import CaptionBudget, CaptionBudgetError, CaptionBudgetExhausted
 from .providers import ProviderError, validate_inference_config
+from .speech import SpeechError, validate_speech_config
+from .faces import FaceStore, FaceStoreError
+from . import clip
 
 
 class WorkerError(RuntimeError):
@@ -43,9 +47,16 @@ def validate_test_scope_config(value):
             or value.get("kind", "on_demand") not in {"on_demand", "recognizeKeyFrames"}):
         raise WorkerError("Test scope kind must be on_demand or recognizeKeyFrames")
     profile = value.get("callback_profile", "full")
-    if (type(profile) is not str or profile not in {"full", "description_only"}
-            or (profile != "full" and value.get("kind") != "recognizeKeyFrames")):
-        raise WorkerError("Description-only callback requires a recognizeKeyFrames test scope")
+    if profile == "description_only":
+        # Protect 7.3.x routes a description-only RAM result to
+        # saveRamDescriptionEnhancement, which only updates an existing RAM
+        # row. On Wohnzimmer (G6, 23 Sep) it set ramState "done" with an empty
+        # ramDescription; the full tagging callback saved the caption and kept
+        # the event's detections (Esszimmer, Büro).
+        raise WorkerError("Description-only callback does not persist on Protect 7.3.x; "
+                          "use the full RAM callback")
+    if type(profile) is not str or profile != "full":
+        raise WorkerError("Test scope callback_profile must be full")
     return dict(value)
 
 
@@ -70,6 +81,11 @@ def configured_test_scopes(options):
 _CALLBACK_TASK = re.compile(r"^/internal/aiprocessors/descriptions/([A-Za-z0-9_-]+)$")
 _CALLBACK_UPLOAD = re.compile(r"^/internal/camera-upload/[A-Za-z0-9_-]+$")
 _LEGACY_CALLBACK = "/internal/aiprocessors/recognize-anything"
+_SPEECH_CALLBACK = "/internal/aiprocessors/speech-to-text"
+# A face found inside a person region gets its own tracker ID, linked to the person.
+_PERSON_FACE_OFFSET = 1_000_000
+_SPEECH_EXPORT = {"camera", "event", "channel", "start", "end", "type", "format", "skipVideo",
+                  "createEvent"}
 _IMAGE_PATH = re.compile(r"^/internal/aiprocessors/image/[^/]+$")
 _VIDEO_PATHS = {"/internal/aiprocessors/video/export", "/internal/video/export"}
 _SNAPSHOT_PATHS = {"/internal/aiprocessors/snapshot/generate",
@@ -116,6 +132,54 @@ def _origin(url):
         return parsed.scheme, parsed.hostname.lower(), port
     except (ValueError, TypeError) as exc:
         raise WorkerError("Invalid HTTP origin or URL") from exc
+
+
+_SNAPSHOT_TYPES = frozenset({"person", "vehicle", "animal", "package"})
+
+
+def _meta_regions(meta):
+    """Flatten Protect's region metadata into (tracker, ts, xywh, type, confidence).
+
+    Live 7.3.68 tasks carry ``[{ts, roi: [{coord, trackerId, ...}, ...]}]``:
+    ``roi`` is a list of objects per timestamp (26 Sep: every thumbnailMeta,
+    roiMeta and personMeta entry). A single ``roi`` object is also accepted.
+    Boxes are 0-1000 xywh. Only fixed fields are read.
+    """
+    if meta is None:
+        return []
+    if not isinstance(meta, list) or len(meta) > 256:
+        raise WorkerError("Region metadata must list at most 256 entries")
+    regions = []
+    for item in meta:
+        ts = item.get("ts") if isinstance(item, dict) else None
+        rois = item.get("roi") if isinstance(item, dict) else None
+        rois = rois if isinstance(rois, list) else [rois]
+        if type(ts) is not int or not 1 <= len(rois) <= 64:
+            raise WorkerError("Region metadata entries need a tracker, ts and 0-1000 xywh coord")
+        for roi in rois:
+            coord = roi.get("coord") if isinstance(roi, dict) else None
+            tracker = roi.get("trackerId", roi.get("trackerID")) if isinstance(roi, dict) else None
+            if (type(tracker) is not int or not 0 <= tracker <= 2 ** 31
+                    or not isinstance(coord, list) or len(coord) != 4
+                    or any(type(v) not in (int, float) or not math.isfinite(v) for v in coord)
+                    or not (0 <= coord[0] < 1000 and 0 <= coord[1] < 1000
+                            and 0 < coord[2] <= 1000 and 0 < coord[3] <= 1000)):
+                raise WorkerError("Region metadata entries need a tracker, ts and 0-1000 xywh coord")
+            attributes = roi.get("attributes") if isinstance(roi.get("attributes"), dict) else {}
+            kind = next((value for value in (roi.get("objectType"), attributes.get("objectType"),
+                                             roi.get("name")) if isinstance(value, str) and value), None)
+            confidence = roi.get("confidence", 0)
+            confidence = (float(confidence) if type(confidence) in (int, float) and math.isfinite(confidence)
+                          else 0.0)
+            regions.append((tracker, ts, [float(v) for v in coord], kind, confidence))
+    return regions
+
+
+def _padded(coord, fraction):
+    x, y, w, h = (v / 1000 for v in coord)
+    pad_x, pad_y = w * fraction, h * fraction
+    return [round(v, 4) for v in (max(0.0, x - pad_x), max(0.0, y - pad_y),
+                                  min(1.0, x + w + pad_x), min(1.0, y + h + pad_y))]
 
 
 @dataclass
@@ -218,6 +282,54 @@ class JobProcessor:
         if self.callback_mode not in {"enabled", "disabled"}:
             raise WorkerError("Invalid callback mode")
         self._check_inference_config()
+        self.speech, self.speech_cameras = None, frozenset()
+        self.max_audio_ms = self._positive("max_audio_ms", 120000)
+        # A local CPU Whisper needs about real time; keep speech off the caption timeout.
+        self.speech_timeout_s = min(self._positive("speech_timeout_s", 300), 900)
+        self.faces = self._face_config(self.config.get("face_recognition"), Path(state_dir))
+        self.find_anything, self.index_cameras, self._clip = None, frozenset(), None
+        search = self.config.get("search", {})
+        if (self.config.get("find_anything") is not None and search.get("enabled") is True
+                and search.get("profile") == clip.PROFILE):
+            try:
+                self.find_anything = clip.validate_find_anything_config(self.config["find_anything"])
+            except clip.ClipError as exc:
+                raise WorkerError(str(exc)) from exc
+            self.index_cameras = frozenset(self.find_anything["index_camera_ids"])
+        if self.config.get("speech_to_text") is not None:
+            try:
+                self.speech, self.speech_cameras = validate_speech_config(
+                    self.config["speech_to_text"], lab=self.lab)
+            except SpeechError as exc:
+                raise WorkerError(str(exc)) from exc
+
+    def _face_config(self, value, state_root):
+        """Local-only face recognition for explicitly listed cameras (#20)."""
+        if value is None:
+            return None
+        if (not isinstance(value, dict) or set(value) - {"server", "camera_ids", "max_faces"}
+                or not {"server", "camera_ids"} <= set(value)):
+            raise WorkerError("face_recognition needs server and camera_ids")
+        server = value["server"]
+        parsed = urlsplit(server) if isinstance(server, str) else None
+        try:
+            address = ipaddress.ip_address(parsed.hostname or "") if parsed else None
+        except ValueError:
+            address = None
+        if (parsed is None or parsed.scheme != "http" or address is None
+                or not (address.is_loopback or address.is_private) or parsed.path not in {"", "/"}):
+            # Face crops and embeddings never leave this host or its container network.
+            raise WorkerError("face_recognition.server must be a local HTTP server")
+        cameras = value["camera_ids"]
+        if (not isinstance(cameras, list) or not 1 <= len(cameras) <= 8
+                or any(not isinstance(c, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", c)
+                       for c in cameras) or len(set(cameras)) != len(cameras)):
+            raise WorkerError("face_recognition.camera_ids must list 1 to 8 camera IDs")
+        limit = value.get("max_faces", 8)
+        if type(limit) is not int or not 1 <= limit <= 16:
+            raise WorkerError("face_recognition.max_faces must be 1..16")
+        return {"url": server.rstrip("/") + "/v1/faces", "cameras": frozenset(cameras),
+                "max_faces": limit, "store": FaceStore(state_root)}
 
     def _positive(self, name, default):
         value = self.options.get(name, default)
@@ -419,7 +531,7 @@ class JobProcessor:
         if purpose == "callback":
             if parsed.query or not (_CALLBACK_TASK.fullmatch(parsed.path)
                                     or _CALLBACK_UPLOAD.fullmatch(parsed.path)
-                                    or parsed.path == _LEGACY_CALLBACK):
+                                    or parsed.path in {_LEGACY_CALLBACK, _SPEECH_CALLBACK}):
                 raise WorkerError("Unsupported callback path")
         elif not (_IMAGE_PATH.fullmatch(parsed.path) or parsed.path in _SNAPSHOT_PATHS
                   or parsed.path in _VIDEO_PATHS):
@@ -429,6 +541,23 @@ class JobProcessor:
     def _normalize(self, command):
         if not isinstance(command, dict) or len(_json(command)) > 65536:
             raise WorkerError("Invalid or oversized RequestAI command")
+        if command.get("command") == "speechToText":
+            return self._normalize_speech_to_text(command)
+        if (command.get("command") == "recognizeKeyFrames" and self.faces is not None
+                and isinstance(command.get("payload"), dict)
+                and command["payload"].get("camera") in self.faces["cameras"]
+                and command["payload"].get("ramType") == "videoWithRecognition"
+                and (command["payload"].get("faceMeta") or command["payload"].get("personMeta"))):
+            return self._normalize_faces(command)
+        if (command.get("command") == "recognizeKeyFrames" and isinstance(command.get("payload"), dict)
+                and command["payload"].get("ramType") == "multipleImages"
+                and command["payload"].get("camera") in self.index_cameras):
+            return self._normalize_multiple_images(command)
+        if (command.get("command") == "recognizeKeyFrames" and isinstance(command.get("payload"), dict)
+                and command["payload"].get("camera") in self.index_cameras
+                and command["payload"].get("camera") not in self._scopes_by_camera
+                and not (self.continuous and self.camera_registry.allows(command["payload"].get("camera")))):
+            return self._normalize_index(command)
         if "command" in command:
             return self._normalize_recognize_key_frames(command)
         if self.continuous:
@@ -562,10 +691,200 @@ class JobProcessor:
                 or body["end"] - body["start"] > self.max_video_duration_ms):
             raise WorkerError("recognizeKeyFrames video exceeds configured duration bound")
         moments = body["keyMoments"]
+        # Protect places a key moment exactly at the export's endTime (26 Sep,
+        # 13 of 39 live requests); that last frame is part of the video.
         if (not isinstance(moments, list) or not 1 <= len(moments) <= 128
-                or any(type(value) is not int or not body["start"] <= value < body["end"]
+                or any(type(value) is not int or not body["start"] <= value <= body["end"]
                        for value in moments)):
             raise WorkerError("recognizeKeyFrames requires at most 128 integer timestamps inside the video")
+        callback, media = self._recognize_media(body)
+        callback_kind = "legacy_tagging"
+        if body["camera"] in self.index_cameras:
+            body["_index"] = self._index_targets(body)
+        normalized = {"operation": "recognizeKeyFrames", "payload": body,
+                      "callback": callback, "callbackKind": callback_kind, "media": media}
+        fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
+        job_id = hashlib.sha256(f"recognizeKeyFrames:{body['camera']}:{body['event']}".encode()).hexdigest()
+        return (job_id, fingerprint, "recognizeKeyFrames", body, callback, callback_kind,
+                media, min(self.timeout_s, 30))
+
+    def _index_targets(self, body):
+        """Objects of a key-moment task to embed for Find Anything.
+
+        Protect saves an embedding only for an object it can match by tracker
+        ID and exact detection time (7.3.60 saveEventTagging):
+
+        * ``thumbnailMeta`` objects already exist as smart-detect objects, so
+          they are answered with ``thumbnailTags`` [tracker, ts, region, None];
+        * otherwise Protect's key-moment regions (``roiMeta``, ``personMeta``,
+          ``vehicleMeta``) are answered with ``keyMomentsTags`` search
+          snapshots [tracker, ts, region, type]: Protect stores each snapshot
+          as a thumbnail and smart-detect object of that tracker and type,
+          then attaches the embedding. Only person, vehicle, animal and
+          package regions qualify, one per tracker.
+
+        Objects outside the exported interval cannot be decoded and are
+        skipped; the highest-confidence objects are kept.
+        """
+        start, end, limit = body["start"], body["end"], self.find_anything["max_objects"]
+        existing = {}
+        for tracker, ts, coord, _, confidence in _meta_regions(body.get("thumbnailMeta")):
+            if start <= ts <= end and ((tracker, ts) not in existing
+                                       or confidence > existing[(tracker, ts)][0]):
+                existing[(tracker, ts)] = (confidence, _padded(coord, 0.1))
+        if existing:
+            ranked = sorted(existing.items(), key=lambda item: (-item[1][0], item[0]))
+            return [[tracker, ts, region, None] for (tracker, ts), (_, region) in ranked[:limit]]
+        snapshots = {}
+        for source in ("roiMeta", "personMeta", "vehicleMeta"):
+            for tracker, ts, coord, kind, confidence in _meta_regions(body.get(source)):
+                if (start <= ts <= end and kind in _SNAPSHOT_TYPES
+                        and (tracker not in snapshots or confidence > snapshots[tracker][0])):
+                    snapshots[tracker] = (confidence, ts, _padded(coord, 0.1), kind)
+        ranked = sorted(snapshots.items(), key=lambda item: (-item[1][0], item[0]))
+        return [[tracker, ts, region, kind] for tracker, (_, ts, region, kind) in ranked[:limit]]
+
+    def _normalize_multiple_images(self, command):
+        """Protect's retroactive task: the saved object crops of a past event.
+
+        7.3.60 ``runRetroactiveProcessing`` sends each past smart event as
+        ``ramType: multipleImages`` with one image per detected thumbnail
+        (``toMultipleImagesEntry``: imageId, keyMoment = clockBestWall,
+        trackerId, objectType). Those objects already exist, so each crop is
+        answered as a ``thumbnailTags`` entry keyed by tracker and exact
+        detection time. Crops go only to the local CLIP server; the vision
+        provider is never contacted and no caption is produced.
+        """
+        body = command["payload"]
+        required = {"resUrl", "ramType", "format", "camera", "event", "channel", "start", "end",
+                    "type", "images"}
+        if set(command) != {"command", "payload"} or set(body) != required:
+            raise WorkerError("Unsupported recognizeKeyFrames payload fields")
+        body = json.loads(_json(body))
+        if (not isinstance(body["event"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])
+                or body["format"] != "jpeg" or body["type"] != "rotating"
+                or type(body["channel"]) is not int or body["channel"] != 0
+                or any(type(body[key]) is not int for key in ("start", "end"))
+                or not 0 <= body["start"] <= body["end"] <= 2 ** 53 - 1):
+            raise WorkerError("multipleImages is limited to one event's saved object crops")
+        images = body["images"]
+        if not isinstance(images, list) or not 1 <= len(images) <= 256:
+            raise WorkerError("multipleImages must list 1 to 256 images")
+        chosen = {}
+        for item in images:
+            if not isinstance(item, dict):
+                raise WorkerError("multipleImages entries need an image, tracker and key moment")
+            image_id, tracker, moment = item.get("imageId"), item.get("trackerId"), item.get("keyMoment")
+            confidence = item.get("confidence", 0)
+            if (not isinstance(image_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", image_id)
+                    or type(tracker) is not int or not 0 <= tracker <= 2 ** 31
+                    or type(moment) is not int or not 0 <= moment <= 2 ** 53 - 1
+                    or item.get("reqUrl") != f"/internal/aiprocessors/image/{image_id}"):
+                raise WorkerError("multipleImages entries need an image, tracker and key moment")
+            confidence = float(confidence) if type(confidence) in (int, float) and math.isfinite(confidence) else 0.0
+            key = (tracker, moment)
+            if key not in chosen or confidence > chosen[key][0]:
+                chosen[key] = (confidence, image_id)
+        ranked = sorted(chosen.items(), key=lambda item: (-item[1][0], item[0]))[:16]
+        media = [("image", self._url(f"/internal/aiprocessors/image/{image_id}", "media"))
+                 for _, (_, image_id) in ranked]
+        body["_crops"] = [[tracker, moment] for (tracker, moment), _ in ranked]
+        callback = self._url(body["resUrl"], "callback")
+        if urlsplit(callback).path != _LEGACY_CALLBACK:
+            raise WorkerError("recognizeKeyFrames requires the observed RAM callback")
+        normalized = {"operation": "indexImages", "payload": body, "callback": callback,
+                      "callbackKind": "legacy_tagging", "media": media}
+        fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
+        job_id = hashlib.sha256(f"multipleImages:{body['camera']}:{body['event']}".encode()).hexdigest()
+        return (job_id, fingerprint, "indexImages", body, callback, "legacy_tagging",
+                media, min(self.timeout_s, 90))
+
+    def _normalize_index(self, command):
+        """Index-only key-moment task: local CLIP embeddings, no caption.
+
+        For Find Anything cameras without a caption policy. Frames go only to
+        the local CLIP server; the vision provider is never contacted, so no
+        permit or caption budget applies.
+        """
+        body = command["payload"]
+        required = {"reqUrl", "resUrl", "ramType", "camera", "event", "channel", "start", "end",
+                    "type", "mute", "format", "createEvent", "keyMoments", "postVLM"}
+        if (set(command) != {"command", "payload"} or not isinstance(body, dict)
+                or not required <= set(body)
+                or set(body) - required - {"roiMeta", "thumbnailMs", "thumbnailMeta",
+                                          "personMeta", "faceMeta", "vehicleMeta"}):
+            raise WorkerError("Unsupported recognizeKeyFrames payload fields")
+        body = json.loads(_json(body))
+        if (body["ramType"] not in ("video", "videoWithRecognition")
+                or not isinstance(body["event"], str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])
+                or type(body["channel"]) is not int or body["channel"] != 0
+                or body["type"] != "rotating" or body["mute"] is not True
+                or body["format"] not in {"ubv", "mp4"} or body["createEvent"] is not False
+                or any(type(body[key]) is not int for key in ("start", "end"))
+                or not 0 <= body["start"] < body["end"] <= 2 ** 53 - 1
+                or body["end"] - body["start"] > self.max_video_duration_ms):
+            raise WorkerError("recognizeKeyFrames is limited to captioned, muted target-camera video")
+        body["_index"] = self._index_targets(body)
+        if not body["_index"]:
+            raise WorkerError("recognizeKeyFrames has no indexable objects")
+        callback, media = self._recognize_media(body)
+        normalized = {"operation": "indexKeyFrames", "payload": body, "callback": callback,
+                      "callbackKind": "legacy_tagging", "media": media}
+        fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
+        job_id = hashlib.sha256(f"recognizeKeyFrames:{body['camera']}:{body['event']}".encode()).hexdigest()
+        return (job_id, fingerprint, "indexKeyFrames", body, callback, "legacy_tagging",
+                media, min(self.timeout_s, 90))
+
+    def _normalize_speech_to_text(self, command):
+        """Protect's native speech task, only for explicitly allowed cameras.
+
+        Protect 7.3.60 dispatches ``speechToText`` for an ``alrmSpeak`` audio
+        event with an audio-only export of the event and the fixed
+        speech-to-text callback. Nothing else is accepted.
+        """
+        if set(command) != {"command", "payload"} or self.speech is None:
+            raise WorkerError("speechToText requires a configured speech backend")
+        body = command["payload"]
+        if not isinstance(body, dict) or set(body) != _SPEECH_EXPORT | {"reqUrl", "resUrl"}:
+            raise WorkerError("Unsupported speechToText payload fields")
+        body = json.loads(_json(body))
+        if (body["camera"] not in self.speech_cameras
+                or not isinstance(body["event"], str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])):
+            raise WorkerError("speechToText is outside the configured camera policy")
+        if (type(body["channel"]) is not int or body["channel"] != 0 or body["type"] != "rotating"
+                or body["format"] not in {"mp4", "ubv"} or body["skipVideo"] is not True
+                or body["createEvent"] is not False):
+            raise WorkerError("speechToText is limited to the audio-only event export")
+        if (any(type(body[key]) is not int for key in ("start", "end"))
+                or not 0 <= body["start"] < body["end"] <= 2 ** 53 - 1
+                or body["end"] - body["start"] > self.max_audio_ms):
+            raise WorkerError("speechToText audio exceeds configured duration bound")
+        callback = self._url(body["resUrl"], "callback")
+        if urlsplit(callback).path != _SPEECH_CALLBACK:
+            raise WorkerError("speechToText requires the speech-to-text callback")
+        media = self._url(body["reqUrl"], "media")
+        parsed = urlsplit(media)
+        if parsed.path != "/internal/aiprocessors/video/export":
+            raise WorkerError("speechToText requires the AI processor video export route")
+        try:
+            pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+        except ValueError as exc:
+            raise WorkerError("speechToText export query is malformed") from exc
+        expected = {key: ("true" if body[key] is True else "false" if body[key] is False
+                          else str(body[key])) for key in _SPEECH_EXPORT}
+        if len(pairs) != len(expected) or dict(pairs) != expected:
+            raise WorkerError("speechToText export must exactly match the command")
+        normalized = {"operation": "speechToText", "payload": body, "callback": callback,
+                      "callbackKind": "speech", "media": [("audio", media)]}
+        fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
+        job_id = hashlib.sha256(f"speechToText:{body['camera']}:{body['event']}".encode()).hexdigest()
+        return (job_id, fingerprint, "speechToText", body, callback, "speech",
+                [("audio", media)], self.speech_timeout_s)
+
+    def _recognize_media(self, body):
+        """The RAM callback and exact event export of a recognizeKeyFrames task."""
         callback = self._url(body["resUrl"], "callback")
         if urlsplit(callback).path != _LEGACY_CALLBACK:
             raise WorkerError("recognizeKeyFrames requires the observed RAM callback")
@@ -582,16 +901,62 @@ class JobProcessor:
                     "mute": "true", "format": body["format"], "createEvent": "false"}
         if len(pairs) != len(expected) or dict(pairs) != expected:
             raise WorkerError("recognizeKeyFrames export must exactly match the command camera and interval")
-        media = [("video", self._mp4_export_url(original_media))]
-        callback_kind = ("legacy_description" if scope is not None
-                         and scope.get("callback_profile", "full") == "description_only"
-                         else "legacy_tagging")
-        normalized = {"operation": "recognizeKeyFrames", "payload": body,
-                      "callback": callback, "callbackKind": callback_kind, "media": media}
+        return callback, [("video", self._mp4_export_url(original_media))]
+
+    def _normalize_faces(self, command):
+        """A recognition task with faceMeta, answered only by local face processing.
+
+        Protect 7.3.60 adds faceMeta when the camera is in the AI Key's
+        faceRecognitionSettings and saves a ``face`` multipart part of the RAM
+        callback (saveFaceRecognition). No frame or crop goes to the vision
+        provider; captions for the same task are not produced here.
+        """
+        body = command["payload"]
+        required = {"reqUrl", "resUrl", "ramType", "camera", "event", "channel", "start", "end",
+                    "type", "mute", "format", "createEvent", "keyMoments", "postVLM"}
+        if (set(command) != {"command", "payload"} or not required <= set(body)
+                or not (body.get("faceMeta") or body.get("personMeta"))
+                or set(body) - required - {"roiMeta", "thumbnailMs", "thumbnailMeta",
+                                          "personMeta", "faceMeta", "vehicleMeta"}):
+            raise WorkerError("Unsupported recognizeKeyFrames payload fields")
+        body = json.loads(_json(body))
+        if (not isinstance(body["event"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])
+                or type(body["channel"]) is not int or body["channel"] != 0
+                or body["type"] != "rotating" or body["mute"] is not True
+                or body["format"] not in {"ubv", "mp4"} or body["createEvent"] is not False
+                or any(type(body[key]) is not int for key in ("start", "end"))
+                or not 0 <= body["start"] < body["end"] <= 2 ** 53 - 1
+                or body["end"] - body["start"] > self.max_video_duration_ms):
+            raise WorkerError("recognizeKeyFrames is limited to captioned, muted target-camera video")
+        # Face regions come from faceMeta. Without them, Protect sends person
+        # regions (personMeta, 26 Sep Wohnzimmer) and the Key finds the face in
+        # each person and links it to that person's tracker.
+        chosen = {}
+        meta = body.get("faceMeta") or body["personMeta"]
+        linked = not body.get("faceMeta")
+        if not isinstance(meta, list) or not 1 <= len(meta) <= 256:
+            raise WorkerError("faceMeta must list 1 to 256 face regions")
+        for tracker, ts, coord, _, confidence in _meta_regions(meta):
+            if not body["start"] <= ts <= body["end"]:
+                continue                    # not decodable from this export
+            if linked:
+                # The upper part of a person box, where the face is.
+                coord = [coord[0], coord[1], coord[2], max(1.0, coord[3] * 0.45)]
+            if tracker not in chosen or confidence > chosen[tracker][2]:
+                chosen[tracker] = (ts, coord, confidence)
+        if not chosen:
+            raise WorkerError("faceMeta has no regions inside the export")
+        callback, media = self._recognize_media(body)
+        faces = sorted(chosen.items(), key=lambda item: -item[1][2])[:self.faces["max_faces"]]
+        body["_faces"] = [[_PERSON_FACE_OFFSET + tracker if linked else tracker, ts, coord,
+                           tracker if linked else None]
+                          for tracker, (ts, coord, _) in faces]
+        normalized = {"operation": "recognizeFaces", "payload": body, "callback": callback,
+                      "callbackKind": "face", "media": media}
         fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
         job_id = hashlib.sha256(f"recognizeKeyFrames:{body['camera']}:{body['event']}".encode()).hexdigest()
-        return (job_id, fingerprint, "recognizeKeyFrames", body, callback, callback_kind,
-                media, min(self.timeout_s, 30))
+        return (job_id, fingerprint, "recognizeFaces", body, callback, "face",
+                media, min(self.timeout_s, 60))
 
     def _read_scope_reservation(self, scope=None):
         if scope is None:
@@ -626,7 +991,8 @@ class JobProcessor:
             raise WorkerError("Invalid test scope reservation; inspect it without resetting the permit") from exc
 
     def _reserve_test_scope(self, job):
-        if not self.test_scopes:
+        if not self.test_scopes or job.operation in {"speechToText", "recognizeFaces", "indexKeyFrames",
+                                                     "indexImages"}:
             return
         camera_id = job.payload.get("camera") if job.operation == "recognizeKeyFrames" else job.payload.get("cameraId")
         scope = self._scopes_by_camera.get(camera_id)
@@ -695,7 +1061,9 @@ class JobProcessor:
         normalized = self._normalize(command)
         await self.start()
         job_id, fingerprint, operation, body, callback, kind, media, budget = normalized
-        if self.continuous and not self.camera_registry.allows(body["camera"]):
+        if (self.continuous and operation not in {"speechToText", "recognizeFaces", "indexKeyFrames",
+                                                  "indexImages"}
+                and not self.camera_registry.allows(body["camera"])):
             raise WorkerError("Camera inventory changed before admission")
         if job_id in self._pending:
             job = self._pending[job_id]
@@ -731,7 +1099,8 @@ class JobProcessor:
                    time.monotonic() + budget, future)
         try:
             self._reserve_test_scope(job)
-            if self.caption_budget is not None:
+            if self.caption_budget is not None and operation not in {"speechToText", "recognizeFaces",
+                                                                     "indexKeyFrames", "indexImages"}:
                 try:
                     receipt = self.caption_budget.reserve(job_id, fingerprint, body["camera"])
                 except CaptionBudgetExhausted as exc:
@@ -844,6 +1213,11 @@ class JobProcessor:
         if len(data) < 12 or data[4:8] != b"ftyp":
             raise WorkerError("Only MP4 video is supported; UBV requires a separate verified converter")
         offset = 0.0
+        # A key moment at the interval end is the export's last frame: seeking
+        # to the very end yields no frame, so decode the final second instead.
+        at_end = (job.operation in {"recognizeKeyFrames", "recognizeFaces", "indexKeyFrames"}
+                  and timestamp is not None
+                  and timestamp == job.payload.get("end"))
         if job.operation == "on_demand" or timestamp is not None:
             lowered = {key.lower(): value for key, value in headers.items()}
             start = lowered.get("x-start-timestamp")
@@ -856,16 +1230,20 @@ class JobProcessor:
                 offset = (requested - start) / 1000
             except (ValueError, TypeError) as exc:
                 raise WorkerError("Video start timestamp is missing or invalid") from exc
-            maximum_offset = self.max_video_duration_ms / 1000 if job.operation == "recognizeKeyFrames" else 3600
+            maximum_offset = (self.max_video_duration_ms / 1000
+                              if job.operation in {"recognizeKeyFrames", "recognizeFaces",
+                                                   "indexKeyFrames"} else 3600)
             if not 0 <= offset <= maximum_offset:
                 raise WorkerError("Requested video frame is outside the supported interval")
         with tempfile.TemporaryDirectory(prefix="aikey-video-", dir=self.state_dir) as temporary:
             source, output = Path(temporary) / "input.mp4", Path(temporary) / "frame.jpg"
             source.write_bytes(data)
+            seek = ["-sseof", "-1"] if at_end else ["-ss", str(offset)]
+            frames = ["-update", "1"] if at_end else ["-frames:v", "1"]
             process = await asyncio.create_subprocess_exec(
                 executable, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-                "-protocol_whitelist", "file,pipe", "-f", "mp4", "-ss", str(offset),
-                "-i", str(source), "-an", "-frames:v", "1", "-vf", "scale=1280:1280:force_original_aspect_ratio=decrease",
+                "-protocol_whitelist", "file,pipe", "-f", "mp4", *seek,
+                "-i", str(source), "-an", *frames, "-vf", "scale=1280:1280:force_original_aspect_ratio=decrease",
                 "-c:v", "mjpeg", "-fs", str(self.max_bytes), str(output),
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
             try:
@@ -899,12 +1277,266 @@ class JobProcessor:
         except (ValueError, ProviderError) as exc:
             raise WorkerError("Inference did not return a complete, nonempty text description") from exc
 
-    async def _execute(self, job):
+    async def _audio(self, data):
+        """16 kHz mono WAV of the export's audio track, bounded in size."""
+        executable = self.options.get("ffmpeg_path")
+        if not executable or not Path(executable).is_absolute() or not Path(executable).is_file():
+            raise WorkerError("Speech jobs require an explicit absolute ffmpeg_path")
+        if len(data) < 12 or data[4:8] != b"ftyp":
+            raise WorkerError("Only MP4 audio exports are supported; UBV needs a verified converter")
+        limit = 32 * self.max_audio_ms + 4096          # 16 kHz x 16 bit, plus header
+        with tempfile.TemporaryDirectory(prefix="aikey-audio-", dir=self.state_dir) as temporary:
+            source, output = Path(temporary) / "input.mp4", Path(temporary) / "audio.wav"
+            source.write_bytes(data)
+            process = await asyncio.create_subprocess_exec(
+                executable, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                "-protocol_whitelist", "file,pipe", "-f", "mp4", "-i", str(source), "-vn",
+                "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+                "-t", str(self.max_audio_ms / 1000), "-fs", str(limit), str(output),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            try:
+                await process.wait()
+            except BaseException:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+                raise
+            if process.returncode != 0 or not output.is_file() or output.stat().st_size <= 44:
+                raise WorkerError("ffmpeg could not extract an audio track")
+            return output.read_bytes()
+
+    async def _transcribe(self, wav, clip_ms):
+        form = aiohttp.FormData()
+        for name, value in self.speech.form_fields():
+            form.add_field(name, value)
+        form.add_field("file", wav, filename="audio.wav", content_type="audio/wav")
+        timeout = aiohttp.ClientTimeout(total=self.speech_timeout_s, connect=10)
+        async with self._inference_session.post(self.speech.url, data=form, timeout=timeout,
+                    headers=self.speech.headers, allow_redirects=False) as response:
+            if response.status != 200:
+                raise WorkerError(f"Speech backend returned HTTP {response.status}")
+            raw = await self._read_response(response, 1024 * 1024)
+        try:
+            return self.speech.parse(json.loads(raw), clip_ms)
+        except (ValueError, SpeechError) as exc:
+            raise WorkerError("Speech backend did not return a usable transcription") from exc
+
+    async def _execute_speech(self, job):
+        (_, url), = job.media
+        data, headers = await self._fetch(url, "video")
+        lowered = {key.lower(): value for key, value in headers.items()}
+        start = job.payload["start"]
+        # The vendor Key prefers the export's own start headers (x-timestamp,
+        # then x-start-timestamp) over the requested start.
+        for name in ("x-timestamp", "x-start-timestamp"):
+            value = lowered.get(name, "")
+            if re.fullmatch(r"[1-9][0-9]{0,15}", value):
+                start = int(value)
+                break
+        clip_ms = job.payload["end"] - job.payload["start"]
+        segments = await self._transcribe(await self._audio(data), clip_ms)
+        payload = {"camera": job.payload["camera"], "event": job.payload["event"],
+                   "stt": [{"startMs": start + begin, "endMs": start + end, "text": text}
+                           for begin, end, text in segments]}
+        if self.callback_mode == "disabled":
+            return {"status": "processed", "jobId": job.job_id, "callback": "disabled",
+                    "result": {"segments": len(segments)}}
+        result = await self._post_callback(job, payload)
+        # Transcripts are private: the journal keeps only the segment count.
+        result["result"] = {"segments": len(segments)}
+        return result
+
+    async def _detect_faces(self, frame, region):
+        form = aiohttp.FormData()
+        form.add_field("image", frame, filename="frame.jpg", content_type="image/jpeg")
+        form.add_field("regions", json.dumps([region]))
+        async with self._inference_session.post(self.faces["url"], data=form,
+                                                allow_redirects=False) as response:
+            if response.status != 200:
+                raise WorkerError(f"Face server returned HTTP {response.status}")
+            raw = await self._read_response(response, 1024 * 1024)
+        try:
+            faces = json.loads(raw)["faces"]
+            if not isinstance(faces, list):
+                raise ValueError
+            return faces
+        except (ValueError, KeyError, TypeError) as exc:
+            raise WorkerError("Face server returned an invalid reply") from exc
+
+    async def _execute_faces(self, job):
+        from PIL import Image
         started = time.monotonic()
-        images = []
+        (_, url), = job.media
+        data, headers = await self._fetch(url, "video")
+        attrs, snapshots, images, matched = {}, [], [], 0
+        for tracker, ts, coord, person in job.payload["_faces"]:
+            frame = await self._video_frame(data, headers, url, job, timestamp=ts)
+            x, y, w, h = (v / 1000 for v in coord)
+            pad_x, pad_y = w * 0.25, h * 0.25
+            region = [round(v, 4) for v in (max(0.0, x - pad_x), max(0.0, y - pad_y),
+                                            min(1.0, x + w + pad_x), min(1.0, y + h + pad_y))]
+            faces = await self._detect_faces(frame, region)
+            if not faces:
+                continue
+            best = max(faces, key=lambda face: face.get("score", 0))
+            try:
+                name, top = self.faces["store"].match(best["embedding"])
+                x1, y1, x2, y2 = (float(v) for v in best["box"])
+            except (FaceStoreError, KeyError, TypeError, ValueError) as exc:
+                raise WorkerError("Face server returned an invalid face") from exc
+            with Image.open(BytesIO(frame)) as picture:
+                width, height = picture.size
+                side = max((x2 - x1) * width, (y2 - y1) * height) * 1.4
+                cx, cy = (x1 + x2) / 2 * width, (y1 + y2) / 2 * height
+                box = (int(max(0, cx - side / 2)), int(max(0, cy - side / 2)),
+                       int(min(width, cx + side / 2)), int(min(height, cy + side / 2)))
+                crop = picture.convert("RGB").crop(box)
+                crop.thumbnail((256, 256))
+                out = BytesIO()
+                crop.save(out, format="JPEG", quality=85)
+            key = str(tracker)
+            matched += name is not None
+            attrs[key] = {"faceMask": {"confidence": 0, "val": "none"},
+                          "matchedName": name or "", "namesTopK": [n for n, _ in top],
+                          "objectType": "face", "topKCandidate": []}
+            if person is not None:
+                attrs[key]["linkedPersonTrackerID"] = person
+            snapshots.append({"clockBestMonotonic": ts, "clockBestWall": ts,
+                              "smartDetectHeatmap": "", "smartDetectSnapshot": f"{key}.jpg",
+                              "smartDetectSnapshotName": f"{key}.jpg",
+                              "smartDetectSnapshotType": "face", "trackerID": tracker})
+            images.append((key, out.getvalue()))
+        elapsed = round((time.monotonic() - started) * 1000)
+        face = {"cameraId": job.payload["camera"], "eventId": job.payload["event"],
+                "eventTracks": [], "faceAttrs": attrs, "faceSnapshots": snapshots,
+                "inferMs": elapsed, "preProcessMs": 0, "status": "success",
+                "timeElapsedMs": elapsed}
+        summary = {"faces": len(snapshots), "matched": matched}
+        if self.callback_mode == "disabled":
+            return {"status": "processed", "jobId": job.job_id, "callback": "disabled",
+                    "result": summary}
+        result = await self._post_callback(job, face, images=images)
+        # Names, crops and embeddings stay out of the journal.
+        result["result"] = summary
+        return result
+
+    async def _index_objects(self, job, data, headers, url):
+        """Local CLIP embeddings per indexed object, one decode per frame.
+
+        Returns (thumbnailTags, keyMomentsTags, image parts). Search snapshots
+        carry a JPEG crop, named by tracker ID, that Protect keeps as the
+        object's thumbnail.
+        """
+        from PIL import Image
+        targets = job.payload.get("_index") or []
+        if not targets:
+            return [], [], []
+        if self._clip is None:
+            self._clip = clip.ClipClient(self.find_anything, timeout_s=60)
+        by_time = {}
+        for tracker, ts, region, kind in targets:
+            by_time.setdefault(ts, []).append((tracker, region, kind))
+        tags, moments, images = [], [], []
+        for ts, objects in sorted(by_time.items()):
+            frame = await self._video_frame(data, headers, url, job, timestamp=ts)
+            try:
+                vectors = await self._clip.embed_regions(frame, [region for _, region, _ in objects])
+            except clip.ClipError as exc:
+                raise WorkerError(str(exc)) from exc
+            picture = None
+            for (tracker, region, kind), vector in zip(objects, vectors):
+                embedding = [round(value, 6) for value in vector]
+                if kind is None:
+                    tags.append({"keyMomentMs": ts, "tags": [], "trackerID": tracker, "imgEmbed": embedding})
+                    continue
+                if picture is None:
+                    picture = Image.open(BytesIO(frame)).convert("RGB")
+                width, height = picture.size
+                crop = picture.crop((int(region[0] * width), int(region[1] * height),
+                                     max(int(region[0] * width) + 1, round(region[2] * width)),
+                                     max(int(region[1] * height) + 1, round(region[3] * height))))
+                crop.thumbnail((512, 512))
+                out = BytesIO()
+                crop.save(out, format="JPEG", quality=85)
+                name = f"{tracker}.jpg"
+                moments.append({"keyMomentMs": ts, "tags": [], "imgEmbed": embedding,
+                                "searchSnapshots": [{
+                                    "clockBestMonotonic": ts, "clockBestWall": ts,
+                                    "smartDetectHeatmap": "", "smartDetectSnapshot": name,
+                                    "smartDetectSnapshotName": name,
+                                    "smartDetectSnapshotType": kind, "trackerID": tracker}]})
+                images.append((str(tracker), out.getvalue()))
+        return tags, moments, images
+
+    async def _execute_index_images(self, job):
+        started = time.monotonic()
+        if self._clip is None:
+            self._clip = clip.ClipClient(self.find_anything, timeout_s=60)
+        tags = []
+        for (tracker, moment), (_, url) in zip(job.payload["_crops"], job.media):
+            data, _ = await self._fetch(url, "image")
+            kind = self._image_type(data)
+            if kind != "image/jpeg":
+                from PIL import Image
+                with Image.open(BytesIO(data)) as picture:
+                    out = BytesIO()
+                    picture.convert("RGB").save(out, format="JPEG", quality=92)
+                    data = out.getvalue()
+            try:
+                [vector] = await self._clip.embed_regions(data, [[0.0, 0.0, 1.0, 1.0]])
+            except clip.ClipError as exc:
+                raise WorkerError(str(exc)) from exc
+            tags.append({"keyMomentMs": moment, "tags": [], "trackerID": tracker,
+                         "imgEmbed": [round(value, 6) for value in vector]})
+        elapsed = round((time.monotonic() - started) * 1000)
+        payload = {"cameraId": job.payload["camera"], "eventId": job.payload["event"],
+                   "description": "", "status": "success", "keyMomentsTags": [],
+                   "thumbnailTags": tags, "inferBoxMs": 0, "inferTagMs": elapsed,
+                   "inferTxtMs": 0, "preProcessMs": 0, "timeElapsedMs": elapsed}
+        summary = {"indexed": len(tags), "snapshots": 0}
+        if self.callback_mode == "disabled":
+            return {"status": "processed", "jobId": job.job_id, "callback": "disabled", "result": summary}
+        result = await self._post_callback(job, payload)
+        result["result"] = summary
+        return result
+
+    async def _execute_index(self, job):
+        started = time.monotonic()
+        (_, url), = job.media
+        data, headers = await self._fetch(url, "video")
+        prepared = time.monotonic()
+        tags, moments, images = await self._index_objects(job, data, headers, url)
+        inferred = time.monotonic()
+        payload = {"cameraId": job.payload["camera"], "eventId": job.payload["event"],
+                   "description": "", "status": "success", "keyMomentsTags": moments,
+                   "thumbnailTags": tags, "inferBoxMs": 0,
+                   "inferTagMs": round((inferred - prepared) * 1000), "inferTxtMs": 0,
+                   "preProcessMs": round((prepared - started) * 1000),
+                   "timeElapsedMs": round((inferred - started) * 1000)}
+        summary = {"indexed": len(tags), "snapshots": len(moments)}
+        if self.callback_mode == "disabled":
+            return {"status": "processed", "jobId": job.job_id, "callback": "disabled", "result": summary}
+        result = await self._post_callback(job, payload, images=images)
+        # Embeddings and crops stay out of the journal.
+        result["result"] = summary
+        return result
+
+    async def _execute(self, job):
+        if job.operation == "speechToText":
+            return await self._execute_speech(job)
+        if job.operation == "indexKeyFrames":
+            return await self._execute_index(job)
+        if job.operation == "indexImages":
+            return await self._execute_index_images(job)
+        if job.operation == "recognizeFaces":
+            return await self._execute_faces(job)
+        started = time.monotonic()
+        images, thumbnail_tags, key_moment_tags, snapshot_images = [], [], [], []
         for kind, url in job.media:
             data, headers = await self._fetch(url, kind)
             if job.operation == "recognizeKeyFrames":
+                thumbnail_tags, key_moment_tags, snapshot_images = await self._index_objects(
+                    job, data, headers, url)
                 moments = sorted(set(job.payload["keyMoments"]))
                 if len(moments) > self.max_images:
                     if self.max_images == 1:
@@ -933,9 +1565,10 @@ class JobProcessor:
                        "inferTxtMs": round((inferred - prepared) * 1000),
                        "preProcessMs": round((prepared - started) * 1000),
                        "timeElapsedMs": round((inferred - started) * 1000)}
-        elif job.callback_kind == "legacy_description":
-            payload = {"cameraId": job.payload["camera"], "eventId": job.payload["event"],
-                       "description": description, "status": "success"}
+            if thumbnail_tags:
+                payload["thumbnailTags"] = thumbnail_tags
+            if key_moment_tags:
+                payload["keyMomentsTags"] = key_moment_tags
         elif job.callback_kind == "legacy":
             payload = {"eventId": job.payload["event"], "status": "success", "description": description}
             if self.options["legacy_profile"] == "protect-7.2.105":
@@ -955,14 +1588,31 @@ class JobProcessor:
                 payload["descEmbedding"] = vectors[0]
         if self.callback_mode == "disabled":
             return {"status": "processed", "jobId": job.job_id, "callback": "disabled", "result": payload}
-        return await self._post_callback(job, payload)
+        result = await self._post_callback(job, payload, images=snapshot_images)
+        if thumbnail_tags or key_moment_tags:
+            # Keep the journal's caption record but not the embeddings.
+            result["result"] = {**payload, "thumbnailTags": len(thumbnail_tags),
+                                "keyMomentsTags": len(key_moment_tags)}
+        return result
 
-    async def _post_callback(self, job, payload):
+    async def _post_callback(self, job, payload, *, images=()):
         self._record(job, "callback_sending")
         try:
-            if job.callback_kind in {"legacy", "legacy_tagging", "legacy_description"}:
+            if job.callback_kind == "face":
+                # saveFaceRecognition reads the face JSON part and one image
+                # part per snapshot, named by its tracker ID.
+                form = aiohttp.FormData()
+                form.add_field("face", _json(payload), filename="face.json",
+                               content_type="application/json")
+                for name, image in images:
+                    form.add_field(name, image, filename=f"{name}.jpg", content_type="image/jpeg")
+                kwargs = {"data": form}
+            elif job.callback_kind in {"legacy", "legacy_tagging"}:
                 form = aiohttp.FormData()
                 form.add_field("ram", _json(payload), filename="description.json", content_type="application/json")
+                # Search snapshot crops, one part per tracker ID (saveEventTagging).
+                for name, image in images:
+                    form.add_field(name, image, filename=f"{name}.jpg", content_type="image/jpeg")
                 kwargs = {"data": form}
             else:
                 kwargs = {"json": payload}
@@ -993,6 +1643,8 @@ class JobProcessor:
             self._queue.task_done()
         if self._embedding_service is not None:
             await self._embedding_service.close()
+        if self._clip is not None:
+            await self._clip.close()
         if self._session is not None:
             await self._session.close()
         if self._inference_session is not None:

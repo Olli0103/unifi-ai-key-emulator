@@ -11,7 +11,9 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
+from .aiport_api_detection import ApiDetectionError
 from .aiport_detection import ObjectObservation
+from .aiport_event_budget import EventBudgetError
 from .aiport_ingest import IngressError, normalize_mac
 from .aiport_tracking import TrackingError, validate_observation
 
@@ -21,24 +23,41 @@ class Detector(Protocol):
 
 
 class FairInference:
-    """Use one model across at most five cameras, one pending frame each.
+    """Use one model across at most five cameras with bounded frame queues.
 
-    A camera cannot occupy more than every other turn when another camera has
-    a pending frame. New frames replace old pending frames, never queue behind
-    them. An inference or observer failure disables only that camera.
+    Local inference rotates cameras every turn. API vision may retain the first
+    frame after an active request, plus the latest frame. One positive API
+    result may prioritize that camera's first pending confirmation frame;
+    another camera then gets the next turn. This keeps a short crossing inside
+    the tracker's time limit without letting one camera monopolize the worker.
+    An inference or observer failure disables only that camera.
     """
+
+    _SAFE_API_ERRORS = frozenset({
+        "invalid_api_detection_frame", "invalid_api_detection_response",
+        "invalid_api_detection_policy", "invalid_api_detection_provider",
+        "api_detection_endpoint_not_approved", "api_detection_http_failure",
+        "api_detection_http_4xx", "api_detection_http_429",
+        "api_detection_http_5xx", "api_detection_response_too_large",
+        "api_detection_request_failed", "api_detection_provider_response_invalid",
+        "api_detection_dns_unavailable",
+        "invalid_api_key_file", "inline_api_key_forbidden",
+    })
 
     def __init__(self, camera_macs: list[str], *,
                  load_detector: Callable[[], Detector],
                  on_result: Callable[[str, tuple[ObjectObservation, ...], int, bytes], Awaitable[None]],
                  on_unavailable: Callable[[str], Awaitable[None]] | None = None,
-                 max_frames_per_camera: int | None):
+                 max_frames_per_camera: int | None,
+                 preserve_first_pending: bool = False):
         if (not isinstance(camera_macs, list) or not 1 <= len(camera_macs) <= 5
                 or max_frames_per_camera is not None
                 and (type(max_frames_per_camera) is not int
                      or not 1 <= max_frames_per_camera <= 120)
                 or not callable(load_detector) or not callable(on_result)
                 or on_unavailable is not None and not callable(on_unavailable)):
+            raise IngressError("invalid_inference_policy")
+        if type(preserve_first_pending) is not bool:
             raise IngressError("invalid_inference_policy")
         cameras = tuple(normalize_mac(camera) for camera in camera_macs)
         if len(set(cameras)) != len(cameras):
@@ -49,17 +68,29 @@ class FairInference:
         self._on_result = on_result
         self._on_unavailable = on_unavailable
         self._max_frames = max_frames_per_camera
+        self._preserve_first_pending = preserve_first_pending
         self._model: Detector | None = None
         self._pending: dict[str, tuple[bytes, int]] = {}
+        self._latest_pending: dict[str, tuple[bytes, int]] = {}
         self._disabled: set[str] = set()
         self._attempts = dict.fromkeys(cameras, 0)
         self._successes = dict.fromkeys(cameras, 0)
+        self._observations = {
+            camera: {"person": 0, "vehicle": 0, "animal": 0, "package": 0}
+            for camera in cameras}
         self._last_index = -1
+        self._last_served_camera: str | None = None
+        self._consecutive_turns = 0
+        self._confirmation_camera: str | None = None
         self._worker: asyncio.Task | None = None
         self._closed = False
         self._global_failure = False
         self.dropped_frames = 0
         self.failed_cameras = 0
+        self.api_failures = 0
+        self.last_api_error_code: str | None = None
+        self._api_failures_by_camera = dict.fromkeys(cameras, 0)
+        self._last_api_error_by_camera: dict[str, str | None] = dict.fromkeys(cameras)
 
     async def observe(self, camera_mac: str, frame: bytes, *, generation: int) -> None:
         camera = normalize_mac(camera_mac)
@@ -75,17 +106,37 @@ class FairInference:
             self.dropped_frames += 1
             return
         if camera in self._pending:
-            self.dropped_frames += 1
-        self._pending[camera] = (frame, generation)
+            if self._preserve_first_pending:
+                if camera in self._latest_pending:
+                    self.dropped_frames += 1
+                self._latest_pending[camera] = (frame, generation)
+            else:
+                self.dropped_frames += 1
+                self._pending[camera] = (frame, generation)
+        else:
+            self._pending[camera] = (frame, generation)
         if self._worker is None or self._worker.done():
             self._worker = asyncio.create_task(self._run(), name="aiport-fair-inference")
 
     def _next_camera(self) -> str:
+        preferred = self._confirmation_camera
+        self._confirmation_camera = None
+        if (preferred is not None and preferred in self._pending
+                and self._consecutive_turns < 2):
+            camera = preferred
+            self._last_index = self._cameras.index(camera)
+            self._consecutive_turns = (self._consecutive_turns + 1
+                                       if self._last_served_camera == camera else 1)
+            self._last_served_camera = camera
+            return camera
         for offset in range(1, len(self._cameras) + 1):
             index = (self._last_index + offset) % len(self._cameras)
             camera = self._cameras[index]
             if camera in self._pending:
                 self._last_index = index
+                self._consecutive_turns = (self._consecutive_turns + 1
+                                           if self._last_served_camera == camera else 1)
+                self._last_served_camera = camera
                 return camera
         raise RuntimeError("inference queue is empty")
 
@@ -93,28 +144,55 @@ class FairInference:
         while self._pending and not self._closed and not self._global_failure:
             camera = self._next_camera()
             frame, generation = self._pending.pop(camera)
+            if camera in self._latest_pending:
+                self._pending[camera] = self._latest_pending.pop(camera)
             self._attempts[camera] += 1
             try:
                 if self._model is None:
                     try:
                         self._model = await asyncio.to_thread(self._load_detector)
                         if (self._model is None
-                                or not callable(getattr(self._model, "detect", None))):
+                                or not callable(getattr(self._model, "detect", None))
+                                and not callable(getattr(self._model,
+                                                         "detect_for_camera", None))):
                             raise TypeError("invalid detector")
                     except Exception:
                         self._global_failure = True
                         self._pending.clear()
+                        self._latest_pending.clear()
                         for unavailable_camera in self._cameras:
                             await self._notify_unavailable(unavailable_camera)
                         return
-                result = await asyncio.to_thread(self._model.detect, frame)
+                detect_for_camera = getattr(self._model, "detect_for_camera", None)
+                if callable(detect_for_camera):
+                    result = await asyncio.to_thread(detect_for_camera, camera, frame)
+                else:
+                    result = await asyncio.to_thread(self._model.detect, frame)
                 if not isinstance(result, tuple) or len(result) > 100:
                     raise TrackingError("invalid_tracking_observation")
                 for observation in result:
                     validate_observation(observation)
                 if self._closed:
                     return
+                for observation in result:
+                    self._observations[camera][observation.kind] += 1
                 await self._on_result(camera, result, generation, frame)
+                if (self._preserve_first_pending and result
+                        and camera in self._pending and self._consecutive_turns < 2):
+                    self._confirmation_camera = camera
+            except ApiDetectionError as exc:
+                # A remote API can fail for one frame without making the
+                # camera or its Protect smart policy permanently unavailable.
+                # The detector's provider backoff (and optional request cap)
+                # bounds retries.
+                self.api_failures += 1
+                self._api_failures_by_camera[camera] += 1
+                raw_code = exc.args[0] if len(exc.args) == 1 else None
+                safe_code = (raw_code if isinstance(raw_code, str)
+                             and raw_code in self._SAFE_API_ERRORS
+                             else "api_detection_failure")
+                self._last_api_error_by_camera[camera] = safe_code
+                self.last_api_error_code = safe_code
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -122,6 +200,7 @@ class FairInference:
                 # of public health. One bad camera must not stop the others.
                 self._disabled.add(camera)
                 self._pending.pop(camera, None)
+                self._latest_pending.pop(camera, None)
                 self.failed_cameras += 1
                 await self._notify_unavailable(camera)
             else:
@@ -129,6 +208,7 @@ class FairInference:
                 if (self._max_frames is not None
                         and self._attempts[camera] >= self._max_frames):
                     self._pending.pop(camera, None)
+                    self._latest_pending.pop(camera, None)
                     await self._notify_unavailable(camera)
 
     async def _notify_unavailable(self, camera: str) -> None:
@@ -146,12 +226,26 @@ class FairInference:
         if worker is not None:
             await worker
 
+    def skip_confirmation(self, camera_mac: str) -> None:
+        """Save a paid confirming request when nothing new needs one."""
+        camera = normalize_mac(camera_mac)
+        if camera not in self._allowed:
+            raise IngressError("camera_not_authorized")
+        skip = getattr(self._model, "skip_confirmation", None)
+        if callable(skip):
+            skip(camera)
+        if self._confirmation_camera == camera:
+            self._confirmation_camera = None
+
     def discard_pending(self, camera_mac: str) -> None:
         """Forget queued frames for a camera whose stream or policy changed."""
         camera = normalize_mac(camera_mac)
         if camera not in self._allowed:
             raise IngressError("camera_not_authorized")
         self._pending.pop(camera, None)
+        self._latest_pending.pop(camera, None)
+        if self._confirmation_camera == camera:
+            self._confirmation_camera = None
 
     def is_available(self, camera_mac: str) -> bool:
         """Whether this camera can still receive a model call in this permit."""
@@ -166,6 +260,8 @@ class FairInference:
     async def close(self) -> None:
         self._closed = True
         self._pending.clear()
+        self._latest_pending.clear()
+        self._confirmation_camera = None
         worker = self._worker
         if worker is not None and not worker.done():
             worker.cancel()
@@ -175,15 +271,55 @@ class FairInference:
                 pass
         self._model = None
 
-    def snapshot(self) -> dict[str, int | bool]:
+    def snapshot(self) -> dict[str, int | bool | None]:
         """Aggregate, content-free counters safe for a private health page."""
-        return {
+        result: dict[str, int | bool | None] = {
             "camera_count": len(self._cameras),
             "attempts": sum(self._attempts.values()),
             "successes": sum(self._successes.values()),
             "dropped_frames": self.dropped_frames,
             "failed_cameras": self.failed_cameras,
+            "api_failures": self.api_failures,
+            "last_api_error_code": self.last_api_error_code,
             "pending_cameras": len(self._pending),
             "model_load_failed": self._global_failure,
             "closed": self._closed,
         }
+        if isinstance(getattr(self._model, "provider_failures", None), int):
+            # API detector only: None means no request cap is configured.
+            budget = getattr(self._model, "budget", None)
+            result.update({
+                "api_request_cap": getattr(budget, "limit", None),
+                "api_provider_failures": self._model.provider_failures,
+                "api_backoff_skips": self._model.backoff_skips,
+            })
+        return result
+
+    def camera_snapshot(self) -> tuple[dict[str, object], ...]:
+        """Content-free counters in config order, without camera identifiers."""
+        budget = getattr(self._model, "budget", None)
+        result = []
+        for index, camera in enumerate(self._cameras):
+            remaining, budget_healthy = None, None
+            if budget is not None:
+                try:
+                    remaining, budget_healthy = budget.remaining(camera), True
+                except EventBudgetError:
+                    remaining, budget_healthy = 0, False
+            result.append({
+                "index": index,
+                "attempts": self._attempts[camera],
+                "successes": self._successes[camera],
+                "observations": dict(self._observations[camera]),
+                "disabled": camera in self._disabled or self._global_failure,
+                "api_failures": self._api_failures_by_camera[camera],
+                "last_api_error_code": self._last_api_error_by_camera[camera],
+                "pending": camera in self._pending,
+                "api_requests_remaining": remaining,
+                "api_request_budget_healthy": budget_healthy,
+                "api_response_counts": (self._model.diagnostic_counts(camera)
+                                        if callable(getattr(self._model,
+                                                            "diagnostic_counts", None))
+                                        else None),
+            })
+        return tuple(result)

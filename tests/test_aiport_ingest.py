@@ -6,6 +6,7 @@ from pathlib import Path
 import shlex
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -47,7 +48,9 @@ def restartable_decoder(tmp_path: Path) -> tuple[str, Path]:
         "import pathlib, sys, time\n"
         f"p = pathlib.Path({str(attempts)!r})\n"
         "n = int(p.read_text()) + 1 if p.exists() else 1\n"
-        "p.write_text(str(n))\n"
+        "pending = p.with_name(p.name + '.pending')\n"
+        "pending.write_text(str(n))\n"
+        "pending.replace(p)\n"
         f"sys.stdout.buffer.write({FRAME!r})\n"
         "sys.stdout.buffer.flush()\n"
         "time.sleep(0.5 if n == 1 else 30)\n"
@@ -106,9 +109,38 @@ async def test_ingress_recovers_decoder_exit_without_new_stream_command(tmp_path
         assert ingress.total_frames_decoded >= 1
         assert ingress.restart_attempts == 1
         assert ingress.restart_successes == 1
+        assert sum(ingress.restart_observed_states.values()) == 1
+        assert ingress.restart_failures == {}
         assert await ingress.control({"streaming": False, "deviceID": CAMERA_MAC}) == {
             "status": "stopped", "usedPoints": 0}
         assert ingress.list_streams() == []
+    finally:
+        await ingress.close()
+
+
+@pytest.mark.asyncio
+async def test_stale_stream_restart_records_fixed_timeout_without_changing_recovery(tmp_path):
+    decoder, _ = fake_decoder(tmp_path)
+    ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
+                           ffmpeg_path=decoder, start_timeout=1.0)
+    try:
+        await ingress.control(start_payload())
+        # The first decoder is live. Replace only the next invocation with a
+        # decoder that never yields a frame, then force the stale-frame clock.
+        fake_decoder(tmp_path, emit_frame=False)
+        ingress._session.last_frame_at = time.monotonic() - 20
+
+        async def timed_out() -> None:
+            while ingress.restart_failures.get("stream_start_timeout", 0) < 1:
+                await asyncio.sleep(0.05)
+
+        await asyncio.wait_for(timed_out(), timeout=4)
+        assert ingress.restart_observed_states == {
+            "process_exited": 0, "reader_stopped": 0, "no_recent_frame": 1}
+        assert ingress.restart_attempts >= 1
+        assert ingress.restart_successes == 0
+        assert ingress.list_streams() == []
+        assert "SyntheticAlias123" not in repr(ingress.restart_failures)
     finally:
         await ingress.close()
 
@@ -158,6 +190,15 @@ async def test_pool_recovers_one_decoder_without_interrupting_other(tmp_path):
         assert pool.reserved_points == 4
         assert pool.restart_attempts == 1
         assert pool.restart_successes == 1
+        diagnostics = pool.camera_diagnostics((CAMERA_MAC, other_mac))
+        assert diagnostics[0]["stream_restart_attempts"] == 1
+        assert diagnostics[1]["stream_restart_attempts"] == 0
+        assert diagnostics[1]["stream_active"] is True
+        assert diagnostics[1]["stream_points"] == 2      # 1920x1080 request
+        assert CAMERA_MAC not in repr(diagnostics)
+        reversed_rows = pool.camera_diagnostics((other_mac, CAMERA_MAC))
+        assert reversed_rows[0]["stream_restart_attempts"] == 0
+        assert reversed_rows[1]["stream_restart_attempts"] == 1
     finally:
         await pool.close()
 
@@ -356,3 +397,17 @@ async def test_new_websocket_requires_fresh_parameter_agreement(tmp_path):
         "functionName": "UiStreamControl", "messageId": 6,
         "payload": {"streaming": False, "deviceID": CAMERA_MAC}}).encode())
     assert len(sink.messages) == before
+
+
+def test_latest_frame_honours_a_maximum_age():
+    ingress = AiPortIngress(camera_mac="2A1122334455", source_ip="192.168.10.1",
+                            ffmpeg_path=sys.executable)
+    session = SimpleNamespace(healthy=True, latest_frame=b"\xff\xd8x",
+                              last_frame_at=time.monotonic() - 6)
+    ingress._session = session
+    assert ingress.latest_frame() == b"\xff\xd8x"
+    assert ingress.latest_frame(max_age=5) is None
+    session.last_frame_at = time.monotonic()
+    assert ingress.latest_frame(max_age=5) == b"\xff\xd8x"
+    session.healthy = False                          # decoder down or restarting
+    assert ingress.latest_frame(max_age=5) is None

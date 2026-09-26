@@ -10,17 +10,20 @@ from pathlib import Path
 import ssl
 import sys
 import time
+from types import SimpleNamespace
 
 import aiohttp
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
+from aikey.aiport_api_detection import ApiObjectDetector
 from aikey.aiport_candidate import CandidateError, CandidateService, load_config
 from aikey.aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
 from aikey.aiport_snapshots import SmartSnapshot
 from aikey.aiport_smart_settings import SmartPolicy
+from aikey.aiport_camera_engine import CameraEventCandidate
 from aikey.aiport_tracking import TrackChange
 from aikey.tls import ensure_identity_certificate
 
@@ -38,6 +41,131 @@ def fixture_state(tmp_path):
                   cert.read_text())).hexdigest(), "firmware_version": "5.1.12"}
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     return config
+
+
+def test_live_pool_accepts_explicit_capped_api_provider(tmp_path):
+    config = fixture_state(tmp_path)
+    config["paired_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1",
+         "ffmpeg_path": sys.executable}
+        for mac in ("2A1122334455", "2A1122334456")]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person"], "max_events_per_hour": 12,
+        "max_requests_per_hour": 24,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["live_pool_detector"] == (
+        config["live_pool_detector"])
+    config["live_pool_detector"]["smart_types"] = [
+        "person", "vehicle", "animal", "package"]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["live_pool_detector"]["smart_types"] == [
+        "person", "vehicle", "animal", "package"]
+    config["live_pool_detector"]["max_requests_per_hour"] = 0
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="API detector"):
+        load_config(tmp_path / "config.json")
+    # The request cap is an optional cost control: absent or null means off.
+    del config["live_pool_detector"]["max_requests_per_hour"]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert "max_requests_per_hour" not in load_config(
+        tmp_path / "config.json")["live_pool_detector"]
+    config["live_pool_detector"]["max_requests_per_hour"] = None
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["live_pool_detector"][
+        "max_requests_per_hour"] is None
+
+
+@pytest.mark.asyncio
+async def test_live_api_frames_publish_native_person_enter_and_snapshot_leave_without_network(
+        tmp_path, monkeypatch):
+    """Exercise the full API-frame-to-native-event path with a fake reply."""
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{
+        "camera_mac": camera, "source_ip": "192.168.10.1",
+        "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person"], "max_events_per_hour": 12,
+        "max_requests_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    calls = []
+
+    def fake_provider(_url, _headers, payload):
+        calls.append(payload)
+        return {"status": "completed", "output": [{
+            "type": "message", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": json.dumps({
+                "detections": [{"kind": "person", "label": "person",
+                                "score": 0.95, "box": [0.2, 0.1, 0.4, 0.8]}]})}],
+        }]}
+
+    monkeypatch.setattr(
+        "aikey.aiport_candidate.ApiObjectDetector",
+        lambda provider, state_dir, **options: ApiObjectDetector(
+            provider, state_dir, transport=fake_provider, **options))
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    frame_io = BytesIO()
+    Image.new("RGB", (640, 360), "gray").save(frame_io, format="JPEG")
+    frame = frame_io.getvalue()
+    try:
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "ChangeSmartDetectSettings", "messageId": 1,
+            "payload": {"deviceID": camera, "enableSmartDetect": ["person"],
+                        "eventStartMSec": 1000, "eventStopMSec": 3000,
+                        "zones": {}}}).encode())
+        assert sink.messages[-1]["statusCode"] == 0
+        for _ in range(2):
+            await service._observe_pool_frame(camera, frame)
+            await service._inference.join()
+        enters = [message for message in sink.messages
+                  if message.get("functionName") == "EventSmartDetect"
+                  and message["payload"]["edgeType"] == "enter"]
+        assert len(calls) == 2
+        assert len(enters) == 1
+        assert enters[0]["payload"]["deviceID"] == camera
+        assert enters[0]["payload"]["objectTypes"] == ["person"]
+        assert service._inference.camera_snapshot()[0]["observations"]["person"] == 2
+        # A motion-gated frame makes no paid request, but still needs to
+        # close the native track and release its crop/full-frame references.
+        later = time.monotonic() + 21
+        monkeypatch.setattr(
+            "aikey.aiport_candidate.time",
+            SimpleNamespace(monotonic=lambda: later, time=time.time))
+        await service._observe_pool_frame(camera, frame)
+        await service._inference.join()
+        leaves = [message for message in sink.messages
+                  if message.get("functionName") == "EventSmartDetect"
+                  and message["payload"]["edgeType"] == "leave"]
+        assert len(calls) == 2
+        assert len(leaves) == 1
+        assert leaves[0]["payload"]["objectTypes"] == ["person"]
+        assert len(leaves[0]["payload"]["smartDetectSnapshots"]) == 1
+        assert service._pool_pending_snapshots
+    finally:
+        await service.stop()
 
 
 @pytest.mark.asyncio
@@ -371,6 +499,34 @@ def test_live_pool_requires_unique_allowlisted_cameras_and_local_detector(tmp_pa
         load_config(tmp_path / "config.json")
 
 
+def test_live_pool_accepts_explicit_pinned_onnx_provider(tmp_path):
+    config = fixture_state(tmp_path)
+    config["paired_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1",
+         "ffmpeg_path": sys.executable}
+        for mac in ("2A1122334455", "2A1122334456")]
+    config["live_pool_detector"] = {
+        "inference_backend": "onnx_openvino_gpu",
+        "model_path": str(tmp_path / "model.onnx"), "model_sha256": "a" * 64,
+        "threshold": 0.3, "smart_types": ["person"], "max_events_per_hour": 120}
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["live_pool_detector"] == (
+        config["live_pool_detector"])
+    config["live_pool_detector"]["smart_types"] = ["package"]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="live pool detector"):
+        load_config(tmp_path / "config.json")
+    config["live_pool_detector"]["smart_types"] = ["person"]
+    config["live_pool_detector"]["inference_backend"] = "unknown"
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="live pool detector"):
+        load_config(tmp_path / "config.json")
+    config["live_pool_detector"]["inference_backend"] = []
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="live pool detector"):
+        load_config(tmp_path / "config.json")
+
+
 @pytest.mark.asyncio
 async def test_live_detector_runs_past_probe_limit_and_enforces_hourly_event_budget(
         tmp_path):
@@ -427,11 +583,14 @@ async def test_live_detector_runs_past_probe_limit_and_enforces_hourly_event_bud
     await service._publish_bounded_smart_changes((replace(enter, track_id=2),))
     assert service.smart_events_entered == 1
     service._live_event_times[0] -= 3601
+    service._event_budget.clock_ns = lambda: time.time_ns() + 3_600_000_000_000
     await service._publish_bounded_smart_changes((replace(enter, track_id=3),))
     assert service.smart_events_entered == 2
     health = json.loads((await service._health(None)).text)
     assert health["detection_mode"] == "live"
     assert health["live_event_budget_remaining"] == 0
+    assert health["live_event_budget_healthy"] is True
+    assert (tmp_path / "aiport-event-budget.json").is_file()
     await service.stop()
 
 
@@ -1789,9 +1948,35 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
     assert all(service._camera_engine.has_policy(mac) for mac in cameras)
 
     stale_generation = service._camera_engine.policy_generation(cameras[0])
+    # Protect's identical re-sends after connecting keep the policy, its
+    # generation and any in-flight startup sample.
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 7,
+        "payload": policies[0],
+    }).encode())
+    assert sink.messages[-1]["statusCode"] == 0
+    assert service._camera_engine.policy_generation(cameras[0]) == stale_generation
+    assert service.smart_settings_repeats == 1
+    # Protect's separate plate-reader flag carries no policy: acknowledge it
+    # without touching the policy; count requests for plates that are not read.
+    rejected = service.smart_settings_requests_rejected
+    for message_id, lpr, status in ((20, 0, 0), (21, 1, 0), (22, False, 0),
+                                    (23, 2, 501), (24, "yes", 501)):
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "ChangeSmartDetectSettings", "messageId": message_id,
+            "payload": {"deviceID": cameras[0], "isLprCamera": lpr}}).encode())
+        assert sink.messages[-1]["statusCode"] == status
+    assert service.smart_settings_lpr_acks == 3
+    assert service.smart_settings_lpr_requested == 1
+    assert service.smart_settings_rejection_reasons == {
+        "invalid_lpr_flag:int": 1, "invalid_lpr_flag:str": 1}
+    assert service.smart_settings_requests_rejected == rejected + 2
+    assert service._camera_engine.has_policy(cameras[0])
+    assert service._camera_engine.policy_generation(cameras[0]) == stale_generation
+    # A changed policy makes results of older frames stale.
     await service._handle_diagnostic_frame(sink, json.dumps({
         "functionName": "ChangeSmartDetectSettings", "messageId": 8,
-        "payload": policies[0],
+        "payload": {**policies[0], "eventStopMSec": 4000},
     }).encode())
     assert service._camera_engine.policy_generation(cameras[0]) > stale_generation
     await service._observe_pool_result(cameras[0], (
@@ -1838,6 +2023,88 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
     assert sink.messages[-1]["statusCode"] == 501
     assert not service._camera_engine.has_policy(cameras[0])
     assert service._camera_engine.has_policy(cameras[1])
+    camera_health = json.loads((await service._health(None)).text)["pool_cameras"]
+    assert [camera["policy_rejection"] for camera in camera_health] == [
+        "disabled_policy", None]
+
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 6,
+        "payload": {"deviceID": cameras[0], "enableSmartDetect": ["person"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000,
+                    "enableTamperDetection": True},
+    }).encode())
+    camera_health = json.loads((await service._health(None)).text)["pool_cameras"]
+    assert camera_health[0]["policy_rejection"] == "unsupported_smart_feature:tamper"
+    assert camera_health[1]["policy_rejection"] is None
+
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 7,
+        "payload": {"deviceID": cameras[0], "enableSmartDetect": ["person"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000,
+                    "secondLensZones": {"7": {
+                        "coord": [0, 0, 1000, 0, 1000, 1000],
+                        "objectTypes": ["person"]}}},
+    }).encode())
+    health_text = (await service._health(None)).text
+    camera_health = json.loads(health_text)["pool_cameras"]
+    assert camera_health[0]["policy_rejection"] == (
+        "unsupported_smart_feature:regions:secondLensZones")
+    assert camera_health[0]["secondary_lens_shape"] == {
+        "zone_count": 1, "schema_valid": True,
+        "animal_selected": False, "package_selected": False,
+        "person_selected": True, "vehicle_selected": False}
+    assert '"coord"' not in health_text
+
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 9,
+        "payload": {"deviceID": cameras[1], "enableSmartDetect": ["person"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000,
+                    "secondLensZones": {"7": {
+                        "coord": [0, 0, 1000, 0, 1000, 1000],
+                        "objectTypes": []}}},
+    }).encode())
+    camera_health = json.loads((await service._health(None)).text)["pool_cameras"]
+    assert sink.messages[-1]["statusCode"] == 0
+    assert camera_health[1]["policy_enabled"] is True
+    assert camera_health[1]["policy_rejection"] is None
+    assert camera_health[1]["secondary_lens_shape"] is None
+
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 10,
+        "payload": {"deviceID": cameras[1], "enableSmartDetect": ["person"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000,
+                    "recognitionAccuracy": {"face": "private-setting",
+                                            "licensePlate": None}},
+    }).encode())
+    health_text = (await service._health(None)).text
+    camera_health = json.loads(health_text)["pool_cameras"]
+    assert sink.messages[-1]["statusCode"] == 501
+    assert camera_health[1]["policy_rejection"] == (
+        "invalid_smart_settings:recognition_accuracy")
+    assert camera_health[1]["recognition_accuracy_shape"] == {
+        "object": True, "key_count": 2, "unknown_key_count": 0,
+        "face": "other_string", "licensePlate": "null"}
+    assert "private-setting" not in health_text
+
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 11,
+        "payload": {"deviceID": cameras[1], "enableSmartDetect": ["person"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000},
+    }).encode())
+    camera_health = json.loads((await service._health(None)).text)["pool_cameras"]
+    assert camera_health[1]["recognition_accuracy_shape"] is None
+    assert camera_health[1]["policy_enabled"] is True
+
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 12,
+        "payload": {"deviceID": cameras[0], "enableSmartDetect": ["person"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000,
+                    "excludeZones": {"9": {
+                        "coord": [0, 0], "objectTypes": ["person"]}}},
+    }).encode())
+    camera_health = json.loads((await service._health(None)).text)["pool_cameras"]
+    assert camera_health[0]["policy_rejection"] == "invalid_exclude_zone"
+    assert camera_health[1]["policy_enabled"] is True
 
     await service._handle_diagnostic_frame(sink, json.dumps({
         "functionName": "ChangeSmartDetectSettings", "messageId": 4,
@@ -1859,6 +2126,14 @@ async def test_pool_event_probe_routes_two_cameras_without_cross_policy(tmp_path
                for message in sink.messages)
     health = json.loads((await service._health(None)).text)
     assert health["pool_inference"]["successes"] == 5
+    assert len(health["pool_cameras"]) == 2
+    assert [item["index"] for item in health["pool_cameras"]] == [0, 1]
+    assert all("observations" in item and "events_entered" in item
+               and "score_eligible_observations" in item
+               and "eligible_frames" in item
+               and "stream_restart_failures" in item
+               for item in health["pool_cameras"])
+    assert cameras[0] not in json.dumps(health["pool_cameras"])
     assert health["smart_events_entered"] == 2
     assert "private-pool-frame" not in json.dumps(health)
     await service.stop()
@@ -1935,14 +2210,20 @@ async def test_pool_multiclass_probe_keeps_camera_policies_and_tracks_separate(
     enters = [message["payload"] for message in sink.messages
               if message["functionName"] == "EventSmartDetect"
               and message["payload"]["edgeType"] == "enter"]
-    assert [(event["deviceID"], event["objectTypes"][0]) for event in enters] == [
-        (cameras[0], "person"), (cameras[0], "vehicle"),
-        (cameras[0], "animal"), (cameras[1], "person")]
-    assert [event["descriptors"][0]["zones"] for event in enters] == [
-        [7], [8], [9], []]
-    assert len({event["descriptors"][0]["trackerID"]
-                for event in enters if event["deviceID"] == cameras[0]}) == 3
-    assert service.smart_events_entered == 4
+    # Protect keeps one smart event per camera, so the first object opens
+    # it and later objects join through moving updates with all objects.
+    assert [(event["deviceID"], event["objectTypes"]) for event in enters] == [
+        (cameras[0], ["person"]), (cameras[1], ["person"])]
+    assert [event["descriptors"][0]["zones"] for event in enters] == [[7], []]
+    joined = [message["payload"] for message in sink.messages
+              if message["functionName"] == "EventSmartDetect"
+              and message["payload"]["edgeType"] == "moving"
+              and message["payload"]["deviceID"] == cameras[0]]
+    assert joined[-1]["objectTypes"] == ["person", "vehicle", "animal"]
+    assert [d["zones"] for d in joined[-1]["descriptors"]] == [[7], [8], [9]]
+    assert len({d["trackerID"] for d in joined[-1]["descriptors"]}) == 3
+    assert service.smart_events_entered == 2
+    assert service.smart_objects_joined == 2
 
     await service._handle_diagnostic_frame(sink, json.dumps({
         "functionName": "ChangeSmartDetectSettings", "messageId": 3,
@@ -1953,9 +2234,12 @@ async def test_pool_multiclass_probe_keeps_camera_policies_and_tracks_separate(
     leaves = [message["payload"] for message in sink.messages
               if message["functionName"] == "EventSmartDetect"
               and message["payload"]["edgeType"] == "leave"]
-    assert [(event["deviceID"], event["objectTypes"][0]) for event in leaves] == [
-        (cameras[0], "person"), (cameras[0], "vehicle"),
-        (cameras[0], "animal")]
+    assert [(event["deviceID"], event["objectTypes"]) for event in leaves] == [
+        (cameras[0], ["person", "vehicle", "animal"])]
+    assert sorted(leaves[0]["trackerIDAttrMap"].values(), key=lambda v: v["zone"]) == [
+        {"objectType": "person", "zone": [7]},
+        {"objectType": "vehicle", "zone": [8]},
+        {"objectType": "animal", "zone": [9]}]
     assert service._camera_engine.has_policy(cameras[1])
 
     await service._handle_diagnostic_frame(sink, json.dumps({
@@ -2109,6 +2393,62 @@ async def test_live_pool_routes_two_camera_events_and_pinned_snapshots(
         assert not service._pool_event_snapshots
     finally:
         await server.close()
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_live_pool_exclusion_policy_suppresses_inside_but_emits_outside(
+        tmp_path):
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    config["paired_streams"] = [{
+        "camera_mac": camera, "source_ip": "192.168.10.1",
+        "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "checkpoint_path": str(tmp_path / "model.pth"),
+        "checkpoint_sha256": "a" * 64, "threshold": 0.3,
+        "smart_types": ["person"], "max_events_per_hour": 12}
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    policy = {"deviceID": camera, "algoVersion": "beta",
+              "enableSmartDetect": ["person"], "eventStartMSec": 1000,
+              "eventStopMSec": 3000, "zones": {},
+              "excludeZones": {"4": {
+                  "coord": [450, 100, 550, 100, 550, 900, 450, 900],
+                  "objectTypes": ["person"], "patrolSetID": -1}}}
+    try:
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "ChangeSmartDetectSettings", "messageId": 16,
+            "payload": policy}).encode())
+        assert sink.messages[-1]["statusCode"] == 0
+        generation = service._camera_engine.policy_generation(camera)
+        excluded = (ObjectObservation("person", "person", 0.9,
+                                      (0.4, 0.2, 0.5, 0.8)),)
+        admitted = (ObjectObservation("person", "person", 0.9,
+                                      (0.2, 0.2, 0.4, 0.8)),)
+        for _ in range(2):
+            await service._observe_pool_result(camera, excluded, generation)
+        assert service.smart_events_entered == 0
+        for _ in range(2):
+            await service._observe_pool_result(camera, admitted, generation)
+        enters = [message for message in sink.messages
+                  if message["functionName"] == "EventSmartDetect"
+                  and message["payload"]["edgeType"] == "enter"]
+        assert len(enters) == 1
+        assert enters[0]["payload"]["deviceID"] == camera
+    finally:
         await service.stop()
 
 
@@ -2547,3 +2887,887 @@ async def test_bounded_hello_answers_readonly_and_rejects_stream_control(tmp_pat
                 await task
     finally:
         await server.close()
+
+
+@pytest.mark.asyncio
+async def test_live_api_package_enters_camera_event_with_zone_and_camera_owned_lens(
+        tmp_path, monkeypatch):
+    """Package is advertised for primary zones and sent as a one-shot edge."""
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{
+        "camera_mac": camera, "source_ip": "192.168.10.1",
+        "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person", "vehicle", "animal", "package"],
+        "max_events_per_hour": 12, "max_requests_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+
+    def fake_provider(_url, _headers, payload):
+        # The second request is the close-up package check.
+        answer = ({"kind": "package", "label": "package"}
+                  if "close-up crop" in json.dumps(payload) else
+                  {"detections": [{"kind": "package", "label": "package",
+                                   "score": 0.93, "box": [0.3, 0.6, 0.45, 0.8]}]})
+        return {"status": "completed", "output": [{
+            "type": "message", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": json.dumps(answer)}],
+        }]}
+
+    monkeypatch.setattr(
+        "aikey.aiport_candidate.ApiObjectDetector",
+        lambda provider, state_dir, **options: ApiObjectDetector(
+            provider, state_dir, transport=fake_provider, **options))
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    await service._send_stream_status(sink, streaming=True, camera_mac=camera)
+    flags, = [message for message in sink.messages
+              if message["functionName"] == "EventFeatureFlagsUpdated"]
+    assert flags["payload"]["smartDetect"] == [
+        "person", "vehicle", "animal", "package", "packageMaincam"]
+    frame_io = BytesIO()
+    Image.new("RGB", (640, 360), (150, 110, 70)).save(frame_io, format="JPEG")  # daylight colour
+    frame = frame_io.getvalue()
+    try:
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "ChangeSmartDetectSettings", "messageId": 1,
+            "payload": {"deviceID": camera, "algoVersion": "beta",
+                        "enableSmartDetect": ["person", "package"],
+                        "eventStartMSec": 1000, "eventStopMSec": 3000,
+                        "zones": {"4": {"coord": [0, 0, 1000, 0, 1000, 1000, 0, 1000],
+                                        "objectTypes": ["person", "package"]}},
+                        "secondLensZones": {"9": {
+                            "coord": [100, 100, 900, 100, 900, 900],
+                            "objectTypes": ["package"]}}}}).encode())
+        assert sink.messages[-1]["statusCode"] == 0
+        for _ in range(2):
+            await service._observe_pool_frame(camera, frame)
+            await service._inference.join()
+        events = [message["payload"] for message in sink.messages
+                  if message.get("functionName") == "EventSmartDetect"]
+        # Protect 7.3.68 resolved an AI Port packageDetected by the AI Port's
+        # own MAC and dropped it; the enter lifecycle is routed by deviceID.
+        assert [event["edgeType"] for event in events] == ["enter"]
+        package = events[0]
+        assert package["deviceID"] == camera
+        assert package["objectTypes"] == ["package"]
+        assert package["zonesStatus"] == {"4": {"status": "enter", "level": 93}}
+        assert package["descriptors"][0]["objectType"] == "package"
+        health = json.loads((await service._health(None)).text)
+        camera_health = health["pool_cameras"][0]
+        assert health["smart_package_events"] == 1
+        assert camera_health["events_entered_by_kind"]["package"] == 1
+        assert camera_health["secondary_lens"] == {
+            "zones": 1, "classes": ["package"], "processed_by": "camera"}
+        assert "coord" not in json.dumps(camera_health)
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_live_pool_advertises_enhanced_motion_and_sends_zone_motion(tmp_path):
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{
+        "camera_mac": camera, "source_ip": "192.168.10.1",
+        "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person"], "max_events_per_hour": 12,
+        "max_requests_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    await service._send_stream_status(sink, streaming=True, camera_mac=camera)
+    flags, = [message for message in sink.messages
+              if message["functionName"] == "EventFeatureFlagsUpdated"]
+    assert flags["payload"]["motionDetect"] == ["enhanced"]
+
+    def picture(box=None):
+        image = Image.new("RGB", (320, 180), (40, 40, 40))
+        if box is not None:
+            ImageDraw.Draw(image).rectangle(box, fill=(230, 230, 230))
+        data = BytesIO()
+        image.save(data, format="JPEG", quality=85)
+        return data.getvalue()
+
+    try:
+        command = {"functionName": "ChangeSmartMotionSettings", "messageId": 7,
+                   "payload": {"algoVersion": "beta", "deviceID": "2A1122334456",
+                               "enable": True, "eventMaxDurationMSec": 300000,
+                               "bgmodel": "default", "lingerEventStartMSec": 0,
+                               "lingerEventStopMSec": 1000,
+                               "zones": {"1": {"coord": [0, 0, 500, 0, 500, 1000, 0, 1000],
+                                               "level": 50, "triggerLight": True}}}}
+        await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+        assert sink.messages[-1]["statusCode"] == 5     # not an allowlisted camera
+        command["payload"]["deviceID"] = camera
+        command["messageId"] = 8
+        await service._handle_diagnostic_frame(sink, json.dumps(command).encode())
+        assert sink.messages[-1]["statusCode"] == 0
+        await service._observe_pool_frame(camera, picture())
+        await service._observe_pool_frame(camera, picture((40, 40, 110, 160)))
+        motion = [message for message in sink.messages
+                  if message["functionName"] == "EventSmartMotion"]
+        assert [m["payload"]["edgeType"] for m in motion] == ["start"]
+        assert motion[0]["payload"]["deviceID"] == camera
+        assert motion[0]["timeStamp"].endswith("Z")
+        await service._revoke_pool_policy(camera)
+        motion = [message for message in sink.messages
+                  if message["functionName"] == "EventSmartMotion"]
+        assert [m["payload"]["edgeType"] for m in motion] == ["start", "stop"]
+        health = json.loads((await service._health(None)).text)
+        assert health["smart_motion_settings_acks"] == 1
+        assert health["smart_motion_settings_rejected"] == 1
+        assert health["pool_cameras"][0]["motion"]["starts"] == 1
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_pool_keeps_one_protect_event_until_the_last_object_leaves(tmp_path):
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{"camera_mac": camera, "source_ip": "192.168.10.1",
+                                 "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person", "vehicle"], "max_events_per_hour": 12,
+        "max_requests_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    service = CandidateService(config, tmp_path)
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    person = TrackChange("enter", 1, "person", "person", 0.9, (0.1, 0.2, 0.3, 0.8))
+    car = TrackChange("enter", 2, "vehicle", "car", 0.9, (0.5, 0.5, 0.9, 0.9))
+    try:
+        for change in (person, car,
+                       TrackChange("leave", 1, "person", "person", 0.9, person.box),
+                       TrackChange("leave", 2, "vehicle", "car", 0.9, car.box)):
+            await service._publish_pool_candidates(
+                (CameraEventCandidate(camera, change, ()),))
+        edges = [(m["payload"]["edgeType"], m["payload"]["objectTypes"])
+                 for m in sink.messages if m["functionName"] == "EventSmartDetect"]
+        assert edges == [("enter", ["person"]), ("moving", ["person", "vehicle"]),
+                         ("moving", ["vehicle"]), ("leave", ["person", "vehicle"])]
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_restart_does_not_reannounce_a_parked_package(tmp_path, monkeypatch):
+    """The package cooldown survives an AI Port restart on the same state."""
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{
+        "camera_mac": camera, "source_ip": "192.168.10.1",
+        "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {   # uncapped default: no request cap
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person", "package"], "max_events_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+
+    def fake_provider(_url, _headers, payload):
+        answer = ({"kind": "package", "label": "package"}
+                  if "close-up crop" in json.dumps(payload) else
+                  {"detections": [{"kind": "package", "label": "package",
+                                   "score": 0.93, "box": [0.3, 0.6, 0.45, 0.8]}]})
+        return {"status": "completed", "output": [{
+            "type": "message", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": json.dumps(answer)}],
+        }]}
+
+    monkeypatch.setattr(
+        "aikey.aiport_candidate.ApiObjectDetector",
+        lambda provider, state_dir, **options: ApiObjectDetector(
+            provider, state_dir, transport=fake_provider, **options))
+    frame_io = BytesIO()
+    Image.new("RGB", (640, 360), (150, 110, 70)).save(frame_io, format="JPEG")  # daylight colour
+    frame = frame_io.getvalue()
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    async def run_once():
+        service = CandidateService(config, tmp_path)
+        service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+        service._params_agreed = True
+        service.ingress.list_streams = lambda: [{"deviceID": camera}]
+        sink = Sink()
+        service._current_ws = sink
+        try:
+            await service._send_stream_status(sink, streaming=True, camera_mac=camera)
+            await service._handle_diagnostic_frame(sink, json.dumps({
+                "functionName": "ChangeSmartDetectSettings", "messageId": 1,
+                "payload": {"deviceID": camera, "algoVersion": "beta",
+                            "enableSmartDetect": ["person", "package"],
+                            "eventStartMSec": 1000, "eventStopMSec": 3000,
+                            "zones": {"4": {"coord": [0, 0, 1000, 0, 1000, 1000, 0, 1000],
+                                            "objectTypes": ["person"]}}}}).encode())
+            assert sink.messages[-1]["statusCode"] == 0
+            for _ in range(2):   # the startup pair samples the parked parcel
+                await service._observe_pool_frame(camera, frame)
+                await service._inference.join()
+            health = json.loads((await service._health(None)).text)
+            enters = [m["payload"] for m in sink.messages
+                      if m.get("functionName") == "EventSmartDetect"
+                      and m["payload"]["edgeType"] == "enter"]
+            return enters, health
+        finally:
+            await service.stop()
+
+    first, _ = await run_once()
+    assert [event["objectTypes"] for event in first] == [["package"]]
+    second, health = await run_once()          # same state dir: a restart
+    assert second == []
+    assert health["package_cooldown_skips"] == 1
+    assert health["pool_cameras"][0]["events_entered_by_kind"]["package"] == 0
+
+
+@pytest.mark.asyncio
+async def test_night_ir_package_starts_no_package_event(tmp_path, monkeypatch):
+    """A package seen only in night IR (a pet, in live evidence) is not announced."""
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{
+        "camera_mac": camera, "source_ip": "192.168.10.1",
+        "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {   # uncapped default: no request cap
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person", "package"], "max_events_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+
+    def fake_provider(_url, _headers, payload):
+        answer = ({"kind": "package", "label": "package"}
+                  if "close-up crop" in json.dumps(payload) else
+                  {"detections": [{"kind": "package", "label": "package",
+                                   "score": 0.93, "box": [0.3, 0.6, 0.45, 0.8]}]})
+        return {"status": "completed", "output": [{
+            "type": "message", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": json.dumps(answer)}],
+        }]}
+
+    monkeypatch.setattr(
+        "aikey.aiport_candidate.ApiObjectDetector",
+        lambda provider, state_dir, **options: ApiObjectDetector(
+            provider, state_dir, transport=fake_provider, **options))
+    frame_io = BytesIO()
+    Image.new("RGB", (640, 360), "gray").save(frame_io, format="JPEG")  # IR: no chroma
+    frame = frame_io.getvalue()
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    async def run_once():
+        service = CandidateService(config, tmp_path)
+        service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+        service._params_agreed = True
+        service.ingress.list_streams = lambda: [{"deviceID": camera}]
+        sink = Sink()
+        service._current_ws = sink
+        try:
+            await service._send_stream_status(sink, streaming=True, camera_mac=camera)
+            await service._handle_diagnostic_frame(sink, json.dumps({
+                "functionName": "ChangeSmartDetectSettings", "messageId": 1,
+                "payload": {"deviceID": camera, "algoVersion": "beta",
+                            "enableSmartDetect": ["person", "package"],
+                            "eventStartMSec": 1000, "eventStopMSec": 3000,
+                            "zones": {"4": {"coord": [0, 0, 1000, 0, 1000, 1000, 0, 1000],
+                                            "objectTypes": ["person"]}}}}).encode())
+            assert sink.messages[-1]["statusCode"] == 0
+            for _ in range(2):   # the startup pair samples the parked parcel
+                await service._observe_pool_frame(camera, frame)
+                await service._inference.join()
+            health = json.loads((await service._health(None)).text)
+            enters = [m["payload"] for m in sink.messages
+                      if m.get("functionName") == "EventSmartDetect"
+                      and m["payload"]["edgeType"] == "enter"]
+            return enters, health
+        finally:
+            await service.stop()
+
+    enters, health = await run_once()
+    assert enters == []
+    assert health["package_ir_held"] == 1
+    assert health["pool_cameras"][0]["events_entered_by_kind"]["package"] == 0
+
+
+async def _person_event_service(tmp_path, monkeypatch):
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{
+        "camera_mac": camera, "source_ip": "192.168.10.1",
+        "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person"], "max_events_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+
+    def fake_provider(_url, _headers, _payload):
+        return {"status": "completed", "output": [{
+            "type": "message", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": json.dumps({
+                "detections": [{"kind": "person", "label": "person",
+                                "score": 0.95, "box": [0.2, 0.1, 0.4, 0.8]}]})}],
+        }]}
+
+    monkeypatch.setattr(
+        "aikey.aiport_candidate.ApiObjectDetector",
+        lambda provider, state_dir, **options: ApiObjectDetector(
+            provider, state_dir, transport=fake_provider, **options))
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    frame_io = BytesIO()
+    Image.new("RGB", (640, 360), "gray").save(frame_io, format="JPEG")
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 1,
+        "payload": {"deviceID": camera, "enableSmartDetect": ["person"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000,
+                    "zones": {}}}).encode())
+    for _ in range(2):
+        await service._observe_pool_frame(camera, frame_io.getvalue())
+        await service._inference.join()
+    return service, sink, frame_io.getvalue()
+
+
+def _edges(sink, edge):
+    return [message["payload"] for message in sink.messages
+            if message.get("functionName") == "EventSmartDetect"
+            and message["payload"]["edgeType"] == edge]
+
+
+@pytest.mark.asyncio
+async def test_stopping_during_an_active_event_closes_it_with_a_leave(tmp_path, monkeypatch):
+    # Esszimmer, 26 Sep 03:46: the AI Port was redeployed mid-event and
+    # Protect kept the Animal event open for about six minutes.
+    service, sink, _frame = await _person_event_service(tmp_path, monkeypatch)
+    assert len(_edges(sink, "enter")) == 1
+    await service.stop()
+    leave, = _edges(sink, "leave")
+    assert leave["objectTypes"] == ["person"]
+    # The stopping AI Port could not serve a snapshot upload afterwards.
+    assert "smartDetectSnapshots" not in leave
+    assert service.smart_events_closed_on_stop == 1
+    assert service._pool_sessions == {}
+
+
+@pytest.mark.asyncio
+async def test_an_ordinarily_closed_event_gets_no_second_leave_on_stop(tmp_path, monkeypatch):
+    service, sink, frame = await _person_event_service(tmp_path, monkeypatch)
+    later = time.monotonic() + 21
+    monkeypatch.setattr("aikey.aiport_candidate.time",
+                        SimpleNamespace(monotonic=lambda: later, time=time.time))
+    await service._observe_pool_frame(service.ingress.list_streams()[0]["deviceID"], frame)
+    await service._inference.join()
+    leave, = _edges(sink, "leave")
+    assert len(leave["smartDetectSnapshots"]) == 1      # ordinary leave unchanged
+    await service.stop()
+    assert len(_edges(sink, "leave")) == 1
+    assert service.smart_events_closed_on_stop == 0
+
+
+@pytest.mark.asyncio
+async def test_stop_without_a_control_link_skips_the_close(tmp_path, monkeypatch):
+    service, sink, _frame = await _person_event_service(tmp_path, monkeypatch)
+    service._current_ws = None
+    await service.stop()
+    assert _edges(sink, "leave") == []
+    assert service.smart_events_closed_on_stop == 0
+
+
+@pytest.mark.asyncio
+async def test_a_hanging_control_link_cannot_block_stop(tmp_path, monkeypatch):
+    service, _sink, _frame = await _person_event_service(tmp_path, monkeypatch)
+
+    class Stuck:
+        async def send_bytes(self, _raw):
+            await asyncio.sleep(3600)
+
+    service._current_ws = Stuck()
+    started = time.monotonic()
+    await service.stop()
+    assert time.monotonic() - started < 5
+    assert service.smart_events_closed_on_stop == 0
+
+
+_LIVE_A, _LIVE_B = "2A1122334455", "2A1122334466"
+_LIVE_URI = "https://192.168.10.1:7444/internal/camera-upload/Tok3nABCdef4567890xyzQRS"
+
+
+def _live_snapshot_service(tmp_path, monkeypatch):
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [
+        {"camera_mac": camera, "source_ip": "192.168.10.1", "ffmpeg_path": sys.executable}
+        for camera in (_LIVE_A, _LIVE_B)]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person"], "max_events_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    frames = {_LIVE_A: b"\xff\xd8camera-a-jpeg"}
+    service.ingress.latest_frame = lambda camera, *, max_age: frames.get(camera)
+    uploads = []
+
+    class Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        class content:
+            @staticmethod
+            async def read(_limit):
+                return b"{}"
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def post(self, url, *, data, allow_redirects):
+            uploads.append((url, data, allow_redirects))
+            return Response()
+
+    monkeypatch.setattr("aikey.aiport_candidate.aiohttp.ClientSession",
+                        lambda **_kwargs: Session())
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    return service, frames, uploads, Sink()
+
+
+async def _live_request(service, sink, message_id, **overrides):
+    payload = {"what": "snapshot", "deviceID": _LIVE_A, "quality": "medium",
+               "timeoutMs": 60_000, "uri": _LIVE_URI, **overrides}
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "GetRequest", "messageId": message_id,
+        "responseExpected": True, "payload": payload}).encode())
+    return sink.messages[-1]
+
+
+@pytest.mark.asyncio
+async def test_live_snapshot_uploads_the_cameras_latest_frame(tmp_path, monkeypatch):
+    # Protect 7.3.68 routes a paired camera's live snapshot through its AI Port.
+    service, _frames, uploads, sink = _live_snapshot_service(tmp_path, monkeypatch)
+    reply = await _live_request(service, sink, 7)
+    assert reply["statusCode"] == 0
+    (url, form, redirects), = uploads
+    assert url == _LIVE_URI and redirects is False
+    field, = form._fields
+    assert field[0]["name"] == "payload" and field[2] == b"\xff\xd8camera-a-jpeg"
+    assert service.live_snapshot_uploads == 1
+    await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_live_snapshot_without_a_fresh_frame_is_unavailable(tmp_path, monkeypatch):
+    service, frames, uploads, sink = _live_snapshot_service(tmp_path, monkeypatch)
+    frames.clear()                        # stream down, or newest frame too old
+    reply = await _live_request(service, sink, 8)
+    assert (reply["statusCode"], reply["payload"]["description"]) == (5, "snapshot_unavailable")
+    assert uploads == []
+    assert service.live_snapshot_rejection_reasons == {"stale_or_missing_frame": 1}
+    await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_live_snapshot_for_a_wrong_or_missing_camera_is_refused(tmp_path, monkeypatch):
+    service, _frames, uploads, sink = _live_snapshot_service(tmp_path, monkeypatch)
+    assert (await _live_request(service, sink, 9, deviceID="2A9999999999"))["statusCode"] == 5
+    assert (await _live_request(service, sink, 10, deviceID=""))["statusCode"] == 5
+    # Paired to this AI Port, but no frame for it: never another camera's image.
+    assert (await _live_request(service, sink, 11, deviceID=_LIVE_B))["statusCode"] == 5
+    assert uploads == []
+    assert service.live_snapshot_rejection_reasons == {
+        "unexpected_snapshot_camera": 1, "snapshot_camera_required": 1,
+        "stale_or_missing_frame": 1}
+    await service.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uri", [
+    "https://192.168.10.1:6666/internal/camera-upload/Tok3nABCdef4567890xyzQRS",
+    "https://192.168.10.99:7444/internal/camera-upload/Tok3nABCdef4567890xyzQRS",
+    "http://192.168.10.1:7444/internal/camera-upload/Tok3nABCdef4567890xyzQRS",
+    "https://192.168.10.1:7444/internal/other/Tok3nABCdef4567890xyzQRS",
+    "https://192.168.10.1:7444/internal/camera-upload/Tok3nABCdef4567890xyzQRS?x=1",
+])
+async def test_live_snapshot_only_uploads_to_the_pinned_token_route(tmp_path, monkeypatch, uri):
+    service, _frames, uploads, sink = _live_snapshot_service(tmp_path, monkeypatch)
+    reply = await _live_request(service, sink, 12, uri=uri)
+    assert (reply["statusCode"], reply["payload"]["description"]) == (5, "snapshot_request_invalid")
+    assert uploads == []
+    await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_live_snapshot_after_a_stream_reconnect_uses_only_the_new_frame(tmp_path, monkeypatch):
+    service, frames, uploads, sink = _live_snapshot_service(tmp_path, monkeypatch)
+    assert (await _live_request(service, sink, 13))["statusCode"] == 0
+    frames.clear()                                      # stream restarting
+    assert (await _live_request(service, sink, 14))["statusCode"] == 5
+    frames[_LIVE_A] = b"\xff\xd8after-reconnect"        # first frame after it
+    assert (await _live_request(service, sink, 15))["statusCode"] == 0
+    assert [form._fields[0][2] for _url, form, _r in uploads] == [
+        b"\xff\xd8camera-a-jpeg", b"\xff\xd8after-reconnect"]
+    # A control link that has not agreed parameters again gets no reply at all.
+    service._params_agreed = False
+    before = len(sink.messages)
+    await _live_request_raw(service, sink, 16)
+    assert len(sink.messages) == before
+    await service.stop()
+
+
+async def _live_request_raw(service, sink, message_id):
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "GetRequest", "messageId": message_id, "responseExpected": True,
+        "payload": {"what": "snapshot", "deviceID": _LIVE_A, "uri": _LIVE_URI}}).encode())
+
+
+async def _night_restart_scene(tmp_path, monkeypatch, frames, *, mode="announce"):
+    """Startup pair plus 2 fps decoded frames of one IR scene; fake provider."""
+    from test_aiport_held_followup import BOX
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{"camera_mac": camera, "source_ip": "192.168.10.1",
+                                 "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person", "animal", "package"], "max_events_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    if mode is not None:
+        config["live_pool_detector"]["held_package_followup"] = mode
+    calls = {"detect": 0, "verify": 0}
+
+    def fake_provider(_url, _headers, payload):
+        # The provider reads this IR object as a package every time, as it
+        # did for the user's cat on Flur and Esszimmer.
+        if "close-up crop" in json.dumps(payload):
+            calls["verify"] += 1
+            text = json.dumps({"kind": "package", "label": "package"})
+        else:
+            calls["detect"] += 1
+            text = json.dumps({"detections": [{"kind": "package", "label": "package",
+                                               "score": 0.93, "box": list(BOX)}]})
+        return {"status": "completed", "output": [{
+            "type": "message", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": text}]}]}
+
+    monkeypatch.setattr(
+        "aikey.aiport_candidate.ApiObjectDetector",
+        lambda provider, state_dir, **options: ApiObjectDetector(
+            provider, state_dir, transport=fake_provider, **options))
+    clock = [1000.0]
+    monkeypatch.setattr("aikey.aiport_candidate.time",
+                        SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    try:
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "ChangeSmartDetectSettings", "messageId": 1,
+            "payload": {"deviceID": camera, "enableSmartDetect": ["person", "animal", "package"],
+                        "eventStartMSec": 1000, "eventStopMSec": 3000, "zones": {}}}).encode())
+        detect_after_startup = None
+        for index, frame in enumerate(frames):
+            clock[0] = 1000.0 + index * 0.5
+            await service._observe_pool_frame(camera, frame)
+            await service._inference.join()
+            if index == 1:
+                detect_after_startup = calls["detect"]
+        health = json.loads((await service._health(None)).text)
+        enters = [m["payload"] for m in sink.messages
+                  if m.get("functionName") == "EventSmartDetect"
+                  and m["payload"]["edgeType"] == "enter"]
+        return enters, calls, detect_after_startup, health
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_parcel_present_at_a_night_restart_is_announced_without_extra_uploads(
+        tmp_path, monkeypatch):
+    from test_aiport_held_followup import _scene
+    enters, calls, detect_after_startup, health = await _night_restart_scene(
+        tmp_path, monkeypatch, [_scene(seed) for seed in range(60)])
+    assert [e["objectTypes"] for e in enters] == [["package"]]
+    assert calls["detect"] == detect_after_startup == 2    # only the startup pair
+    assert health["package_ir_followup"]["confirmed"] == 1
+    assert health["package_ir_held"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_visibly_moving_animal_read_as_a_package_at_a_night_restart_gets_no_package(
+        tmp_path, monkeypatch):
+    from test_aiport_held_followup import _scene
+    frames = [_scene(seed, patch=(290, 235 + (seed % 3) * 4, 60 if seed % 2 else 200))
+              for seed in range(60)]
+    enters, _calls, _detect, health = await _night_restart_scene(tmp_path, monkeypatch, frames)
+    assert [e["objectTypes"] for e in enters if "package" in e["objectTypes"]] == []
+    assert health["package_ir_followup"]["animated"] == 1
+
+
+@pytest.mark.asyncio
+async def test_the_default_shadow_follow_up_only_counts_what_it_would_announce(
+        tmp_path, monkeypatch):
+    from test_aiport_held_followup import _scene
+    enters, calls, _detect, health = await _night_restart_scene(
+        tmp_path, monkeypatch, [_scene(seed) for seed in range(60)], mode=None)
+    assert [e for e in enters if "package" in e["objectTypes"]] == []
+    assert health["package_ir_followup"]["mode"] == "shadow"
+    assert health["package_ir_followup"]["confirmed"] == 1   # would have announced
+    assert calls["detect"] == 2
+
+
+def test_the_follow_up_mode_accepts_only_shadow_or_announce(tmp_path):
+    config = fixture_state(tmp_path)
+    config["paired_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1", "ffmpeg_path": sys.executable}
+        for mac in ("2A1122334455", "2A1122334456")]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["package"], "max_events_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    for mode in ("shadow", "announce"):
+        config["live_pool_detector"]["held_package_followup"] = mode
+        private_file(tmp_path / "config.json", json.dumps(config).encode())
+        assert load_config(tmp_path / "config.json")["live_pool_detector"][
+            "held_package_followup"] == mode
+    config["live_pool_detector"]["held_package_followup"] = "always"
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError):
+        load_config(tmp_path / "config.json")
+
+
+def test_plate_cameras_are_an_explicit_subset_of_paired_api_cameras(tmp_path):
+    config = fixture_state(tmp_path)
+    config["paired_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1", "ffmpeg_path": sys.executable}
+        for mac in ("2A1122334455", "2A1122334456")]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["vehicle"], "max_events_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    config["live_pool_detector"]["plate_cameras"] = ["2a:11:22:33:44:56"]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["live_pool_detector"][
+        "plate_cameras"] == ["2A1122334456"]
+    for plates in (["2A11223344FF"], [], ["2A1122334455", "2A1122334455"], "2A1122334455"):
+        config["live_pool_detector"]["plate_cameras"] = plates
+        private_file(tmp_path / "config.json", json.dumps(config).encode())
+        with pytest.raises(CandidateError):
+            load_config(tmp_path / "config.json")
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_keeps_a_sleeping_cat_read_as_a_package_silent(tmp_path, monkeypatch):
+    from test_aiport_held_followup import _scene
+    enters, calls, _detect, health = await _night_restart_scene(
+        tmp_path, monkeypatch, [_scene(seed, cat=True) for seed in range(60)], mode=None)
+    assert [e for e in enters if "package" in e["objectTypes"]] == []
+    # The follow-up would have announced it: the live Esszimmer verdict.
+    assert health["package_ir_followup"]["mode"] == "shadow"
+    assert health["package_ir_followup"]["confirmed"] == 1
+    assert calls["detect"] == 2
+
+
+
+@pytest.mark.asyncio
+async def test_a_doorbell_whose_package_lens_owns_package_gets_no_main_lens_package(
+        tmp_path, monkeypatch):
+    # Haustür (G4 Doorbell Pro), live policy shape: main-lens zone for
+    # person/vehicle/animal, Package only on the package lens.
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{"camera_mac": camera, "source_ip": "192.168.10.1",
+                                 "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person", "vehicle", "animal", "package"], "max_events_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    calls = {"detect": 0, "verify": 0}
+
+    def fake_provider(_url, _headers, payload):
+        if "close-up crop" in json.dumps(payload):
+            calls["verify"] += 1
+            answer = {"kind": "package", "label": "package"}
+        else:
+            calls["detect"] += 1
+            answer = {"detections": [{"kind": "package", "label": "package",
+                                      "score": 0.93, "box": [0.3, 0.6, 0.45, 0.8]}]}
+        return {"status": "completed", "output": [{
+            "type": "message", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": json.dumps(answer)}]}]}
+
+    monkeypatch.setattr(
+        "aikey.aiport_candidate.ApiObjectDetector",
+        lambda provider, state_dir, **options: ApiObjectDetector(
+            provider, state_dir, transport=fake_provider, **options))
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    frame_io = BytesIO()
+    Image.new("RGB", (640, 360), (150, 110, 70)).save(frame_io, format="JPEG")
+    try:
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "ChangeSmartDetectSettings", "messageId": 1,
+            "payload": {"deviceID": camera, "algoVersion": "beta",
+                        "enableSmartDetect": ["person", "vehicle", "animal", "package"],
+                        "eventStartMSec": 1000, "eventStopMSec": 3000,
+                        "zones": {"4": {"coord": [0, 0, 1000, 0, 1000, 1000, 0, 1000],
+                                        "objectTypes": ["person", "vehicle", "animal"]}},
+                        "secondLensZones": {"9": {"coord": [0, 0, 1000, 0, 1000, 1000, 0, 1000],
+                                                  "objectTypes": ["package"]}}}}).encode())
+        assert sink.messages[-1]["statusCode"] == 0          # the policy is accepted
+        for _ in range(2):
+            await service._observe_pool_frame(camera, frame_io.getvalue())
+            await service._inference.join()
+        events = [m for m in sink.messages if m.get("functionName") == "EventSmartDetect"]
+        assert events == []                                    # no main-lens Package
+        assert calls["verify"] == 0                            # no close-up crop uploaded
+        health = json.loads((await service._health(None)).text)
+        row = health["pool_cameras"][0]
+        assert row["package_scope"] == "second_lens"
+        assert row["api_response_counts"]["package_checks"]["lens_owned"] >= 1
+        assert row["secondary_lens"]["processed_by"] == "camera"
+        # A package-lens snapshot (what=snapshot2) routed here is never answered
+        # with a main-lens frame.
+        service.ingress.latest_frame = lambda *_a, **_k: frame_io.getvalue()
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "GetRequest", "messageId": 7, "responseExpected": True,
+            "payload": {"what": "snapshot2", "quality": "medium", "timeoutMs": 60000,
+                        "uri": "https://192.168.10.1:7444/internal/camera-upload/Tok3nABCdef4567890xyzQRS"}}).encode())
+        assert sink.messages[-1]["statusCode"] == 5
+        assert health["live_snapshot_uploads"] == 0
+    finally:
+        await service.stop()

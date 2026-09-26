@@ -1,6 +1,7 @@
 """AI Port capacity and port plans use synthetic inventory only."""
 
 import json
+from fractions import Fraction
 
 import pytest
 
@@ -8,7 +9,7 @@ from aikey import aiport_deployment
 from aikey.aiport_deployment import AiPortPlanError, plan_ai_ports
 
 
-def camera(number, *, model="UVC G3 Instant", source=None, resolution=None,
+def camera(number, *, model="UVC G3 Test Camera", source=None, resolution=None,
            processing_class="legacy_ingress_needed", state="CONNECTED"):
     row = {"id": f"{number:024x}", "model": model, "state": state,
            "processing_class": processing_class}
@@ -101,10 +102,56 @@ def test_explicit_g3_g5_scope_plans_onboard_smart_cameras_without_g6():
     assert {camera_id for instance in plan["instances"]
             for camera_id in instance["camera_ids"]} == {
                 f"{number:024x}" for number in range(1, 9)}
-    assert all(instance["reserved_capacity"] == "1"
+    assert all(Fraction(instance["reserved_capacity"]) <= 1
                for instance in plan["instances"])
     assert all(instance["source_kind"] == "protect" for instance in plan["instances"])
     assert plan["camera_pairing"] == "disabled"
+
+
+def test_known_legacy_models_fit_four_ports_from_fresh_inventory_and_keep_existing_slots():
+    models = ["UVC G3 Instant", "UVC G3 Instant", "UVC G5 Flex",
+              "UVC G4 Instant", "UVC G4 Doorbell Pro", "UVC G4 Pro",
+              "UVC G4 Bullet", "UVC G4 Bullet", "UVC G4 Dome"]
+    rows = report(*(camera(index, model=model,
+                           processing_class="smart_event_candidate")
+                    for index, model in enumerate(models, 1)))
+    fresh = plan_ai_ports(rows, camera_scope="legacy-and-g3-g5")
+    assert fresh["selected_camera_count"] == 9
+    assert fresh["ai_port_instances_required"] == 4
+    assert all(item["resolution_unverified"] for item in fresh["instances"])
+    previous = {
+        "schema": "aikey-aiport-deployment-plan/2", "ai_key": {"host_ip": None},
+        "instances": [
+            {"slot": slot, "source_kind": "protect",
+             "camera_ids": [f"{index:024x}" for index in indices],
+             "host_ip": f"192.0.2.{10 + slot}"}
+            for slot, indices in enumerate(((1, 2, 3), (4, 5), (6, 7), (8, 9)), 1)
+        ],
+    }
+    reconciled = plan_ai_ports(rows, camera_scope="legacy-and-g3-g5",
+                               previous_plan=previous)
+    assert reconciled["ai_port_instances_required"] == 4
+    assert [item["reserved_capacity"] for item in reconciled["instances"]] == [
+        "9/10", "7/10", "1", "1"]
+    assert [item["host_ip"] for item in reconciled["instances"]] == [
+        f"192.0.2.{index}" for index in range(11, 15)]
+
+
+def test_model_capacity_bound_requires_an_exact_name_and_missing_resolution():
+    known = plan_ai_ports(report(camera(1, model="UVC G3 Instant")))
+    unknown = plan_ai_ports(report(camera(1, model="UVC G3 Instant Variant")))
+    dual_lens = plan_ai_ports(report(camera(1, model="UVC G4 Doorbell Pro")))
+    declared = plan_ai_ports(report(camera(1, model="UVC G3 Instant",
+                                           resolution="4K")))
+    assert known["instances"][0]["reserved_capacity"] == "1/5"
+    assert unknown["instances"][0]["reserved_capacity"] == "1/2"
+    # Protect streams only the doorbell's 1600x1200 main lens to an AI Port;
+    # its package lens stays with the camera (live evidence, 26 Sep 2026).
+    assert dual_lens["instances"][0]["reserved_capacity"] == "1/5"
+    assert declared["instances"][0]["reserved_capacity"] == "1/2"
+    assert all(plan["instances"][0]["resolution_unverified"]
+               for plan in (known, unknown))
+    assert declared["instances"][0]["resolution_unverified"] is False
 
 
 def test_g3_g5_scope_rejects_unknown_scope_and_does_not_select_similar_model():

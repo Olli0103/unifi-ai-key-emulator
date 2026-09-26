@@ -131,6 +131,12 @@ class StreamSpec:
         return f"rtsp://{self.ip}:7447/{self.alias}"
 
 
+def stream_capacity_points(width: int, height: int) -> int:
+    """Reserve the same capacity for a planned or a live Protect stream."""
+    pixels = width * height
+    return 2 if pixels <= 1920 * 1080 else 3 if pixels <= 2560 * 1440 else 5
+
+
 def _stream_spec(payload: object, *, camera_mac: str, source_ip: str) -> StreamSpec:
     if not isinstance(payload, dict) or set(payload) != {
         "streaming", "ip", "port", "uri", "deviceID", "width", "height", "fps"
@@ -150,8 +156,7 @@ def _stream_spec(payload: object, *, camera_mac: str, source_ip: str) -> StreamS
             or type(fps) not in (int, float) or not math.isfinite(fps)
             or fps < 1 or fps > 120):
         raise IngressError("invalid_stream_dimensions")
-    pixels = width * height
-    points = 2 if pixels <= 1920 * 1080 else 3 if pixels <= 2560 * 1440 else 5
+    points = stream_capacity_points(width, height)
     return StreamSpec(device_id, source_ip, alias, width, height, float(fps), points)
 
 
@@ -190,11 +195,15 @@ class _Session:
         # The alias and destination have already passed exact policy checks.
         # FFmpeg may print the private alias. Drain stderr without logging it,
         # retaining only a short in-memory excerpt for fixed-code classification.
+        # The tracker needs two overlapping sightings. One frame per second
+        # can miss a person crossing a short camera view between samples.
         self.process = await asyncio.create_subprocess_exec(
             self.ffmpeg_path, "-hide_banner", "-nostdin", "-loglevel", "error",
             "-rtsp_transport", "tcp", "-timeout", "5000000", "-i", self.spec.url,
             "-map", "0:v:0", "-an", "-sn", "-dn", "-filter_threads", "1",
-            "-vf", "fps=1,scale=320:-2", "-threads", "1", "-f", "image2pipe",
+            # Up to 1280 px wide (native when smaller). 320 px left a cat in a
+            # night IR frame a few dozen pixels, which vision replies saw as empty.
+            "-vf", "fps=2,scale=w='min(iw,1280)':h=-2", "-threads", "1", "-f", "image2pipe",
             "-vcodec", "mjpeg", "-q:v", "5", "pipe:1",
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, limit=_MAX_FRAME + 2,
@@ -336,6 +345,10 @@ class AiPortIngress:
         self.observer_failures = 0
         self.restart_attempts = 0
         self.restart_successes = 0
+        self.restart_observed_states = {"process_exited": 0,
+                                        "reader_stopped": 0,
+                                        "no_recent_frame": 0}
+        self.restart_failures: dict[str, int] = {}
 
     async def control(self, payload: object) -> dict:
         if not isinstance(payload, dict) or "streaming" not in payload:
@@ -399,6 +412,15 @@ class AiPortIngress:
                 if self._session is not None and self._session.healthy:
                     delay = 1
                     continue
+                previous = self._session
+                if previous is not None:
+                    # Record what was observable at retry time, not a root
+                    # cause. An exited decoder can also have stale frames.
+                    state = ("process_exited" if previous.process is not None
+                             and previous.process.returncode is not None else
+                             "reader_stopped" if previous.failure is not None else
+                             "no_recent_frame")
+                    self.restart_observed_states[state] += 1
                 await self._close_locked()
                 session = _Session(spec, self.ffmpeg_path, self.frame_observer)
                 self.restart_attempts += 1
@@ -407,7 +429,17 @@ class AiPortIngress:
                 except asyncio.CancelledError:
                     await session.close()
                     raise
-                except (OSError, IngressError):
+                except (OSError, IngressError) as exc:
+                    code = exc.code if isinstance(exc, IngressError) else "stream_decoder_unavailable"
+                    if code.startswith("rtsp_status_"):
+                        code = "rtsp_status"
+                    elif code not in {"stream_start_timeout", "stream_unavailable",
+                                      "stream_ended", "invalid_decoded_frame",
+                                      "stream_decoder_unavailable", "rtsp_connect_failed",
+                                      "rtsp_protocol_rejected", "rtsp_invalid_data",
+                                      "decoder_option_missing"}:
+                        code = "other"
+                    self.restart_failures[code] = self.restart_failures.get(code, 0) + 1
                     self.last_decoder_exit_code = session.exit_code
                     self.last_decoder_stderr_seen = session.stderr_seen
                     self.last_decoder_error_markers = session.error_markers
@@ -429,9 +461,13 @@ class AiPortIngress:
             return []
         return [{"deviceID": session.spec.device_id, "points": session.spec.points}]
 
-    def latest_frame(self) -> bytes | None:
+    def latest_frame(self, *, max_age: float | None = None) -> bytes | None:
         session = self._session
-        return session.latest_frame if session is not None and session.healthy else None
+        if session is None or not session.healthy:
+            return None
+        if max_age is not None and time.monotonic() - session.last_frame_at > max_age:
+            return None
+        return session.latest_frame
 
     @property
     def reserved_points(self) -> int:
@@ -529,6 +565,32 @@ class AiPortIngressPool:
     def list_streams(self) -> list[dict]:
         return [stream for _, ingress in sorted(self._ingresses.items())
                 for stream in ingress.list_streams()]
+
+    def latest_frame(self, camera_mac: str, *, max_age: float) -> bytes | None:
+        """The camera's newest decoded JPEG, or None if unknown, down or stale."""
+        ingress = self._ingresses.get(camera_mac)
+        return ingress.latest_frame(max_age=max_age) if ingress is not None else None
+
+    def camera_diagnostics(self, camera_order: tuple[str, ...]
+                           ) -> tuple[dict[str, object], ...]:
+        """Fixed-code stream recovery counters in explicit camera order."""
+        if (len(camera_order) != len(self._ingresses)
+                or set(camera_order) != set(self._ingresses)):
+            raise IngressError("camera_order_mismatch")
+        result = []
+        for camera in camera_order:
+            ingress = self._ingresses[camera]
+            result.append({
+                "stream_active": bool(ingress.list_streams()),
+                # Capacity points reserved for the stream Protect requested.
+                "stream_points": ingress.reserved_points,
+                "stream_restart_attempts": ingress.restart_attempts,
+                "stream_restart_successes": ingress.restart_successes,
+                "stream_restart_observed_states": dict(
+                    ingress.restart_observed_states),
+                "stream_restart_failures": dict(ingress.restart_failures),
+            })
+        return tuple(result)
 
     @property
     def reserved_points(self) -> int:

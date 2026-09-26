@@ -118,7 +118,8 @@ def build_nas_compose(plan: dict, state_dirs: dict[int, Path], *,
         state_dir = Path(state_dirs[index])
         _verified_state(state_dir, uid)
         try:
-            config = load_config(state_dir / "config.json")
+            config = load_config(state_dir / "config.json",
+                                 check_decoder_executable=False)
             provision_slot(plan, index, state_dir, controller_ip=controller_ip,
                            controller_cert_file=state_dir / "controller-ca.pem",
                            controller_pin=controller_pin,

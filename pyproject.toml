@@ -7,7 +7,7 @@ name = "local-aikey"
 version = "0.1.0"
 description = "Independent experimental UniFi Protect AI processor for a local lab"
 requires-python = ">=3.12"
-dependencies = ["aiohttp==3.14.3", "cryptography==50.0.1"]
+dependencies = ["aiohttp==3.14.3", "cryptography==50.0.1", "pillow>=11,<13"]
 
 [project.urls]
 Repository = "https://github.com/Olli0103/unifi-ai-key-emulator"
@@ -15,9 +15,12 @@ Issues = "https://github.com/Olli0103/unifi-ai-key-emulator/issues"
 
 [project.optional-dependencies]
 dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "ruff==0.16.8", "build==1.6.1",
-       "numpy>=2,<3", "pillow>=11,<13"]
+       "numpy>=2,<3", "pillow>=11,<13", "pyyaml==6.0.3"]
+rollout = ["pyyaml==6.0.3"]
 models = ["sentence-transformers>=5,<6"]
 detector = ["rfdetr==1.9.1"]
+detector-onnx-cpu = ["rfdetr==1.9.1", "onnxruntime==1.28.0"]
+detector-onnx-openvino = ["rfdetr==1.9.1", "onnxruntime-openvino==1.24.1"]
 database = ["psycopg[binary]>=3.2,<4"]
 
 [project.scripts]
@@ -30,6 +33,14 @@ local-aiport-relay = "aikey.aiport_relay:main"
 local-aiport-host-relay = "aikey.aiport_host_relay:main"
 local-aiport-nas-compose = "aikey.aiport_nas_compose:main"
 local-aiport-nas-reconcile = "aikey.aiport_nas_reconcile:main"
+local-aiport-slot-diff = "aikey.aiport_slot_diff:main"
+local-aiport-rollout = "aikey.aiport_rollout:main"
+local-aiport-onnx-export = "aikey.aiport_onnx_export:main"
+local-aikey-control = "aikey.control_site:main"
+local-apple-supervise = "aikey.apple_supervisor:main"
+local-whisper-server = "aikey.whisper_server:main"
+local-face-server = "aikey.face_server:main"
+local-aikey-faces = "aikey.faces:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

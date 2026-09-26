@@ -1,6 +1,6 @@
 # AI Port controller contract: initial evidence
 
-This is an interface inventory for issue [#6](https://github.com/Olli0103/unifi-ai-key-emulator/issues/6), not an AI Port implementation or native compatibility claim. The source is a local, read-only analysis of the Protect **7.2.105** controller package. The deployment under test runs Protect **7.3.60**; every version-sensitive detail below still needs confirmation there. No vendor source or firmware is included in this repository.
+This is an initial interface inventory for issue [#6](https://github.com/Olli0103/unifi-ai-key-emulator/issues/6), not a full native compatibility claim. The table records a local, read-only analysis of the Protect **7.2.105** controller package. Later live results on Protect **7.3.60** are recorded in the [firmware and live-contract notes](ai-port-firmware-contract.md). The initial table is retained as versioned evidence; its open statuses have not all been updated by those later results. No vendor source or firmware is included in this repository.
 
 ## Evidence and confidence
 
@@ -14,6 +14,8 @@ This is an interface inventory for issue [#6](https://github.com/Olli0103/unifi-
 | G3 and ONVIF cameras need AI Port smart detections before AI Key processes them. | [Ubiquiti AI Key FAQ](https://help.ui.com/hc/en-us/articles/29221435686039-UniFi-AI-Key-Setup-and-FAQs) | Vendor-documented behavior |
 
 The analyzed files were `service.js` (SHA-256 `a7370e9a1b35db67d56104268841b9c2ba16342befb750ffef6654ee2b07bfdb`) and its `fixtures/api/openapi.json` (SHA-256 `f3912fe08a9503c53a6f3e5e9a6f94d25133bae06183ae6f645a0ed20319fcee`). These hashes identify the inspected package, not a runtime attestation of the current console.
+
+On 24 September 2026, a pinned, read-only request to Protect 7.3.60 returned **401** for `GET /proxy/protect/api/aiports` using this project's existing Integration API key. `GET /proxy/protect/integration/v1/aiports` returned **404**. This proves neither that the internal pairing route is absent nor that another credential could use it. It does show that the current camera-inventory key cannot drive unattended pairing, and the public integration path tested here does not expose AI Ports. An authenticated, supported pairing path remains `needs_evidence`; the deployment planner must not silently claim to pair cameras.
 
 ## Implementation boundary
 

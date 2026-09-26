@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-23.2",
+ "manifest_version": "ai-key/2026-09-26.3",
  "processor_profile": "ai-key",
  "base_commit": "54160ce",
  "emulated_identity": {
@@ -83,6 +83,38 @@
    "raw_traces_public": false
   },
   {
+   "id": "live-protect-7.3.68",
+   "kind": "live",
+   "protect_version": "7.3.68",
+   "date": "2026-09-26",
+   "console": "UDM Pro Max",
+   "camera_family": "G6 Instant (one persisted caption)",
+   "vision_provider": "OpenAI Responses; the exact model identifier is not in the public records",
+   "operator": "integration owner",
+   "observed": [
+    "reconnect after three emulator container replacements on the same state, staying adopted and connected",
+    "controller version reported and classified unknown before this manifest listed 7.3.68; the supported baseline stayed active",
+    "getInfo, getTaskQueueInfo, setConsoleInfo and updateTimezone answered with result 0 in device health counters",
+    "changeAiInferAgentSettings, networkStatus, sshService, unknown function names and RequestAI answered 95",
+    "one automatic G6 Instant recognizeKeyFrames event with a full RAM callback; exact-event GET returned metadata.ramState done and a non-empty metadata.ramDescription, with the camera's own detections kept",
+    "a description-only RAM result from 23 Sep read back as ramState done with an empty ramDescription",
+    "recognizeKeyFrames key moments placed exactly at the export end in 13 of 39 requests",
+    "four Wohnzimmer (G6 Instant) alrmSpeak audio events dispatched speechToText; the local Whisper backend answered; Protect saved 10, 13, 6 and 6 transcription rows (35, equal to the posted segments), all with text and times inside their events, and set metadata sttState done, sttDetected and sttSearchable (26 Sep, readback by the event transcriptions route)"
+   ],
+   "not_observed": [
+    "fresh adoption, credential rotation or factory-login changes on 7.3.68",
+    "search, database, deep mode, /describe tasks or on-demand RequestAI targets",
+    "continuous multi-camera admission",
+    "persistence across a controller restart"
+   ],
+   "limits": "One persisted caption on one camera family under a single-use permit; not continuous operation.",
+   "records": [
+    "docs/evidence/live-protect-7.3.68.md",
+    "docs/basic-descriptions.md"
+   ],
+   "raw_traces_public": false
+  },
+  {
    "id": "static-protect-7.2.105",
    "kind": "static",
    "protect_version": "7.2.105",
@@ -141,15 +173,45 @@
     {
      "name": "ubntbox 0.1.7",
      "sha256": "e16b4d5bae3b440221b7a20fc2bbee19fa732af451c8d787ff6d76956bc23807"
+    },
+    {
+     "name": "ui-websocketd 0.1.47.1 syswrapper.sh",
+     "sha256": "10fdc7d888b2051d6baf50424ce7c60a5aef47c8d33ca7fb0fbcf3a01c890da5"
+    },
+    {
+     "name": "ui-stt-agent 0.0.3.6 stt_app.py",
+     "sha256": "cafaa7a98b0f261eed49da785c68e9b4c7eb919f0b4c4f5e31c429c4d57b0639"
+    },
+    {
+     "name": "ui-ai-infer-agent 0.0.24.4",
+     "sha256": "b08e983a556ea90485c6b2d49570004778ed5bb22bc6860107c40d719fc6b886"
     }
    ],
    "records": [
     "docs/evidence/adoption-evidence.md",
     "docs/evidence/search-evidence.md",
     "docs/device-contract.md",
-    "docs/worker-contract.md"
+    "docs/worker-contract.md",
+    "docs/evidence/speech-to-text-contract.md"
    ],
    "note": "Static inspection only. Firmware was not executed. Nothing is redistributed here."
+  },
+  {
+   "id": "static-protect-7.3.60-bundle",
+   "kind": "static",
+   "bundle_version": "7.3.60",
+   "date": "2026-09-26",
+   "artifacts": [
+    {
+     "name": "usr/share/unifi-protect/app/service.js",
+     "version": "Protect 7.3.60",
+     "sha256": "9364cc9e37cd2ef283228f9f92e0efcc58c61f665c77224c7dfc158c0a358291"
+    }
+   ],
+   "records": [
+    "docs/evidence/speech-to-text-contract.md"
+   ],
+   "note": "Static inspection of the 7.3.60 controller bundle for the speech-to-text path. Live 7.3.60 evidence is a separate source; this does not change that version's classification. Nothing is redistributed here."
   },
   {
    "id": "vendor-docs",
@@ -182,7 +244,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "indirect",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-aikey-2.2.8"
@@ -232,7 +295,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "indirect",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
@@ -257,7 +321,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "native-verified",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
@@ -302,7 +367,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "native-verified",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105"
@@ -327,7 +393,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105"
@@ -351,7 +418,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [
@@ -373,7 +441,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "indirect",
-    "live-protect-7.3.60": "indirect"
+    "live-protect-7.3.60": "indirect",
+    "live-protect-7.3.68": "indirect"
    },
    "static": [
     "static-protect-7.2.105",
@@ -399,7 +468,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105"
@@ -424,7 +494,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "native-verified",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [
@@ -448,7 +519,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "native-verified",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
@@ -473,7 +545,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "native-verified",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
@@ -499,7 +572,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "native-verified",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [
@@ -519,7 +593,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "native-verified",
-    "live-protect-7.3.60": "native-verified"
+    "live-protect-7.3.60": "native-verified",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-protect-7.2.105",
@@ -546,7 +621,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [
@@ -568,7 +644,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [
@@ -588,10 +665,11 @@
    "id": "lifecycle.unknown_controller_version",
    "area": "lifecycle",
    "title": "Unknown or unrecognized Protect versions in setConsoleInfo are reported as fixed categories; adoption and the baseline continue",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [],
    "tests": [
@@ -606,7 +684,7 @@
    "missing_evidence": [
     "The exact protectVersion value, if any, sent by 7.3.56 or 7.3.60 in setConsoleInfo was not recorded"
    ],
-   "notes": "Report, not refuse: a supported baseline must keep working on a newer controller. No feature is gated on version yet."
+   "notes": "Report, not refuse: a supported baseline must keep working on a newer controller. No feature is gated on version yet. On 7.3.68, before it was listed, health reported evidence unknown while the processor stayed adopted, reconnected and persisted a caption."
   },
   {
    "id": "lifecycle.controller_upgrade",
@@ -615,7 +693,8 @@
    "status": "needs_evidence",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [],
@@ -649,10 +728,11 @@
    "id": "control.get_info",
    "area": "control",
    "title": "getInfo returns type, sysid, version, MAC, uptime, poeType, storageSize and featureFlags",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "indirect",
-    "live-protect-7.3.60": "indirect"
+    "live-protect-7.3.60": "indirect",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-protect-7.2.105",
@@ -674,10 +754,11 @@
    "id": "control.get_task_queue_info",
    "area": "control",
    "title": "getTaskQueueInfo reports the six observed queue fields",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-protect-7.2.105",
@@ -700,10 +781,11 @@
    "id": "control.set_console_info",
    "area": "control",
    "title": "setConsoleInfo stores consoleName, id, protectVersion and supportsDbCredential locally",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-protect-7.2.105",
@@ -729,7 +811,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-aikey-2.2.8"
@@ -750,10 +833,11 @@
    "id": "control.update_timezone",
    "area": "control",
    "title": "updateTimezone accepts only {timezone} as logical metadata",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-aikey-2.2.8"
@@ -777,7 +861,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "native-verified"
+    "live-protect-7.3.60": "native-verified",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
@@ -807,7 +892,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105"
@@ -834,7 +920,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
@@ -861,17 +948,20 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "native-verified"
+    "live-protect-7.3.60": "native-verified",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
    ],
    "tests": [
-    "tests/test_basic_descriptions.py::test_real_http_caption_and_full_ram_envelope_once_across_restart",
-    "tests/test_basic_descriptions.py::test_native_video_metadata_and_longer_timeline_use_bounded_frames",
     "tests/test_basic_descriptions.py::test_device_admits_explicit_wrapper_and_sanitizes_bounded_diagnostics",
+    "tests/test_basic_descriptions.py::test_native_video_metadata_and_longer_timeline_use_bounded_frames",
+    "tests/test_basic_descriptions.py::test_real_http_caption_and_full_ram_envelope_once_across_restart",
     "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect",
+    "tests/test_key_moment_boundaries.py::test_a_key_moment_at_end_decodes_the_exports_last_frame",
+    "tests/test_key_moment_boundaries.py::test_worker_guard_boundaries",
     "tests/test_two_camera_scope.py::test_each_camera_spends_only_its_own_permit_and_replays_after_restart"
    ],
    "implementation": [
@@ -892,7 +982,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [
@@ -926,7 +1017,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [
@@ -993,7 +1085,9 @@
    "area": "control",
    "title": "changeAiInferAgentSettings, changeDescribePrompts, networkStatus and sshService",
    "status": "unsupported",
-   "live": {},
+   "live": {
+    "live-protect-7.3.68": "indirect"
+   },
    "static": [],
    "tests": [
     "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
@@ -1012,7 +1106,9 @@
    "area": "control",
    "title": "Any other command name",
    "status": "unsupported",
-   "live": {},
+   "live": {
+    "live-protect-7.3.68": "indirect"
+   },
    "static": [],
    "tests": [
     "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect",
@@ -1032,7 +1128,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "indirect",
-    "live-protect-7.3.60": "indirect"
+    "live-protect-7.3.60": "indirect",
+    "live-protect-7.3.68": "indirect"
    },
    "static": [
     "static-aikey-2.2.8"
@@ -1137,7 +1234,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "native-verified"
+    "live-protect-7.3.60": "native-verified",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-protect-7.2.105"
@@ -1180,7 +1278,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105"
@@ -1220,7 +1319,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "native-verified"
+    "live-protect-7.3.60": "native-verified",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
@@ -1244,7 +1344,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "native-verified"
+    "live-protect-7.3.60": "native-verified",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-protect-7.2.105",
@@ -1269,28 +1370,27 @@
    "id": "callback.ram_description_only",
    "area": "callbacks",
    "title": "Legacy description-only multipart profiles key-2.2.8 and protect-7.2.105",
-   "status": "fixture-tested",
+   "status": "unsupported",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
    ],
    "tests": [
-    "tests/test_worker.py::test_explicit_legacy_multipart_profiles",
-    "tests/test_protocol.py::DescriptionTests::test_receiver_profile_rejects_device_shape_missing_camera"
+    "tests/test_two_camera_scope.py::test_description_only_scope_is_refused_because_protect_7_3_does_not_save_it"
    ],
    "implementation": [
     "src/aikey/protocol.py",
     "src/aikey/worker.py"
    ],
    "activation": "explicit_opt_in",
-   "missing_evidence": [
-    "Live receiver behavior for either profile",
-    "Description-only updates existing rows only; no initial insert"
-   ]
+   "missing_evidence": [],
+   "rejection": "refused at configuration: Protect 7.3.x saves ramState done with an empty ramDescription for a result without keyMomentsTags",
+   "notes": "Observed on 7.3.60 (23 Sep G6 event) and read back on 7.3.68: ramState done, ramDescription empty. The 7.3.60 bundle routes results without keyMomentsTags to a handler that only updates an existing RAM row."
   },
   {
    "id": "callback.task_description",
@@ -1299,7 +1399,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105"
@@ -1363,7 +1464,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105"
@@ -1407,7 +1509,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105"
@@ -1545,23 +1648,61 @@
   {
    "id": "capability.audio_speech",
    "area": "capabilities",
-   "title": "Audio detection and speech transcription",
-   "status": "unsupported",
+   "title": "Speech transcription (speechToText)",
+   "status": "fixture-tested",
    "live": {},
    "static": [
-    "static-protect-7.2.105",
-    "vendor-docs"
+    "static-protect-7.3.60-bundle",
+    "static-aikey-2.2.8"
    ],
-   "tests": [],
+   "tests": [
+    "tests/test_speech_to_text.py::test_a_speech_event_is_transcribed_and_posted_in_protects_shape",
+    "tests/test_speech_to_text.py::test_silence_noise_and_repeated_hallucinations_post_no_transcript",
+    "tests/test_speech_to_text.py::test_a_failing_backend_posts_nothing",
+    "tests/test_speech_to_text.py::test_anything_but_the_exact_native_task_is_refused_before_media_or_audio",
+    "tests/test_speech_to_text.py::test_the_device_routes_speech_to_text_only_for_allowed_cameras"
+   ],
    "implementation": [
-    "src/aikey/worker.py"
+    "src/aikey/speech.py",
+    "src/aikey/worker.py",
+    "src/aikey/device.py"
    ],
-   "activation": "default",
+   "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Native contract (issue #15)",
-    "Vendor camera eligibility differs between sources"
+    "A persisted native transcript on Protect 7.3.68 after a reload (issue #15)",
+    "An alrmSpeak-enabled camera and the AI Key Speech to Text setting, both user actions",
+    "Speech on AI Port-paired legacy cameras, which raise no alrmSpeak"
    ],
-   "rejection": "Audio variants rejected before media or inference."
+   "notes": "Protect dispatches speechToText only for an alrmSpeak audio event and only to an AI processor whose speechToTextSettings list the camera; no capability flag is involved. Refused unless speech_to_text lists the camera."
+  },
+  {
+   "id": "callback.speech_to_text_transcriptions",
+   "area": "callbacks",
+   "title": "speechToText callback saved as native transcription rows",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.60-bundle",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_speech_to_text.py::test_a_speech_event_is_transcribed_and_posted_in_protects_shape",
+    "tests/test_speech_to_text.py::test_a_failing_backend_posts_nothing"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/speech.py",
+    "src/aikey/whisper_server.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Persistence after a controller restart",
+    "Non-German speech, noise and overlapping speakers on live events",
+    "Search by transcript text in the Protect UI"
+   ],
+   "notes": "Verified by transcription rows read back per event (counts and time bounds only, no text inspected), not by HTTP 200. Backend: local whisper.cpp; audio never left the Mac."
   },
   {
    "id": "capability.ai_alarms",
@@ -1585,7 +1726,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
@@ -1667,7 +1809,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105"
@@ -1926,13 +2069,13 @@
    {
     "source": "live-protect-7.3.60",
     "activation": "worker.test_scope (recognizeKeyFrames)",
-   "state": "single-use permit for one G5 Flex camera, consumed"
-  },
-  {
-   "source": "live-protect-7.3.60",
-   "activation": "worker.test_scopes (recognizeKeyFrames)",
-   "state": "separate single-use G4 Instant permit consumed; separate G4 Bullet permit remained unused"
-  },
+    "state": "single-use permit for one G5 Flex camera, consumed"
+   },
+   {
+    "source": "live-protect-7.3.60",
+    "activation": "worker.test_scopes (recognizeKeyFrames)",
+    "state": "separate single-use G4 Instant permit consumed; separate G4 Bullet permit remained unused"
+   },
    {
     "source": "live-protect-7.3.60",
     "activation": "worker.request_mp4_exports",

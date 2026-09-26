@@ -2,8 +2,9 @@
 
 import pytest
 
-from aikey.aiport_camera_engine import CameraPolicyEngine
+from aikey.aiport_camera_engine import CameraPolicyEngine, _IR_PACKAGE_DWELL_SECONDS
 from aikey.aiport_detection import ObjectObservation
+from aikey.aiport_event_budget import EventBudget, EventBudgetError, _HOUR_NS
 from aikey.aiport_ingest import IngressError
 from aikey.aiport_smart_settings import parse_smart_settings
 from aikey.aiport_tracking import TrackingError
@@ -120,6 +121,98 @@ def test_vehicle_and_animal_candidates_are_isolated_by_class_and_zone():
     assert engine.has_policy(SECOND)
 
 
+def test_package_candidate_keeps_its_camera_and_zone():
+    engine = CameraPolicyEngine([FIRST, SECOND])
+    engine.replace_policy(FIRST, policy(FIRST, zone=True, kind="package"))
+    package = ObjectObservation("package", "package", 0.93, INSIDE)
+    assert engine.observe(FIRST, (package,), now=1) == ()
+    entered, = engine.observe(FIRST, (package,), now=2)
+    assert (entered.camera_mac, entered.change.kind, entered.change.edge,
+            entered.zone_ids) == (FIRST, "package", "enter", (7,))
+    assert engine.observe(SECOND, (package,), now=1) == ()
+    # A package now has the normal lifecycle: revoking the policy closes it.
+    closed, = engine.replace_policy(FIRST, None)
+    assert (closed.change.kind, closed.change.edge) == ("package", "leave")
+
+
+def test_package_reenters_only_after_camera_cooldown():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                                max_track_gap_seconds=20)
+    engine.replace_policy(FIRST, policy(FIRST, zone=True, kind="package"))
+    package = ObjectObservation("package", "package", 0.93, INSIDE)
+    assert engine.observe(FIRST, (package,), now=1) == ()
+    assert len(engine.observe(FIRST, (package,), now=2)) == 1
+    left, = engine.observe(FIRST, (), now=60)           # track ends: leave
+    assert left.change.edge == "leave"
+    # A later sparse sample of the same parcel is not a new delivery.
+    assert engine.observe(FIRST, (package,), now=100) == ()
+    assert engine.observe(FIRST, (package,), now=101) == ()
+    assert engine.observe(FIRST, (), now=200) == ()
+    assert engine.observe(FIRST, (package,), now=1900) == ()
+    again, = engine.observe(FIRST, (package,), now=1901)
+    assert again.change.edge == "enter"
+    snapshot = engine.camera_snapshot(now=1902)[0]
+    assert snapshot["events_entered_by_kind"]["package"] == 2
+
+
+def _package_policy(zones):
+    return parse_smart_settings({
+        "deviceID": FIRST, "algoVersion": "beta",
+        "enableSmartDetect": ["person", "package"],
+        "eventStartMSec": 1000, "eventStopMSec": 3000, "zones": zones,
+        "excludeZones": {"9": {"coord": [0, 0, 100, 0, 100, 100, 0, 100],
+                                "objectTypes": ["person", "package"], "patrolSetID": -1}}},
+        camera_mac=FIRST)
+
+
+def test_package_stays_inside_detection_area_when_protect_cannot_zone_it():
+    # Paired first-party cameras never get Package in a primary zone.
+    area = {"7": {"coord": [100, 100, 900, 100, 900, 900, 100, 900],
+                  "objectTypes": ["person"], "sensitivity": 50}}
+    policy = _package_policy(area)
+    assert policy.package_scope == "detection_area"
+    assert policy.zone_ids("package", INSIDE) == (7,)
+    assert policy.zone_ids("package", OUTSIDE) is None     # zones still apply
+    assert policy.zone_ids("package", (0.01, 0.01, 0.08, 0.08)) is None  # excluded
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=4)
+    engine.replace_policy(FIRST, policy)
+    package = ObjectObservation("package", "package", 0.93, INSIDE)
+    engine.observe(FIRST, (package,), now=1)
+    entered, = engine.observe(FIRST, (package,), now=2)
+    assert (entered.change.edge, entered.zone_ids) == ("enter", (7,))
+    assert engine.camera_snapshot(now=3)[0]["package_scope"] == "detection_area"
+
+
+def test_explicit_package_zone_keeps_exact_zone_semantics():
+    policy = _package_policy({
+        "7": {"coord": [100, 100, 900, 100, 900, 900, 100, 900],
+              "objectTypes": ["person"]},
+        "8": {"coord": [500, 500, 1000, 500, 1000, 1000, 500, 1000],
+              "objectTypes": ["package"]}})
+    assert policy.package_scope == "package_zone"
+    assert policy.zone_ids("package", INSIDE) is None
+    assert policy.zone_ids("package", (0.6, 0.6, 0.8, 0.8)) == (8,)
+    assert _package_policy({}).package_scope == "full_frame"
+
+
+def test_package_rejected_outside_any_zone():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=4)
+    engine.replace_policy(FIRST, parse_smart_settings({
+        "deviceID": FIRST, "algoVersion": "beta",
+        "enableSmartDetect": ["person", "package"],
+        "eventStartMSec": 1000, "eventStopMSec": 3000,
+        "zones": {"7": {"coord": [100, 100, 900, 100, 900, 900, 100, 900],
+                        "objectTypes": ["person"], "sensitivity": 50}}},
+        camera_mac=FIRST))
+    package = ObjectObservation("package", "package", 0.93, OUTSIDE)
+    assert engine.observe(FIRST, (package,), now=1) == ()
+    assert engine.observe(FIRST, (package,), now=2) == ()
+    snapshot = engine.camera_snapshot(now=3)[0]
+    assert snapshot["zone_rejections"]["below_overlap"] == 2
+    assert snapshot["zone_rejections_by_kind"]["package"] == 2
+    assert snapshot["events_entered_by_kind"]["package"] == 0
+
+
 def test_unknown_camera_or_cross_camera_policy_is_rejected():
     engine = CameraPolicyEngine([FIRST, SECOND])
     with pytest.raises(IngressError, match="camera_not_authorized"):
@@ -156,6 +249,19 @@ def test_one_camera_tracks_person_vehicle_and_animal_independently():
     assert {(item.change.kind, item.change.track_id) for item in left} == {
         (item.change.kind, item.change.track_id) for item in entered}
     assert all(item.change.edge == "leave" for item in left)
+
+
+def test_four_class_policy_accepts_package_with_other_object_classes():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=4)
+    kinds = ("person", "vehicle", "animal", "package")
+    engine.replace_policy(FIRST, multiclass_policy(FIRST, kinds))
+    observations = (person(), ObjectObservation("vehicle", "car", 0.91, INSIDE),
+                    ObjectObservation("animal", "dog", 0.92, INSIDE),
+                    ObjectObservation("package", "package", 0.93, INSIDE))
+    assert engine.observe(FIRST, observations, now=1) == ()
+    entered = engine.observe(FIRST, observations, now=2)
+    assert {item.change.kind for item in entered} == set(kinds)
+    assert engine.camera_snapshot(now=2)[0]["policy_enabled_types"] == list(kinds)
 
 
 def test_multiclass_revoke_closes_only_its_camera_tracks():
@@ -211,3 +317,446 @@ def test_live_event_budget_rolls_forward_without_affecting_other_camera():
     assert engine.observe(FIRST, (person(),), now=63) == ()
     renewed, = engine.observe(FIRST, (person(),), now=64)
     assert renewed.change.edge == "enter"
+    status = engine.camera_snapshot(now=64)
+    assert status[0]["events_entered"] == 2
+    assert status[0]["event_budget_remaining"] == 0
+    assert status[0]["eligible_observations"] >= 2
+    assert FIRST not in str(status)
+
+
+def test_camera_counters_separate_score_zone_and_tracking_gates():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=2,
+                                event_window_seconds=3600)
+    engine.replace_policy(FIRST, policy(FIRST, zone=True, reverify=True))
+    # Below Protect's 80% reverification ceiling.
+    assert engine.observe(FIRST, (person(score=0.7),), now=1) == ()
+    # Above the score gate, outside the validated zone.
+    assert engine.observe(FIRST, (person(box=OUTSIDE),), now=2) == ()
+    assert engine.observe(FIRST, (person(),), now=3) == ()
+    status, = engine.camera_snapshot(now=3)
+    assert status["score_eligible_observations"] == 2
+    assert status["eligible_observations"] == 1
+    assert status["eligible_frames"] == 1
+    assert status["events_entered"] == 0
+
+
+def test_zone_rejection_health_distinguishes_overlap_and_exclusion_without_geometry():
+    engine = CameraPolicyEngine([FIRST])
+    engine.replace_policy(FIRST, policy(FIRST, zone=True))
+    # Three score-eligible boxes in one frame: near threshold, grazing, and
+    # entirely outside. Aggregated bands retain all three distinctions.
+    engine.observe(FIRST, (person(box=OUTSIDE),
+                           person(box=(0.05, 0.2, 0.11, 0.8)),
+                           person(box=(0.95, 0.2, 1.0, 0.8))), now=1)
+    status, = engine.camera_snapshot(now=1)
+    assert status["zone_rejections"] == {
+        "excluded": 0, "no_class_zone": 0,
+        "outside_zone": 1, "below_overlap": 2,
+    }
+    assert status["zone_overlap_bands"] == {
+        "trace_under_50": 1, "partial_50_to_80": 0,
+        "rejected_at_least_80": 1,
+    }
+    assert FIRST not in str(status)
+    assert "coord" not in str(status)
+
+    excluded = {"deviceID": FIRST, "enableSmartDetect": ["person"],
+                "eventStartMSec": 1000, "eventStopMSec": 3000,
+                "zones": {"7": {"coord": [100, 100, 900, 100,
+                                         900, 900, 100, 900],
+                                "objectTypes": ["person"]}},
+                "excludeZones": {"4": {
+                    "coord": [0, 100, 100, 100, 100, 900, 0, 900],
+                    "objectTypes": ["person"], "patrolSetID": -1}}}
+    engine.replace_policy(FIRST, parse_smart_settings(excluded,
+                                                     camera_mac=FIRST))
+    # This box is both excluded and below 90% zone overlap; exclusion wins.
+    prior_bands = dict(status["zone_overlap_bands"])
+    engine.observe(FIRST, (person(box=OUTSIDE),), now=2)
+    status, = engine.camera_snapshot(now=2)
+    assert status["zone_rejections"]["excluded"] == 1
+    assert status["zone_overlap_bands"] == prior_bands
+
+    no_class = {"deviceID": FIRST, "enableSmartDetect": ["person"],
+                "eventStartMSec": 1000, "eventStopMSec": 3000,
+                "zones": {"7": {"coord": [100, 100, 900, 100,
+                                         900, 900, 100, 900],
+                                "objectTypes": ["vehicle"]}}}
+    engine.replace_policy(FIRST, parse_smart_settings(no_class,
+                                                     camera_mac=FIRST))
+    engine.observe(FIRST, (person(),), now=3)
+    status, = engine.camera_snapshot(now=3)
+    assert status["zone_rejections"]["no_class_zone"] == 1
+    assert status["eligible_observations"] == 0
+
+
+def test_live_pool_event_budget_survives_engine_restart(tmp_path):
+    wall = [5 * _HOUR_NS]
+    budget = EventBudget(tmp_path, limit=1, clock_ns=lambda: wall[0])
+    first = CameraPolicyEngine([FIRST], max_events_per_camera=1,
+                               event_window_seconds=3600, event_budget=budget)
+    first.replace_policy(FIRST, policy(FIRST))
+    assert first.observe(FIRST, (person(),), now=1) == ()
+    assert first.observe(FIRST, (person(),), now=2)[0].change.edge == "enter"
+
+    restarted = CameraPolicyEngine([FIRST], max_events_per_camera=1,
+                                   event_window_seconds=3600,
+                                   event_budget=EventBudget(
+                                       tmp_path, limit=1, clock_ns=lambda: wall[0]))
+    restarted.replace_policy(FIRST, policy(FIRST))
+    assert restarted.observe(FIRST, (person(),), now=10) == ()
+    assert restarted.observe(FIRST, (person(),), now=11) == ()
+    status, = restarted.camera_snapshot(now=11)
+    assert status["event_budget_remaining"] == 0
+    assert status["event_budget_healthy"] is True
+    wall[0] += _HOUR_NS
+    restarted.replace_policy(FIRST, None)
+    restarted.replace_policy(FIRST, policy(FIRST))
+    assert restarted.observe(FIRST, (person(),), now=12) == ()
+    assert restarted.observe(FIRST, (person(),), now=13)[0].change.edge == "enter"
+
+
+def test_live_pool_budget_corruption_denies_new_enters(tmp_path):
+    budget = EventBudget(tmp_path, limit=1)
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=1,
+                                event_window_seconds=3600, event_budget=budget)
+    engine.replace_policy(FIRST, policy(FIRST))
+    budget.path.write_text("{}")
+    assert engine.observe(FIRST, (person(),), now=1) == ()
+    with pytest.raises(EventBudgetError, match="corrupt"):
+        engine.observe(FIRST, (person(),), now=2)
+    status, = engine.camera_snapshot(now=2)
+    assert status["event_budget_remaining"] == 0
+    assert status["event_budget_healthy"] is False
+
+
+WALK_START = (0.10, 0.30, 0.25, 0.90)
+WALK_NEXT = (0.32, 0.28, 0.47, 0.92)
+
+
+def test_sparse_api_samples_confirm_a_walking_person_without_box_overlap():
+    # Flur regression: two paid samples ~2 s apart both report one in-zone
+    # person, but the walking person's boxes do not overlap at all.
+    strict = CameraPolicyEngine([FIRST], max_track_gap_seconds=20)
+    strict.replace_policy(FIRST, policy(FIRST))
+    assert strict.observe(FIRST, (person(box=WALK_START),), now=1) == ()
+    assert strict.observe(FIRST, (person(box=WALK_NEXT),), now=3.2) == ()
+    assert strict.camera_snapshot(now=4)[0]["track_associations"] == {
+        "iou_matches": 0, "proximity_matches": 0, "tentative_unmatched": 1,
+        "class_resolved": 0}
+
+    sparse = CameraPolicyEngine([FIRST], max_track_gap_seconds=20,
+                                max_center_distance=1.5)
+    sparse.replace_policy(FIRST, policy(FIRST))
+    assert sparse.observe(FIRST, (person(box=WALK_START),), now=1) == ()
+    entered, = sparse.observe(FIRST, (person(box=WALK_NEXT),), now=3.2)
+    assert entered.change.edge == "enter"
+    assert sparse.camera_snapshot(now=4)[0]["track_associations"] == {
+        "iou_matches": 0, "proximity_matches": 1, "tentative_unmatched": 0,
+        "class_resolved": 0}
+
+
+def test_sparse_association_still_rejects_distant_or_other_class_objects():
+    engine = CameraPolicyEngine([FIRST], max_track_gap_seconds=20,
+                                max_center_distance=1.5)
+    engine.replace_policy(FIRST, multiclass_policy(FIRST))
+    small_left = (0.02, 0.02, 0.10, 0.20)
+    small_right = (0.85, 0.75, 0.95, 0.95)
+    assert engine.observe(FIRST, (person(box=small_left),), now=1) == ()
+    assert engine.observe(FIRST, (person(box=small_right),), now=3) == ()
+    assert engine.observe(FIRST, (ObjectObservation(
+        "animal", "dog", 0.9, small_right),), now=5) == ()
+    # Overlap wins over proximity when both people are near the track.
+    assert engine.observe(FIRST, (person(box=INSIDE),), now=7) == ()
+    entered, = engine.observe(FIRST, (person(box=(0.21, 0.2, 0.51, 0.8)),
+                                      person(box=(0.55, 0.2, 0.85, 0.8))), now=9)
+    assert entered.change.box == (0.21, 0.2, 0.51, 0.8)
+
+
+def test_single_animal_sighting_is_counted_as_unconfirmed():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=4,
+                                max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, multiclass_policy(FIRST))
+    cat = ObjectObservation("animal", "cat", 0.9, (0.1, 0.6, 0.2, 0.7))
+    assert engine.observe(FIRST, (cat,), now=1) == ()
+    assert engine.observe(FIRST, (person(),), now=3) == ()
+    snapshot = engine.camera_snapshot(now=4)[0]
+    assert snapshot["unconfirmed_by_kind"]["animal"] == 1
+    assert snapshot["events_entered_by_kind"]["animal"] == 0
+
+
+def test_confirmation_is_needed_only_for_new_unconfirmed_objects():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=4,
+                                max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, multiclass_policy(FIRST))
+    engine.observe(FIRST, (person(),), now=1)
+    assert engine.needs_confirmation(FIRST)            # first sighting
+    engine.observe(FIRST, (person(),), now=3)          # person confirmed
+    assert not engine.needs_confirmation(FIRST)
+    engine.observe(FIRST, (person(),), now=10)         # same active person
+    assert not engine.needs_confirmation(FIRST)
+    cat = ObjectObservation("animal", "cat", 0.9, (0.6, 0.6, 0.7, 0.7))
+    engine.observe(FIRST, (person(), cat), now=12)      # a cat arrives
+    assert engine.needs_confirmation(FIRST)
+
+
+
+def test_identical_policy_resend_keeps_tentative_track_and_generation():
+    engine = CameraPolicyEngine([FIRST])
+    engine.replace_policy(FIRST, policy(FIRST, zone=True))
+    generation = engine.policy_generation(FIRST)
+    assert engine.observe(FIRST, (person(),), now=1) == ()   # startup sample
+    assert engine.replace_policy(FIRST, policy(FIRST, zone=True)) == ()
+    assert engine.policy_generation(FIRST) == generation
+    assert engine.policy_repeats == 1
+    entered, = engine.observe(FIRST, (person(),), now=2)     # confirmation
+    assert entered.change.edge == "enter"
+    # An identical re-send does not close the open event either.
+    assert engine.replace_policy(FIRST, policy(FIRST, zone=True)) == ()
+    moving = engine.observe(FIRST, (person(),), now=3)
+    assert all(item.change.edge != "enter" for item in moving)
+    # A changed policy still closes the event and restarts tracking.
+    left, = engine.replace_policy(FIRST, policy(FIRST))
+    assert left.change.edge == "leave"
+    assert engine.policy_generation(FIRST) == generation + 1
+
+
+def test_package_cooldown_survives_an_engine_restart(tmp_path):
+    wall = [10 * _HOUR_NS]
+
+    def store():
+        return EventBudget(tmp_path, limit=1, namespace="package-cooldown",
+                           window_seconds=1800, clock_ns=lambda: wall[0])
+
+    package = ObjectObservation("package", "package", 0.93, INSIDE)
+    first = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                               package_cooldown=store())
+    first.replace_policy(FIRST, policy(FIRST, zone=True, kind="package"))
+    first.observe(FIRST, (package,), now=1)
+    assert first.observe(FIRST, (package,), now=2)[0].change.edge == "enter"
+    # A restarted process has a new monotonic clock and an empty memory.
+    wall[0] += 60 * 1_000_000_000
+    restarted = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                                   package_cooldown=store())
+    restarted.replace_policy(FIRST, policy(FIRST, zone=True, kind="package"))
+    restarted.observe(FIRST, (package,), now=1)
+    assert restarted.observe(FIRST, (package,), now=2) == ()
+    assert restarted.package_cooldown_skips == 1
+    # After the durable window a new delivery is announced again.
+    wall[0] += 1800 * 1_000_000_000
+    later = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                               package_cooldown=store())
+    later.replace_policy(FIRST, policy(FIRST, zone=True, kind="package"))
+    later.observe(FIRST, (package,), now=1)
+    assert later.observe(FIRST, (package,), now=2)[0].change.edge == "enter"
+
+
+def _multi(camera):
+    return parse_smart_settings({
+        "deviceID": camera, "algoVersion": "beta",
+        "enableSmartDetect": ["person", "animal", "package"],
+        "eventStartMSec": 1000, "eventStopMSec": 3000}, camera_mac=camera)
+
+
+def test_a_cat_read_as_animal_then_package_confirms_as_animal():
+    # Esszimmer, 25 Sep 23:38: one moving object was reported once as animal
+    # and three times as package, and no class ever confirmed.
+    engine = CameraPolicyEngine([FIRST], max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, _multi(FIRST))
+    cat = ObjectObservation("animal", "cat", 0.9, (0.60, 0.70, 0.70, 0.85))
+    parcel = ObjectObservation("package", "package", 0.88, (0.61, 0.71, 0.71, 0.86))
+    assert engine.observe(FIRST, (cat,), now=1) == ()
+    entered, = engine.observe(FIRST, (parcel,), now=4)
+    assert (entered.change.edge, entered.change.kind, entered.change.label) == (
+        "enter", "animal", "cat")
+    assert engine.camera_snapshot(now=5)[0]["track_associations"]["class_resolved"] == 1
+    # Package first, then animal, resolves to animal as well.
+    engine = CameraPolicyEngine([FIRST], max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, _multi(FIRST))
+    engine.observe(FIRST, (parcel,), now=1)
+    entered, = engine.observe(FIRST, (cat,), now=4)
+    assert (entered.change.kind, entered.change.label) == ("animal", "cat")
+
+
+def test_only_the_confused_pair_on_an_unconfirmed_track_crosses_classes():
+    engine = CameraPolicyEngine([FIRST], max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, _multi(FIRST))
+    box = (0.40, 0.20, 0.60, 0.90)
+    walker = ObjectObservation("person", "person", 0.95, box)
+    parcel = ObjectObservation("package", "package", 0.9, box)
+    engine.observe(FIRST, (walker,), now=1)
+    assert engine.observe(FIRST, (parcel,), now=2) == ()          # person never crosses
+    # A confirmed package stays a package when an animal passes over it.
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                                max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, _multi(FIRST))
+    engine.observe(FIRST, (parcel,), now=1)
+    entered, = engine.observe(FIRST, (parcel,), now=2)
+    assert entered.change.kind == "package"
+    cat = ObjectObservation("animal", "cat", 0.9, box)
+    first = engine.observe(FIRST, (parcel, cat), now=3)
+    assert all(item.change.kind == "package" for item in first)   # parcel keeps its class
+    second = engine.observe(FIRST, (parcel, cat), now=5)
+    animal = [item.change for item in second if item.change.kind == "animal"]
+    assert [(c.edge, c.label) for c in animal] == [("enter", "cat")]
+    assert animal[0].track_id != entered.change.track_id         # its own track
+    counts = engine.camera_snapshot(now=6)[0]["events_entered_by_kind"]
+    assert (counts["package"], counts["animal"]) == (1, 1)
+
+
+def _night_engine():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                                max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, _multi(FIRST))
+    return engine
+
+
+def test_ir_cat_read_only_as_package_starts_no_package_and_confirms_as_animal():
+    parcel = ObjectObservation("package", "package", 0.9, (0.60, 0.80, 0.70, 0.95))
+    cat = ObjectObservation("animal", "cat", 0.85, (0.61, 0.79, 0.71, 0.96))
+    night = _night_engine()
+    # Flur 00:47: the cat was read as package in both confirming samples.
+    night.observe(FIRST, (parcel,), now=1, infrared=True)
+    assert night.observe(FIRST, (parcel,), now=2, infrared=True) == ()
+    assert night.package_ir_held == 1
+    # The held track, already active in the tracker, still resolves to Animal.
+    entered, = night.observe(FIRST, (cat,), now=5, infrared=True)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "animal")
+    assert night.package_ir_as_animal == 1
+    counts = night.camera_snapshot(now=6)[0]["events_entered_by_kind"]
+    assert (counts["package"], counts["animal"]) == (0, 1)
+
+
+def test_moving_ir_package_never_becomes_a_package_event():
+    night = _night_engine()
+    for step in range(8):   # a cat walking along the hallway, read as package
+        x = 0.10 + 0.08 * step
+        box = (x, 0.80, x + 0.10, 0.95)
+        assert night.observe(FIRST, (ObjectObservation("package", "package", 0.9, box),),
+                             now=1 + 6 * step, infrared=True) == ()
+    assert night.package_ir_confirmed == 0
+
+
+def test_real_ir_parcel_becomes_package_after_a_stationary_dwell():
+    parcel = ObjectObservation("package", "package", 0.9, (0.60, 0.80, 0.70, 0.95))
+    night = _night_engine()
+    night.observe(FIRST, (parcel,), now=1, infrared=True)
+    assert night.observe(FIRST, (parcel,), now=2, infrared=True) == ()
+    assert night.observe(FIRST, (parcel,), now=10, infrared=True) == ()
+    entered, = night.observe(FIRST, (parcel,), now=2 + _IR_PACKAGE_DWELL_SECONDS,
+                             infrared=True)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "package")
+    assert night.package_ir_confirmed == 1
+    assert night.camera_snapshot(now=40)[0]["events_entered_by_kind"]["package"] == 1
+
+
+def test_held_ir_package_seen_in_colour_is_announced_at_once():
+    parcel = ObjectObservation("package", "package", 0.9, (0.60, 0.80, 0.70, 0.95))
+    night = _night_engine()
+    night.observe(FIRST, (parcel,), now=1, infrared=True)
+    night.observe(FIRST, (parcel,), now=2, infrared=True)
+    entered, = night.observe(FIRST, (parcel,), now=4)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "package")
+
+
+def test_colour_parcel_is_announced_without_a_hold():
+    parcel = ObjectObservation("package", "package", 0.9, (0.60, 0.80, 0.70, 0.95))
+    day = _night_engine()
+    day.observe(FIRST, (parcel,), now=1)
+    entered, = day.observe(FIRST, (parcel,), now=2)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "package")
+    assert day.package_ir_held == 0
+
+
+def test_ir_package_then_animal_still_confirms_the_animal():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                                max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, _multi(FIRST))
+    parcel = ObjectObservation("package", "package", 0.9, (0.60, 0.80, 0.70, 0.95))
+    cat = ObjectObservation("animal", "cat", 0.85, (0.61, 0.79, 0.71, 0.96))
+    engine.observe(FIRST, (parcel,), now=1, infrared=True)
+    entered, = engine.observe(FIRST, (cat,), now=4, infrared=True)
+    assert (entered.change.edge, entered.change.kind, entered.change.label) == (
+        "enter", "animal", "cat")
+
+
+def _animal_zone_policy(camera, *, x1, y1, x2, y2):
+    return parse_smart_settings({
+        "deviceID": camera, "algoVersion": "beta",
+        "enableSmartDetect": ["person", "vehicle", "animal"],
+        "eventStartMSec": 1000, "eventStopMSec": 3000,
+        "zones": {"7": {"coord": [x1, y1, x2, y1, x2, y2, x1, y2], "sensitivity": 50,
+                        "objectTypes": ["person", "vehicle", "animal"],
+                        "triggerLight": False, "triggerAccessTypes": []}}},
+        camera_mac=camera)
+
+
+def test_cat_at_the_bottom_edge_enters_animal_on_a_default_inset_zone():
+    # Flur's only zone (Protect's inset full-frame rectangle), 26 Sep 03:25.
+    cat = ObjectObservation("animal", "cat", 0.9, (0.40, 0.93, 0.50, 1.0))
+    flur = CameraPolicyEngine([FIRST], max_track_gap_seconds=20, max_center_distance=1.5)
+    flur.replace_policy(FIRST, _animal_zone_policy(FIRST, x1=25, y1=35, x2=976, y2=960))
+    assert flur.observe(FIRST, (cat,), now=1) == ()
+    entered, = flur.observe(FIRST, (cat,), now=3)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "animal")
+    # A zone deliberately drawn 10% in from the border still excludes it.
+    inset = CameraPolicyEngine([FIRST], max_track_gap_seconds=20, max_center_distance=1.5)
+    inset.replace_policy(FIRST, _animal_zone_policy(FIRST, x1=100, y1=100, x2=900, y2=900))
+    inset.observe(FIRST, (cat,), now=1)
+    assert inset.observe(FIRST, (cat,), now=3) == ()
+    assert inset.camera_snapshot(now=4)[0]["zone_rejections"]["outside_zone"] == 2
+
+
+def _held_night_parcel():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                                max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, _multi(FIRST))
+    parcel = ObjectObservation("package", "package", 0.9, (0.60, 0.80, 0.70, 0.95))
+    engine.observe(FIRST, (parcel,), now=1, infrared=True)
+    assert engine.observe(FIRST, (parcel,), now=2, infrared=True) == ()
+    track, = engine.held_packages(FIRST)
+    return engine, parcel, track
+
+
+def test_a_kept_held_parcel_survives_empty_samples_and_is_confirmed_once():
+    # Night restart: only the startup pair saw the parcel; later frames are
+    # motion-gated, so the engine gets empty observations.
+    engine, _parcel, track = _held_night_parcel()
+    engine.watch_held(FIRST, track)
+    for now in range(3, 26):
+        assert engine.keep_held(FIRST, track, now=now)
+        assert engine.observe(FIRST, (), now=now + 0.5) == ()
+    entered, = engine.confirm_held(FIRST, track, now=26)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "package")
+    assert engine.confirm_held(FIRST, track, now=27) == ()          # not twice
+    assert engine.camera_snapshot(now=28)[0]["events_entered_by_kind"]["package"] == 1
+
+
+def test_without_the_follow_up_the_held_parcel_expires_with_the_gap():
+    engine, _parcel, _track = _held_night_parcel()
+    for now in range(3, 26):
+        engine.observe(FIRST, (), now=now)
+    assert engine.held_packages(FIRST) == {}
+    assert engine.package_ir_dropped == 1
+
+
+def test_while_watched_or_vetoed_an_ir_dwell_sample_does_not_confirm():
+    engine, parcel, track = _held_night_parcel()
+    engine.watch_held(FIRST, track)
+    # A motion-triggered sample after the dwell still reads "package" in IR.
+    assert engine.observe(FIRST, (parcel,), now=30, infrared=True) == ()
+    engine.veto_held(FIRST, track)                      # follow-up: animal-like
+    assert engine.observe(FIRST, (parcel,), now=31, infrared=True) == ()
+    assert engine.confirm_held(FIRST, track, now=32) == ()
+    # An Animal read of the same object still enters Animal.
+    cat = ObjectObservation("animal", "cat", 0.85, (0.61, 0.79, 0.71, 0.96))
+    entered, = engine.observe(FIRST, (cat,), now=33, infrared=True)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "animal")
+
+
+def test_a_released_follow_up_restores_the_normal_dwell_rule():
+    engine, parcel, track = _held_night_parcel()
+    engine.watch_held(FIRST, track)
+    engine.release_held(FIRST, track)                   # follow-up expired
+    entered, = engine.observe(FIRST, (parcel,), now=30, infrared=True)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "package")

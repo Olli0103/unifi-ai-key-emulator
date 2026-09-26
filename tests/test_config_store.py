@@ -64,6 +64,33 @@ def test_preview_has_no_write_and_apply_archives_previous_revision(tmp_path):
     assert config_path.stat().st_mode & 0o777 == 0o600
 
 
+def test_provider_change_does_not_forward_old_key_to_a_new_endpoint(tmp_path):
+    config_store, config_path = store(tmp_path)
+    before = config_store.snapshot()
+    inference = {"provider": "ollama", "model": "synthetic-local-vision",
+                 "base_url": "http://127.0.0.1:11434", "max_output_tokens": 128}
+    preview = config_store.preview_inference(before.revision, inference)
+    assert preview.restart_required
+    after = config_store.apply_inference(before.revision, inference)
+    assert after.revision == preview.resulting_revision
+    assert "api_key_file" not in json.loads(config_path.read_text())["inference"]
+
+
+def test_provider_key_reference_is_write_only_and_identity_stays_fixed(tmp_path):
+    config_store, config_path = store(tmp_path)
+    before = json.loads(config_path.read_text())
+    selection = {"provider": "openai", "model": "gpt-6-luna",
+                 "base_url": "https://api.openai.com/v1", "allow_remote": True,
+                 "api_key_file": str(tmp_path / "state" / "new-provider-key")}
+    snapshot = config_store.snapshot()
+    after = config_store.apply_inference(snapshot.revision, selection)
+    assert after.configuration["inference"]["api_key_file"] == {
+        "configured": True, "write_only": True}
+    saved = json.loads(config_path.read_text())
+    assert saved["device"] == before["device"]
+    assert saved["controller"] == before["controller"]
+
+
 def test_stale_or_invalid_apply_preserves_current_bytes(tmp_path):
     config_store, config_path = store(tmp_path)
     before = config_store.snapshot()

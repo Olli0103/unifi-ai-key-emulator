@@ -1,7 +1,9 @@
-"""E5 session-query transport and real, optional embedding backends.
+"""Query transport for Protect's search WebSocket and its embedding backends.
 
-This profile is independent of the vendor's unrecovered model preprocessing.
-It cannot encode legacy CLIP queries or image embeddings.
+Two profiles answer ``NL_PARSE``: ``e5-session-v1`` (deep-mode session
+queries, 384-value E5) and ``clip-basic-v1`` (basic Find Anything, 768-value
+CLIP ViT-L/14 from the local ``aikey.clip_server``). One service runs one
+profile, and its identity is pinned in ``search-profile.json``.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import uuid
 
 import aiohttp
 
+from . import clip
 from .protocol import ContractError, decode_message, encode_message
 from .device import VerifiedConnector
 from .embedding_profile import EmbeddingProfileError, ensure_embedding_profile
@@ -209,18 +212,57 @@ class EmbeddingService:
             self._session = None
 
 
+def _png_to_jpeg(data: bytes) -> bytes:
+    from io import BytesIO
+    from PIL import Image
+    try:
+        with Image.open(BytesIO(data)) as picture:
+            if picture.width * picture.height > 50_000_000:
+                raise ImageSearchError("format")
+            out = BytesIO()
+            picture.convert("RGB").save(out, format="JPEG", quality=92)
+    except (OSError, ValueError):
+        raise ImageSearchError("format") from None
+    return out.getvalue()
+
+
+class ImageSearchError(RuntimeError):
+    """An IMAGE_SEARCH request failed; ``category`` is a fixed reason code."""
+
+    def __init__(self, category: str):
+        super().__init__(category)
+        self.category = category
+
+
+MAX_SEARCH_IMAGE_BYTES = 5 * 1024 * 1024 + 65536   # Protect's upload limit is 5 MB
+
+
 class SearchService:
     """Connect an adopted emulator to Protect's UCP4 query WebSocket."""
 
-    def __init__(self, config: dict[str, Any], state_dir: Path, ssl_context: ssl.SSLContext | None = None):
+    def __init__(self, config: dict[str, Any], state_dir: Path, ssl_context: ssl.SSLContext | None = None,
+                 media_ssl_context: ssl.SSLContext | None = None):
         self.config = config
         self.state_dir = Path(state_dir)
         self.ssl_context = ssl_context
+        # Protect serves search-by-image uploads on its cameraHttps port (7444),
+        # with the control-port certificate, not the 7443 search certificate.
+        self.media_ssl_context = media_ssl_context or ssl_context
+        self._media_session: aiohttp.ClientSession | None = None
+        self.profile = config.get("search", {}).get("profile", PROFILE)
         self.embeddings = EmbeddingService(config.get("embeddings", {}))
+        self.clip: clip.ClipClient | None = None
+        if self.profile == clip.PROFILE and config.get("search", {}).get("enabled") is True:
+            try:
+                self.clip = clip.ClipClient(config.get("find_anything"))
+            except clip.ClipError as exc:
+                raise EmbeddingError(str(exc)) from exc
         self._task: asyncio.Task | None = None
         self._session: aiohttp.ClientSession | None = None
         self._stopping = asyncio.Event()
-        self.status: dict[str, Any] = {"connected": False, "profile": PROFILE, "last_error": None, "queries": 0}
+        self.status: dict[str, Any] = {"connected": False, "profile": self.profile, "last_error": None,
+                                       "queries": 0, "query_failures": 0, "ignored_frames": 0,
+                                       "image_queries": 0, "image_failures": {}}
 
     def _url(self) -> str:
         controller = self.config.get("controller", {})
@@ -234,15 +276,77 @@ class SearchService:
             raise ValueError("Invalid controller search port")
         return f"wss://{host}:{port}/wss/nl-search/v1"
 
+    async def _image_embedding(self, uri: Any) -> list[float]:
+        """CLIP embedding of an image Protect stored for search by image.
+
+        Protect 7.3.60 ``requestImageToVector`` sends ``IMAGE_SEARCH`` with
+        ``imgUri`` = ``https://<console>:<cameraHttps>/internal/files/<RECOGNIZE_IMAGE>/<name>``
+        to an AI processor advertising ``supportImageSearch`` and expects
+        ``{imgEmbed: 768 values}``. Only that console route is fetched, over
+        the pinned search connection; the image goes only to the local CLIP
+        server and is not kept.
+        """
+        controller = self.config.get("controller", {})
+        parsed = urlsplit(uri) if isinstance(uri, str) and len(uri) <= 2048 else None
+        try:
+            port = parsed.port if parsed is not None else None
+        except ValueError:
+            port = None
+        if (parsed is None or parsed.scheme != "https" or parsed.hostname != controller.get("host")
+                or port != int(controller.get("media_port", 7444))
+                or parsed.username or parsed.password or parsed.query or parsed.fragment
+                or not parsed.path.startswith("/internal/files/") or ".." in parsed.path
+                or any(char.isspace() for char in uri)):
+            raise ImageSearchError("uri")
+        if self._media_session is None or self._media_session.closed:
+            self._media_session = aiohttp.ClientSession(connector=VerifiedConnector(
+                ssl_context=self.media_ssl_context or ssl.create_default_context(),
+                expected_fingerprint=controller.get("expected_fingerprint")))
+        headers = {"x-ident": self._mac().upper(), "x-type": "UP-AI-KEY", "x-sysid": "0xa5f0"}
+        try:
+            async with self._media_session.get(uri, headers=headers, allow_redirects=False,
+                                         timeout=aiohttp.ClientTimeout(total=20)) as response:
+                if response.status != 200:
+                    raise ImageSearchError(f"http_{response.status // 100}xx")
+                data = bytearray()
+                async for chunk in response.content.iter_chunked(65536):
+                    data.extend(chunk)
+                    if len(data) > MAX_SEARCH_IMAGE_BYTES:
+                        raise ImageSearchError("too_large")
+        except ImageSearchError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
+            raise ImageSearchError("fetch") from None
+        data = bytes(data)
+        if not data.startswith(b"\xff\xd8\xff"):
+            if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise ImageSearchError("format")
+            data = await asyncio.to_thread(_png_to_jpeg, data)
+        try:
+            [vector] = await self.clip.embed_regions(data, [[0.0, 0.0, 1.0, 1.0]])
+        except clip.ClipError:
+            raise ImageSearchError("clip") from None
+        return vector
+
+    def _fingerprint(self) -> str | None:
+        controller = self.config.get("controller", {})
+        return controller.get("search_expected_fingerprint") or controller.get("expected_fingerprint")
+
     def _mac(self) -> str:
         mac = re.sub(r"[:-]", "", str(self.config.get("device", {}).get("mac", ""))).lower()
         if not re.fullmatch(r"[0-9a-f]{12}", mac):
             raise ValueError("device.mac must contain 12 hexadecimal digits")
         return mac
 
+    def _identity(self) -> dict[str, Any]:
+        if self.clip is not None:
+            return {"profile": clip.PROFILE, "model": clip.MODEL, "dimensions": clip.DIMENSIONS,
+                    "backend": "local-clip-onnx", "source": self.clip.base}
+        return self.embeddings.identity
+
     def _check_profile(self) -> None:
         try:
-            ensure_embedding_profile(self.state_dir, self.embeddings.identity)
+            ensure_embedding_profile(self.state_dir, self._identity())
         except EmbeddingProfileError as exc:
             raise EmbeddingError(str(exc)) from exc
 
@@ -250,16 +354,16 @@ class SearchService:
         """Validate the enabled query service before any controller connection."""
         if self.config.get("search", {}).get("enabled", False) is not True:
             return
-        if self.config.get("search", {}).get("profile", PROFILE) != PROFILE:
-            raise EmbeddingError("Only e5-session-v1 search is implemented")
-        if self.embeddings.backend not in ("http", "sentence-transformers"):
+        if self.profile not in (PROFILE, clip.PROFILE):
+            raise EmbeddingError("Search profile must be e5-session-v1 or clip-basic-v1")
+        if self.profile == PROFILE and self.embeddings.backend not in ("http", "sentence-transformers"):
             raise EmbeddingError("Search requires a real embedding backend")
         self._url()
         self._mac()
         if self.ssl_context is not None:
             if self.ssl_context.verify_mode != ssl.CERT_REQUIRED:
                 raise EmbeddingError("Search controller TLS must verify certificates")
-            if not self.ssl_context.check_hostname and not self.config.get("controller", {}).get("expected_fingerprint"):
+            if not self.ssl_context.check_hostname and not self._fingerprint():
                 raise EmbeddingError("Search controller TLS requires hostname verification or an explicit pin")
         self._check_profile()
 
@@ -282,7 +386,12 @@ class SearchService:
         if self._session:
             await self._session.close()
             self._session = None
+        if self._media_session is not None:
+            await self._media_session.close()
+            self._media_session = None
         await self.embeddings.close()
+        if self.clip is not None:
+            await self.clip.close()
         self.status["connected"] = False
 
     async def _run(self) -> None:
@@ -290,7 +399,7 @@ class SearchService:
         delay = min(max(delay, 1), 60)
         connector = VerifiedConnector(
             ssl_context=self.ssl_context or ssl.create_default_context(),
-            expected_fingerprint=self.config.get("controller", {}).get("expected_fingerprint"),
+            expected_fingerprint=self._fingerprint(),
         )
         self._session = aiohttp.ClientSession(
             connector=connector, timeout=aiohttp.ClientTimeout(total=None, sock_connect=10),
@@ -309,7 +418,12 @@ class SearchService:
                         ))
                         async for incoming in websocket:
                             if incoming.type == aiohttp.WSMsgType.BINARY:
-                                reply = await self.handle_message(incoming.data)
+                                try:
+                                    reply = await self.handle_message(incoming.data)
+                                except ContractError:
+                                    # One undecodable frame must not drop the query channel.
+                                    self.status["ignored_frames"] += 1
+                                    continue
                                 if reply is not None:
                                     await websocket.send_bytes(reply)
                             elif incoming.type == aiohttp.WSMsgType.ERROR:
@@ -340,6 +454,20 @@ class SearchService:
         try:
             if header.get("action") == "echo":
                 result = body
+            elif self.clip is not None and header.get("action") == "IMAGE_SEARCH":
+                result = {"imgEmbed": await self._image_embedding(body.get("imgUri"))}
+                self.status["image_queries"] += 1
+            elif self.clip is not None:
+                # Basic Find Anything: Protect defaults model to clip-ViT-L-14.
+                if header.get("action") != "NL_PARSE" or body.get("model", clip.MODEL) != clip.MODEL:
+                    raise EmbeddingError("Only clip-ViT-L-14 NL_PARSE is supported by this profile")
+                try:
+                    vector = await self.clip.embed_text(body.get("querySentence"))
+                except clip.ClipError as exc:
+                    raise EmbeddingError(str(exc)) from exc
+                result = {"keyTags": [], "objectTypes": [], "txtEmbed": vector, "model": clip.MODEL,
+                          "dim": clip.DIMENSIONS, "exact_match": False}
+                self.status["queries"] += 1
             else:
                 if header.get("action") != "NL_PARSE" or body.get("model") != MODEL:
                     raise EmbeddingError("Only explicit multilingual-e5-small NL_PARSE is supported")
@@ -347,7 +475,13 @@ class SearchService:
                 result = {"keyTags": [], "objectTypes": [], "txtEmbed": vector, "model": MODEL,
                           "dim": DIMENSIONS, "exact_match": False}
                 self.status["queries"] += 1
+        except ImageSearchError as exc:
+            failures = self.status["image_failures"]
+            failures[exc.category] = failures.get(exc.category, 0) + 1
+            reply.update(error="Image search failed", errorCode=1)
+            result = {}
         except EmbeddingError as exc:
+            self.status["query_failures"] += 1
             reply.update(error=str(exc), errorCode=1)
             result = {}
         return encode_message(reply, result)

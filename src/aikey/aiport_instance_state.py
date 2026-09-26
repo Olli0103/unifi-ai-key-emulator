@@ -79,7 +79,9 @@ def _verify_existing(state_dir: Path, expected: dict, pem: bytes) -> None:
     if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077:
         raise InstanceStateError("Existing AI Port state directory must be private")
     try:
-        config = load_config(state_dir / "config.json")
+        # The saved decoder path belongs to the Linux container, not the host
+        # running plan and identity verification. Runtime startup checks it.
+        config = load_config(state_dir / "config.json", check_decoder_executable=False)
         identity = json.loads(_private_file(state_dir / "identity.json", 4096))
         saved_ca = _private_file(state_dir / "controller-ca.pem", 16384)
         saved_cert = _private_file(state_dir / "device.crt", 16384)
@@ -90,7 +92,7 @@ def _verify_existing(state_dir: Path, expected: dict, pem: bytes) -> None:
     except (CandidateError, OSError, ValueError, ssl.SSLError, UnicodeError,
             IndexError) as exc:
         raise InstanceStateError("Existing AI Port identity is incomplete or invalid") from exc
-    if (set(config) != _BASE_KEYS or not isinstance(identity, dict)
+    if (not _BASE_KEYS <= set(config) or not isinstance(identity, dict)
             or identity.get("mac") != config["mac"]
             or any(config.get(name) != value for name, value in expected.items())
             or not hmac.compare_digest(saved_ca, pem)
@@ -104,8 +106,14 @@ def _verify_existing(state_dir: Path, expected: dict, pem: bytes) -> None:
 
 def provision_slot(plan: dict, slot: int, state_dir: Path, *, controller_ip: str,
                    controller_cert_file: Path, controller_pin: str,
-                   firmware_version: str = "5.1.12") -> dict:
-    """Create once or verify, never rotate an already created identity."""
+                   firmware_version: str = "5.1.12", mac: str | None = None) -> dict:
+    """Create once or verify, never rotate an already created identity.
+
+    ``mac`` fixes the new identity's MAC (a planned slot's reviewed value);
+    an existing identity must already have it.
+    """
+    if mac is not None and not re.fullmatch(r"02[0-9A-F]{10}", mac):
+        raise InstanceStateError("A planned MAC must be locally administered")
     address = _slot_address(plan, slot)
     try:
         controller_ip = _private_ipv4(controller_ip)
@@ -125,13 +133,15 @@ def provision_slot(plan: dict, slot: int, state_dir: Path, *, controller_ip: str
         raise InstanceStateError("AI Port state directory cannot be a symlink")
     if state_dir.exists():
         _verify_existing(state_dir, expected, pem)
+        if mac is not None and json.loads((state_dir / "config.json").read_text()).get("mac") != mac:
+            raise InstanceStateError("The existing identity has a different MAC")
         return {"slot": slot, "state": "verified_existing", "host_ip": address}
     if (not state_dir.parent.is_dir() or state_dir.parent.is_symlink()
             or state_dir.parent.stat().st_mode & 0o077):
         raise InstanceStateError("Create a private parent directory before provisioning")
     try:
         state_dir.mkdir(mode=0o700)
-        mac = (bytes([0x02]) + secrets.token_bytes(5)).hex().upper()
+        mac = mac or (bytes([0x02]) + secrets.token_bytes(5)).hex().upper()
         ensure_identity_certificate(state_dir, mac)
         certificate = x509.load_pem_x509_certificate(
             _private_file(state_dir / "device.crt", 16384))
