@@ -282,3 +282,21 @@ Read-only, from a tab in the signed-in Chrome profile. Only metadata, counts and
 **Live work.**
 - **No late retries:** there are no late index rows (events during the run, written more than 10 minutes later). Protect sent no retried live index work afterwards.
 - **Live indexing continued during the run:** 22 fresh rows in the 18:00 UTC hour and 18 in the 19:00 UTC hour.
+
+## Native search filters and search after the encoder pin (N12, N14; 26 Sep 2026 21:08 UTC)
+
+`detection-nls` with `minSimilarity=20`, read-only; only counts, types and search conditions were read.
+
+| Query | Protect search condition | Results |
+|---|---|---|
+| "a car" | hybrid, no time window | 50, all vehicle; top similarity 49 |
+| "person today" | hybrid, 25 Sep 22:00 → now (UTC; local midnight, UTC+2) | 50, all person, all detected today |
+| "person yesterday" | hybrid, 24 Sep 22:00 → 25 Sep 22:00 UTC | 0 (nothing is indexed for 25 Sep) |
+| "Auto gestern" | hybrid, 24 Sep 22:00 → 25 Sep 22:00 UTC | 0 |
+| "a boat on the lake" | vector (no object word), no window | 50 mixed, top similarity 28 |
+
+**What this shows.**
+- **Object filter:** the Key's object words become Protect's object filter.
+- **Time windows:** English and German time phrases become Protect's time windows at local midnight.
+- **Fallback:** a query without a known object word runs as a pure vector search.
+- **N14:** this and the backfill readback ran after the pinned-revision deploy, so native search works under the pinned encoder.
