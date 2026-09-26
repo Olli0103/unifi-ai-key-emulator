@@ -90,6 +90,11 @@ _WORKER_REJECTION_REASONS = {
     "Worker queue is full": "queue_full",
     "Worker journal is full; archive reviewed entries": "journal_full",
     "Worker has stopped": "worker_stopped",
+    "thumbnailMeta must list at most 256 objects": "index_metadata",
+    "thumbnailMeta entries need a tracker, ts and 0-1000 xywh coord": "index_metadata",
+    "recognizeKeyFrames has no indexable objects": "index_empty",
+    "faceMeta must list 1 to 256 face regions": "face_metadata",
+    "faceMeta entries need a tracker, ts and 0-1000 xywh coord": "face_metadata",
 }
 
 
@@ -294,7 +299,8 @@ class DeviceService:
             "camera_match_counts": dict.fromkeys(("matches", "different", "not_comparable"), 0),
             "cameraId_match_counts": dict.fromkeys(("matches", "different", "not_comparable"), 0),
             "ram_type_counts": dict.fromkeys((*_RAM_TYPES, "missing", "invalid_type", "other_string"), 0),
-            "metadata_presence_counts": dict.fromkeys(("personMeta", "faceMeta", "vehicleMeta"), 0),
+            "metadata_presence_counts": dict.fromkeys(("personMeta", "faceMeta", "vehicleMeta",
+                                                       "thumbnailMeta"), 0),
             "video_interval_counts": dict.fromkeys(("missing", "invalid_type", "invalid_order_or_range",
                                                     "up_to_10_seconds", "over_10_seconds"), 0),
             "duration_limit_counts": dict.fromkeys(("within", "exceeds", "not_comparable"), 0),
@@ -303,6 +309,11 @@ class DeviceService:
                 "interval_not_comparable"), 0),
             # Per request, content-free: where key moments fall against the
             # exported interval, and why an interval is unusable.
+            # Find Anything objects (#2): counts only, never IDs, times or boxes.
+            "thumbnail_meta_counts": dict.fromkeys((
+                "tasks_empty", "tasks_with_objects", "objects_inside", "objects_before_start",
+                "objects_after_end", "objects_invalid", "name_hex24", "name_empty", "name_other",
+                "ts_in_thumbnail_ms", "ts_not_in_thumbnail_ms"), 0),
             "key_moment_position_counts": dict.fromkeys((
                 "all_inside", "some_outside", "all_outside", "any_at_end",
                 "before_start_up_to_1s", "before_start_over_1s",
@@ -856,6 +867,24 @@ class DeviceService:
         start, end = body.get("start"), body.get("end")
         interval_valid = (type(start) is int and type(end) is int
                           and 0 <= start < end <= 2 ** 53 - 1)
+        meta = body.get("thumbnailMeta")
+        if isinstance(meta, list):
+            counts = self._recognize_diagnostics["thumbnail_meta_counts"]
+            _increment(counts, "tasks_with_objects" if meta else "tasks_empty")
+            thumbnail_ms = body.get("thumbnailMs") if isinstance(body.get("thumbnailMs"), list) else []
+            for item in meta[:256]:
+                roi = item.get("roi") if isinstance(item, dict) else None
+                ts = item.get("ts") if isinstance(item, dict) else None
+                if not isinstance(roi, dict) or type(ts) is not int or not interval_valid:
+                    _increment(counts, "objects_invalid")
+                    continue
+                _increment(counts, "objects_before_start" if ts < start else
+                           "objects_after_end" if ts > end else "objects_inside")
+                name = roi.get("name")
+                _increment(counts, "name_empty" if name == "" else
+                           "name_hex24" if isinstance(name, str) and re.fullmatch(r"[0-9a-f]{24}", name)
+                           else "name_other")
+                _increment(counts, "ts_in_thumbnail_ms" if ts in thumbnail_ms else "ts_not_in_thumbnail_ms")
         interval_category = (
             "missing" if "start" not in body or "end" not in body else
             "invalid_type" if type(start) is not int or type(end) is not int else
@@ -985,6 +1014,13 @@ class DeviceService:
             if isinstance(faces, dict) and isinstance(faces.get("camera_ids"), list):
                 # Local face recognition answers recognition tasks for these cameras.
                 active.update(c for c in faces["camera_ids"] if isinstance(c, str))
+            search = self.config.get("search", {})
+            find_anything = self.config.get("find_anything")
+            if (search.get("enabled") is True and search.get("profile") == "clip-basic-v1"
+                    and isinstance(find_anything, dict)
+                    and isinstance(find_anything.get("index_camera_ids"), list)):
+                # Local CLIP indexing answers key-moment tasks for these cameras.
+                active.update(c for c in find_anything["index_camera_ids"] if isinstance(c, str))
             if not active:
                 _increment(phases, "scope_disabled")
                 raise CommandFailure(95, "recognizeKeyFrames is outside the configured camera policy")

@@ -28,6 +28,7 @@ from .caption_budget import CaptionBudget, CaptionBudgetError, CaptionBudgetExha
 from .providers import ProviderError, validate_inference_config
 from .speech import SpeechError, validate_speech_config
 from .faces import FaceStore, FaceStoreError
+from . import clip
 
 
 class WorkerError(RuntimeError):
@@ -238,6 +239,15 @@ class JobProcessor:
         # A local CPU Whisper needs about real time; keep speech off the caption timeout.
         self.speech_timeout_s = min(self._positive("speech_timeout_s", 300), 900)
         self.faces = self._face_config(self.config.get("face_recognition"), Path(state_dir))
+        self.find_anything, self.index_cameras, self._clip = None, frozenset(), None
+        search = self.config.get("search", {})
+        if (self.config.get("find_anything") is not None and search.get("enabled") is True
+                and search.get("profile") == clip.PROFILE):
+            try:
+                self.find_anything = clip.validate_find_anything_config(self.config["find_anything"])
+            except clip.ClipError as exc:
+                raise WorkerError(str(exc)) from exc
+            self.index_cameras = frozenset(self.find_anything["index_camera_ids"])
         if self.config.get("speech_to_text") is not None:
             try:
                 self.speech, self.speech_cameras = validate_speech_config(
@@ -491,6 +501,11 @@ class JobProcessor:
                 and command["payload"].get("ramType") == "videoWithRecognition"
                 and (command["payload"].get("faceMeta") or command["payload"].get("personMeta"))):
             return self._normalize_faces(command)
+        if (command.get("command") == "recognizeKeyFrames" and isinstance(command.get("payload"), dict)
+                and command["payload"].get("camera") in self.index_cameras
+                and command["payload"].get("camera") not in self._scopes_by_camera
+                and not (self.continuous and self.camera_registry.allows(command["payload"].get("camera")))):
+            return self._normalize_index(command)
         if "command" in command:
             return self._normalize_recognize_key_frames(command)
         if self.continuous:
@@ -632,12 +647,94 @@ class JobProcessor:
             raise WorkerError("recognizeKeyFrames requires at most 128 integer timestamps inside the video")
         callback, media = self._recognize_media(body)
         callback_kind = "legacy_tagging"
+        if body["camera"] in self.index_cameras:
+            body["_index"] = self._index_targets(body)
         normalized = {"operation": "recognizeKeyFrames", "payload": body,
                       "callback": callback, "callbackKind": callback_kind, "media": media}
         fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
         job_id = hashlib.sha256(f"recognizeKeyFrames:{body['camera']}:{body['event']}".encode()).hexdigest()
         return (job_id, fingerprint, "recognizeKeyFrames", body, callback, callback_kind,
                 media, min(self.timeout_s, 30))
+
+    def _index_targets(self, body):
+        """Objects of a key-moment task to embed for Find Anything.
+
+        Protect saves an embedding only for a ``thumbnailTags`` entry whose
+        tracker ID and ``keyMomentMs`` equal a smart-detect object's
+        ``attributes.trackerId`` and exact ``detectedAt`` (7.3.60
+        saveEventTagging). ``thumbnailMeta`` carries exactly those: each
+        ``roi`` has the tracker and a 0-1000 xywh box, ``ts`` the detection
+        time. Objects outside the exported interval cannot be decoded and are
+        skipped; the highest-confidence objects are kept.
+        """
+        meta = body.get("thumbnailMeta")
+        if meta is None:
+            return []
+        if not isinstance(meta, list) or len(meta) > 256:
+            raise WorkerError("thumbnailMeta must list at most 256 objects")
+        chosen = {}
+        for item in meta:
+            roi = item.get("roi") if isinstance(item, dict) else None
+            ts = item.get("ts") if isinstance(item, dict) else None
+            coord = roi.get("coord") if isinstance(roi, dict) else None
+            tracker = roi.get("trackerId") if isinstance(roi, dict) else None
+            if (type(ts) is not int or type(tracker) is not int or not 0 <= tracker <= 2 ** 31
+                    or not isinstance(coord, list) or len(coord) != 4
+                    or any(type(v) not in (int, float) or not math.isfinite(v) for v in coord)
+                    or not (0 <= coord[0] < 1000 and 0 <= coord[1] < 1000
+                            and 0 < coord[2] <= 1000 and 0 < coord[3] <= 1000)):
+                raise WorkerError("thumbnailMeta entries need a tracker, ts and 0-1000 xywh coord")
+            if not body["start"] <= ts <= body["end"]:
+                continue
+            confidence = roi.get("confidence", 0)
+            confidence = float(confidence) if type(confidence) in (int, float) and math.isfinite(confidence) else 0.0
+            x, y, w, h = (float(v) / 1000 for v in coord)
+            pad_x, pad_y = w * 0.1, h * 0.1
+            region = [round(v, 4) for v in (max(0.0, x - pad_x), max(0.0, y - pad_y),
+                                            min(1.0, x + w + pad_x), min(1.0, y + h + pad_y))]
+            key = (tracker, ts)
+            if key not in chosen or confidence > chosen[key][0]:
+                chosen[key] = (confidence, region)
+        ranked = sorted(chosen.items(), key=lambda item: (-item[1][0], item[0]))
+        return [[tracker, ts, region] for (tracker, ts), (_, region)
+                in ranked[:self.find_anything["max_objects"]]]
+
+    def _normalize_index(self, command):
+        """Index-only key-moment task: local CLIP embeddings, no caption.
+
+        For Find Anything cameras without a caption policy. Frames go only to
+        the local CLIP server; the vision provider is never contacted, so no
+        permit or caption budget applies.
+        """
+        body = command["payload"]
+        required = {"reqUrl", "resUrl", "ramType", "camera", "event", "channel", "start", "end",
+                    "type", "mute", "format", "createEvent", "keyMoments", "postVLM"}
+        if (set(command) != {"command", "payload"} or not isinstance(body, dict)
+                or not required <= set(body)
+                or set(body) - required - {"roiMeta", "thumbnailMs", "thumbnailMeta",
+                                          "personMeta", "faceMeta", "vehicleMeta"}):
+            raise WorkerError("Unsupported recognizeKeyFrames payload fields")
+        body = json.loads(_json(body))
+        if (body["ramType"] not in ("video", "videoWithRecognition")
+                or not isinstance(body["event"], str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])
+                or type(body["channel"]) is not int or body["channel"] != 0
+                or body["type"] != "rotating" or body["mute"] is not True
+                or body["format"] not in {"ubv", "mp4"} or body["createEvent"] is not False
+                or any(type(body[key]) is not int for key in ("start", "end"))
+                or not 0 <= body["start"] < body["end"] <= 2 ** 53 - 1
+                or body["end"] - body["start"] > self.max_video_duration_ms):
+            raise WorkerError("recognizeKeyFrames is limited to captioned, muted target-camera video")
+        body["_index"] = self._index_targets(body)
+        if not body["_index"]:
+            raise WorkerError("recognizeKeyFrames has no indexable objects")
+        callback, media = self._recognize_media(body)
+        normalized = {"operation": "indexKeyFrames", "payload": body, "callback": callback,
+                      "callbackKind": "legacy_tagging", "media": media}
+        fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
+        job_id = hashlib.sha256(f"recognizeKeyFrames:{body['camera']}:{body['event']}".encode()).hexdigest()
+        return (job_id, fingerprint, "indexKeyFrames", body, callback, "legacy_tagging",
+                media, min(self.timeout_s, 90))
 
     def _normalize_speech_to_text(self, command):
         """Protect's native speech task, only for explicitly allowed cameras.
@@ -803,7 +900,7 @@ class JobProcessor:
             raise WorkerError("Invalid test scope reservation; inspect it without resetting the permit") from exc
 
     def _reserve_test_scope(self, job):
-        if not self.test_scopes or job.operation in {"speechToText", "recognizeFaces"}:
+        if not self.test_scopes or job.operation in {"speechToText", "recognizeFaces", "indexKeyFrames"}:
             return
         camera_id = job.payload.get("camera") if job.operation == "recognizeKeyFrames" else job.payload.get("cameraId")
         scope = self._scopes_by_camera.get(camera_id)
@@ -872,7 +969,7 @@ class JobProcessor:
         normalized = self._normalize(command)
         await self.start()
         job_id, fingerprint, operation, body, callback, kind, media, budget = normalized
-        if (self.continuous and operation not in {"speechToText", "recognizeFaces"}
+        if (self.continuous and operation not in {"speechToText", "recognizeFaces", "indexKeyFrames"}
                 and not self.camera_registry.allows(body["camera"])):
             raise WorkerError("Camera inventory changed before admission")
         if job_id in self._pending:
@@ -909,7 +1006,8 @@ class JobProcessor:
                    time.monotonic() + budget, future)
         try:
             self._reserve_test_scope(job)
-            if self.caption_budget is not None and operation not in {"speechToText", "recognizeFaces"}:
+            if self.caption_budget is not None and operation not in {"speechToText", "recognizeFaces",
+                                                                     "indexKeyFrames"}:
                 try:
                     receipt = self.caption_budget.reserve(job_id, fingerprint, body["camera"])
                 except CaptionBudgetExhausted as exc:
@@ -1024,7 +1122,8 @@ class JobProcessor:
         offset = 0.0
         # A key moment at the interval end is the export's last frame: seeking
         # to the very end yields no frame, so decode the final second instead.
-        at_end = (job.operation in {"recognizeKeyFrames", "recognizeFaces"} and timestamp is not None
+        at_end = (job.operation in {"recognizeKeyFrames", "recognizeFaces", "indexKeyFrames"}
+                  and timestamp is not None
                   and timestamp == job.payload.get("end"))
         if job.operation == "on_demand" or timestamp is not None:
             lowered = {key.lower(): value for key, value in headers.items()}
@@ -1039,7 +1138,8 @@ class JobProcessor:
             except (ValueError, TypeError) as exc:
                 raise WorkerError("Video start timestamp is missing or invalid") from exc
             maximum_offset = (self.max_video_duration_ms / 1000
-                              if job.operation in {"recognizeKeyFrames", "recognizeFaces"} else 3600)
+                              if job.operation in {"recognizeKeyFrames", "recognizeFaces",
+                                                   "indexKeyFrames"} else 3600)
             if not 0 <= offset <= maximum_offset:
                 raise WorkerError("Requested video frame is outside the supported interval")
         with tempfile.TemporaryDirectory(prefix="aikey-video-", dir=self.state_dir) as temporary:
@@ -1227,16 +1327,62 @@ class JobProcessor:
         result["result"] = summary
         return result
 
+    async def _thumbnail_tags(self, job, data, headers, url):
+        """Local CLIP embeddings for each indexed object, one decode per frame."""
+        targets = job.payload.get("_index") or []
+        if not targets:
+            return []
+        if self._clip is None:
+            self._clip = clip.ClipClient(self.find_anything, timeout_s=60)
+        by_time = {}
+        for tracker, ts, region in targets:
+            by_time.setdefault(ts, []).append((tracker, region))
+        tags = []
+        for ts, objects in sorted(by_time.items()):
+            frame = await self._video_frame(data, headers, url, job, timestamp=ts)
+            try:
+                vectors = await self._clip.embed_regions(frame, [region for _, region in objects])
+            except clip.ClipError as exc:
+                raise WorkerError(str(exc)) from exc
+            for (tracker, _), vector in zip(objects, vectors):
+                tags.append({"keyMomentMs": ts, "tags": [], "trackerID": tracker,
+                             "imgEmbed": [round(value, 6) for value in vector]})
+        return tags
+
+    async def _execute_index(self, job):
+        started = time.monotonic()
+        (_, url), = job.media
+        data, headers = await self._fetch(url, "video")
+        prepared = time.monotonic()
+        tags = await self._thumbnail_tags(job, data, headers, url)
+        inferred = time.monotonic()
+        payload = {"cameraId": job.payload["camera"], "eventId": job.payload["event"],
+                   "description": "", "status": "success", "keyMomentsTags": [],
+                   "thumbnailTags": tags, "inferBoxMs": 0,
+                   "inferTagMs": round((inferred - prepared) * 1000), "inferTxtMs": 0,
+                   "preProcessMs": round((prepared - started) * 1000),
+                   "timeElapsedMs": round((inferred - started) * 1000)}
+        summary = {"indexed": len(tags)}
+        if self.callback_mode == "disabled":
+            return {"status": "processed", "jobId": job.job_id, "callback": "disabled", "result": summary}
+        result = await self._post_callback(job, payload)
+        # Embeddings stay out of the journal.
+        result["result"] = summary
+        return result
+
     async def _execute(self, job):
         if job.operation == "speechToText":
             return await self._execute_speech(job)
+        if job.operation == "indexKeyFrames":
+            return await self._execute_index(job)
         if job.operation == "recognizeFaces":
             return await self._execute_faces(job)
         started = time.monotonic()
-        images = []
+        images, thumbnail_tags = [], []
         for kind, url in job.media:
             data, headers = await self._fetch(url, kind)
             if job.operation == "recognizeKeyFrames":
+                thumbnail_tags = await self._thumbnail_tags(job, data, headers, url)
                 moments = sorted(set(job.payload["keyMoments"]))
                 if len(moments) > self.max_images:
                     if self.max_images == 1:
@@ -1265,6 +1411,8 @@ class JobProcessor:
                        "inferTxtMs": round((inferred - prepared) * 1000),
                        "preProcessMs": round((prepared - started) * 1000),
                        "timeElapsedMs": round((inferred - started) * 1000)}
+            if thumbnail_tags:
+                payload["thumbnailTags"] = thumbnail_tags
         elif job.callback_kind == "legacy":
             payload = {"eventId": job.payload["event"], "status": "success", "description": description}
             if self.options["legacy_profile"] == "protect-7.2.105":
@@ -1284,7 +1432,11 @@ class JobProcessor:
                 payload["descEmbedding"] = vectors[0]
         if self.callback_mode == "disabled":
             return {"status": "processed", "jobId": job.job_id, "callback": "disabled", "result": payload}
-        return await self._post_callback(job, payload)
+        result = await self._post_callback(job, payload)
+        if "thumbnailTags" in payload:
+            # Keep the journal's caption record but not the embeddings.
+            result["result"] = {**payload, "thumbnailTags": len(payload["thumbnailTags"])}
+        return result
 
     async def _post_callback(self, job, payload, *, images=()):
         self._record(job, "callback_sending")
@@ -1331,6 +1483,8 @@ class JobProcessor:
             self._queue.task_done()
         if self._embedding_service is not None:
             await self._embedding_service.close()
+        if self._clip is not None:
+            await self._clip.close()
         if self._session is not None:
             await self._session.close()
         if self._inference_session is not None:
