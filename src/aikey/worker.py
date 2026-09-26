@@ -81,6 +81,8 @@ _CALLBACK_TASK = re.compile(r"^/internal/aiprocessors/descriptions/([A-Za-z0-9_-
 _CALLBACK_UPLOAD = re.compile(r"^/internal/camera-upload/[A-Za-z0-9_-]+$")
 _LEGACY_CALLBACK = "/internal/aiprocessors/recognize-anything"
 _SPEECH_CALLBACK = "/internal/aiprocessors/speech-to-text"
+# A face found inside a person region gets its own tracker ID, linked to the person.
+_PERSON_FACE_OFFSET = 1_000_000
 _SPEECH_EXPORT = {"camera", "event", "channel", "start", "end", "type", "format", "skipVideo",
                   "createEvent"}
 _IMAGE_PATH = re.compile(r"^/internal/aiprocessors/image/[^/]+$")
@@ -487,7 +489,7 @@ class JobProcessor:
                 and isinstance(command.get("payload"), dict)
                 and command["payload"].get("camera") in self.faces["cameras"]
                 and command["payload"].get("ramType") == "videoWithRecognition"
-                and command["payload"].get("faceMeta")):
+                and (command["payload"].get("faceMeta") or command["payload"].get("personMeta"))):
             return self._normalize_faces(command)
         if "command" in command:
             return self._normalize_recognize_key_frames(command)
@@ -714,10 +716,11 @@ class JobProcessor:
         """
         body = command["payload"]
         required = {"reqUrl", "resUrl", "ramType", "camera", "event", "channel", "start", "end",
-                    "type", "mute", "format", "createEvent", "keyMoments", "postVLM", "faceMeta"}
+                    "type", "mute", "format", "createEvent", "keyMoments", "postVLM"}
         if (set(command) != {"command", "payload"} or not required <= set(body)
+                or not (body.get("faceMeta") or body.get("personMeta"))
                 or set(body) - required - {"roiMeta", "thumbnailMs", "thumbnailMeta",
-                                          "personMeta", "vehicleMeta"}):
+                                          "personMeta", "faceMeta", "vehicleMeta"}):
             raise WorkerError("Unsupported recognizeKeyFrames payload fields")
         body = json.loads(_json(body))
         if (not isinstance(body["event"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])
@@ -728,8 +731,12 @@ class JobProcessor:
                 or not 0 <= body["start"] < body["end"] <= 2 ** 53 - 1
                 or body["end"] - body["start"] > self.max_video_duration_ms):
             raise WorkerError("recognizeKeyFrames is limited to captioned, muted target-camera video")
+        # Face regions come from faceMeta. Without them, Protect sends person
+        # regions (personMeta, 26 Sep Wohnzimmer) and the Key finds the face in
+        # each person and links it to that person's tracker.
         chosen = {}
-        meta = body["faceMeta"]
+        meta = body.get("faceMeta") or body["personMeta"]
+        linked = not body.get("faceMeta")
         if not isinstance(meta, list) or not 1 <= len(meta) <= 256:
             raise WorkerError("faceMeta must list 1 to 256 face regions")
         for item in meta:
@@ -744,13 +751,18 @@ class JobProcessor:
                     or not (0 <= coord[0] < 1000 and 0 <= coord[1] < 1000
                             and 0 < coord[2] <= 1000 and 0 < coord[3] <= 1000)):
                 raise WorkerError("faceMeta entries need a tracker, ts and 0-1000 xywh coord")
+            if linked:
+                # The upper part of a person box, where the face is.
+                coord = [coord[0], coord[1], coord[2], max(1.0, coord[3] * 0.45)]
             confidence = roi.get("confidence", 0)
             confidence = confidence if type(confidence) in (int, float) else 0
             if tracker not in chosen or confidence > chosen[tracker][2]:
                 chosen[tracker] = (ts, [float(v) for v in coord], confidence)
         callback, media = self._recognize_media(body)
         faces = sorted(chosen.items(), key=lambda item: -item[1][2])[:self.faces["max_faces"]]
-        body["_faces"] = [[tracker, ts, coord] for tracker, (ts, coord, _) in faces]
+        body["_faces"] = [[_PERSON_FACE_OFFSET + tracker if linked else tracker, ts, coord,
+                           tracker if linked else None]
+                          for tracker, (ts, coord, _) in faces]
         normalized = {"operation": "recognizeFaces", "payload": body, "callback": callback,
                       "callbackKind": "face", "media": media}
         fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
@@ -1164,7 +1176,7 @@ class JobProcessor:
         (_, url), = job.media
         data, headers = await self._fetch(url, "video")
         attrs, snapshots, images, matched = {}, [], [], 0
-        for tracker, ts, coord in job.payload["_faces"]:
+        for tracker, ts, coord, person in job.payload["_faces"]:
             frame = await self._video_frame(data, headers, url, job, timestamp=ts)
             x, y, w, h = (v / 1000 for v in coord)
             pad_x, pad_y = w * 0.25, h * 0.25
@@ -1194,6 +1206,8 @@ class JobProcessor:
             attrs[key] = {"faceMask": {"confidence": 0, "val": "none"},
                           "matchedName": name or "", "namesTopK": [n for n, _ in top],
                           "objectType": "face", "topKCandidate": []}
+            if person is not None:
+                attrs[key]["linkedPersonTrackerID"] = person
             snapshots.append({"clockBestMonotonic": ts, "clockBestWall": ts,
                               "smartDetectHeatmap": "", "smartDetectSnapshot": f"{key}.jpg",
                               "smartDetectSnapshotName": f"{key}.jpg",

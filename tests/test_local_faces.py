@@ -250,3 +250,25 @@ async def test_the_face_server_returns_boxes_and_embeddings_only():
         health = await (await client.get("/healthz")).json()
         assert health == {"status": "ok", "requests": 2, "analyzed": 1, "faces": 1,
                           "rejected": 1, "failed": 0}
+
+
+async def test_without_face_regions_the_face_is_searched_in_person_regions_and_linked(
+        controller, tmp_path):
+    # Wohnzimmer, 26 Sep: recognition tasks carried personMeta but no faceMeta.
+    FaceStore(tmp_path).enroll("Synthetic Alice", ALICE)
+    command = task(face_meta=False)
+    command["payload"]["personMeta"] = [
+        {"roi": {"coord": [300, 100, 200, 800], "trackerId": 4,
+                 "objectType": "person"}, "ts": START + 1200}]
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        await worker.handle(command)
+    finally:
+        await worker.stop()
+    assert controller.face_requests[0]["regions"] == [[0.25, 0.01, 0.55, 0.55]]
+    parts = controller.callbacks[0]
+    face = parts["face"][1]
+    assert set(face["faceAttrs"]) == {"1000004"} and "1000004" in parts
+    assert face["faceAttrs"]["1000004"]["linkedPersonTrackerID"] == 4
+    assert face["faceAttrs"]["1000004"]["matchedName"] == "Synthetic Alice"
+    assert face["faceSnapshots"][0]["trackerID"] == 1_000_004
