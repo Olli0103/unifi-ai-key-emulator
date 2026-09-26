@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-26.10). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.1). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-26.10` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-27.1` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -174,7 +174,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `capability.face_recognition`: Camera Coverage counts only legacy cameras; no eligible legacy camera is selected here
 - `capability.license_plate_recognition`: An eligible camera and an owner decision (issue #19)
 - `capability.face_enhancement`: Native contract (issue #23)
-- `capability.retroactive_processing`: Why Protect completed the stored run after about 2386 events at an 18 Sep 19:10 cursor although older tracker-ID events exist (aiprocessorTasks rows are not exposed)
+- `capability.retroactive_processing`: The stored run completed on an empty batch query at an 18 Sep 19:10 cursor although 2109 older tracker-crop events have no RAM task state; the cause needs Protect's aiprocessorTasks rows or 7.3.68 runner source
+- `capability.retroactive_processing`: Protect does not allow continuing older events once a run is completed without re-adopting the AI Key (start requires not_started on every processor; nothing resets it)
 - `capability.recognize_anything_tagging`: Structured object results (issue #14)
 - `capability.audio_speech`: A persisted native transcript on Protect 7.3.68 after a reload (issue #15)
 - `capability.audio_speech`: An alrmSpeak-enabled camera and the AI Key Speech to Text setting, both user actions
@@ -255,6 +256,6 @@ Every live trial must record each experimental activation below that was in effe
 - **N7** (`control.request_ai.describe`, `search.e5_nl_parse`, `search.native_retrieval`): Issue #10: determine whether 7.3.60 dispatches /describe and which search path it uses, before any search trial.
 - **N8** (`lifecycle.abnormal_closure_backoff`): Interrupt the network path briefly and record reconnect timing and adoption state.
 - **N9** (`control.continuous_caption_admission`, `worker.private_journal_rollover`): In an isolated, reviewed rollout, confirm fresh model-family inventory, Protect-side dispatch, persistence, budget exhaustion, additions/removals, reconnect and journal rollover. Keep richer native-AI models excluded until tag preservation is verified.
-- **N10** (`capability.retroactive_processing`, `control.recognize_key_frames.multiple_images`, `index.thumbnail_tags`): Run completion and native readback were observed on 26 Sep. Remaining: explain the early completion at the 18 Sep 19:10 cursor (read aiprocessorTasks for events before it, for example from a Protect support file), and decide with Olli whether a bounded run for older events is wanted.
+- **N10** (`capability.retroactive_processing`, `control.recognize_key_frames.multiple_images`, `index.thumbnail_tags`): Completion path established (empty batch query at 19:44-19:45 UTC on 26 Sep; 84 failed pushes, none in the final cycle). Remaining: explain why 2109 older tracker-crop events without RAM task state were not selected (needs Protect's aiprocessorTasks rows or 7.3.68 runner source). Continuing them requires a new processor record (re-adoption), which is out of scope.
 - **N11** (`search.native_retrieval`, `search.index_recovery`, `database.controller_migrations`): After a planned controller restart, confirm isSearchHost true, that existing ramDetections rows survive, and that a known positive text search still returns its object.
 - **N13** (`control.request_ai.second_stage_verification`): Owner decision: enable find_anything.reverification for a bounded window, then read back one reverified event's detectedThumbnails (preReverificationObjectType and confidence) and confirm unsure verdicts left events unchanged.

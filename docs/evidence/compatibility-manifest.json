@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-26.10",
+ "manifest_version": "ai-key/2026-09-27.1",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -1686,15 +1686,18 @@
     "static-protect-7.3.60-bundle"
    ],
    "tests": [
-    "tests/test_find_anything.py::test_retroactive_processing_is_advertised_only_on_opt_in"
+    "tests/test_find_anything.py::test_retroactive_processing_is_advertised_only_on_opt_in",
+    "tests/test_retroactive_plan.py::test_a_completed_run_cannot_be_continued_or_restarted"
    ],
    "implementation": [
     "src/aikey/device.py",
-    "src/aikey/clip.py"
+    "src/aikey/clip.py",
+    "src/aikey/retroactive_plan.py"
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Why Protect completed the stored run after about 2386 events at an 18 Sep 19:10 cursor although older tracker-ID events exist (aiprocessorTasks rows are not exposed)"
+    "The stored run completed on an empty batch query at an 18 Sep 19:10 cursor although 2109 older tracker-crop events have no RAM task state; the cause needs Protect's aiprocessorTasks rows or 7.3.68 runner source",
+    "Protect does not allow continuing older events once a run is completed without re-adopting the AI Key (start requires not_started on every processor; nothing resets it)"
    ]
   },
   {
@@ -2420,7 +2423,7 @@
     "control.recognize_key_frames.multiple_images",
     "index.thumbnail_tags"
    ],
-   "procedure": "Run completion and native readback were observed on 26 Sep. Remaining: explain the early completion at the 18 Sep 19:10 cursor (read aiprocessorTasks for events before it, for example from a Protect support file), and decide with Olli whether a bounded run for older events is wanted."
+   "procedure": "Completion path established (empty batch query at 19:44-19:45 UTC on 26 Sep; 84 failed pushes, none in the final cycle). Remaining: explain why 2109 older tracker-crop events without RAM task state were not selected (needs Protect's aiprocessorTasks rows or 7.3.68 runner source). Continuing them requires a new processor record (re-adoption), which is out of scope."
   },
   {
    "id": "N11",

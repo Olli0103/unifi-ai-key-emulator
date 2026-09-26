@@ -300,3 +300,48 @@ Read-only, from a tab in the signed-in Chrome profile. Only metadata, counts and
 - **Time windows:** English and German time phrases become Protect's time windows at local midnight.
 - **Fallback:** a query without a known object word runs as a pure vector search.
 - **N14:** this and the backfill readback ran after the pinned-revision deploy, so native search works under the pinned encoder.
+
+## Why the stored run stopped early, and whether older events can continue (N10, 27 Sep 2026)
+
+Sources:
+- **Read-only Protect 7.3.68 API:** event metadata (counts only).
+- **A console support file downloaded with Olli's approval:** only filtered counts and message templates were read; the archive and every extract were deleted afterwards.
+- **Protect 7.3.60 static code.**
+
+No media was fetched. No run was started, cancelled or resumed.
+
+**Task state per event (`metadata.ramState`, Protect's mirror of each event's RAM task).**
+
+| Window (`smartDetectZone`) | Tracker-ID crops | No tracker ID |
+|---|---|---|
+| 18 Sep 19:10 → 22 Sep 15:42 (covered) | done 2272, failed 38 | failed 76 |
+| 15 Sep 00:00 → 18 Sep 19:10 (older) | **none 2109**, done 1 | none 112, failed 1 |
+
+**Completion path.** 7.3.60 marks a run completed from exactly one function, reached from four checks:
+1. **Remaining ≤ 0:** ruled out. The last ETA (20:38:39 UTC at 1.2 s per event) implies about 2600 events remaining.
+2. **Processed ≥ requested:** ruled out for the same reason.
+3. **The batch query returned no events.**
+4. **Every push in a batch failed:** ruled out. The support file's `aiprocessors` log has 84 `Failed to push retroactive task` lines between 18:58 and 19:44 UTC and **none at the final cycle**. A batch of failed pushes would log up to 50.
+
+The run ended between 19:44 and 19:45 UTC. The first post-run `Retrying 30 failed tasks.` (which runs only while no run is active) is at 19:45, and backfill dispatches stop there. No PostgreSQL error falls near that time. **The run completed on an empty batch query.**
+
+**What stays open.**
+- **The contradiction:** under 7.3.60's query (smart and audio events with no `aiprocessorTasks` row, `end ≤ nextProcessedFrom`, newest first), the 2109 older tracker-crop events with no RAM state should have been eligible.
+- **Checked and not the cause:**
+  - no AI task was dispatched before the AI Key's adoption on 22 Sep 15:13 UTC;
+  - the console's AI controller was idle;
+  - recordings go back to 28 Jul.
+- **Candidates:** either the older events carry task rows of a type Protect does not mirror into event metadata, or 7.3.68's runner query adds a condition that 7.3.60 lacks.
+- **Neither can be checked without the database or 7.3.68 source. `needs_evidence`.**
+
+**Continuing older events: Protect does not permit it while preserving the run.**
+- **Start:** requires `not_started` on every processor.
+- **Nothing resets to `not_started`:** it is only the model default.
+- **Cancel:** accepts only `running` or `paused`, and moves the run to `cancelled`.
+- **Resume:** accepts only `paused`.
+
+So a `completed` run is terminal for this processor record. The only reset is a new record, meaning re-adoption, which changes the AI Key identity. Even a fresh run would probably stop at the same boundary until the empty-query cause is known.
+
+**Tested artifact.** `aikey.retroactive_plan` (11 tests) encodes these rules without I/O. For the live state (`completed`, flag on) it refuses start, cancel, resume and pause, and reports `continue_older_events: false`. Any future tool or admin control can use it to refuse an action before it reaches Protect.
+
+**Post-run retries.** The held-back live tasks were retried natively, which closes that gap. From 19:45 Protect ran `Retrying 30 failed tasks.` at 19:45 and 19:48, then smaller retries. The 19:48 retry dispatched 11 key-frame, 11 crop, 9 speech and 1 reverification task to the AI Key.
