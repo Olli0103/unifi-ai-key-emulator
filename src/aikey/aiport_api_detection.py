@@ -21,6 +21,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 from PIL import Image, UnidentifiedImageError
 
 from .aiport_detection import ObjectObservation
+from .aiport_plates import normalize_plate
 from .aiport_event_budget import EventBudget
 from .aiport_tracking import TrackingError, validate_observation
 from .providers import ProviderError, image_mime, validate_inference_config
@@ -64,6 +65,13 @@ _PROMPT = (
     "an inanimate delivered box, parcel, envelope or bag with straight edges or folds. "
     "Include an object only when its full visible extent can be located. "
     "Return an empty detections array when uncertain. Do not infer off-screen objects."
+)
+# Only for cameras an operator listed in plate_cameras (#19). The same frame
+# and request; Protect stores the text as the vehicle track's licensePlate.
+_PLATE_PROMPT = (
+    " For a vehicle whose license plate is visible, add \"plate\" with its characters "
+    "exactly as printed, using ? for every character you cannot read with certainty. "
+    "Never guess a character. Omit plate when no plate is legible."
 )
 
 
@@ -235,7 +243,7 @@ _VERIFY_PROMPT = (
     "{\"kind\":\"none\",\"label\":\"none\"}."
 )
 _ITEM_REJECTIONS = ("shape", "kind", "label:person", "label:vehicle", "label:animal",
-                    "label:package", "score", "box")
+                    "label:package", "score", "box", "plate")
 
 
 def _envelope_failure(reply: object) -> str:
@@ -284,8 +292,8 @@ def _parse_failure(text: str) -> str:
 
 
 def parse_detections(text: str, *, threshold: float,
-                     rejected: dict[str, int] | None = None
-                     ) -> tuple[ObjectObservation, ...]:
+                     rejected: dict[str, int] | None = None,
+                     plates: bool = False) -> tuple[ObjectObservation, ...]:
     """Parse one provider reply; malformed items are dropped, never accepted.
 
     A malformed reply envelope fails closed. A single malformed item used to
@@ -304,8 +312,14 @@ def parse_detections(text: str, *, threshold: float,
     observations = []
     for item in entries:
         reason = None
-        if not isinstance(item, dict) or set(item) != {"kind", "label", "score", "box"}:
+        keys = set(item) if isinstance(item, dict) else None
+        if keys != {"kind", "label", "score", "box"} and not (
+                plates and keys == {"kind", "label", "score", "box", "plate"}):
             reason = "shape"
+        elif "plate" in item and (item["kind"] != "vehicle"
+                                  or item["plate"] is not None
+                                  and not isinstance(item["plate"], str)):
+            reason = "plate"
         else:
             kind, label, score, box = (item[name] for name in
                                        ("kind", "label", "score", "box"))
@@ -319,7 +333,8 @@ def parse_detections(text: str, *, threshold: float,
                     or any(type(point) not in (float, int) for point in box)):
                 reason = "box"
             else:
-                observation = ObjectObservation(kind, label, score, tuple(box))
+                observation = ObjectObservation(kind, label, score, tuple(box),
+                                                normalize_plate(item.get("plate")))
                 try:
                     validate_observation(observation)
                 except TrackingError:
@@ -400,7 +415,8 @@ class ApiObjectDetector:
     def __init__(self, provider_config: dict[str, Any], state_dir: Path, *,
                  threshold: float, max_requests_per_hour: int | None = None,
                  transport: Callable[[str, dict, dict], dict] = _post,
-                 package_lens_owned: Callable[[str], bool] | None = None):
+                 package_lens_owned: Callable[[str], bool] | None = None,
+                 plate_cameras: frozenset[str] = frozenset()):
         if (type(threshold) not in (float, int) or not 0 < threshold <= 1
                 or max_requests_per_hour is not None
                 and (type(max_requests_per_hour) is not int
@@ -428,6 +444,9 @@ class ApiObjectDetector:
         # Cameras whose own package lens owns Package: a main-lens "package"
         # is dropped before the close-up check, so no crop is uploaded.
         self._package_lens_owned = package_lens_owned or (lambda _camera: False)
+        # Opt-in cameras whose vehicles also get plate text; counts only.
+        self.plate_cameras = frozenset(plate_cameras)
+        self._plate_counts: dict[str, dict[str, int]] = {}
         self.budget = (EventBudget(state_dir, limit=max_requests_per_hour,
                                    namespace="vision-request")
                        if max_requests_per_hour is not None else None)
@@ -515,7 +534,9 @@ class ApiObjectDetector:
             self._budget_retry_at[camera_mac] = time.monotonic() + 60
             return ()
         try:
-            url, headers, payload = self.provider.build_request([frame], _PROMPT)
+            plates = camera_mac in self.plate_cameras
+            url, headers, payload = self.provider.build_request(
+                [frame], _PROMPT + _PLATE_PROMPT if plates else _PROMPT)
             if self.provider.provider == "openai" and self.provider.model == "gpt-6-luna":
                 payload["reasoning"] = {"effort": "none"}
             reply = None
@@ -534,7 +555,8 @@ class ApiObjectDetector:
             # response from an object rejected by the configured score gate.
             rejected: dict[str, int] = {}
             try:
-                reported = parse_detections(text, threshold=0, rejected=rejected)
+                reported = parse_detections(text, threshold=0, rejected=rejected,
+                                            plates=plates)
             except ApiDetectionError:
                 self._count_failure(camera_mac, _parse_failure(text))
                 raise
@@ -580,6 +602,14 @@ class ApiObjectDetector:
                     for verified in ((self._verify_package(camera_mac, frame, item),)
                                      if item.kind == "package" else (item,))
                     if verified is not None)
+            if plates:
+                read = self._plate_counts.setdefault(camera_mac, dict.fromkeys(
+                    ("vehicles", "plates_read", "plates_partial"), 0))
+                for item in accepted:
+                    if item.kind == "vehicle":
+                        read["vehicles"] += 1
+                        read["plates_read"] += item.plate is not None
+                        read["plates_partial"] += item.plate is not None and "?" in item.plate
             self.motion.sample_result(camera_mac, found_object=bool(accepted))
             return accepted
         except ApiDetectionError as exc:
@@ -686,4 +716,7 @@ class ApiObjectDetector:
         result["output_token_budget"] = self.provider.max_output_tokens
         result["package_checks"] = dict(self._package_checks.get(
             camera_mac, dict.fromkeys(_PACKAGE_CHECK_KEYS, 0)))
+        if camera_mac in self.plate_cameras:
+            result["plates"] = dict(self._plate_counts.get(camera_mac, dict.fromkeys(
+                ("vehicles", "plates_read", "plates_partial"), 0)))
         return result

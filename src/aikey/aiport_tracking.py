@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import math
 
 from .aiport_detection import ObjectObservation
+from .aiport_plates import merge_plates, normalize_plate
 
 
 _KINDS = frozenset({"person", "vehicle", "animal", "package"})
@@ -34,6 +35,7 @@ class TrackChange:
     label: str
     score: float
     box: tuple[float, float, float, float]
+    plate: str | None = None
 
 
 @dataclass
@@ -44,11 +46,13 @@ class _Track:
     hits: int = 1
     active: bool = False
     held: bool = False      # confirmed, but its enter was not announced
+    plate: str | None = None
 
     def change(self, edge: str) -> TrackChange:
         return TrackChange(edge, self.track_id, self.observation.kind,
                            self.observation.label, self.observation.score,
-                           self.observation.box)
+                           self.observation.box,
+                           self.plate if self.observation.kind == "vehicle" else None)
 
 
 def validate_observation(value: object) -> None:
@@ -223,6 +227,8 @@ class TemporalTracker:
                         "animal", track.observation.label, observation.score,
                         observation.box)
             resolved = track.observation.kind != observation.kind
+            if observation.kind == "vehicle":
+                track.plate = merge_plates(track.plate, normalize_plate(observation.plate))
             track.observation = observation
             track.last_seen = now
             track.hits += 1
@@ -254,6 +260,8 @@ class TemporalTracker:
                 continue
             track_id = self._next_id
             self._next_id += 1
-            self._tracks[track_id] = _Track(track_id, observation, now)
+            self._tracks[track_id] = _Track(
+                track_id, observation, now,
+                plate=normalize_plate(observation.plate) if observation.kind == "vehicle" else None)
         self._last_update = now
         return tuple(changes)

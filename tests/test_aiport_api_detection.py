@@ -161,7 +161,7 @@ def test_response_counts_distinguish_empty_from_score_rejection(tmp_path):
         "below_threshold": 0, "accepted_objects": 0,
         "below_threshold_by_kind": {"person": 0, "vehicle": 0, "animal": 0, "package": 0},
         "near_threshold_by_kind": {"person": 0, "vehicle": 0, "animal": 0, "package": 0},
-        "rejected_items": {"shape": 0, "kind": 0, "label:person": 0, "label:vehicle": 0, "label:animal": 0, "label:package": 0, "score": 0, "box": 0},
+        "rejected_items": {"shape": 0, "kind": 0, "label:person": 0, "label:vehicle": 0, "label:animal": 0, "label:package": 0, "score": 0, "box": 0, "plate": 0},
         "request_profile": {"color_empty": 0, "color_low": 0, "color_objects": 0,
                             "ir_empty": 0, "ir_low": 0, "ir_objects": 0},
         "last_frame_width": None,
@@ -790,3 +790,30 @@ def test_an_unparseable_reply_text_is_classified_without_content(tmp_path, text,
     counts = detector.diagnostic_counts(FIRST)
     assert counts["failure_reasons"] == {reason: 1}
     assert "cars" not in json.dumps(counts) and "note" not in json.dumps(counts)
+
+
+def test_only_plate_cameras_ask_for_plates_and_count_them_without_values(tmp_path):
+    prompts = []
+
+    def transport(_url, _headers, payload):
+        prompts.append(json.dumps(payload))
+        car = {"kind": "vehicle", "label": "car", "score": 0.93, "box": [0.1, 0.2, 0.3, 0.4]}
+        if "plate" in prompts[-1]:
+            car["plate"] = "SYN 12?"
+        return _reply(json.dumps({"detections": [car]}))
+
+    key = tmp_path / "openai-key"
+    key.write_text("synthetic-test-key\n")
+    key.chmod(0o600)
+    detector = ApiObjectDetector(
+        {"provider": "openai", "model": "gpt-6-luna", "base_url": "https://api.openai.com/v1",
+         "allow_remote": True, "api_key_file": str(key)},
+        tmp_path, threshold=0.8, transport=transport, plate_cameras=frozenset({FIRST}))
+    [plated] = detector.detect_for_camera(FIRST, STILL)
+    [other] = detector.detect_for_camera(SECOND, STILL)
+    assert plated.plate == "SYN 12?" and other.plate is None
+    assert "license plate" in prompts[0] and "license plate" not in prompts[1]
+    counts = detector.diagnostic_counts(FIRST)
+    assert counts["plates"] == {"vehicles": 1, "plates_read": 1, "plates_partial": 1}
+    assert "SYN" not in json.dumps(counts)
+    assert "plates" not in detector.diagnostic_counts(SECOND)

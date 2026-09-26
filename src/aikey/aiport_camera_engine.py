@@ -157,7 +157,7 @@ class CameraPolicyEngine:
         result = tuple(
             CameraEventCandidate(camera, TrackChange(
                 "leave", previous.track_id, previous.kind, previous.label,
-                previous.score, previous.box), zones)
+                previous.score, previous.box, previous.plate), zones)
             for _, (previous, zones) in sorted(self._active[camera].items()))
         self._active[camera] = {}
         self._last_moving[camera] = {}

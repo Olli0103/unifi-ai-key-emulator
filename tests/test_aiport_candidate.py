@@ -3651,6 +3651,29 @@ def test_the_follow_up_mode_accepts_only_shadow_or_announce(tmp_path):
         load_config(tmp_path / "config.json")
 
 
+def test_plate_cameras_are_an_explicit_subset_of_paired_api_cameras(tmp_path):
+    config = fixture_state(tmp_path)
+    config["paired_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1", "ffmpeg_path": sys.executable}
+        for mac in ("2A1122334455", "2A1122334456")]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["vehicle"], "max_events_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    config["live_pool_detector"]["plate_cameras"] = ["2a:11:22:33:44:56"]
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    assert load_config(tmp_path / "config.json")["live_pool_detector"][
+        "plate_cameras"] == ["2A1122334456"]
+    for plates in (["2A11223344FF"], [], ["2A1122334455", "2A1122334455"], "2A1122334455"):
+        config["live_pool_detector"]["plate_cameras"] = plates
+        private_file(tmp_path / "config.json", json.dumps(config).encode())
+        with pytest.raises(CandidateError):
+            load_config(tmp_path / "config.json")
+
+
 @pytest.mark.asyncio
 async def test_shadow_mode_keeps_a_sleeping_cat_read_as_a_package_silent(tmp_path, monkeypatch):
     from test_aiport_held_followup import _scene

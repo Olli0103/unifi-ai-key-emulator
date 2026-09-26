@@ -253,7 +253,8 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
                         # held-package follow-up mode is optional (shadow).
                         or is_api and (api_fields - {"max_requests_per_hour"}
                                        <= set(detector)
-                                       <= api_fields | {"held_package_followup"}))
+                                       <= api_fields | {"held_package_followup",
+                                                        "plate_cameras"}))
                 or detector.get("held_package_followup", "shadow") not in {"shadow", "announce"}
                 or backend is not None and not (is_api or is_onnx)
                 or not is_api and (
@@ -273,6 +274,17 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
                 or type(detector["max_events_per_hour"]) is not int
                 or not 1 <= detector["max_events_per_hour"] <= 3600):
             raise CandidateError("Invalid live pool detector policy")
+        if "plate_cameras" in detector:
+            # Opt-in plate reading (#19): only listed paired cameras, API backend.
+            plates = detector["plate_cameras"]
+            try:
+                normalized = [normalize_mac(mac) for mac in plates] if isinstance(plates, list) else None
+            except ValueError:
+                normalized = None
+            if (not is_api or not normalized or len(set(normalized)) != len(normalized)
+                    or not set(normalized) <= seen):
+                raise CandidateError("Invalid live pool detector policy")
+            detector["plate_cameras"] = normalized
         try:
             RFDetrNanoDetector(object(), threshold=detector["threshold"])
         except DetectionError as exc:
@@ -687,7 +699,8 @@ class CandidateService:
                         detector["provider_config"], self.state_dir,
                         threshold=detector["threshold"],
                         max_requests_per_hour=detector.get("max_requests_per_hour"),
-                        package_lens_owned=self._package_lens_owned))
+                        package_lens_owned=self._package_lens_owned,
+                        plate_cameras=frozenset(detector.get("plate_cameras", ()))))
                     if live_pool and detector.get("inference_backend") == "vision_api" else
                     (lambda: OnnxRFDetrNanoDetector.from_model(
                         detector["model_path"], detector["model_sha256"],

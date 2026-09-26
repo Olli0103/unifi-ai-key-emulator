@@ -60,9 +60,9 @@ def smart_event_payload(camera_mac: str, change: TrackChange, *,
         raise SmartEventError("invalid_smart_event")
     descriptor = {
         "trackerID": change.track_id,
-        # The controller interprets a vehicle name as a license plate.
-        # An object detector cannot supply one.
-        "name": "" if change.kind == "vehicle" else change.kind,
+        # Protect stores a vehicle's name as its licensePlate; it is empty
+        # unless the plate reader reported one for this track (#19).
+        "name": (change.plate or "") if change.kind == "vehicle" else change.kind,
         "confidenceLevel": round(change.score * 100),
         "coord": [round(x1 * 1000), round(y1 * 1000),
                   round((x2 - x1) * 1000), round((y2 - y1) * 1000)],
@@ -93,7 +93,7 @@ def _descriptor(change: TrackChange, zone_ids: tuple[int, ...]) -> dict:
         raise SmartEventError("invalid_smart_event")
     return {
         "trackerID": change.track_id,
-        "name": "" if change.kind == "vehicle" else change.kind,
+        "name": (change.plate or "") if change.kind == "vehicle" else change.kind,
         "confidenceLevel": round(change.score * 100),
         "coord": [round(x1 * 1000), round(y1 * 1000),
                   round((x2 - x1) * 1000), round((y2 - y1) * 1000)],
