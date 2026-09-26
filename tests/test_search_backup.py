@@ -24,7 +24,9 @@ class FakeContainer:
         assert command[:2] == ["container", "exec"]
         args = [a for a in command[2:] if a != "-i"][1:]
         self.calls.append(args[0] if args[0] != "psql" else "psql:" + args[args.index("-d") + 1])
-        ok = lambda out=b"": subprocess.CompletedProcess(command, 0, out, b"")
+
+        def ok(out=b""):
+            return subprocess.CompletedProcess(command, 0, out, b"")
         database = args[args.index("-d") + 1] if "-d" in args else None
         if args[0] == "psql":
             return ok(json.dumps(self.databases[database]).encode())
