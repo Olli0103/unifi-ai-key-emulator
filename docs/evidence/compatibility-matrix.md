@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-26.2). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-26.3). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-26.2` for the `ai-key` profile, based on commit `54160ce`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-26.3` for the `ai-key` profile, based on commit `54160ce`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -83,6 +83,9 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `capability.retroactive_processing`: Retroactive processing of older footage | unsupported | — | — | — | Protect 7.2.105 | default |
 | `capability.recognize_anything_tagging`: Recognize Anything tags, detections and key-moment snapshots | unsupported | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
 | `capability.audio_speech`: Speech transcription (speechToText) | fixture-tested | — | — | — | vendor docs, AI Key 2.2.8 | explicit_opt_in |
+| **callbacks** | |  |  |  | | |
+| `callback.speech_to_text_transcriptions`: speechToText callback saved as native transcription rows | native-verified | — | — | native-verified | vendor docs, AI Key 2.2.8 | explicit_opt_in |
+| **capabilities** | |  |  |  | | |
 | `capability.ai_alarms`: AI query matches in Alarm Manager | unsupported | — | — | — | — | default |
 | **database** | |  |  |  | | |
 | `database.credential_rotation_hook`: PostgreSQL unifi-protect role rotated before management-password rotation | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
@@ -166,6 +169,9 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `capability.audio_speech`: A persisted native transcript on Protect 7.3.68 after a reload (issue #15)
 - `capability.audio_speech`: An alrmSpeak-enabled camera and the AI Key Speech to Text setting, both user actions
 - `capability.audio_speech`: Speech on AI Port-paired legacy cameras, which raise no alrmSpeak
+- `callback.speech_to_text_transcriptions`: Persistence after a controller restart
+- `callback.speech_to_text_transcriptions`: Non-German speech, noise and overlapping speakers on live events
+- `callback.speech_to_text_transcriptions`: Search by transcript text in the Protect UI
 - `capability.ai_alarms`: Native contract (issue #26)
 - `database.credential_rotation_hook`: A real PostgreSQL transaction
 - `database.credential_rotation_hook`: Protect connecting with the rotated password

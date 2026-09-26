@@ -58,3 +58,16 @@ Audio and transcripts are neither logged nor kept; the job journal records only 
 2. The user chooses the speech backend. Audio leaves the network only if it is the OpenAI API.
 3. A real speech event produces a transcription row that Protect shows after a reload.
 4. For the nine AI Port-paired legacy cameras, Protect raises no `alrmSpeak`. Speech there would need an AI Port audio detection path, which does not exist yet (#28).
+
+## Live result on Protect 7.3.68 (26 Sep 2026)
+
+Setup:
+- Wohnzimmer (G6 Instant) has `alrmSpeak` on.
+- The AI Key's `speechToTextSettings` covers only Wohnzimmer.
+- The backend is a local whisper.cpp (`large-v3-turbo`) container on the host-only container bridge. No audio left the Mac.
+
+Result: between 10:41 and 10:48, four real speech events each dispatched `speechToText`.
+- **Our side:** every job completed. The callbacks were accepted, posting 10, 13, 6 and 6 segments.
+- **Protect readback:** `GET /proxy/protect/api/events/<event>/transcriptions?camera=<camera>` returned exactly 10, 13, 6 and 6 rows. Every row has text, and its start and end fall inside its event.
+- **Event metadata:** `sttState: done`, `sttDetected: true`, `sttSearchable: true`.
+- **Privacy:** only counts and time bounds were read; no transcript text was inspected.

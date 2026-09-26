@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-26.2",
+ "manifest_version": "ai-key/2026-09-26.3",
  "processor_profile": "ai-key",
  "base_commit": "54160ce",
  "emulated_identity": {
@@ -98,7 +98,8 @@
     "changeAiInferAgentSettings, networkStatus, sshService, unknown function names and RequestAI answered 95",
     "one automatic G6 Instant recognizeKeyFrames event with a full RAM callback; exact-event GET returned metadata.ramState done and a non-empty metadata.ramDescription, with the camera's own detections kept",
     "a description-only RAM result from 23 Sep read back as ramState done with an empty ramDescription",
-    "recognizeKeyFrames key moments placed exactly at the export end in 13 of 39 requests"
+    "recognizeKeyFrames key moments placed exactly at the export end in 13 of 39 requests",
+    "four Wohnzimmer (G6 Instant) alrmSpeak audio events dispatched speechToText; the local Whisper backend answered; Protect saved 10, 13, 6 and 6 transcription rows (35, equal to the posted segments), all with text and times inside their events, and set metadata sttState done, sttDetected and sttSearchable (26 Sep, readback by the event transcriptions route)"
    ],
    "not_observed": [
     "fresh adoption, credential rotation or factory-login changes on 7.3.68",
@@ -1673,6 +1674,35 @@
     "Speech on AI Port-paired legacy cameras, which raise no alrmSpeak"
    ],
    "notes": "Protect dispatches speechToText only for an alrmSpeak audio event and only to an AI processor whose speechToTextSettings list the camera; no capability flag is involved. Refused unless speech_to_text lists the camera."
+  },
+  {
+   "id": "callback.speech_to_text_transcriptions",
+   "area": "callbacks",
+   "title": "speechToText callback saved as native transcription rows",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.60-bundle",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_speech_to_text.py::test_a_speech_event_is_transcribed_and_posted_in_protects_shape",
+    "tests/test_speech_to_text.py::test_a_failing_backend_posts_nothing"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/speech.py",
+    "src/aikey/whisper_server.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Persistence after a controller restart",
+    "Non-German speech, noise and overlapping speakers on live events",
+    "Search by transcript text in the Protect UI"
+   ],
+   "notes": "Verified by transcription rows read back per event (counts and time bounds only, no text inspected), not by HTTP 200. Backend: local whisper.cpp; audio never left the Mac."
   },
   {
    "id": "capability.ai_alarms",
