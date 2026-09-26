@@ -11,7 +11,12 @@ Configuration (``find_anything``)::
 
     {"clip_server": "http://192.168.64.1:8180",
      "index_camera_ids": ["<protect camera id>", ...],
-     "max_objects": 8}
+     "max_objects": 8,
+     "retroactive": false}
+
+``retroactive`` (opt-in) advertises ``supportRetroactiveProcessing``, so
+Protect may backfill past events of these cameras as ``multipleImages``
+tasks; those crops are embedded locally only.
 """
 
 from __future__ import annotations
@@ -51,9 +56,12 @@ def normalize(values: Any) -> list[float]:
 
 def validate_find_anything_config(value: Any) -> dict:
     """Return a normalized copy of ``find_anything`` or raise ClipError."""
-    if (not isinstance(value, dict) or set(value) - {"clip_server", "index_camera_ids", "max_objects"}
+    if (not isinstance(value, dict)
+            or set(value) - {"clip_server", "index_camera_ids", "max_objects", "retroactive"}
             or "clip_server" not in value):
-        raise ClipError("find_anything needs clip_server and optional index_camera_ids, max_objects")
+        raise ClipError("find_anything needs clip_server and optional index_camera_ids, max_objects, retroactive")
+    if type(value.get("retroactive", False)) is not bool:
+        raise ClipError("find_anything.retroactive must be a JSON boolean")
     server = value["clip_server"]
     parsed = urlsplit(server) if isinstance(server, str) else None
     try:
@@ -74,7 +82,8 @@ def validate_find_anything_config(value: Any) -> dict:
     limit = value.get("max_objects", 8)
     if type(limit) is not int or not 1 <= limit <= 16:
         raise ClipError("find_anything.max_objects must be 1..16")
-    return {"clip_server": server.rstrip("/"), "index_camera_ids": list(cameras), "max_objects": limit}
+    return {"clip_server": server.rstrip("/"), "index_camera_ids": list(cameras), "max_objects": limit,
+            "retroactive": value.get("retroactive", False)}
 
 
 class ClipClient:

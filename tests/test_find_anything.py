@@ -51,6 +51,13 @@ class Controller:
         return web.json_response({"model": clip.MODEL, "dim": 768,
                                   "embeddings": [vector(i) for i in range(len(regions))]})
 
+    async def crop(self, request):
+        self.crop_requests = getattr(self, "crop_requests", []) + [request.match_info["image"]]
+        from PIL import Image
+        out = io.BytesIO()
+        Image.new("RGB", (96, 160), (90, 90, 90)).save(out, "JPEG" if request.match_info["image"] != "png1" else "PNG")
+        return web.Response(body=out.getvalue(), content_type="image/jpeg")
+
     async def text(self, request):
         self.text_requests.append(await request.json())
         return web.json_response({"model": clip.MODEL, "dim": 768, "embeddings": [vector(5)]})
@@ -87,6 +94,7 @@ async def controller(tmp_path):
     app = web.Application()
     app.router.add_get("/internal/aiprocessors/video/export", service.export)
     app.router.add_post("/v1/image", service.image)
+    app.router.add_get("/internal/aiprocessors/image/{image}", service.crop)
     app.router.add_post("/v1/text", service.text)
     app.router.add_post("/v1/chat/completions", service.vision)
     app.router.add_post("/internal/aiprocessors/recognize-anything", service.callback)
@@ -591,3 +599,69 @@ def test_capability_flags_follow_the_served_features(tmp_path):
     options["device"]["feature_flags"] = {"supportTts": {"enabled": False, "version": "v1"}}
     assert DeviceService(options, tmp_path / "c", admit).get_info()["featureFlags"]["supportTts"][
         "enabled"] is False
+
+
+def multiple_images(images, camera=CAMERA):
+    return {"command": "recognizeKeyFrames", "payload": {
+        "resUrl": "/internal/aiprocessors/recognize-anything", "ramType": "multipleImages",
+        "format": "jpeg", "camera": camera, "event": EVENT, "channel": 0, "start": START, "end": END,
+        "type": "rotating", "images": images}}
+
+
+def crop_entry(image_id, tracker, moment, confidence=80, kind="person"):
+    return {"reqUrl": f"/internal/aiprocessors/image/{image_id}", "imageId": image_id,
+            "keyMoment": moment, "confidence": confidence, "objectType": kind,
+            "attributes": {"trackerId": tracker}, "trackerId": tracker}
+
+
+async def test_retroactive_crops_are_embedded_locally_as_thumbnail_tags(controller, tmp_path):
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        result = await worker.handle(multiple_images([
+            crop_entry("crop1", 11, START + 500), crop_entry("png1", 12, START + 900, 60, "vehicle"),
+            crop_entry("crop3", 11, START + 500, 40)]))            # same object, lower confidence
+    finally:
+        await worker.stop()
+    assert controller.vision_requests == []                     # never the vision provider
+    assert controller.crop_requests == ["crop1", "png1"]
+    assert [r["regions"] for r in controller.clip_requests] == [[[0.0, 0.0, 1.0, 1.0]]] * 2
+    [parts] = controller.callbacks
+    ram = parts["ram"]
+    assert set(parts) == {"ram"} and ram["description"] == "" and ram["keyMomentsTags"] == []
+    assert [(t["trackerID"], t["keyMomentMs"]) for t in ram["thumbnailTags"]] == [
+        (11, START + 500), (12, START + 900)]
+    assert all(len(t["imgEmbed"]) == 768 for t in ram["thumbnailTags"])
+    assert result["result"] == {"indexed": 2, "snapshots": 0}
+
+
+@pytest.mark.parametrize("images", [
+    [],
+    [{"reqUrl": "/internal/aiprocessors/image/other", "imageId": "crop1", "keyMoment": START, "trackerId": 1}],
+    [{"reqUrl": "/internal/aiprocessors/image/crop1", "imageId": "crop1", "keyMoment": START}],
+    [{"reqUrl": "/internal/aiprocessors/image/../x", "imageId": "../x", "keyMoment": START, "trackerId": 1}],
+])
+async def test_malformed_retroactive_tasks_are_refused_before_media(controller, tmp_path, images):
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError):
+            await worker.handle(multiple_images(images))
+        with pytest.raises(WorkerError):
+            await worker.handle(multiple_images([crop_entry("crop1", 1, START)], camera="unlisted"))
+    finally:
+        await worker.stop()
+    assert getattr(controller, "crop_requests", []) == [] and controller.clip_requests == []
+
+
+def test_retroactive_processing_is_advertised_only_on_opt_in(tmp_path):
+    async def admit(body):
+        return {"accepted": True}
+    options = device_config()
+    options["search"] = {"enabled": True, "profile": clip.PROFILE}
+    options["find_anything"] = {"clip_server": "http://127.0.0.1:8180", "index_camera_ids": ["cam"]}
+    flags = DeviceService(options, tmp_path / "a", admit).get_info()["featureFlags"]
+    assert flags["supportRetroactiveProcessing"] == {"enabled": False, "version": "v1"}
+    options["find_anything"]["retroactive"] = True
+    flags = DeviceService(options, tmp_path / "b", admit).get_info()["featureFlags"]
+    assert flags["supportRetroactiveProcessing"]["enabled"] is True
+    with pytest.raises(clip.ClipError):
+        clip.validate_find_anything_config({"clip_server": "http://127.0.0.1:8180", "retroactive": "yes"})

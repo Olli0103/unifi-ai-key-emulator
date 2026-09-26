@@ -379,6 +379,8 @@ class DeviceService:
         return {
             "supportImageSearch": image_search,
             "supportRecognizeAnything": indexing,
+            # Opt-in: Protect then backfills past events as multipleImages tasks.
+            "supportRetroactiveProcessing": indexing and find_anything.get("retroactive") is True,
             "supportTts": bool(self._speech_cameras()),
             "supportFaceRecognition": isinstance(face_cameras, list) and bool(face_cameras)
                                       and isinstance(faces.get("server"), str),

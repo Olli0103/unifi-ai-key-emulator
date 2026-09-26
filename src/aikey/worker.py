@@ -550,6 +550,10 @@ class JobProcessor:
                 and (command["payload"].get("faceMeta") or command["payload"].get("personMeta"))):
             return self._normalize_faces(command)
         if (command.get("command") == "recognizeKeyFrames" and isinstance(command.get("payload"), dict)
+                and command["payload"].get("ramType") == "multipleImages"
+                and command["payload"].get("camera") in self.index_cameras):
+            return self._normalize_multiple_images(command)
+        if (command.get("command") == "recognizeKeyFrames" and isinstance(command.get("payload"), dict)
                 and command["payload"].get("camera") in self.index_cameras
                 and command["payload"].get("camera") not in self._scopes_by_camera
                 and not (self.continuous and self.camera_registry.allows(command["payload"].get("camera")))):
@@ -739,6 +743,61 @@ class JobProcessor:
                     snapshots[tracker] = (confidence, ts, _padded(coord, 0.1), kind)
         ranked = sorted(snapshots.items(), key=lambda item: (-item[1][0], item[0]))
         return [[tracker, ts, region, kind] for tracker, (_, ts, region, kind) in ranked[:limit]]
+
+    def _normalize_multiple_images(self, command):
+        """Protect's retroactive task: the saved object crops of a past event.
+
+        7.3.60 ``runRetroactiveProcessing`` sends each past smart event as
+        ``ramType: multipleImages`` with one image per detected thumbnail
+        (``toMultipleImagesEntry``: imageId, keyMoment = clockBestWall,
+        trackerId, objectType). Those objects already exist, so each crop is
+        answered as a ``thumbnailTags`` entry keyed by tracker and exact
+        detection time. Crops go only to the local CLIP server; the vision
+        provider is never contacted and no caption is produced.
+        """
+        body = command["payload"]
+        required = {"resUrl", "ramType", "format", "camera", "event", "channel", "start", "end",
+                    "type", "images"}
+        if set(command) != {"command", "payload"} or set(body) != required:
+            raise WorkerError("Unsupported recognizeKeyFrames payload fields")
+        body = json.loads(_json(body))
+        if (not isinstance(body["event"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])
+                or body["format"] != "jpeg" or body["type"] != "rotating"
+                or type(body["channel"]) is not int or body["channel"] != 0
+                or any(type(body[key]) is not int for key in ("start", "end"))
+                or not 0 <= body["start"] <= body["end"] <= 2 ** 53 - 1):
+            raise WorkerError("multipleImages is limited to one event's saved object crops")
+        images = body["images"]
+        if not isinstance(images, list) or not 1 <= len(images) <= 256:
+            raise WorkerError("multipleImages must list 1 to 256 images")
+        chosen = {}
+        for item in images:
+            if not isinstance(item, dict):
+                raise WorkerError("multipleImages entries need an image, tracker and key moment")
+            image_id, tracker, moment = item.get("imageId"), item.get("trackerId"), item.get("keyMoment")
+            confidence = item.get("confidence", 0)
+            if (not isinstance(image_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", image_id)
+                    or type(tracker) is not int or not 0 <= tracker <= 2 ** 31
+                    or type(moment) is not int or not 0 <= moment <= 2 ** 53 - 1
+                    or item.get("reqUrl") != f"/internal/aiprocessors/image/{image_id}"):
+                raise WorkerError("multipleImages entries need an image, tracker and key moment")
+            confidence = float(confidence) if type(confidence) in (int, float) and math.isfinite(confidence) else 0.0
+            key = (tracker, moment)
+            if key not in chosen or confidence > chosen[key][0]:
+                chosen[key] = (confidence, image_id)
+        ranked = sorted(chosen.items(), key=lambda item: (-item[1][0], item[0]))[:16]
+        media = [("image", self._url(f"/internal/aiprocessors/image/{image_id}", "media"))
+                 for _, (_, image_id) in ranked]
+        body["_crops"] = [[tracker, moment] for (tracker, moment), _ in ranked]
+        callback = self._url(body["resUrl"], "callback")
+        if urlsplit(callback).path != _LEGACY_CALLBACK:
+            raise WorkerError("recognizeKeyFrames requires the observed RAM callback")
+        normalized = {"operation": "indexImages", "payload": body, "callback": callback,
+                      "callbackKind": "legacy_tagging", "media": media}
+        fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
+        job_id = hashlib.sha256(f"multipleImages:{body['camera']}:{body['event']}".encode()).hexdigest()
+        return (job_id, fingerprint, "indexImages", body, callback, "legacy_tagging",
+                media, min(self.timeout_s, 90))
 
     def _normalize_index(self, command):
         """Index-only key-moment task: local CLIP embeddings, no caption.
@@ -932,7 +991,8 @@ class JobProcessor:
             raise WorkerError("Invalid test scope reservation; inspect it without resetting the permit") from exc
 
     def _reserve_test_scope(self, job):
-        if not self.test_scopes or job.operation in {"speechToText", "recognizeFaces", "indexKeyFrames"}:
+        if not self.test_scopes or job.operation in {"speechToText", "recognizeFaces", "indexKeyFrames",
+                                                     "indexImages"}:
             return
         camera_id = job.payload.get("camera") if job.operation == "recognizeKeyFrames" else job.payload.get("cameraId")
         scope = self._scopes_by_camera.get(camera_id)
@@ -1001,7 +1061,8 @@ class JobProcessor:
         normalized = self._normalize(command)
         await self.start()
         job_id, fingerprint, operation, body, callback, kind, media, budget = normalized
-        if (self.continuous and operation not in {"speechToText", "recognizeFaces", "indexKeyFrames"}
+        if (self.continuous and operation not in {"speechToText", "recognizeFaces", "indexKeyFrames",
+                                                  "indexImages"}
                 and not self.camera_registry.allows(body["camera"])):
             raise WorkerError("Camera inventory changed before admission")
         if job_id in self._pending:
@@ -1039,7 +1100,7 @@ class JobProcessor:
         try:
             self._reserve_test_scope(job)
             if self.caption_budget is not None and operation not in {"speechToText", "recognizeFaces",
-                                                                     "indexKeyFrames"}:
+                                                                     "indexKeyFrames", "indexImages"}:
                 try:
                     receipt = self.caption_budget.reserve(job_id, fingerprint, body["camera"])
                 except CaptionBudgetExhausted as exc:
@@ -1407,6 +1468,38 @@ class JobProcessor:
                 images.append((str(tracker), out.getvalue()))
         return tags, moments, images
 
+    async def _execute_index_images(self, job):
+        started = time.monotonic()
+        if self._clip is None:
+            self._clip = clip.ClipClient(self.find_anything, timeout_s=60)
+        tags = []
+        for (tracker, moment), (_, url) in zip(job.payload["_crops"], job.media):
+            data, _ = await self._fetch(url, "image")
+            kind = self._image_type(data)
+            if kind != "image/jpeg":
+                from PIL import Image
+                with Image.open(BytesIO(data)) as picture:
+                    out = BytesIO()
+                    picture.convert("RGB").save(out, format="JPEG", quality=92)
+                    data = out.getvalue()
+            try:
+                [vector] = await self._clip.embed_regions(data, [[0.0, 0.0, 1.0, 1.0]])
+            except clip.ClipError as exc:
+                raise WorkerError(str(exc)) from exc
+            tags.append({"keyMomentMs": moment, "tags": [], "trackerID": tracker,
+                         "imgEmbed": [round(value, 6) for value in vector]})
+        elapsed = round((time.monotonic() - started) * 1000)
+        payload = {"cameraId": job.payload["camera"], "eventId": job.payload["event"],
+                   "description": "", "status": "success", "keyMomentsTags": [],
+                   "thumbnailTags": tags, "inferBoxMs": 0, "inferTagMs": elapsed,
+                   "inferTxtMs": 0, "preProcessMs": 0, "timeElapsedMs": elapsed}
+        summary = {"indexed": len(tags), "snapshots": 0}
+        if self.callback_mode == "disabled":
+            return {"status": "processed", "jobId": job.job_id, "callback": "disabled", "result": summary}
+        result = await self._post_callback(job, payload)
+        result["result"] = summary
+        return result
+
     async def _execute_index(self, job):
         started = time.monotonic()
         (_, url), = job.media
@@ -1433,6 +1526,8 @@ class JobProcessor:
             return await self._execute_speech(job)
         if job.operation == "indexKeyFrames":
             return await self._execute_index(job)
+        if job.operation == "indexImages":
+            return await self._execute_index_images(job)
         if job.operation == "recognizeFaces":
             return await self._execute_faces(job)
         started = time.monotonic()
