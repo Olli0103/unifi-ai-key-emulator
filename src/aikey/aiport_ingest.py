@@ -461,9 +461,13 @@ class AiPortIngress:
             return []
         return [{"deviceID": session.spec.device_id, "points": session.spec.points}]
 
-    def latest_frame(self) -> bytes | None:
+    def latest_frame(self, *, max_age: float | None = None) -> bytes | None:
         session = self._session
-        return session.latest_frame if session is not None and session.healthy else None
+        if session is None or not session.healthy:
+            return None
+        if max_age is not None and time.monotonic() - session.last_frame_at > max_age:
+            return None
+        return session.latest_frame
 
     @property
     def reserved_points(self) -> int:
@@ -561,6 +565,11 @@ class AiPortIngressPool:
     def list_streams(self) -> list[dict]:
         return [stream for _, ingress in sorted(self._ingresses.items())
                 for stream in ingress.list_streams()]
+
+    def latest_frame(self, camera_mac: str, *, max_age: float) -> bytes | None:
+        """The camera's newest decoded JPEG, or None if unknown, down or stale."""
+        ingress = self._ingresses.get(camera_mac)
+        return ingress.latest_frame(max_age=max_age) if ingress is not None else None
 
     def camera_diagnostics(self, camera_order: tuple[str, ...]
                            ) -> tuple[dict[str, object], ...]:

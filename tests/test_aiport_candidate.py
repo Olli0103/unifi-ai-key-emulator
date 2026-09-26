@@ -3366,3 +3366,153 @@ async def test_a_hanging_control_link_cannot_block_stop(tmp_path, monkeypatch):
     await service.stop()
     assert time.monotonic() - started < 5
     assert service.smart_events_closed_on_stop == 0
+
+
+_LIVE_A, _LIVE_B = "2A1122334455", "2A1122334466"
+_LIVE_URI = "https://192.168.10.1:7444/internal/camera-upload/Tok3nABCdef4567890xyzQRS"
+
+
+def _live_snapshot_service(tmp_path, monkeypatch):
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [
+        {"camera_mac": camera, "source_ip": "192.168.10.1", "ffmpeg_path": sys.executable}
+        for camera in (_LIVE_A, _LIVE_B)]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person"], "max_events_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    frames = {_LIVE_A: b"\xff\xd8camera-a-jpeg"}
+    service.ingress.latest_frame = lambda camera, *, max_age: frames.get(camera)
+    uploads = []
+
+    class Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        class content:
+            @staticmethod
+            async def read(_limit):
+                return b"{}"
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def post(self, url, *, data, allow_redirects):
+            uploads.append((url, data, allow_redirects))
+            return Response()
+
+    monkeypatch.setattr("aikey.aiport_candidate.aiohttp.ClientSession",
+                        lambda **_kwargs: Session())
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    return service, frames, uploads, Sink()
+
+
+async def _live_request(service, sink, message_id, **overrides):
+    payload = {"what": "snapshot", "deviceID": _LIVE_A, "quality": "medium",
+               "timeoutMs": 60_000, "uri": _LIVE_URI, **overrides}
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "GetRequest", "messageId": message_id,
+        "responseExpected": True, "payload": payload}).encode())
+    return sink.messages[-1]
+
+
+@pytest.mark.asyncio
+async def test_live_snapshot_uploads_the_cameras_latest_frame(tmp_path, monkeypatch):
+    # Protect 7.3.68 routes a paired camera's live snapshot through its AI Port.
+    service, _frames, uploads, sink = _live_snapshot_service(tmp_path, monkeypatch)
+    reply = await _live_request(service, sink, 7)
+    assert reply["statusCode"] == 0
+    (url, form, redirects), = uploads
+    assert url == _LIVE_URI and redirects is False
+    field, = form._fields
+    assert field[0]["name"] == "payload" and field[2] == b"\xff\xd8camera-a-jpeg"
+    assert service.live_snapshot_uploads == 1
+    await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_live_snapshot_without_a_fresh_frame_is_unavailable(tmp_path, monkeypatch):
+    service, frames, uploads, sink = _live_snapshot_service(tmp_path, monkeypatch)
+    frames.clear()                        # stream down, or newest frame too old
+    reply = await _live_request(service, sink, 8)
+    assert (reply["statusCode"], reply["payload"]["description"]) == (5, "snapshot_unavailable")
+    assert uploads == []
+    assert service.live_snapshot_rejection_reasons == {"stale_or_missing_frame": 1}
+    await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_live_snapshot_for_a_wrong_or_missing_camera_is_refused(tmp_path, monkeypatch):
+    service, _frames, uploads, sink = _live_snapshot_service(tmp_path, monkeypatch)
+    assert (await _live_request(service, sink, 9, deviceID="2A9999999999"))["statusCode"] == 5
+    assert (await _live_request(service, sink, 10, deviceID=""))["statusCode"] == 5
+    # Paired to this AI Port, but no frame for it: never another camera's image.
+    assert (await _live_request(service, sink, 11, deviceID=_LIVE_B))["statusCode"] == 5
+    assert uploads == []
+    assert service.live_snapshot_rejection_reasons == {
+        "unexpected_snapshot_camera": 1, "snapshot_camera_required": 1,
+        "stale_or_missing_frame": 1}
+    await service.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uri", [
+    "https://192.168.10.1:6666/internal/camera-upload/Tok3nABCdef4567890xyzQRS",
+    "https://192.168.10.99:7444/internal/camera-upload/Tok3nABCdef4567890xyzQRS",
+    "http://192.168.10.1:7444/internal/camera-upload/Tok3nABCdef4567890xyzQRS",
+    "https://192.168.10.1:7444/internal/other/Tok3nABCdef4567890xyzQRS",
+    "https://192.168.10.1:7444/internal/camera-upload/Tok3nABCdef4567890xyzQRS?x=1",
+])
+async def test_live_snapshot_only_uploads_to_the_pinned_token_route(tmp_path, monkeypatch, uri):
+    service, _frames, uploads, sink = _live_snapshot_service(tmp_path, monkeypatch)
+    reply = await _live_request(service, sink, 12, uri=uri)
+    assert (reply["statusCode"], reply["payload"]["description"]) == (5, "snapshot_request_invalid")
+    assert uploads == []
+    await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_live_snapshot_after_a_stream_reconnect_uses_only_the_new_frame(tmp_path, monkeypatch):
+    service, frames, uploads, sink = _live_snapshot_service(tmp_path, monkeypatch)
+    assert (await _live_request(service, sink, 13))["statusCode"] == 0
+    frames.clear()                                      # stream restarting
+    assert (await _live_request(service, sink, 14))["statusCode"] == 5
+    frames[_LIVE_A] = b"\xff\xd8after-reconnect"        # first frame after it
+    assert (await _live_request(service, sink, 15))["statusCode"] == 0
+    assert [form._fields[0][2] for _url, form, _r in uploads] == [
+        b"\xff\xd8camera-a-jpeg", b"\xff\xd8after-reconnect"]
+    # A control link that has not agreed parameters again gets no reply at all.
+    service._params_agreed = False
+    before = len(sink.messages)
+    await _live_request_raw(service, sink, 16)
+    assert len(sink.messages) == before
+    await service.stop()
+
+
+async def _live_request_raw(service, sink, message_id):
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "GetRequest", "messageId": message_id, "responseExpected": True,
+        "payload": {"what": "snapshot", "deviceID": _LIVE_A, "uri": _LIVE_URI}}).encode())

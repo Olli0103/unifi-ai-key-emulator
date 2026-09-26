@@ -17,6 +17,10 @@ class SnapshotError(ValueError):
     """A snapshot or controller upload request failed validation."""
 
 
+# Protect's on-demand ("live") snapshot upload: a random token path on 7444.
+_LIVE_UPLOAD_PATH = re.compile(r"/internal/camera-upload/[A-Za-z0-9]{16,64}\Z")
+_LIVE_UPLOAD_PORT = 7444
+_LIVE_QUALITIES = frozenset({"medium", "max"})
 _UPLOAD_PATH = re.compile(
     r"/internal/camera-upload/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
@@ -99,6 +103,42 @@ def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int, *,
     }
     return SmartSnapshot(filename, jpeg, metadata, full_fov_filename,
                          full_fov_jpeg, full_fov_width, full_fov_height)
+
+
+def validated_live_snapshot_request(payload: object, *,
+                                    controller_ip: str) -> tuple[str, str]:
+    """Accept Protect's on-demand snapshot request; return (camera MAC, URL).
+
+    Observed on Protect 7.3.68 for paired cameras: ``what`` is ``snapshot``,
+    ``deviceID`` names the camera, and the upload goes to a one-use token
+    path on the pinned controller's port 7444.
+    """
+    if (not isinstance(payload, dict) or payload.get("what") != "snapshot"
+            or set(payload) - {"what", "deviceID", "quality", "timeoutMs", "uri"}):
+        raise SnapshotError("unsupported_snapshot_request")
+    if payload.get("quality", "medium") not in _LIVE_QUALITIES:
+        raise SnapshotError("unexpected_snapshot_request")
+    timeout_ms = payload.get("timeoutMs", 60_000)
+    if type(timeout_ms) is not int or not 0 < timeout_ms <= 60_000:
+        raise SnapshotError("invalid_snapshot_timeout")
+    device = payload.get("deviceID")
+    if not isinstance(device, str) or not re.fullmatch(r"[0-9A-Fa-f]{12}", device):
+        raise SnapshotError("snapshot_camera_required")
+    uri = payload.get("uri")
+    if not isinstance(uri, str) or len(uri) > 256:
+        raise SnapshotError("invalid_snapshot_url")
+    try:
+        parsed = urlsplit(uri)
+        expected = ipaddress.IPv4Address(controller_ip)
+        actual = ipaddress.IPv4Address(parsed.hostname or "")
+        port = parsed.port
+    except (ipaddress.AddressValueError, ValueError) as exc:
+        raise SnapshotError("invalid_snapshot_url") from exc
+    if (parsed.scheme != "https" or actual != expected or port != _LIVE_UPLOAD_PORT
+            or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or not _LIVE_UPLOAD_PATH.fullmatch(parsed.path)):
+        raise SnapshotError("invalid_snapshot_url")
+    return device.upper(), uri
 
 
 def validated_upload_url(payload: object, *, controller_ip: str, filename: str,

@@ -6,6 +6,7 @@ from pathlib import Path
 import shlex
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -396,3 +397,17 @@ async def test_new_websocket_requires_fresh_parameter_agreement(tmp_path):
         "functionName": "UiStreamControl", "messageId": 6,
         "payload": {"streaming": False, "deviceID": CAMERA_MAC}}).encode())
     assert len(sink.messages) == before
+
+
+def test_latest_frame_honours_a_maximum_age():
+    ingress = AiPortIngress(camera_mac="2A1122334455", source_ip="192.168.10.1",
+                            ffmpeg_path=sys.executable)
+    session = SimpleNamespace(healthy=True, latest_frame=b"\xff\xd8x",
+                              last_frame_at=time.monotonic() - 6)
+    ingress._session = session
+    assert ingress.latest_frame() == b"\xff\xd8x"
+    assert ingress.latest_frame(max_age=5) is None
+    session.last_frame_at = time.monotonic()
+    assert ingress.latest_frame(max_age=5) == b"\xff\xd8x"
+    session.healthy = False                          # decoder down or restarting
+    assert ingress.latest_frame(max_age=5) is None

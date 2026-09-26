@@ -43,7 +43,8 @@ from .aiport_tracking import TemporalTracker, TrackChange, TrackingError
 from .aiport_smart_events import (SmartEventError, camera_event_payload,
                                   smart_event_payload)
 from .aiport_snapshots import (
-    SmartSnapshot, SnapshotError, make_smart_snapshot, validated_upload_url,
+    SmartSnapshot, SnapshotError, make_smart_snapshot, validated_live_snapshot_request,
+    validated_upload_url,
 )
 from .aiport_recorded_probe import (
     RecordedProbeError, infer_recorded_person, parse_recorded_probe,
@@ -71,6 +72,9 @@ _MAX_MANAGE = 8192
 _DISCONNECT_GRACE_SECONDS = 15
 # Bound on closing open native events while stopping (e.g. a redeploy).
 _STOP_CLOSE_SECONDS = 2.0
+# On-demand snapshots from the newest decoded frame (Protect's live view).
+_LIVE_SNAPSHOT_MAX_AGE = 5.0
+_LIVE_SNAPSHOT_CONCURRENCY = 2
 _ALLOWED_TOP_LEVEL = frozenset(("username", "password", "mgmt", "hosts", "protocol", "mode"))
 _ALLOWED_MGMT = frozenset(("token", "hosts", "protocol", "mode", "nvr",
                            "username", "password", "controller", "consoleId",
@@ -605,6 +609,9 @@ class CandidateService:
         self._live_event_times: deque[float] = deque()
         self.snapshot_requests = 0
         self.snapshot_uploads = 0
+        self.live_snapshot_uploads = 0
+        self.live_snapshot_rejection_reasons: dict[str, int] = {}
+        self._live_snapshot_slots = asyncio.Semaphore(_LIVE_SNAPSHOT_CONCURRENCY)
         self.snapshot_rejections = 0
         self.snapshot_rejection_reasons: dict[str, int] = {}
         self.last_stream_error: str | None = None
@@ -1534,6 +1541,8 @@ class CandidateService:
             "smart_events_closed_on_stop": self.smart_events_closed_on_stop,
             "snapshot_requests": self.snapshot_requests,
             "snapshot_uploads": self.snapshot_uploads,
+            "live_snapshot_uploads": self.live_snapshot_uploads,
+            "live_snapshot_rejection_reasons": dict(self.live_snapshot_rejection_reasons),
             "snapshot_rejections": self.snapshot_rejections,
             "snapshot_rejection_reasons": dict(self.snapshot_rejection_reasons),
             "synthetic_probe_claimed": self.synthetic_probe_claimed,
@@ -2157,6 +2166,9 @@ class CandidateService:
                     self.snapshot_rejection_reasons.get("unadopted", 0) + 1)
                 return
             request_payload = message.get("payload")
+            if isinstance(request_payload, dict) and request_payload.get("what") == "snapshot":
+                await self._serve_live_snapshot(ws, request_id, request_payload)
+                return
             requested_filename = (request_payload.get("filename")
                                   if isinstance(request_payload, dict) else None)
             pool_pending = None
@@ -2241,6 +2253,65 @@ class CandidateService:
                 await self._reply_control(ws, function, request_id, 0, {})
                 self.snapshot_uploads += 1
             return
+
+    async def _serve_live_snapshot(self, ws, request_id: int, payload: dict) -> None:
+        """Upload the camera's newest decoded frame for Protect's live view.
+
+        Protect 7.3.68 routes a paired camera's on-demand snapshot through its
+        AI Port. Only a frame of the requested camera, at most a few seconds
+        old, is sent, and only to the pinned controller's one-use upload URL.
+        """
+        async def refuse(reason: str, description: str) -> None:
+            self.live_snapshot_rejection_reasons[reason] = (
+                self.live_snapshot_rejection_reasons.get(reason, 0) + 1)
+            await self._reply_control(ws, "GetRequest", request_id, 5,
+                                      {"description": description})
+
+        try:
+            camera, url = validated_live_snapshot_request(
+                payload, controller_ip=self.config["controller_ip"])
+            camera = normalize_mac(camera)
+        except (SnapshotError, IngressError) as exc:
+            await refuse(str(exc) if isinstance(exc, SnapshotError) else "invalid_camera",
+                         "snapshot_request_invalid")
+            return
+        frame = None
+        if isinstance(self.ingress, AiPortIngressPool):
+            if camera not in self._pool_camera_order:
+                await refuse("unexpected_snapshot_camera", "snapshot_request_invalid")
+                return
+            frame = self.ingress.latest_frame(camera, max_age=_LIVE_SNAPSHOT_MAX_AGE)
+        elif isinstance(self.ingress, AiPortIngress):
+            if camera != self.ingress.camera_mac:
+                await refuse("unexpected_snapshot_camera", "snapshot_request_invalid")
+                return
+            frame = self.ingress.latest_frame(max_age=_LIVE_SNAPSHOT_MAX_AGE)
+        if frame is None:
+            await refuse("stale_or_missing_frame", "snapshot_unavailable")
+            return
+        if self._live_snapshot_slots.locked():
+            await refuse("busy", "snapshot_unavailable")
+            return
+        async with self._live_snapshot_slots:
+            try:
+                connector = VerifiedConnector(
+                    ssl_context=self._client_context(),
+                    expected_fingerprint=self.config["controller_pin"])
+                timeout = aiohttp.ClientTimeout(total=10, connect=5, sock_connect=5)
+                async with aiohttp.ClientSession(
+                        connector=connector, timeout=timeout, trust_env=False) as session:
+                    form = aiohttp.FormData()
+                    form.add_field("payload", frame, filename="snapshot.jpg",
+                                   content_type="image/jpeg")
+                    async with session.post(url, data=form, allow_redirects=False) as response:
+                        if response.status != 200:
+                            raise aiohttp.ClientError("snapshot_upload_rejected")
+                        await response.content.read(1024)
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ssl.SSLError):
+                await refuse("upload_failed", "snapshot_upload_failed")
+                return
+        await self._reply_control(ws, "GetRequest", request_id, 0, {})
+        self.live_snapshot_uploads += 1
 
     @staticmethod
     async def _expire_diagnostic(ws: aiohttp.ClientWebSocketResponse, until: int) -> None:
