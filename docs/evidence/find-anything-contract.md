@@ -1,5 +1,7 @@
 # AI Key Find Anything (basic mode) contract (issues #2, #21)
 
+**Status, 26 Sep 2026 15:55: verified natively on Protect 7.3.68** (Mac search host, see [Live verification](#live-verification-26-sep-2026)). The blocker section further down is kept as history.
+
 This is static evidence from the Protect 7.3.60 controller bundle (`service.js`, SHA-256 `9364cc9e…`), plus read-only live checks on Protect 7.3.68 on 26 Sep 2026. Nothing was changed on the controller for this record.
 
 ## How Protect answers a Find Anything text search
@@ -47,3 +49,46 @@ Options for the owner:
 2. **Index:** for recognition tasks, crop each `thumbnailMeta` object at its timestamp and embed it with the *same* CLIP image encoder. Post `thumbnailTags` with that `trackerID` and `keyMomentMs`, with no description and no external upload.
 3. **Encoder:** a local CLIP ViT-L/14 model (OpenAI weights, MIT), text and image from one checkpoint, in a sidecar on the host-only container bridge like Whisper and faces.
 4. **Acceptance:** Protect shows `isSearchHost: true` after its migrations, `ramDetections` rows exist for the indexed objects, and a text search returns a known positive result and misses a known negative, read back in Protect.
+
+## Live verification (26 Sep 2026)
+
+**Setup on the Mac (no firewall change, no NAS move yet).**
+- **PostgreSQL:** `local-postgres-search` runs the `deployment/postgres` profile (pgvector 0.8.6, PG14) on a named volume. It is published only on the host bridge, `192.168.64.1:55432`, with TLS from a private CA whose server certificate names `192.168.0.98`.
+- **Relay:** `aikey.pg_relay` listens on `192.168.0.98:5432` under the signed `/usr/bin/python3`. It admits only `192.168.0.1/32` (the console) and `192.168.64.0/24` (the host-only container bridge), and splices bytes to PostgreSQL. TLS and SCRAM stay end to end.
+- **CLIP:** `local-clip-vitl14` runs ONNX CLIP ViT-L/14, pinned to Hugging Face revision `c3077901`, on `192.168.64.1:8180` only.
+- **AI Key config:**
+  - `search.profile: clip-basic-v1`;
+  - `database.enabled: true`, host `192.168.0.98`, `verify-full` against that CA;
+  - `find_anything.index_camera_ids`: the 10 connected cameras;
+  - `controller.search_ca_file` and `controller.search_expected_fingerprint` hold the separate 7443 certificate pin (`CN=unifi.local`; 7442 serves `CN=localhost`).
+
+**Credential.** Postgres was initialised with a random secret of our own. On the next connect Protect sent `changeUserPassword` with the device's current password as the new one; its generic `updatePassword` confirms the credential once per connection. The existing `PgCredentialRotator` applied it to the role (result 0). Protect's connect-time Postgres login then succeeded. No vendor default credential is used.
+
+**Readbacks (content-free).**
+
+| Check | Result |
+|---|---|
+| Protect `aiprocessors` | AI Key `192.168.0.98` `isSearchHost: true` (was `false`) |
+| Relay | console connections accepted; host and other sources refused |
+| Search host tables | 6 tables created by Protect's own migrations |
+| AI Key search WebSocket | `connected: true`, 0 failures; the `NL_PARSE` counter follows Protect queries |
+| Index jobs (15:44–15:52) | 7 `searchSnapshots` callbacks, all HTTP 200; local CLIP only, 0 provider requests |
+| `ramDetections` | 7 rows, 7 with a 768-value embedding, 7 events, 2 cameras (Flur, Haustür) |
+| Protect `detection-nls`, `minSimilarity=35` | "person": 6 hits (the six person objects; the vehicle excluded); "a person walking in a hallway": 4 Flur hits, top similarity 49; "a sailing boat on the ocean": 0; "an airplane in the sky": 0 |
+| Event readback (top hit) | `smartDetectZone`/person event lists 1 detected thumbnail of type person with an object ID; the thumbnail is served (HTTP 200, not viewed) |
+
+**Contract details found live.**
+- **`thumbnailMeta` is usually empty.** It was empty on 6 of 7 key-moment tasks, so `thumbnailTags` alone indexes almost nothing.
+- **`roi` is a list.** Every `thumbnailMeta`, `roiMeta` and `personMeta` entry carries a list of objects (`{ts, roi: [...]}`), with 0-1000 xywh boxes.
+- **Search snapshots:** `keyMomentsTags[].searchSnapshots` (Protect's `snapshotSchema`) plus an image part named by tracker ID make Protect create the thumbnail and smart-detect object, then attach the key moment's `imgEmbed` (`saveEventTagging` → `w()` → `D()`). The Key answers each person, vehicle, animal or package region from `roiMeta`, `personMeta` or `vehicleMeta` this way, one per tracker.
+- **Echo error body:** Protect's UCP4 error replies (such as the answer to the Key's `echo`) carry an empty *string* body, which must not drop the query channel.
+
+**Gaps that remain.**
+- **Retrieval quality:** discrimination is modest on low-resolution night crops. "a car" did not rank the one vehicle first. No benchmark (#7) exists yet.
+- **Coverage:**
+  - Audio-event image tasks (`ramType: image`, one cropped thumbnail each) are not indexed yet.
+  - Face-camera recognition tasks go to local faces and are not indexed.
+  - Cameras paired to our AI Ports produce no key moments of their own, because our AI Port does not send `FrameSelection` on Protect's AI console connection (#28).
+- **Durability:** CLIP and Postgres are pinned in the Mac supervisor. The relay runs as a plain background process and is **not** yet restarted after a reboot.
+- **Deep mode** (E5 session search), image search and hybrid search: not implemented.
+- **NAS:** the search host moves to the NAS only at the final cutover ([plan](../planning/nas-final-cutover.md)).
