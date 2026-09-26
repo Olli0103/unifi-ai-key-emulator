@@ -83,3 +83,16 @@ def test_admission_is_exact():
     for allowed in ([], ["192.168.0.0/16"], ["192.168.0.1/24"]):
         with pytest.raises(ValueError):
             Relay(("127.0.0.1", 1), ("127.0.0.1", 2), allowed)
+
+
+def test_the_launch_agent_keeps_exactly_these_arguments_running():
+    import plistlib
+    from aikey.pg_relay import launch_agent
+    args = ["--listen", "192.168.0.98:5432", "--target", "192.168.64.1:55432",
+            "--allow", "192.168.0.1/32", "--status", "/private/state/relay status.json"]
+    agent = plistlib.loads(launch_agent(args).encode())
+    assert agent["Label"] == "com.olli.local-aikey-pg-relay"
+    assert agent["ProgramArguments"][0] == "/usr/bin/python3"
+    assert agent["ProgramArguments"][1].endswith("pg_relay.py")
+    assert agent["ProgramArguments"][2:] == args
+    assert agent["KeepAlive"] is True and agent["RunAtLoad"] is True and agent["ThrottleInterval"] == 10

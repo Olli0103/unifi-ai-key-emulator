@@ -149,6 +149,30 @@ def _endpoint(value):
     return host, port
 
 
+def launch_agent(argv, python="/usr/bin/python3", label="com.olli.local-aikey-pg-relay"):
+    """launchd agent XML that keeps this relay running from login on.
+
+    KeepAlive restarts it after an exit, including a failed bind while the
+    AI Key address is not up yet at login; ThrottleInterval spaces retries.
+    Remove with ``launchctl bootout gui/$UID/<label>`` and deleting the file.
+    """
+    from xml.sax.saxutils import escape
+    args = [python, os.path.abspath(__file__)] + list(argv)
+    items = "".join("<string>%s</string>" % escape(a) for a in args)
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+            '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+            '<plist version="1.0"><dict>'
+            "<key>Label</key><string>%s</string>"
+            "<key>ProgramArguments</key><array>%s</array>"
+            "<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>"
+            "<key>ThrottleInterval</key><integer>10</integer>"
+            "<key>ProcessType</key><string>Background</string>"
+            "<key>StandardOutPath</key><string>/dev/null</string>"
+            "<key>StandardErrorPath</key><string>/dev/null</string>"
+            "</dict></plist>\n") % (escape(label), items)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="aikey-pg-relay")
     parser.add_argument("--listen", required=True, help="AI Key address and port, e.g. 192.168.0.98:5432")
@@ -157,7 +181,14 @@ def main(argv=None):
                         help="allowed source network; repeat (console /32, container bridge /24)")
     parser.add_argument("--max-connections", type=int, default=32)
     parser.add_argument("--status", help="private JSON file for counters")
+    parser.add_argument("--launch-agent", action="store_true",
+                        help="print a launchd agent that runs this relay with these arguments, then exit")
     args = parser.parse_args(argv)
+    if args.launch_agent:
+        import sys
+        forwarded = [a for a in (argv if argv is not None else sys.argv[1:]) if a != "--launch-agent"]
+        print(launch_agent(forwarded), end="")
+        return 0
     relay = Relay(_endpoint(args.listen), _endpoint(args.target), args.allow,
                   max_connections=args.max_connections, status_path=args.status)
 

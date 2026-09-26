@@ -49,7 +49,7 @@ The NAS runs three AI Ports and no AI Key. **Only the Mac AI Port (.135) and the
    - check the idle gates;
    - run `local-apple-supervise hold aikey-mac` and `hold aiport-mac`;
    - take the backups.
-2. **Stop the Mac services:** stop the Mac AI Key, relay, Postgres, CLIP, Whisper and faces containers. Stop, never delete; they are the rollback.
+2. **Stop the Mac services:** stop the Mac AI Key, Postgres, CLIP, Whisper and faces containers. Stop, never delete; they are the rollback. Unload the relay agent with `launchctl bootout gui/$UID/com.olli.local-aikey-pg-relay`, but keep its plist for rollback.
    - Readback: Protect shows the AI Key disconnected.
 3. **Address handover (Olli):** .98 is released from the Mac.
    - Readback: nothing on the LAN answers at .98.
@@ -74,7 +74,7 @@ The NAS runs three AI Ports and no AI Key. **Only the Mac AI Port (.135) and the
 
 1. Stop the NAS `local-aikey-nas` project, or only `aiport_slot_1`. The other three NAS AI Ports stay untouched.
 2. Give .98 back to the Mac: re-enable en7 and restore its reservation. For .135, restore the Mac's en0 address.
-3. Start the stopped Mac containers by name (`container start …`), then run `local-apple-supervise release` for both services. The state directories on the Mac were never modified during cutover.
+3. Start the stopped Mac containers by name (`container start …`), run `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.olli.local-aikey-pg-relay.plist`, then run `local-apple-supervise release` for both services. The state directories on the Mac were never modified during cutover.
 4. Readback: Protect shows the AI Key and AI Port `.135` connected from the Mac, with the same pairings and settings.
 5. If the NAS AI Key ran and Protect rotated its credential there, copy `device-state.json` and `database-password` back from the NAS before starting the Mac AI Key, so the credential hash and the DB role stay consistent.
 
