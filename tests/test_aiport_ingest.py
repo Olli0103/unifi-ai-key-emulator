@@ -195,7 +195,10 @@ async def test_pool_recovers_one_decoder_without_interrupting_other(tmp_path):
         assert diagnostics[1]["stream_restart_attempts"] == 0
         assert diagnostics[1]["stream_active"] is True
         assert diagnostics[1]["stream_points"] == 2      # 1920x1080 request
+        # The negotiated geometry shows which Protect channel was paired (#6).
+        assert diagnostics[1]["stream_geometry"] == {"width": 1920, "height": 1080, "fps": 30.0}
         assert CAMERA_MAC not in repr(diagnostics)
+        assert "7447" not in repr(diagnostics) and SOURCE_IP not in repr(diagnostics)
         reversed_rows = pool.camera_diagnostics((other_mac, CAMERA_MAC))
         assert reversed_rows[0]["stream_restart_attempts"] == 0
         assert reversed_rows[1]["stream_restart_attempts"] == 1
@@ -411,3 +414,18 @@ def test_latest_frame_honours_a_maximum_age():
     assert ingress.latest_frame(max_age=5) == b"\xff\xd8x"
     session.healthy = False                          # decoder down or restarting
     assert ingress.latest_frame(max_age=5) is None
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_stream_reports_no_geometry(tmp_path):
+    decoder, _ = fake_decoder(tmp_path)
+    pool = AiPortIngressPool([{"camera_mac": CAMERA_MAC, "source_ip": SOURCE_IP,
+                               "ffmpeg_path": decoder}])
+    try:
+        await pool.control(start_payload(width=2688, height=1512, fps=20))
+        assert pool.camera_diagnostics((CAMERA_MAC,))[0]["stream_geometry"] == {
+            "width": 2688, "height": 1512, "fps": 20.0}
+        await pool.control({"streaming": False, "deviceID": CAMERA_MAC})
+        assert pool.camera_diagnostics((CAMERA_MAC,))[0]["stream_geometry"] is None
+    finally:
+        await pool.close()

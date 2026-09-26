@@ -30,3 +30,25 @@ Native proof requires the following sequence:
 5. Unpair and restore the camera, then test reconnect and a second event before expanding the detector or adding ONVIF support.
 
 The device-side streaming, event-ingress, timebase, PTZ, edge-recording and result schemas are still `needs_evidence`. Until those are proved, the implementation issue [#28](https://github.com/Olli0103/unifi-ai-key-emulator/issues/28) remains blocked by #6. The [AI Port FAQ](https://help.ui.com/hc/en-us/articles/28315005177239-Protect-AI-Port-FAQs) describes the supported camera classes, resolution limits and stream behavior, but it does not publish the device protocol.
+
+## Stream, PTZ and recording contracts on Protect 7.3.68 (26 Sep 2026, #6)
+
+**Stream (evidenced).**
+- **Command:** for each paired camera, Protect sends the AI Port `UiStreamControl` with `{streaming: true, ip, port: 7447, uri, deviceID, width, height, fps}`. That is a stream alias on Protect's own RTSP relay at the controller; the AI Port never connects to the camera directly.
+- **Health:** since this change the AI Port reports the negotiated `stream_geometry` (width, height, fps) per camera. It never reports the alias, an address or a camera identity.
+- **Mac AI Port readback, after a gated restart at 19:40:**
+
+  | Camera | Model | Requested | Main-lens maximum |
+  |---|---|---|---|
+  | Flur | G3 Instant | 1920×1080 @ 30 fps | 1920×1080 |
+  | Schlafzimmer | G3 Instant | 1920×1080 @ 30 fps | 1920×1080 |
+  | Büro | G5 Flex | 2688×1512 @ 30 fps | 2688×1512 |
+
+  Protect pairs the **main (HQ) channel** at its full resolution, not a lower channel.
+- **NAS AI Ports:** their reserved capacity points match the main channel. That is 5 points (above 1440p) for Einfahrt (G4 Pro), both G4 Bullets, Esszimmer (G4 Instant) and Garage (G4 Dome), and 2 points for Haustür's 1600×1200 main lens. Their exact geometry appears after their next redeploy.
+- **Recovery:** after the AI Port container restarted on the same identity, Protect re-sent the stream start and the smart policy for all three paired cameras within 30 s (`stream_controls_started: 3`, 3 streams decoding). No re-pairing was needed.
+
+**Not evidenced (`needs_evidence`).**
+- **Protect's own channel list** for the exact channel index of each stream (needs the private camera API in a console session).
+- **PTZ:** no PTZ camera is paired, and the AI Port implements no PTZ commands.
+- **Edge recording:** the AI Port sends no recording controls. That recordings stay unchanged on paired cameras has not been read back natively on 7.3.68.

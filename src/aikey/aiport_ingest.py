@@ -475,6 +475,15 @@ class AiPortIngress:
         return self._desired_spec.points if self._desired_spec is not None else 0
 
     @property
+    def stream_geometry(self) -> dict[str, object] | None:
+        """Width, height and fps Protect requested for this camera (#6 stream
+        contract); never the relay alias, address or camera identity."""
+        spec = self._desired_spec
+        if spec is None:
+            return None
+        return {"width": spec.width, "height": spec.height, "fps": round(spec.fps, 2)}
+
+    @property
     def frame_count(self) -> int:
         return self._session.frame_count if self._session is not None else 0
 
@@ -584,6 +593,7 @@ class AiPortIngressPool:
                 "stream_active": bool(ingress.list_streams()),
                 # Capacity points reserved for the stream Protect requested.
                 "stream_points": ingress.reserved_points,
+                "stream_geometry": ingress.stream_geometry,
                 "stream_restart_attempts": ingress.restart_attempts,
                 "stream_restart_successes": ingress.restart_successes,
                 "stream_restart_observed_states": dict(
