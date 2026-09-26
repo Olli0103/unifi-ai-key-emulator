@@ -213,6 +213,15 @@ def _frame_mode(frame: bytes) -> str:
     return "ir" if chroma < _IR_CHROMA else "color"
 
 
+# The detection schema allows 20 compact detections (~30-35 tokens each), so
+# a reply needs up to ~700 output tokens. A smaller configured budget made
+# busy scenes (Garage, ~5 vehicles per reply) end "incomplete" and fail.
+_DETECTION_OUTPUT_TOKENS = 1024
+# Fixed, content-free categories for a refused reply.
+_FAILURE_REASONS = (
+    "incomplete_max_output_tokens", "incomplete_content_filter", "incomplete_other",
+    "status_failed", "status_cancelled", "status_other", "error", "refusal", "shape",
+    "stop_max_tokens", "fenced", "not_json", "not_object", "extra_fields", "too_many_entries")
 _PACKAGE_CHECK_KEYS = ("confirmed", "relabelled_animal", "rejected", "failed", "lens_owned")
 _VERIFY_SIDE = 512
 _VERIFY_PROMPT = (
@@ -227,6 +236,51 @@ _VERIFY_PROMPT = (
 )
 _ITEM_REJECTIONS = ("shape", "kind", "label:person", "label:vehicle", "label:animal",
                     "label:package", "score", "box")
+
+
+def _envelope_failure(reply: object) -> str:
+    """Why a provider envelope was refused, as a fixed category (no content)."""
+    if not isinstance(reply, dict):
+        return "shape"
+    if reply.get("error") is not None:
+        return "error"
+    if reply.get("stop_reason") == "max_tokens":
+        return "stop_max_tokens"
+    status = reply.get("status")
+    if status == "incomplete":
+        details = reply.get("incomplete_details")
+        reason = details.get("reason") if isinstance(details, dict) else None
+        return {"max_output_tokens": "incomplete_max_output_tokens",
+                "content_filter": "incomplete_content_filter"}.get(reason, "incomplete_other")
+    if status in {"failed", "cancelled"}:
+        return "status_" + status
+    if status not in (None, "completed"):
+        return "status_other"
+    output = reply.get("output")
+    if isinstance(output, list) and any(
+            isinstance(item, dict) and isinstance(item.get("content"), list)
+            and any(isinstance(part, dict) and part.get("type") == "refusal"
+                    for part in item["content"]) for item in output):
+        return "refusal"
+    return "shape"
+
+
+def _parse_failure(text: str) -> str:
+    """Why a reply text was not a detection object, as a fixed category."""
+    if text.lstrip().startswith("```"):
+        return "fenced"
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return "not_json"
+    if not isinstance(value, dict):
+        return "not_object"
+    if set(value) != {"detections"}:
+        return "extra_fields"
+    entries = value.get("detections")
+    if isinstance(entries, list) and len(entries) > 20:
+        return "too_many_entries"
+    return "shape"
 
 
 def parse_detections(text: str, *, threshold: float,
@@ -367,6 +421,10 @@ class ApiObjectDetector:
                 or endpoint.hostname in {"localhost", "127.0.0.1", "::1"}):
             raise ApiDetectionError("api_detection_endpoint_not_approved")
         self.threshold = float(threshold)
+        # Room for the schema's largest valid reply, whatever was configured.
+        if self.provider.max_output_tokens < _DETECTION_OUTPUT_TOKENS:
+            self.provider.max_output_tokens = _DETECTION_OUTPUT_TOKENS
+        self._failure_reasons: dict[str, dict[str, int]] = {}
         # Cameras whose own package lens owns Package: a main-lens "package"
         # is dropped before the close-up check, so no crop is uploaded.
         self._package_lens_owned = package_lens_owned or (lambda _camera: False)
@@ -460,10 +518,13 @@ class ApiObjectDetector:
             url, headers, payload = self.provider.build_request([frame], _PROMPT)
             if self.provider.provider == "openai" and self.provider.model == "gpt-6-luna":
                 payload["reasoning"] = {"effort": "none"}
+            reply = None
             try:
                 reply = self.transport(url, headers, payload)
                 text = self.provider.parse_response(reply)
             except (ApiDetectionError, ProviderError, TypeError, ValueError) as exc:
+                if isinstance(exc, ProviderError) and reply is not None:
+                    self._count_failure(camera_mac, _envelope_failure(reply))
                 if not (isinstance(exc, ApiDetectionError)
                         and exc.args == ("api_detection_dns_unavailable",)):
                     self._provider_failed()
@@ -472,7 +533,11 @@ class ApiObjectDetector:
             # Keep only counts. This distinguishes a real empty provider
             # response from an object rejected by the configured score gate.
             rejected: dict[str, int] = {}
-            reported = parse_detections(text, threshold=0, rejected=rejected)
+            try:
+                reported = parse_detections(text, threshold=0, rejected=rejected)
+            except ApiDetectionError:
+                self._count_failure(camera_mac, _parse_failure(text))
+                raise
             accepted = tuple(item for item in reported
                              if item.score >= self.threshold)
             counts = self._camera_counts.setdefault(camera_mac, {
@@ -529,6 +594,10 @@ class ApiObjectDetector:
         except (TypeError, ValueError) as exc:
             self.motion.sample_result(camera_mac, found_object=False)
             raise ApiDetectionError("api_detection_request_failed") from exc
+
+    def _count_failure(self, camera_mac: str, reason: str) -> None:
+        counts = self._failure_reasons.setdefault(camera_mac, dict.fromkeys(_FAILURE_REASONS, 0))
+        counts[reason] = counts.get(reason, 0) + 1
 
     def _verify_package(self, camera_mac: str, frame: bytes,
                         item: ObjectObservation) -> ObjectObservation | None:
@@ -613,6 +682,8 @@ class ApiObjectDetector:
         result["request_profile"] = dict(self._profiles.get(
             camera_mac, dict.fromkeys(_PROFILE_KEYS, 0)))
         result["last_frame_width"] = self._frame_width.get(camera_mac)
+        result["failure_reasons"] = {k: v for k, v in self._failure_reasons.get(camera_mac, {}).items() if v}
+        result["output_token_budget"] = self.provider.max_output_tokens
         result["package_checks"] = dict(self._package_checks.get(
             camera_mac, dict.fromkeys(_PACKAGE_CHECK_KEYS, 0)))
         return result

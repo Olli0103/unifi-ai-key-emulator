@@ -167,6 +167,7 @@ def test_response_counts_distinguish_empty_from_score_rejection(tmp_path):
         "last_frame_width": None,
         "package_checks": {"confirmed": 0, "relabelled_animal": 0,
                            "rejected": 0, "failed": 0, "lens_owned": 0},
+        "failure_reasons": {}, "output_token_budget": 1024,
     }
     # Black and white synthetic frames carry no chroma, like night IR.
     assert first["request_profile"] == {
@@ -720,3 +721,72 @@ def test_objects_other_than_package_need_no_second_request(tmp_path):
             '"box":[0.6,0.8,0.7,0.95]}]}')))
     assert [item.kind for item in detector.detect_for_camera(FIRST, _scene_frame())] == ["animal"]
     assert len(sent) == 1
+
+
+
+def _openai_detector(tmp_path, transport, *, max_output_tokens=256):
+    key = tmp_path / "openai-key"
+    key.write_text("synthetic-test-key\n")
+    key.chmod(0o600)
+    return ApiObjectDetector(
+        {"provider": "openai", "model": "gpt-6-luna",
+         "base_url": "https://api.openai.com/v1", "allow_remote": True,
+         "api_key_file": str(key), "max_output_tokens": max_output_tokens},
+        tmp_path, threshold=0.8, transport=transport)
+
+
+def _reply(text, **envelope):
+    return {"status": "completed", "output": [{
+        "type": "message", "role": "assistant", "status": "completed",
+        "content": [{"type": "output_text", "text": text}]}], **envelope}
+
+
+def test_a_detection_request_has_room_for_twenty_detections(tmp_path):
+    # Garage, 26 Sep: about five vehicles per reply with a 256-token budget;
+    # busier frames ended incomplete. The schema allows 20 detections.
+    requests = []
+
+    def transport(_url, _headers, payload):
+        requests.append(payload)
+        one = {"kind": "vehicle", "label": "car", "score": 0.93, "box": [0.1, 0.2, 0.3, 0.4]}
+        return _reply(json.dumps({"detections": [one] * 20}, separators=(",", ":")))
+
+    detector = _openai_detector(tmp_path, transport, max_output_tokens=256)
+    found = detector.detect_for_camera(FIRST, STILL)
+    assert len(found) == 20
+    assert requests[0]["max_output_tokens"] >= 1024
+    assert detector.diagnostic_counts(FIRST)["output_token_budget"] == 1024
+    (tmp_path / "large").mkdir()
+    larger = _openai_detector(tmp_path / "large", transport, max_output_tokens=4096)
+    assert larger.provider.max_output_tokens == 4096        # a larger setting is kept
+
+
+def test_a_truncated_reply_is_refused_and_classified_without_content(tmp_path):
+    secret = "SECRET-REPLY-TEXT"
+
+    def transport(_url, _headers, _payload):
+        return _reply('{"detections":[{"kind":"vehicle","label":"car",' + secret,
+                      status="incomplete",
+                      incomplete_details={"reason": "max_output_tokens"})
+
+    detector = _openai_detector(tmp_path, transport)
+    with pytest.raises(ApiDetectionError, match="provider_response_invalid"):
+        detector.detect_for_camera(FIRST, STILL)
+    counts = detector.diagnostic_counts(FIRST)
+    assert counts["failure_reasons"] == {"incomplete_max_output_tokens": 1}
+    assert secret not in json.dumps(counts)
+
+
+@pytest.mark.parametrize("text,reason", [
+    ('```json\n{"detections":[]}\n```', "fenced"),
+    ("I see two cars.", "not_json"),
+    ('[{"kind":"vehicle"}]', "not_object"),
+    ('{"detections":[],"note":"x"}', "extra_fields"),
+])
+def test_an_unparseable_reply_text_is_classified_without_content(tmp_path, text, reason):
+    detector = _openai_detector(tmp_path, lambda *_a: _reply(text))
+    with pytest.raises(ApiDetectionError, match="invalid_api_detection_response"):
+        detector.detect_for_camera(FIRST, STILL)
+    counts = detector.diagnostic_counts(FIRST)
+    assert counts["failure_reasons"] == {reason: 1}
+    assert "cars" not in json.dumps(counts) and "note" not in json.dumps(counts)
