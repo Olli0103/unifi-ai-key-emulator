@@ -53,3 +53,20 @@ The Key now derives these flags from what it is configured to serve. An explicit
 - **Object indexing:** fresh after the fix. Three Garage vehicle search snapshots at 17:16:36 are searchable in Protect, and "a car" ranks them above "person" and "an animal".
 - **Speech and faces:** Protect sent no Wohnzimmer speech or person tasks between 16:52 and 17:55, and Olli reports the household is away. A **fresh** indoor transcript and a fresh AI Key face after the flag change are `needs_evidence` (backlog), as is re-reading the Camera Coverage tooltip after such events. Earlier native transcripts (#15) and AI Key faces (#20) stand.
 - **Names and plate accuracy:** stay `needs_evidence` until Olli validates them.
+
+## Fresh native speech results after the fix (read back 27 Sep 2026)
+
+Read-only, from Protect's API (the private API in a signed-in console session). Only counts, timestamps and field names were read; no transcript text.
+
+- **Protect's stored state:**
+  - flags: `supportTts` true, `supportFaceRecognition` true, `supportRecognizeAnything` true, `supportImageSearch` true, `supportRetroactiveProcessing` true, `supportLicensePlateRecognition` false;
+  - `speechToTextSettings` enabled for 1 camera;
+  - `recentProcessedSTTTasks` is 226.
+- **Events since 20 Sep:** 226 audio events with speech state `done`, all on Wohnzimmer (the configured speech camera), and 124 `failed`.
+- **Persisted transcripts after the fix:** the newest 60 done events all ended after the 16:52 local status change. On a fresh API read, **40 of them return stored transcript segments** (up to 31 per event, fields `start`, `end`, `text`, `id`). The newest with segments ended 26 Sep 21:42 UTC.
+- **Backlog:** this closes the backlogged "fresh indoor transcript after the flag change" item.
+- **Still open:**
+  - a fresh AI Key face result after the fix;
+  - re-reading the Camera Coverage tooltip in the UI;
+  - names and plate accuracy (Olli).
+- **Reverification:** Protect's `reverificationSettings` is enabled for all cameras. The Key's `find_anything.reverification` opt-in stays off, so it refuses reverification tasks and events keep their type. That is the N13 boundary, and nothing was changed.

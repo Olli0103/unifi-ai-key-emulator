@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.2). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.3). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-27.2` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-27.3` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -177,9 +177,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `capability.retroactive_processing`: The stored run completed on an empty batch query at an 18 Sep 19:10 cursor although 2109 older tracker-crop events have no RAM task state; the cause needs Protect's aiprocessorTasks rows or 7.3.68 runner source
 - `capability.retroactive_processing`: Protect does not allow continuing older events once a run is completed without re-adopting the AI Key (start requires not_started on every processor; nothing resets it)
 - `capability.recognize_anything_tagging`: Structured object results (issue #14)
-- `capability.audio_speech`: A persisted native transcript on Protect 7.3.68 after a reload (issue #15)
-- `capability.audio_speech`: An alrmSpeak-enabled camera and the AI Key Speech to Text setting, both user actions
 - `capability.audio_speech`: Speech on AI Port-paired legacy cameras, which raise no alrmSpeak
+- `capability.audio_speech`: The capability flag itself is never native-verified by the matrix rules; the transcripts it enables are (callback.speech_to_text_transcriptions)
 - `callback.speech_to_text_transcriptions`: Persistence after a controller restart
 - `callback.speech_to_text_transcriptions`: Non-German speech, noise and overlapping speakers on live events
 - `callback.speech_to_text_transcriptions`: Search by transcript text in the Protect UI

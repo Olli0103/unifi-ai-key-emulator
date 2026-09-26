@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-27.2",
+ "manifest_version": "ai-key/2026-09-27.3",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -1747,9 +1747,8 @@
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "A persisted native transcript on Protect 7.3.68 after a reload (issue #15)",
-    "An alrmSpeak-enabled camera and the AI Key Speech to Text setting, both user actions",
-    "Speech on AI Port-paired legacy cameras, which raise no alrmSpeak"
+    "Speech on AI Port-paired legacy cameras, which raise no alrmSpeak",
+    "The capability flag itself is never native-verified by the matrix rules; the transcripts it enables are (callback.speech_to_text_transcriptions)"
    ],
    "notes": "Protect dispatches speechToText only for an alrmSpeak audio event and only to an AI processor whose speechToTextSettings list the camera; no capability flag is involved. Refused unless speech_to_text lists the camera."
   },
