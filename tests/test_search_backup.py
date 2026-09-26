@@ -61,6 +61,8 @@ def test_backup_then_verify_round_trips_through_a_scratch_database(tmp_path):
     assert dump.read_bytes() == b"PGDMP-fixture" and oct(dump.stat().st_mode)[-3:] == "600"
     result = verify(fake, "pg", tmp_path / "out" / manifest["dump"].replace(".dump", ".json"))
     assert result["verified"] and result["counts"] == COUNTS
+    saved = json.loads((tmp_path / "out" / manifest["dump"].replace(".dump", ".json")).read_text())
+    assert saved["verified"]["restore_counts_match"] is True
     assert set(fake.databases) == {"unifi-protect"}          # scratch database dropped
     assert fake.databases["unifi-protect"] == COUNTS          # live database untouched
     assert "pg_restore" in fake.calls and fake.calls[-1] == "dropdb"

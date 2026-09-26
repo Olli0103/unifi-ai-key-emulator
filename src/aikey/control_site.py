@@ -32,6 +32,7 @@ from .config import atomic_private, load_config
 from .config_store import (
     ConfigurationStore, ConfigurationStoreError, RevisionConflict,
 )
+from .index_rebuild import migration_plan
 
 
 _COOKIE = "aikey_admin_local"
@@ -99,7 +100,10 @@ class ControlSite:
                  aiport_runtime_state_dir: Path | None = None,
                  aiport_instances: dict[str, Path] | None = None,
                  inventory_loader: Callable[[], Awaitable[dict]] | None = None,
-                 rollout_path: Path | None = None):
+                 rollout_path: Path | None = None,
+                 search_state_dir: Path | None = None,
+                 search_backups_dir: Path | None = None,
+                 search_live_rows: Callable[[], Awaitable[int]] | None = None):
         if type(port) is not int or not 1024 <= port <= 65535:
             raise ValueError("Invalid control-site port")
         self.origin = f"http://127.0.0.1:{port}"
@@ -122,6 +126,9 @@ class ControlSite:
             self.aiports[f"aiport:{name}"] = store
         self.inventory_loader = inventory_loader
         self.rollout_path = rollout_path
+        self.search_state_dir = search_state_dir
+        self.search_backups_dir = search_backups_dir
+        self.search_live_rows = search_live_rows
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=8192)
@@ -129,6 +136,8 @@ class ControlSite:
         app.router.add_get("/cameras", self.cameras)
         app.router.add_get("/aiport-rollout", self.rollout_page)
         app.router.add_post("/aiport-rollout", self.rollout_apply)
+        # Read-only: no POST route exists, so nothing can be applied from here (#18).
+        app.router.add_get("/index-migration", self.index_migration)
         app.router.add_get("/login", self.login_page)
         app.router.add_post("/login", self.login)
         app.router.add_post("/provider", self.save_provider)
@@ -144,6 +153,55 @@ class ControlSite:
         rollout = load_rollout_config(self.rollout_path)
         plan, _ = await asyncio.to_thread(compute_rollout, rollout, report)
         return rollout, plan
+
+    async def index_migration(self, request: web.Request) -> web.Response:
+        cookie = self._session(request)
+        if cookie is None:
+            raise web.HTTPSeeOther("/login")
+        if self.search_state_dir is None:
+            raise web.HTTPNotFound()
+        live_rows = None
+        if self.search_live_rows is not None:
+            try:
+                live_rows = await self.search_live_rows()
+            except Exception:            # counts are optional; the plan says so
+                live_rows = None
+        plan = migration_plan(self.search_state_dir, backups_dir=self.search_backups_dir,
+                              live_rows=live_rows)
+        live, backup, rollback = plan["live"], plan["backup"], plan["rollback"]
+        rows = "".join(
+            "<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in (
+                g["generation"], g.get("state"), g.get("from", "—"), g.get("to", "—"),
+                "—" if "coverage" not in g else
+                f"{g['coverage']['embedded']} embedded, {g['coverage']['no_source']} without source"
+                + (f", {g['coverage']['percent']}% of {g['coverage']['live_rows']}"
+                   if g["coverage"].get("percent") is not None else ""),
+                "; ".join(g["problems"]) or "—")) + "</tr>"
+            for g in plan["generations"]) or "<tr><td colspan='6'>No staged generation</td></tr>"
+        steps = "".join(f"<li><strong>{_safe(s['status'])}</strong> · {_safe(s['step'])}"
+                        + (f"<br><span class='muted'>{_safe(s['detail'])}</span>" if s["detail"] else "")
+                        + "</li>" for s in plan["steps"])
+        reasons = "".join(f"<li>{_safe(reason)}</li>" for reason in plan["apply"]["reasons"])
+        body = ("<h1>Search index migration</h1><p><a href='/'>Settings</a> · "
+                "<a href='/index-migration'>Refresh</a></p>"
+                "<p class='muted'>Read-only status and dry-run plan. Nothing is staged, cut over, "
+                "rolled back or restarted from this page.</p>"
+                "<section><h2>Live index</h2><p>Encoder revision "
+                f"<strong>{_safe(live['revision'] or 'not pinned')}</strong> · rows "
+                f"{_safe(live['rows'] if live['rows'] is not None else 'unavailable')}</p></section>"
+                "<h2>Generations</h2><table><tr><th>Generation</th><th>State</th><th>From</th>"
+                "<th>To</th><th>Coverage</th><th>Problems</th></tr>" + rows + "</table>"
+                "<h2>Backup and rollback</h2><ul>"
+                f"<li>Latest backup: {_safe(backup['latest'] or 'none')}"
+                + (f" · {_safe(backup.get('rows'))} rows · verified {'yes' if backup['verified'] else 'no'}"
+                   if backup["latest"] else "") + "</li>"
+                f"<li>Rollback ready: {'yes' if rollback['ready'] else 'no'}"
+                + (f" — {_safe(rollback['reason'])}" if rollback["reason"] else "")
+                + f"<br><span class='muted'>{_safe(rollback['note'])}</span></li></ul>"
+                "<h2>Dry-run plan</h2><ol>" + steps + "</ol>"
+                "<h2>Apply is unavailable</h2><ul>" + reasons + "</ul>"
+                + ("<p>No migration exists: this plan is a no-op.</p>" if plan["no_op"] else ""))
+        return _page("Search index migration", body)
 
     async def rollout_page(self, request: web.Request) -> web.Response:
         cookie = self._session(request)
@@ -365,7 +423,9 @@ class ControlSite:
                 "<p>Changes are saved with a revision check. They take effect after a service "
                 "restart. Pairings and device identities stay in place.</p>"
                 + ("<p><a href='/cameras'>View current Protect cameras</a></p>"
-                   if self.inventory_loader is not None else "") + "<div class='grid'>")
+                   if self.inventory_loader is not None else "")
+                + ("<p><a href='/index-migration'>Search index migration (read-only)</a></p>"
+                   if self.search_state_dir is not None else "") + "<div class='grid'>")
         body += self._provider_form("AI Key", "aikey", key.revision, inference,
                                     key_configured, csrf)
         for profile, port in ports.items():
@@ -548,11 +608,26 @@ def _cli() -> argparse.ArgumentParser:
     run.add_argument("--port", type=int, default=8765)
     run.add_argument("--aiport-rollout", type=Path,
                      help="Private AI Port rollout slot file (needs the inventory settings)")
+    run.add_argument("--search-state-dir", type=Path,
+                     help="AI Key state directory holding search-profile.json (read-only)")
+    run.add_argument("--search-backups", type=Path, help="search_backup output directory (read-only)")
+    run.add_argument("--search-container",
+                     help="PostgreSQL container for a read-only live row count")
     run.add_argument("--inventory-controller")
     run.add_argument("--inventory-api-key-file", type=Path)
     run.add_argument("--inventory-web-trust-file", type=Path)
     run.add_argument("--inventory-web-cert-file", type=Path)
     return parser
+
+
+def _live_rows(container: str) -> Callable[[], Awaitable[int]]:
+    import subprocess
+    from .search_backup import counts
+
+    async def read() -> int:
+        value = await asyncio.to_thread(counts, subprocess.run, container)
+        return int(value["tables"]["ramDetections"])
+    return read
 
 
 async def _run(site: ControlSite, port: int) -> None:
@@ -622,7 +697,11 @@ def main(argv: list[str] | None = None) -> int:
                            aiport_runtime_state_dir=args.aiport_runtime_state_dir,
                            aiport_instances=instances,
                            inventory_loader=inventory_loader,
-                           rollout_path=args.aiport_rollout)
+                           rollout_path=args.aiport_rollout,
+                           search_state_dir=args.search_state_dir,
+                           search_backups_dir=args.search_backups,
+                           search_live_rows=_live_rows(args.search_container)
+                           if args.search_container else None)
         site.aikey.snapshot()
         for port_store in site.aiports.values():
             port_store.snapshot()

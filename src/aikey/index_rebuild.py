@@ -499,12 +499,159 @@ def status(state_dir: Path) -> list[dict]:
     return out
 
 
+# Cutover stays unavailable until both exist; flipping these is a reviewed code
+# change, not a setting (#18).
+APPROVED_IMAGE_SOURCE = None
+APPROVED_NATIVE_READBACK = None
+_FIXED_BLOCKERS = (
+    "No approved stored-object image source: the AI Key receives crops only inside Protect tasks",
+    "No approved native Protect post-cutover readback: Protect searches only the live table, "
+    "so a staged index can be read back natively only after cutover")
+
+
+def _latest_backup(backups_dir: Path | None, live_rows: int | None, now: float) -> dict:
+    if backups_dir is None or not Path(backups_dir).is_dir():
+        return {"latest": None, "verified": False, "matches_live": None,
+                "reason": "No backup directory is configured"}
+    manifests = sorted(Path(backups_dir).glob("search-*.json"), key=lambda p: p.name, reverse=True)
+    for path in manifests:
+        try:
+            value = json.loads(path.read_text())
+            counts = value["counts"]
+            dump = Path(backups_dir) / value["dump"]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        rows = (counts.get("tables") or {}).get("ramDetections")
+        verified = isinstance(value.get("verified"), dict) and value["verified"].get("restore_counts_match") is True
+        matches = None if live_rows is None else rows == live_rows == counts.get("embeddings")
+        age = max(0, int(now - path.stat().st_mtime))
+        reason = None
+        if not dump.is_file():
+            reason = "The latest backup's dump file is missing"
+        elif not verified:
+            reason = "The latest backup has no recorded scratch-restore verification"
+        elif matches is False:
+            reason = f"The latest backup holds {rows} rows; the live index holds {live_rows}"
+        elif matches is None:
+            reason = "Live row count unavailable; cannot compare with the backup"
+        return {"latest": path.name, "rows": rows, "age_s": age, "verified": verified and dump.is_file(),
+                "matches_live": matches, "reason": reason}
+    return {"latest": None, "verified": False, "matches_live": None, "reason": "No backup manifest found"}
+
+
+def migration_plan(state_dir: Path, *, backups_dir: Path | None = None, live_rows: int | None = None,
+                   now: Callable[[], float] = time.time) -> dict:
+    """Read-only index-migration status and dry-run plan; apply is never available here.
+
+    Reads the live profile, every generation's journal and the newest backup
+    manifest. ``live_rows`` is the live ``ramDetections`` count when the caller
+    can read it. Nothing is written.
+    """
+    state_dir = Path(state_dir)
+    try:
+        live = json.loads((state_dir / "search-profile.json").read_text())
+    except (OSError, ValueError):
+        live = None
+    live_revision = live.get("revision") if isinstance(live, dict) else None
+    pinned = isinstance(live_revision, str) and bool(_REVISION.fullmatch(live_revision))
+    generations = []
+    root = state_dir / "index-rebuild"
+    for journal_path in sorted(root.glob("*/journal.json")) if root.is_dir() else []:
+        entry = {"generation": journal_path.parent.name, "problems": []}
+        try:
+            journal = json.loads(journal_path.read_text())
+            if not isinstance(journal, dict) or journal.get("state") not in STATES:
+                raise ValueError
+        except (OSError, ValueError):
+            entry.update(state="unreadable", problems=["The journal is unreadable; inspect it"])
+            generations.append(entry)
+            continue
+        target, source_rev = str(journal.get("revision", "")), str(journal.get("from_revision", ""))
+        counts = journal.get("counts") or {}
+        entry.update(state=journal["state"], to=target[:12], **{"from": source_rev[:12]})
+        if not _REVISION.fullmatch(target) or target[:12] != entry["generation"]:
+            entry["problems"].append("The journal's target revision does not match its generation")
+        if journal["state"] == "cut_over":
+            if target != live_revision:
+                entry["problems"].append("Recorded as cut over, but the live profile has another revision")
+        elif journal["state"] != "rolled_back":
+            if target == live_revision:
+                entry["problems"].append("The target revision is already the live revision")
+            elif source_rev != live_revision:
+                entry["problems"].append(f"Started from {source_rev[:12]}, but the live revision is "
+                                         f"{str(live_revision)[:12]}; this generation is stale")
+        embedded, no_source = counts.get("embedded", 0), counts.get("no_source", 0)
+        coverage = {"embedded": embedded, "no_source": no_source, "live_rows": live_rows}
+        if live_rows:
+            coverage["percent"] = round(100 * embedded / live_rows, 1)
+            coverage["uncovered"] = max(0, live_rows - embedded - no_source)
+        entry["coverage"] = coverage
+        entry["previous_profile"] = (journal_path.parent / "previous-profile.json").is_file()
+        entry["last_error"] = journal.get("last_error")
+        generations.append(entry)
+    backup = _latest_backup(backups_dir, live_rows, now())
+    active = [g for g in generations if g.get("state") in ("staging", "staged", "verified") and not g["problems"]]
+    cut = [g for g in generations if g.get("state") == "cut_over"]
+    if cut:
+        ready = all(g["previous_profile"] for g in cut)
+        rollback = {"ready": ready, "reason": None if ready else "A cut-over generation lacks its previous profile",
+                    "note": "The snapshot table is checked when the rollback runs"}
+    else:
+        rollback = {"ready": backup["verified"] and backup["matches_live"] is True,
+                    "reason": backup["reason"] or None,
+                    "note": "No cutover happened; the verified backup restores the live index"}
+    reasons = list(_FIXED_BLOCKERS)
+    if not pinned:
+        reasons.append("The live profile has no pinned encoder revision")
+    if not active:
+        reasons.append("No staged generation for a new encoder revision")
+    for g in active:
+        if g["state"] != "verified":
+            reasons.append(f"Generation {g['generation']} is {g['state']}, not verified")
+        if g["coverage"].get("uncovered") or g["coverage"]["no_source"]:
+            reasons.append(f"Generation {g['generation']} does not cover every live row")
+    for g in generations:
+        reasons.extend(f"Generation {g['generation']}: {p}" for p in g["problems"])
+    if backup["reason"]:
+        reasons.append(backup["reason"])
+    reasons.append("The AI Key must be stopped for a cutover; this page never stops it")
+    generation = active[0] if active else None
+
+    def step(name, done, blocked=None):
+        return {"step": name, "status": "done" if done else ("blocked" if blocked else "pending"),
+                "detail": blocked}
+    steps = [
+        step("Pin the live encoder revision", pinned, None if pinned else "Pin it first"),
+        step("Run a second CLIP server for the target revision", False),
+        step("Stage every live object with the target encoder", bool(generation and generation["state"] in (
+            "staged", "verified")), _FIXED_BLOCKERS[0]),
+        step("Verify revision, dimensions and coverage", bool(generation and generation["state"] == "verified")),
+        step("Take and verify a backup matching the live index",
+             backup["verified"] and backup["matches_live"] is True, backup["reason"]),
+        step("Stop the AI Key and cut over in one transaction", False, _FIXED_BLOCKERS[0]),
+        step("Switch find_anything.clip_server, start the Key, and read back native search", False,
+             _FIXED_BLOCKERS[1]),
+    ]
+    return {"live": {"pinned": pinned, "revision": str(live_revision)[:12] if pinned else None,
+                     "source": live.get("source") if isinstance(live, dict) else None,
+                     "rows": live_rows},
+            "generations": generations, "backup": backup, "rollback": rollback,
+            "apply": {"available": False, "reasons": reasons}, "steps": steps,
+            "no_op": not generations}
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
     parser = argparse.ArgumentParser(prog="aikey-index-rebuild")
-    parser.add_argument("command", choices=["status"])
+    parser.add_argument("command", choices=["status", "plan"])
     parser.add_argument("--state-dir", type=Path, required=True)
+    parser.add_argument("--backups", type=Path)
+    parser.add_argument("--live-rows", type=int)
     args = parser.parse_args(argv)
+    if args.command == "plan":
+        print(json.dumps(migration_plan(args.state_dir, backups_dir=args.backups, live_rows=args.live_rows),
+                         indent=2))
+        return 0
     # Staging, cutover and rollback need an image source; the AI Key only
     # receives object crops inside Protect tasks, so they stay library calls
     # until a source is approved (#18).

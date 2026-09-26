@@ -110,6 +110,13 @@ def verify(run: Runner, container: str, manifest_path: Path) -> dict:
         _exec(run, container, ["dropdb", "-U", USER, "--if-exists", scratch])
     if restored != manifest["counts"]:
         raise BackupError("Restored counts differ from the manifest")
+    # Record the outcome so readiness checks can tell a verified backup from
+    # one that merely exists (#18).
+    manifest["verified"] = {"at": time.strftime("%Y%m%dT%H%M%S"), "restore_counts_match": True}
+    temporary = Path(manifest_path).with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, manifest_path)
     return {"verified": True, "counts": restored, "sha256": manifest["sha256"]}
 
 
