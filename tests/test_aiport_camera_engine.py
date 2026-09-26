@@ -705,3 +705,58 @@ def test_cat_at_the_bottom_edge_enters_animal_on_a_default_inset_zone():
     inset.observe(FIRST, (cat,), now=1)
     assert inset.observe(FIRST, (cat,), now=3) == ()
     assert inset.camera_snapshot(now=4)[0]["zone_rejections"]["outside_zone"] == 2
+
+
+def _held_night_parcel():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                                max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, _multi(FIRST))
+    parcel = ObjectObservation("package", "package", 0.9, (0.60, 0.80, 0.70, 0.95))
+    engine.observe(FIRST, (parcel,), now=1, infrared=True)
+    assert engine.observe(FIRST, (parcel,), now=2, infrared=True) == ()
+    track, = engine.held_packages(FIRST)
+    return engine, parcel, track
+
+
+def test_a_kept_held_parcel_survives_empty_samples_and_is_confirmed_once():
+    # Night restart: only the startup pair saw the parcel; later frames are
+    # motion-gated, so the engine gets empty observations.
+    engine, _parcel, track = _held_night_parcel()
+    engine.watch_held(FIRST, track)
+    for now in range(3, 26):
+        assert engine.keep_held(FIRST, track, now=now)
+        assert engine.observe(FIRST, (), now=now + 0.5) == ()
+    entered, = engine.confirm_held(FIRST, track, now=26)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "package")
+    assert engine.confirm_held(FIRST, track, now=27) == ()          # not twice
+    assert engine.camera_snapshot(now=28)[0]["events_entered_by_kind"]["package"] == 1
+
+
+def test_without_the_follow_up_the_held_parcel_expires_with_the_gap():
+    engine, _parcel, _track = _held_night_parcel()
+    for now in range(3, 26):
+        engine.observe(FIRST, (), now=now)
+    assert engine.held_packages(FIRST) == {}
+    assert engine.package_ir_dropped == 1
+
+
+def test_while_watched_or_vetoed_an_ir_dwell_sample_does_not_confirm():
+    engine, parcel, track = _held_night_parcel()
+    engine.watch_held(FIRST, track)
+    # A motion-triggered sample after the dwell still reads "package" in IR.
+    assert engine.observe(FIRST, (parcel,), now=30, infrared=True) == ()
+    engine.veto_held(FIRST, track)                      # follow-up: animal-like
+    assert engine.observe(FIRST, (parcel,), now=31, infrared=True) == ()
+    assert engine.confirm_held(FIRST, track, now=32) == ()
+    # An Animal read of the same object still enters Animal.
+    cat = ObjectObservation("animal", "cat", 0.85, (0.61, 0.79, 0.71, 0.96))
+    entered, = engine.observe(FIRST, (cat,), now=33, infrared=True)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "animal")
+
+
+def test_a_released_follow_up_restores_the_normal_dwell_rule():
+    engine, parcel, track = _held_night_parcel()
+    engine.watch_held(FIRST, track)
+    engine.release_held(FIRST, track)                   # follow-up expired
+    entered, = engine.observe(FIRST, (parcel,), now=30, infrared=True)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "package")

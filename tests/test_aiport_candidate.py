@@ -3516,3 +3516,99 @@ async def _live_request_raw(service, sink, message_id):
     await service._handle_diagnostic_frame(sink, json.dumps({
         "functionName": "GetRequest", "messageId": message_id, "responseExpected": True,
         "payload": {"what": "snapshot", "deviceID": _LIVE_A, "uri": _LIVE_URI}}).encode())
+
+
+async def _night_restart_scene(tmp_path, monkeypatch, frames):
+    """Startup pair plus 2 fps decoded frames of one IR scene; fake provider."""
+    from test_aiport_held_followup import BOX
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{"camera_mac": camera, "source_ip": "192.168.10.1",
+                                 "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person", "animal", "package"], "max_events_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    calls = {"detect": 0, "verify": 0}
+
+    def fake_provider(_url, _headers, payload):
+        # The provider reads this IR object as a package every time, as it
+        # did for the user's cat on Flur and Esszimmer.
+        if "close-up crop" in json.dumps(payload):
+            calls["verify"] += 1
+            text = json.dumps({"kind": "package", "label": "package"})
+        else:
+            calls["detect"] += 1
+            text = json.dumps({"detections": [{"kind": "package", "label": "package",
+                                               "score": 0.93, "box": list(BOX)}]})
+        return {"status": "completed", "output": [{
+            "type": "message", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": text}]}]}
+
+    monkeypatch.setattr(
+        "aikey.aiport_candidate.ApiObjectDetector",
+        lambda provider, state_dir, **options: ApiObjectDetector(
+            provider, state_dir, transport=fake_provider, **options))
+    clock = [1000.0]
+    monkeypatch.setattr("aikey.aiport_candidate.time",
+                        SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    try:
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "ChangeSmartDetectSettings", "messageId": 1,
+            "payload": {"deviceID": camera, "enableSmartDetect": ["person", "animal", "package"],
+                        "eventStartMSec": 1000, "eventStopMSec": 3000, "zones": {}}}).encode())
+        detect_after_startup = None
+        for index, frame in enumerate(frames):
+            clock[0] = 1000.0 + index * 0.5
+            await service._observe_pool_frame(camera, frame)
+            await service._inference.join()
+            if index == 1:
+                detect_after_startup = calls["detect"]
+        health = json.loads((await service._health(None)).text)
+        enters = [m["payload"] for m in sink.messages
+                  if m.get("functionName") == "EventSmartDetect"
+                  and m["payload"]["edgeType"] == "enter"]
+        return enters, calls, detect_after_startup, health
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_parcel_present_at_a_night_restart_is_announced_without_extra_uploads(
+        tmp_path, monkeypatch):
+    from test_aiport_held_followup import _scene
+    enters, calls, detect_after_startup, health = await _night_restart_scene(
+        tmp_path, monkeypatch, [_scene(seed) for seed in range(60)])
+    assert [e["objectTypes"] for e in enters] == [["package"]]
+    assert calls["detect"] == detect_after_startup == 2    # only the startup pair
+    assert health["package_ir_followup"]["confirmed"] == 1
+    assert health["package_ir_held"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_resting_cat_read_as_a_package_at_a_night_restart_gets_no_package(
+        tmp_path, monkeypatch):
+    from test_aiport_held_followup import _scene
+    frames = [_scene(seed, patch=(290, 235 + (seed % 3) * 4, 60 if seed % 2 else 200))
+              for seed in range(60)]
+    enters, _calls, _detect, health = await _night_restart_scene(tmp_path, monkeypatch, frames)
+    assert [e["objectTypes"] for e in enters if "package" in e["objectTypes"]] == []
+    assert health["package_ir_followup"]["animated"] == 1

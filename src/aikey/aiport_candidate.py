@@ -38,6 +38,7 @@ from .aiport_camera_engine import (
     _PACKAGE_COOLDOWN_SECONDS, CameraEventCandidate, CameraPolicyEngine,
 )
 from .aiport_event_budget import EventBudget, EventBudgetError
+from .aiport_held_followup import HeldPackageFollowup
 from .aiport_inference import FairInference
 from .aiport_tracking import TemporalTracker, TrackChange, TrackingError
 from .aiport_smart_events import (SmartEventError, camera_event_payload,
@@ -645,6 +646,7 @@ class CandidateService:
         self._camera_engine: CameraPolicyEngine | None = None
         self._inference: FairInference | None = None
         self._pool_camera_order: tuple[str, ...] = ()
+        self._held_followup = HeldPackageFollowup()
         self._pool_policy_errors: dict[str, str] = {}
         self._pool_secondary_lens_shapes: dict[str, dict[str, int | bool]] = {}
         self._pool_recognition_accuracy_shapes: dict[
@@ -733,6 +735,8 @@ class CandidateService:
                 or time.time() < self.config.get("diagnostic_pool_event_until", 0))
 
     async def _observe_pool_frame(self, camera_mac: str, frame: bytes) -> None:
+        if self._held_followup.tracking(camera_mac):
+            await self._follow_held_packages(camera_mac, frame)
         detector = self._pool_motion.get(camera_mac)
         if detector is not None and self._pool_event_enabled():
             try:
@@ -786,10 +790,21 @@ class CandidateService:
                 or not self._pool_event_enabled()
                 or generation != engine.policy_generation(camera_mac)):
             return
-        candidates = engine.observe(
-            camera_mac, observations, now=time.monotonic(),
-            infrared=(frame is not None and any(item.kind == "package" for item in observations)
-                      and _frame_mode(frame) == "ir"))
+        infrared = (frame is not None and any(item.kind == "package" for item in observations)
+                    and _frame_mode(frame) == "ir")
+        now = time.monotonic()
+        candidates = engine.observe(camera_mac, observations, now=now, infrared=infrared)
+        held = engine.held_packages(camera_mac)
+        for track_id in self._held_followup.tracking(camera_mac) - set(held):
+            self._held_followup.discard(camera_mac, track_id)   # resolved or gone
+        if infrared:
+            # A parcel already in place at a night restart gets only the
+            # startup pair; watch it in the frames decoded anyway.
+            for track_id, box in held.items():
+                if (track_id not in self._held_followup.tracking(camera_mac)
+                        and await asyncio.to_thread(self._held_followup.start,
+                                                    camera_mac, track_id, box, frame, now)):
+                    engine.watch_held(camera_mac, track_id)
         # A confirming paid sample only helps a new, unconfirmed object. When
         # every sampled object already belongs to an active track, keep the
         # bounded hourly allowance for later arrivals such as a passing cat.
@@ -797,6 +812,27 @@ class CandidateService:
                 and not engine.needs_confirmation(camera_mac)):
             self._inference.skip_confirmation(camera_mac)
         await self._publish_pool_candidates(candidates, frame=frame)
+
+    async def _follow_held_packages(self, camera_mac: str, frame: bytes) -> None:
+        engine = self._camera_engine
+        if engine is None or not self._pool_event_enabled():
+            self._held_followup.discard(camera_mac)
+            return
+        now = time.monotonic()
+        decisions = await asyncio.to_thread(self._held_followup.observe,
+                                            camera_mac, frame, now)
+        for track_id, decision in decisions.items():
+            if decision == "keep":
+                engine.keep_held(camera_mac, track_id, now=now)
+            elif decision == "confirmed":
+                await self._publish_pool_candidates(
+                    engine.confirm_held(camera_mac, track_id, now=now), frame=frame)
+            elif decision == "animated":
+                engine.veto_held(camera_mac, track_id)
+            else:
+                # moved / expired: no keep-alive; the track leaves by its gap
+                # unless a normal sample finds it again.
+                engine.release_held(camera_mac, track_id)
 
     async def _publish_pool_candidates(
             self, candidates: tuple[CameraEventCandidate, ...],
@@ -1527,6 +1563,7 @@ class CandidateService:
             "smart_settings_rejection_reasons": dict(self.smart_settings_rejection_reasons),
             "package_cooldown_skips": (self._camera_engine.package_cooldown_skips
                                        if self._camera_engine is not None else 0),
+            "package_ir_followup": dict(self._held_followup.decisions),
             "package_ir_held": (self._camera_engine.package_ir_held
                                   if self._camera_engine is not None else 0),
             "package_ir_confirmed": (self._camera_engine.package_ir_confirmed

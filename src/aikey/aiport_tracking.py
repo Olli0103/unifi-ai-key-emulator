@@ -155,6 +155,18 @@ class TemporalTracker:
         if track is not None and track.active:
             track.held = held
 
+    def touch(self, track_id: int, now: float) -> bool:
+        """Keep a held track alive while local evidence shows it unchanged."""
+        track = self._tracks.get(track_id)
+        if track is None or not track.held or not math.isfinite(now):
+            return False
+        track.last_seen = max(track.last_seen, now)
+        return True
+
+    def current_change(self, track_id: int) -> TrackChange | None:
+        track = self._tracks.get(track_id)
+        return track.change("moving") if track is not None and track.active else None
+
     def update(self, observations: tuple[ObjectObservation, ...], *,
                now: float) -> tuple[TrackChange, ...]:
         if (type(now) not in (int, float) or not math.isfinite(now)

@@ -111,6 +111,11 @@ class CameraPolicyEngine:
         # track_id -> (since, box) of night-IR packages not yet announced.
         self._ir_held: dict[str, dict[int, tuple[float, tuple[float, ...]]]] = {
             camera: {} for camera in cameras}
+        # Held tracks the local follow-up found animal-like: an IR dwell can
+        # no longer confirm them (a colour sample or an Animal read still can).
+        self._ir_vetoed: dict[str, set[int]] = {camera: set() for camera in cameras}
+        # Held tracks a local follow-up is watching: only it may confirm them.
+        self._ir_local: dict[str, set[int]] = {camera: set() for camera in cameras}
         self._generations = dict.fromkeys(cameras, 0)
         self.policy_repeats = 0
         self.package_cooldown_skips = 0
@@ -157,6 +162,8 @@ class CameraPolicyEngine:
         self._active[camera] = {}
         self._last_moving[camera] = {}
         self._ir_held[camera] = {}
+        self._ir_vetoed[camera] = set()
+        self._ir_local[camera] = set()
         for name, count in self._trackers[camera].stats.items():
             self._association_totals[camera][name] += count
         for kind, count in self._trackers[camera].tentative_by_kind.items():
@@ -217,93 +224,153 @@ class CameraPolicyEngine:
                 event_times.popleft()
         result = []
         for change in changes:
-            if change.kind not in policy.enabled_types:
-                continue
-            active = self._active[camera].get(change.track_id)
-            budget_used = (len(self._event_times[camera])
-                           if self._event_window_seconds is not None
-                           else self._event_counts[camera])
-            held = self._ir_held[camera]
-            if change.track_id in held and active is None:
-                since, box = held[change.track_id]
-                if change.edge == "leave":
-                    del held[change.track_id]
-                    self.package_ir_dropped += 1
-                    continue
-                if change.kind == "animal":
-                    # The tracker resolved the held package track as a cat.
-                    del held[change.track_id]
-                    self.package_ir_as_animal += 1
-                elif infrared and (
-                        _iou(box, change.box) < _IR_PACKAGE_STATIONARY_IOU
-                        or now - since < _IR_PACKAGE_DWELL_SECONDS):
-                    if _iou(box, change.box) < _IR_PACKAGE_STATIONARY_IOU:
-                        held[change.track_id] = (now, change.box)  # it moved
-                    continue
-                else:
-                    # Stationary through the dwell, or seen in colour.
-                    del held[change.track_id]
-                    self._trackers[camera].hold(change.track_id, False)
-                    self.package_ir_confirmed += 1
-                    change = replace(change, edge="enter")
-            elif (change.kind == "package" and change.edge == "enter"
-                    and active is None and infrared):
-                # Every indoor Package in night IR so far was the user's cat
-                # (Flur, Esszimmer); 0 of 24 real parcels in 30 days were IR.
-                held[change.track_id] = (now, change.box)
-                self._trackers[camera].hold(change.track_id)
-                self.package_ir_held += 1
-                continue
-            if (change.kind == "package" and change.edge == "enter"
-                    and active is None):
-                # Protect 7.3.68 resolves an AI Port's packageDetected edge by
-                # the AI Port's own MAC ("Camera not found"); only the
-                # enter/moving/leave lifecycle is routed by deviceID. A parcel
-                # re-sampled later is not a new delivery.
-                last = self._last_package_at.get(camera)
-                if last is not None and now - last < _PACKAGE_COOLDOWN_SECONDS:
-                    continue
-                if self._package_cooldown is not None:
-                    try:
-                        cooling = self._package_cooldown.remaining(camera) == 0
-                    except EventBudgetError:
-                        cooling = True  # fail closed: no duplicate parcel event
-                    if cooling:
-                        self.package_cooldown_skips += 1
-                        continue
-            if (change.edge == "enter" and active is None
-                    and budget_used < self._max_events):
-                zones = policy.zone_ids(change.kind, change.box)
-                if (zones is not None and (self._event_budget is None
-                                           or self._event_budget.claim(camera))):
-                    self._active[camera][change.track_id] = (change, zones)
-                    self._last_moving[camera][change.track_id] = now
-                    self._event_counts[camera] += 1
-                    self._entered_by_kind[camera][change.kind] += 1
-                    if change.kind == "package":
-                        self._last_package_at[camera] = now
-                        if self._package_cooldown is not None:
-                            try:
-                                self._package_cooldown.claim(camera)
-                            except EventBudgetError:
-                                pass  # the in-memory cooldown still holds
-                    if self._event_window_seconds is not None:
-                        self._event_times[camera].append(now)
-                    result.append(CameraEventCandidate(camera, change, zones))
-            elif (change.edge == "moving" and active is not None
-                  and active[0].kind == change.kind
-                  and now - self._last_moving[camera][change.track_id] >= 1):
-                zones = policy.zone_ids(change.kind, change.box)
-                if zones == active[1]:
-                    self._active[camera][change.track_id] = (change, zones)
-                    self._last_moving[camera][change.track_id] = now
-                    result.append(CameraEventCandidate(camera, change, zones))
-            elif (change.edge == "leave" and active is not None
-                  and active[0].kind == change.kind):
-                del self._active[camera][change.track_id]
-                del self._last_moving[camera][change.track_id]
-                result.append(CameraEventCandidate(camera, change, active[1]))
+            candidate = self._apply_change(camera, policy, change, now, infrared)
+            if candidate is not None:
+                result.append(candidate)
         return tuple(result)
+
+    def _apply_change(self, camera: str, policy: SmartPolicy, change: TrackChange,
+                      now: float, infrared: bool) -> CameraEventCandidate | None:
+        if change.kind not in policy.enabled_types:
+            return None
+        active = self._active[camera].get(change.track_id)
+        budget_used = (len(self._event_times[camera])
+                       if self._event_window_seconds is not None
+                       else self._event_counts[camera])
+        held = self._ir_held[camera]
+        if change.track_id in held and active is None:
+            since, box = held[change.track_id]
+            vetoed, local = self._ir_vetoed[camera], self._ir_local[camera]
+            if change.edge == "leave":
+                del held[change.track_id]
+                vetoed.discard(change.track_id)
+                local.discard(change.track_id)
+                self.package_ir_dropped += 1
+                return None
+            if change.kind == "animal":
+                # The tracker resolved the held package track as a cat.
+                del held[change.track_id]
+                vetoed.discard(change.track_id)
+                local.discard(change.track_id)
+                self.package_ir_as_animal += 1
+            elif infrared and (
+                    change.track_id in vetoed or change.track_id in local
+                    or _iou(box, change.box) < _IR_PACKAGE_STATIONARY_IOU
+                    or now - since < _IR_PACKAGE_DWELL_SECONDS):
+                if _iou(box, change.box) < _IR_PACKAGE_STATIONARY_IOU:
+                    held[change.track_id] = (now, change.box)  # it moved
+                return None
+            else:
+                # Stationary through the dwell, or seen in colour.
+                del held[change.track_id]
+                vetoed.discard(change.track_id)
+                local.discard(change.track_id)
+                self._trackers[camera].hold(change.track_id, False)
+                self.package_ir_confirmed += 1
+                change = replace(change, edge="enter")
+        elif (change.kind == "package" and change.edge == "enter"
+                and active is None and infrared):
+            # Every indoor Package in night IR so far was the user's cat
+            # (Flur, Esszimmer); 0 of 24 real parcels in 30 days were IR.
+            held[change.track_id] = (now, change.box)
+            self._trackers[camera].hold(change.track_id)
+            self.package_ir_held += 1
+            return None
+        if (change.kind == "package" and change.edge == "enter"
+                and active is None):
+            # Protect 7.3.68 resolves an AI Port's packageDetected edge by
+            # the AI Port's own MAC ("Camera not found"); only the
+            # enter/moving/leave lifecycle is routed by deviceID. A parcel
+            # re-sampled later is not a new delivery.
+            last = self._last_package_at.get(camera)
+            if last is not None and now - last < _PACKAGE_COOLDOWN_SECONDS:
+                return None
+            if self._package_cooldown is not None:
+                try:
+                    cooling = self._package_cooldown.remaining(camera) == 0
+                except EventBudgetError:
+                    cooling = True  # fail closed: no duplicate parcel event
+                if cooling:
+                    self.package_cooldown_skips += 1
+                    return None
+        if (change.edge == "enter" and active is None
+                and budget_used < self._max_events):
+            zones = policy.zone_ids(change.kind, change.box)
+            if (zones is not None and (self._event_budget is None
+                                       or self._event_budget.claim(camera))):
+                self._active[camera][change.track_id] = (change, zones)
+                self._last_moving[camera][change.track_id] = now
+                self._event_counts[camera] += 1
+                self._entered_by_kind[camera][change.kind] += 1
+                if change.kind == "package":
+                    self._last_package_at[camera] = now
+                    if self._package_cooldown is not None:
+                        try:
+                            self._package_cooldown.claim(camera)
+                        except EventBudgetError:
+                            pass  # the in-memory cooldown still holds
+                if self._event_window_seconds is not None:
+                    self._event_times[camera].append(now)
+                return CameraEventCandidate(camera, change, zones)
+        elif (change.edge == "moving" and active is not None
+              and active[0].kind == change.kind
+              and now - self._last_moving[camera][change.track_id] >= 1):
+            zones = policy.zone_ids(change.kind, change.box)
+            if zones == active[1]:
+                self._active[camera][change.track_id] = (change, zones)
+                self._last_moving[camera][change.track_id] = now
+                return CameraEventCandidate(camera, change, zones)
+        elif (change.edge == "leave" and active is not None
+              and active[0].kind == change.kind):
+            del self._active[camera][change.track_id]
+            del self._last_moving[camera][change.track_id]
+            return CameraEventCandidate(camera, change, active[1])
+        return None
+
+    def held_packages(self, camera_mac: str) -> dict[int, tuple[float, float, float, float]]:
+        """Night-IR package tracks held without an announced event."""
+        return {track: box for track, (_since, box)
+                in self._ir_held[self._camera(camera_mac)].items()}
+
+    def keep_held(self, camera_mac: str, track_id: int, *, now: float) -> bool:
+        camera = self._camera(camera_mac)
+        return (track_id in self._ir_held[camera]
+                and self._trackers[camera].touch(track_id, now))
+
+    def watch_held(self, camera_mac: str, track_id: int) -> None:
+        """A local follow-up now decides this held track's IR dwell."""
+        camera = self._camera(camera_mac)
+        if track_id in self._ir_held[camera]:
+            self._ir_local[camera].add(track_id)
+
+    def release_held(self, camera_mac: str, track_id: int) -> None:
+        """The follow-up gave up (moved or expired): normal rules apply again."""
+        self._ir_local[self._camera(camera_mac)].discard(track_id)
+
+    def veto_held(self, camera_mac: str, track_id: int) -> None:
+        camera = self._camera(camera_mac)
+        self._ir_local[camera].discard(track_id)
+        if track_id in self._ir_held[camera]:
+            self._ir_vetoed[camera].add(track_id)
+
+    def confirm_held(self, camera_mac: str, track_id: int, *,
+                     now: float) -> tuple[CameraEventCandidate, ...]:
+        """Announce a held package the local follow-up found in place.
+
+        It passes the same cooldown, budget and zone gates as any enter.
+        """
+        camera = self._camera(camera_mac)
+        policy = self._policies[camera]
+        held = self._ir_held[camera]
+        change = self._trackers[camera].current_change(track_id)
+        if (policy is None or track_id not in held or change is None
+                or change.kind != "package" or track_id in self._ir_vetoed[camera]):
+            return ()
+        since, box = held[track_id]
+        held[track_id] = (min(since, now - _IR_PACKAGE_DWELL_SECONDS), box)
+        self._ir_local[camera].discard(track_id)
+        candidate = self._apply_change(camera, policy, change, now, infrared=False)
+        return (candidate,) if candidate is not None else ()
 
     def needs_confirmation(self, camera_mac: str) -> bool:
         """Whether this camera's last sample left an unconfirmed object."""
