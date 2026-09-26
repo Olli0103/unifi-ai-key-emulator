@@ -237,8 +237,14 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
         section[key] = str((base / Path(raw).expanduser()).resolve())
     if device.get("management_password"):
         raise ConfigError("Store management credentials in management_password_file")
+    speech = config.get("speech_to_text")
+    if speech is not None and not isinstance(speech, dict):
+        raise ConfigError("speech_to_text must be a configuration object")
+    if speech is not None and speech.get("api_key"):
+        raise ConfigError("Use speech_to_text.api_key_file instead of an inline API key")
     for section, key in ((config["inference"], "api_key_file"),
-                         (config["embeddings"], "bearer_token_file")):
+                         (config["embeddings"], "bearer_token_file"),
+                         (speech or {}, "api_key_file")):
         if section.get(key):
             p = (base / Path(section[key]).expanduser()).resolve()
             section[key] = str(p)
@@ -269,6 +275,12 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
         validate_inference_config(inference, lab=runtime["mode"] == "lab", require_api_key=False)
     except ProviderError as exc:
         raise ConfigError(str(exc)) from None
+    if speech is not None:
+        from .speech import SpeechError, validate_speech_config
+        try:
+            validate_speech_config(speech, lab=runtime["mode"] == "lab", require_api_key=False)
+        except SpeechError as exc:
+            raise ConfigError(str(exc)) from None
     if config["embeddings"].get("backend", "http") == "http":
         from .search import EmbeddingError, EmbeddingService
         try:
@@ -298,6 +310,9 @@ def hydrate_secrets(config: dict) -> dict:
     key_path = config["inference"].get("api_key_file")
     if key_path:
         config["inference"]["api_key"] = Path(key_path).read_text().strip()
+    speech = config.get("speech_to_text")
+    if isinstance(speech, dict) and speech.get("api_key_file"):
+        speech["api_key"] = Path(speech["api_key_file"]).read_text().strip()
     return config
 
 

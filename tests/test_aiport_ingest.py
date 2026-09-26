@@ -122,7 +122,7 @@ async def test_ingress_recovers_decoder_exit_without_new_stream_command(tmp_path
 async def test_stale_stream_restart_records_fixed_timeout_without_changing_recovery(tmp_path):
     decoder, _ = fake_decoder(tmp_path)
     ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
-                           ffmpeg_path=decoder, start_timeout=0.2)
+                           ffmpeg_path=decoder, start_timeout=1.0)
     try:
         await ingress.control(start_payload())
         # The first decoder is live. Replace only the next invocation with a

@@ -16,7 +16,7 @@ RECOGNIZE_ANYTHING_PATH = "/internal/aiprocessors/recognize-anything"
 _RECORD = struct.Struct(">BBBBI")
 
 # Must equal docs/evidence/compatibility-manifest.json; a test enforces this.
-COMPATIBILITY_MANIFEST_VERSION = "ai-key/2026-09-26.1"
+COMPATIBILITY_MANIFEST_VERSION = "ai-key/2026-09-26.2"
 # Evidence scope per Protect version. "live_partial" means some behaviors were
 # observed on a live controller; it never means every feature is compatible.
 # "static_only" means source inspection without a live controller of that version.

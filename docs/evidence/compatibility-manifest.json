@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-26.1",
+ "manifest_version": "ai-key/2026-09-26.2",
  "processor_profile": "ai-key",
  "base_commit": "54160ce",
  "emulated_identity": {
@@ -172,15 +172,45 @@
     {
      "name": "ubntbox 0.1.7",
      "sha256": "e16b4d5bae3b440221b7a20fc2bbee19fa732af451c8d787ff6d76956bc23807"
+    },
+    {
+     "name": "ui-websocketd 0.1.47.1 syswrapper.sh",
+     "sha256": "10fdc7d888b2051d6baf50424ce7c60a5aef47c8d33ca7fb0fbcf3a01c890da5"
+    },
+    {
+     "name": "ui-stt-agent 0.0.3.6 stt_app.py",
+     "sha256": "cafaa7a98b0f261eed49da785c68e9b4c7eb919f0b4c4f5e31c429c4d57b0639"
+    },
+    {
+     "name": "ui-ai-infer-agent 0.0.24.4",
+     "sha256": "b08e983a556ea90485c6b2d49570004778ed5bb22bc6860107c40d719fc6b886"
     }
    ],
    "records": [
     "docs/evidence/adoption-evidence.md",
     "docs/evidence/search-evidence.md",
     "docs/device-contract.md",
-    "docs/worker-contract.md"
+    "docs/worker-contract.md",
+    "docs/evidence/speech-to-text-contract.md"
    ],
    "note": "Static inspection only. Firmware was not executed. Nothing is redistributed here."
+  },
+  {
+   "id": "static-protect-7.3.60-bundle",
+   "kind": "static",
+   "bundle_version": "7.3.60",
+   "date": "2026-09-26",
+   "artifacts": [
+    {
+     "name": "usr/share/unifi-protect/app/service.js",
+     "version": "Protect 7.3.60",
+     "sha256": "9364cc9e37cd2ef283228f9f92e0efcc58c61f665c77224c7dfc158c0a358291"
+    }
+   ],
+   "records": [
+    "docs/evidence/speech-to-text-contract.md"
+   ],
+   "note": "Static inspection of the 7.3.60 controller bundle for the speech-to-text path. Live 7.3.60 evidence is a separate source; this does not change that version's classification. Nothing is redistributed here."
   },
   {
    "id": "vendor-docs",
@@ -1617,23 +1647,32 @@
   {
    "id": "capability.audio_speech",
    "area": "capabilities",
-   "title": "Audio detection and speech transcription",
-   "status": "unsupported",
+   "title": "Speech transcription (speechToText)",
+   "status": "fixture-tested",
    "live": {},
    "static": [
-    "static-protect-7.2.105",
-    "vendor-docs"
+    "static-protect-7.3.60-bundle",
+    "static-aikey-2.2.8"
    ],
-   "tests": [],
+   "tests": [
+    "tests/test_speech_to_text.py::test_a_speech_event_is_transcribed_and_posted_in_protects_shape",
+    "tests/test_speech_to_text.py::test_silence_noise_and_repeated_hallucinations_post_no_transcript",
+    "tests/test_speech_to_text.py::test_a_failing_backend_posts_nothing",
+    "tests/test_speech_to_text.py::test_anything_but_the_exact_native_task_is_refused_before_media_or_audio",
+    "tests/test_speech_to_text.py::test_the_device_routes_speech_to_text_only_for_allowed_cameras"
+   ],
    "implementation": [
-    "src/aikey/worker.py"
+    "src/aikey/speech.py",
+    "src/aikey/worker.py",
+    "src/aikey/device.py"
    ],
-   "activation": "default",
+   "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Native contract (issue #15)",
-    "Vendor camera eligibility differs between sources"
+    "A persisted native transcript on Protect 7.3.68 after a reload (issue #15)",
+    "An alrmSpeak-enabled camera and the AI Key Speech to Text setting, both user actions",
+    "Speech on AI Port-paired legacy cameras, which raise no alrmSpeak"
    ],
-   "rejection": "Audio variants rejected before media or inference."
+   "notes": "Protect dispatches speechToText only for an alrmSpeak audio event and only to an AI processor whose speechToTextSettings list the camera; no capability flag is involved. Refused unless speech_to_text lists the camera."
   },
   {
    "id": "capability.ai_alarms",

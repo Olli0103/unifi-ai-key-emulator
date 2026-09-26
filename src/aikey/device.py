@@ -285,7 +285,8 @@ class DeviceService:
         self._control_diagnostics = {name: {"count": 0, "last_result_code": None,
                                            "result_code_counts": _result_counts()} for name in (
             "getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone",
-            "changeUserPassword", "RequestAI", "recognizeKeyFrames", "changeAiInferAgentSettings",
+            "changeUserPassword", "RequestAI", "recognizeKeyFrames", "speechToText",
+            "changeAiInferAgentSettings",
             "changeDescribePrompts", "networkStatus", "sshService", "unknown")}
         self._recognize_diagnostics = {
             "camera_shape_counts": dict.fromkeys(_JSON_SHAPES, 0),
@@ -345,7 +346,13 @@ class DeviceService:
                 "clock_offset_ms": self._clock_offset_ms, "discovery": "unsupported",
                 "compatibility": self._compatibility_status(),
                 "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "changeUserPassword", "RequestAI"]
-                    + (["recognizeKeyFrames"] if basic_enabled else [])}
+                    + (["recognizeKeyFrames"] if basic_enabled else [])
+                    + (["speechToText"] if self._speech_cameras() else [])}
+
+    def _speech_cameras(self) -> frozenset:
+        speech = self.config.get("speech_to_text")
+        cameras = speech.get("camera_ids") if isinstance(speech, dict) else None
+        return frozenset(c for c in cameras if isinstance(c, str)) if isinstance(cameras, list) else frozenset()
 
     def _compatibility_status(self) -> dict:
         """Fixed categories only; never echoes controller-supplied text."""
@@ -952,6 +959,20 @@ class DeviceService:
                 raise
             finally:
                 self._active_admissions -= 1
+            return body
+        if action == "speechToText":
+            # Protect 7.3.60 dispatches this for an alrmSpeak audio event; the
+            # worker posts the transcript to /internal/aiprocessors/speech-to-text.
+            if not isinstance(body.get("camera"), str) or body["camera"] not in self._speech_cameras():
+                raise CommandFailure(95, "speechToText is outside the configured camera policy")
+            self._active_admissions += 1
+            try:
+                async with asyncio.timeout(30):
+                    admitted = await self.job_handler({"command": action, "payload": deepcopy(body)})
+            finally:
+                self._active_admissions -= 1
+            if not isinstance(admitted, dict):
+                raise ContractError("Job admission must return an object")
             return body
         if action == "recognizeKeyFrames":
             from .worker import WorkerError, configured_test_scopes

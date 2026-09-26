@@ -25,6 +25,7 @@ import aiohttp
 
 from .caption_budget import CaptionBudget, CaptionBudgetError, CaptionBudgetExhausted
 from .providers import ProviderError, validate_inference_config
+from .speech import SpeechError, validate_speech_config
 
 
 class WorkerError(RuntimeError):
@@ -77,6 +78,9 @@ def configured_test_scopes(options):
 _CALLBACK_TASK = re.compile(r"^/internal/aiprocessors/descriptions/([A-Za-z0-9_-]+)$")
 _CALLBACK_UPLOAD = re.compile(r"^/internal/camera-upload/[A-Za-z0-9_-]+$")
 _LEGACY_CALLBACK = "/internal/aiprocessors/recognize-anything"
+_SPEECH_CALLBACK = "/internal/aiprocessors/speech-to-text"
+_SPEECH_EXPORT = {"camera", "event", "channel", "start", "end", "type", "format", "skipVideo",
+                  "createEvent"}
 _IMAGE_PATH = re.compile(r"^/internal/aiprocessors/image/[^/]+$")
 _VIDEO_PATHS = {"/internal/aiprocessors/video/export", "/internal/video/export"}
 _SNAPSHOT_PATHS = {"/internal/aiprocessors/snapshot/generate",
@@ -225,6 +229,14 @@ class JobProcessor:
         if self.callback_mode not in {"enabled", "disabled"}:
             raise WorkerError("Invalid callback mode")
         self._check_inference_config()
+        self.speech, self.speech_cameras = None, frozenset()
+        self.max_audio_ms = self._positive("max_audio_ms", 120000)
+        if self.config.get("speech_to_text") is not None:
+            try:
+                self.speech, self.speech_cameras = validate_speech_config(
+                    self.config["speech_to_text"], lab=self.lab)
+            except SpeechError as exc:
+                raise WorkerError(str(exc)) from exc
 
     def _positive(self, name, default):
         value = self.options.get(name, default)
@@ -426,7 +438,7 @@ class JobProcessor:
         if purpose == "callback":
             if parsed.query or not (_CALLBACK_TASK.fullmatch(parsed.path)
                                     or _CALLBACK_UPLOAD.fullmatch(parsed.path)
-                                    or parsed.path == _LEGACY_CALLBACK):
+                                    or parsed.path in {_LEGACY_CALLBACK, _SPEECH_CALLBACK}):
                 raise WorkerError("Unsupported callback path")
         elif not (_IMAGE_PATH.fullmatch(parsed.path) or parsed.path in _SNAPSHOT_PATHS
                   or parsed.path in _VIDEO_PATHS):
@@ -436,6 +448,8 @@ class JobProcessor:
     def _normalize(self, command):
         if not isinstance(command, dict) or len(_json(command)) > 65536:
             raise WorkerError("Invalid or oversized RequestAI command")
+        if command.get("command") == "speechToText":
+            return self._normalize_speech_to_text(command)
         if "command" in command:
             return self._normalize_recognize_key_frames(command)
         if self.continuous:
@@ -600,6 +614,53 @@ class JobProcessor:
         return (job_id, fingerprint, "recognizeKeyFrames", body, callback, callback_kind,
                 media, min(self.timeout_s, 30))
 
+    def _normalize_speech_to_text(self, command):
+        """Protect's native speech task, only for explicitly allowed cameras.
+
+        Protect 7.3.60 dispatches ``speechToText`` for an ``alrmSpeak`` audio
+        event with an audio-only export of the event and the fixed
+        speech-to-text callback. Nothing else is accepted.
+        """
+        if set(command) != {"command", "payload"} or self.speech is None:
+            raise WorkerError("speechToText requires a configured speech backend")
+        body = command["payload"]
+        if not isinstance(body, dict) or set(body) != _SPEECH_EXPORT | {"reqUrl", "resUrl"}:
+            raise WorkerError("Unsupported speechToText payload fields")
+        body = json.loads(_json(body))
+        if (body["camera"] not in self.speech_cameras
+                or not isinstance(body["event"], str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])):
+            raise WorkerError("speechToText is outside the configured camera policy")
+        if (type(body["channel"]) is not int or body["channel"] != 0 or body["type"] != "rotating"
+                or body["format"] not in {"mp4", "ubv"} or body["skipVideo"] is not True
+                or body["createEvent"] is not False):
+            raise WorkerError("speechToText is limited to the audio-only event export")
+        if (any(type(body[key]) is not int for key in ("start", "end"))
+                or not 0 <= body["start"] < body["end"] <= 2 ** 53 - 1
+                or body["end"] - body["start"] > self.max_audio_ms):
+            raise WorkerError("speechToText audio exceeds configured duration bound")
+        callback = self._url(body["resUrl"], "callback")
+        if urlsplit(callback).path != _SPEECH_CALLBACK:
+            raise WorkerError("speechToText requires the speech-to-text callback")
+        media = self._url(body["reqUrl"], "media")
+        parsed = urlsplit(media)
+        if parsed.path != "/internal/aiprocessors/video/export":
+            raise WorkerError("speechToText requires the AI processor video export route")
+        try:
+            pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+        except ValueError as exc:
+            raise WorkerError("speechToText export query is malformed") from exc
+        expected = {key: ("true" if body[key] is True else "false" if body[key] is False
+                          else str(body[key])) for key in _SPEECH_EXPORT}
+        if len(pairs) != len(expected) or dict(pairs) != expected:
+            raise WorkerError("speechToText export must exactly match the command")
+        normalized = {"operation": "speechToText", "payload": body, "callback": callback,
+                      "callbackKind": "speech", "media": [("audio", media)]}
+        fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
+        job_id = hashlib.sha256(f"speechToText:{body['camera']}:{body['event']}".encode()).hexdigest()
+        return (job_id, fingerprint, "speechToText", body, callback, "speech",
+                [("audio", media)], min(self.timeout_s, 120))
+
     def _read_scope_reservation(self, scope=None):
         if scope is None:
             if not self.test_scopes:
@@ -633,7 +694,7 @@ class JobProcessor:
             raise WorkerError("Invalid test scope reservation; inspect it without resetting the permit") from exc
 
     def _reserve_test_scope(self, job):
-        if not self.test_scopes:
+        if not self.test_scopes or job.operation == "speechToText":
             return
         camera_id = job.payload.get("camera") if job.operation == "recognizeKeyFrames" else job.payload.get("cameraId")
         scope = self._scopes_by_camera.get(camera_id)
@@ -702,7 +763,8 @@ class JobProcessor:
         normalized = self._normalize(command)
         await self.start()
         job_id, fingerprint, operation, body, callback, kind, media, budget = normalized
-        if self.continuous and not self.camera_registry.allows(body["camera"]):
+        if (self.continuous and operation != "speechToText"
+                and not self.camera_registry.allows(body["camera"])):
             raise WorkerError("Camera inventory changed before admission")
         if job_id in self._pending:
             job = self._pending[job_id]
@@ -738,7 +800,7 @@ class JobProcessor:
                    time.monotonic() + budget, future)
         try:
             self._reserve_test_scope(job)
-            if self.caption_budget is not None:
+            if self.caption_budget is not None and operation != "speechToText":
                 try:
                     receipt = self.caption_budget.reserve(job_id, fingerprint, body["camera"])
                 except CaptionBudgetExhausted as exc:
@@ -912,7 +974,77 @@ class JobProcessor:
         except (ValueError, ProviderError) as exc:
             raise WorkerError("Inference did not return a complete, nonempty text description") from exc
 
+    async def _audio(self, data):
+        """16 kHz mono WAV of the export's audio track, bounded in size."""
+        executable = self.options.get("ffmpeg_path")
+        if not executable or not Path(executable).is_absolute() or not Path(executable).is_file():
+            raise WorkerError("Speech jobs require an explicit absolute ffmpeg_path")
+        if len(data) < 12 or data[4:8] != b"ftyp":
+            raise WorkerError("Only MP4 audio exports are supported; UBV needs a verified converter")
+        limit = 32 * self.max_audio_ms + 4096          # 16 kHz x 16 bit, plus header
+        with tempfile.TemporaryDirectory(prefix="aikey-audio-", dir=self.state_dir) as temporary:
+            source, output = Path(temporary) / "input.mp4", Path(temporary) / "audio.wav"
+            source.write_bytes(data)
+            process = await asyncio.create_subprocess_exec(
+                executable, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                "-protocol_whitelist", "file,pipe", "-f", "mp4", "-i", str(source), "-vn",
+                "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+                "-t", str(self.max_audio_ms / 1000), "-fs", str(limit), str(output),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            try:
+                await process.wait()
+            except BaseException:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+                raise
+            if process.returncode != 0 or not output.is_file() or output.stat().st_size <= 44:
+                raise WorkerError("ffmpeg could not extract an audio track")
+            return output.read_bytes()
+
+    async def _transcribe(self, wav, clip_ms):
+        form = aiohttp.FormData()
+        for name, value in self.speech.form_fields():
+            form.add_field(name, value)
+        form.add_field("file", wav, filename="audio.wav", content_type="audio/wav")
+        async with self._inference_session.post(self.speech.url, data=form,
+                    headers=self.speech.headers, allow_redirects=False) as response:
+            if response.status != 200:
+                raise WorkerError(f"Speech backend returned HTTP {response.status}")
+            raw = await self._read_response(response, 1024 * 1024)
+        try:
+            return self.speech.parse(json.loads(raw), clip_ms)
+        except (ValueError, SpeechError) as exc:
+            raise WorkerError("Speech backend did not return a usable transcription") from exc
+
+    async def _execute_speech(self, job):
+        (_, url), = job.media
+        data, headers = await self._fetch(url, "video")
+        lowered = {key.lower(): value for key, value in headers.items()}
+        start = job.payload["start"]
+        # The vendor Key prefers the export's own start headers (x-timestamp,
+        # then x-start-timestamp) over the requested start.
+        for name in ("x-timestamp", "x-start-timestamp"):
+            value = lowered.get(name, "")
+            if re.fullmatch(r"[1-9][0-9]{0,15}", value):
+                start = int(value)
+                break
+        clip_ms = job.payload["end"] - job.payload["start"]
+        segments = await self._transcribe(await self._audio(data), clip_ms)
+        payload = {"camera": job.payload["camera"], "event": job.payload["event"],
+                   "stt": [{"startMs": start + begin, "endMs": start + end, "text": text}
+                           for begin, end, text in segments]}
+        if self.callback_mode == "disabled":
+            return {"status": "processed", "jobId": job.job_id, "callback": "disabled",
+                    "result": {"segments": len(segments)}}
+        result = await self._post_callback(job, payload)
+        # Transcripts are private: the journal keeps only the segment count.
+        result["result"] = {"segments": len(segments)}
+        return result
+
     async def _execute(self, job):
+        if job.operation == "speechToText":
+            return await self._execute_speech(job)
         started = time.monotonic()
         images = []
         for kind, url in job.media:
