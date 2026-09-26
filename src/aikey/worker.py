@@ -31,6 +31,9 @@ from .faces import FaceStore, FaceStoreError
 from . import clip
 
 
+_LOCAL_INDEX_OPERATIONS = frozenset({"indexImages", "indexKeyFrames"})
+_INDEX_IMAGES_BUDGET_S = 600
+
 class WorkerError(RuntimeError):
     """A job was rejected or could not be completed safely."""
 
@@ -281,6 +284,9 @@ class JobProcessor:
         self._embedding_service = None
         self._pending: dict[str, _Job] = {}
         self._history = {}
+        # Retroactive backfill progress; counts only, no identifiers (#21).
+        self.retroactive = {"tasks": 0, "crops_indexed": 0, "completed": 0, "failed": 0,
+                            "refused_unindexed_camera": 0, "refused_image": 0, "archived": 0}
         self._stopping = False
         self._start_lock = asyncio.Lock()
         self._load_history()
@@ -475,20 +481,29 @@ class JobProcessor:
         self._history.pop(job_id)
 
     def _rollover_history(self):
-        if not self.continuous:
-            return
-        cutoff = time.time() - 24 * 3600
-        candidates = sorted((record["updatedAt"], job_id)
-                            for job_id, record in self._history.items()
-                            if record.get("state") in {"completed", "failed"}
-                            and type(record.get("updatedAt")) in {int, float}
-                            and 0 < record["updatedAt"] < cutoff)
+        now = time.time()
+        candidates = sorted(
+            (record["updatedAt"], job_id) for job_id, record in self._history.items()
+            if record.get("state") in {"completed", "failed"}
+            and type(record.get("updatedAt")) in {int, float} and 0 < record["updatedAt"]
+            # Continuous mode archives everything after a day. Local-only index
+            # jobs (CLIP embeddings, no provider data) are archived after a
+            # minute in every mode, so a retroactive backfill of thousands of
+            # events never fills the ledger (#21). Tombstones keep replays out;
+            # failed index jobs stay, so Protect can still retry them.
+            and ((self.continuous and record["updatedAt"] < now - 24 * 3600)
+                 or (record.get("operation") in _LOCAL_INDEX_OPERATIONS
+                     and record["state"] == "completed" and record["updatedAt"] < now - 60)))
+        if candidates:
+            self._private_archive_dir(self.archive_dir)
         for _, job_id in candidates:
             self._archive_terminal(job_id)
+            if self._history.get(job_id) is None:
+                self.retroactive["archived"] += 1
 
     def _record(self, job, state, **extra):
         record = {"jobId": job.job_id, "fingerprint": job.fingerprint,
-                  "state": state, "updatedAt": time.time(), **extra}
+                  "state": state, "updatedAt": time.time(), "operation": job.operation, **extra}
         path = self.state_dir / f"{job.job_id}.json"
         fd, temporary = tempfile.mkstemp(prefix=".journal-", dir=self.state_dir)
         try:
@@ -561,9 +576,18 @@ class JobProcessor:
                 and (command["payload"].get("faceMeta") or command["payload"].get("personMeta"))):
             return self._normalize_faces(command)
         if (command.get("command") == "recognizeKeyFrames" and isinstance(command.get("payload"), dict)
-                and command["payload"].get("ramType") == "multipleImages"
-                and command["payload"].get("camera") in self.index_cameras):
-            return self._normalize_multiple_images(command)
+                and command["payload"].get("ramType") in ("multipleImages", "image")):
+            if command["payload"]["ramType"] == "image":
+                # Retroactive audio events send their thumbnail as ramType image;
+                # it has no local index path and must never reach the provider.
+                self.retroactive["refused_image"] += 1
+                raise WorkerError("recognizeKeyFrames image tasks are not processed")
+            if command["payload"].get("camera") not in self.index_cameras:
+                self.retroactive["refused_unindexed_camera"] += 1
+                raise WorkerError("multipleImages camera is not a Find Anything index camera")
+            job = self._normalize_multiple_images(command)
+            self.retroactive["tasks"] += 1
+            return job
         if (command.get("command") == "recognizeKeyFrames" and isinstance(command.get("payload"), dict)
                 and command["payload"].get("camera") in self.index_cameras
                 and command["payload"].get("camera") not in self._scopes_by_camera
@@ -866,8 +890,10 @@ class JobProcessor:
                       "callbackKind": "legacy_tagging", "media": media}
         fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
         job_id = hashlib.sha256(f"multipleImages:{body['camera']}:{body['event']}".encode()).hexdigest()
+        # Protect allows RAM tasks 30 minutes and keeps up to 50 backfill tasks
+        # queued here; a queued crop job must not expire behind the others.
         return (job_id, fingerprint, "indexImages", body, callback, "legacy_tagging",
-                media, min(self.timeout_s, 90))
+                media, _INDEX_IMAGES_BUDGET_S)
 
     def _normalize_index(self, command):
         """Index-only key-moment task: local CLIP embeddings, no caption.
@@ -1210,7 +1236,8 @@ class JobProcessor:
     def status(self):
         queued = self._queue.qsize()
         return {"queued": queued, "active": max(0, len(self._pending) - queued),
-                "pending": len(self._pending), "capacity": self._queue.maxsize}
+                "pending": len(self._pending), "capacity": self._queue.maxsize,
+                "ledger": len(self._history), "retroactive": dict(self.retroactive)}
 
     async def _consume(self):
         while True:
@@ -1219,6 +1246,8 @@ class JobProcessor:
                 async with asyncio.timeout(max(0, job.deadline - time.monotonic())):
                     result = await self._execute(job)
                 self._record(job, "completed", result=result)
+                if job.operation == "indexImages":
+                    self.retroactive["completed"] += 1
                 if not job.future.done():
                     job.future.set_result(result)
             except asyncio.CancelledError:
@@ -1227,6 +1256,8 @@ class JobProcessor:
                 raise
             except Exception as exc:
                 message = "Job timed out" if isinstance(exc, TimeoutError) else str(exc)
+                if job.operation == "indexImages":
+                    self.retroactive["failed"] += 1
                 current = self._history.get(job.job_id, {})
                 if current.get("state") not in {"callback_sending", "callback_uncertain"}:
                     if (job.operation == "on_demand" and self.callback_mode == "enabled"
@@ -1633,6 +1664,7 @@ class JobProcessor:
                 raise WorkerError(str(exc)) from exc
             tags.append({"keyMomentMs": moment, "tags": [], "trackerID": tracker,
                          "imgEmbed": [round(value, 6) for value in vector]})
+            self.retroactive["crops_indexed"] += 1
         elapsed = round((time.monotonic() - started) * 1000)
         payload = {"cameraId": job.payload["camera"], "eventId": job.payload["event"],
                    "description": "", "status": "success", "keyMomentsTags": [],

@@ -924,3 +924,46 @@ async def test_worker_clip_calls_follow_the_pinned_revision(controller, tmp_path
     (tmp_path / "search-profile.json").write_text(json.dumps({"revision": "c" * 64}))
     assert worker._clip_client().expected_revision == "c" * 64
     await worker.stop()
+
+
+async def test_completed_index_jobs_roll_over_so_a_backfill_never_fills_the_ledger(controller, tmp_path):
+    options = config(controller)
+    options["worker"]["max_ledger_entries"] = 2
+    worker = JobProcessor(options, tmp_path)
+    try:
+        for event in ("retro-a", "retro-b", "retro-c"):
+            command = multiple_images([crop_entry("crop1", 11, START + 500)])
+            command["payload"]["event"] = event
+            await worker.handle(command)
+            for record in worker._history.values():
+                record["updatedAt"] -= 120                 # age past the one-minute rollover
+                path = worker.state_dir / f"{record['jobId']}.json"
+                path.write_text(json.dumps(record))
+        # Three jobs through a two-entry ledger: completed index jobs were archived.
+        status = worker.status()
+        assert status["retroactive"]["completed"] == 3 and status["retroactive"]["archived"] >= 1
+        assert status["ledger"] <= 2
+        # An archived event is still recognized, not processed twice.
+        command = multiple_images([crop_entry("crop1", 11, START + 500)])
+        command["payload"]["event"] = "retro-a"
+        worker._rollover_history()
+        result = await worker.handle(command)
+        assert result["callback"] == "already_completed"
+    finally:
+        await worker.stop()
+
+
+async def test_retroactive_image_and_unindexed_camera_tasks_are_refused_before_any_fetch(controller, tmp_path):
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError, match="not a Find Anything index camera"):
+            await worker.handle(multiple_images([crop_entry("crop1", 11, START)], camera="offline-camera-fixture"))
+        command = multiple_images([crop_entry("crop1", 11, START)])
+        command["payload"]["ramType"] = "image"
+        with pytest.raises(WorkerError, match="image tasks are not processed"):
+            await worker.handle(command)
+        counts = worker.status()["retroactive"]
+        assert counts["refused_unindexed_camera"] == 1 and counts["refused_image"] == 1
+        assert getattr(controller, "crop_requests", []) == [] and controller.vision_requests == []
+    finally:
+        await worker.stop()
