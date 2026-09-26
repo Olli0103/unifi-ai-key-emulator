@@ -967,3 +967,27 @@ async def test_retroactive_image_and_unindexed_camera_tasks_are_refused_before_a
         assert getattr(controller, "crop_requests", []) == [] and controller.vision_requests == []
     finally:
         await worker.stop()
+
+
+async def test_live_jobs_run_before_queued_backfill_jobs(controller, tmp_path):
+    options = config(controller)
+    options["worker"]["max_queue"] = 8
+    worker = JobProcessor(options, tmp_path)
+    order = []
+
+    async def execute(job):
+        order.append(job.operation)
+        return {"status": "processed"}
+    worker._execute = execute
+    worker._record = lambda *args, **kwargs: None
+    import time
+    loop = asyncio.get_running_loop()
+    from aikey.worker import _Job
+    jobs = [_Job(f"{i:064x}", "0" * 64, op, {}, "", "", [], time.monotonic() + 60, loop.create_future())
+            for i, op in enumerate(["indexImages", "indexImages", "speechToText"])]
+    for job in jobs:
+        worker._queue.put_nowait((1 if job.operation == "indexImages" else 0, next(worker._sequence), job))
+    consumer = asyncio.create_task(worker._consume())
+    await asyncio.wait_for(asyncio.gather(*(job.future for job in jobs)), 5)
+    consumer.cancel()
+    assert order == ["speechToText", "indexImages", "indexImages"]

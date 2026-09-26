@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import hashlib
 from io import BytesIO
 import ipaddress
+import itertools
 import json
 import math
 import os
@@ -277,7 +278,11 @@ class JobProcessor:
         self.timeout_s = self._positive("timeout_s", 120)
         self.concurrency = self._positive("max_concurrency", 1)
         self.max_jobs = self._positive("max_ledger_entries", 1024)
-        self._queue = asyncio.Queue(maxsize=self._positive("max_queue", 8))
+        # Live work runs before retroactive backfill: Protect keeps up to 50
+        # backfill tasks queued here, and a live face or speech job must not
+        # wait behind them until it times out (#21).
+        self._queue = asyncio.PriorityQueue(maxsize=self._positive("max_queue", 8))
+        self._sequence = itertools.count()
         self._tasks = []
         self._session = None
         self._inference_session = None
@@ -1206,7 +1211,7 @@ class JobProcessor:
                     raise WorkerError("Global caption budget is unavailable") from exc
                 if not receipt.new:
                     raise WorkerError("Caption reservation exists without completed job")
-            self._queue.put_nowait(job)
+            self._queue.put_nowait((1 if job.operation == "indexImages" else 0, next(self._sequence), job))
         except asyncio.QueueFull as exc:
             future.cancel()
             raise WorkerError("Worker queue is full") from exc
@@ -1241,7 +1246,7 @@ class JobProcessor:
 
     async def _consume(self):
         while True:
-            job = await self._queue.get()
+            *_, job = await self._queue.get()
             try:
                 async with asyncio.timeout(max(0, job.deadline - time.monotonic())):
                     result = await self._execute(job)
@@ -1815,7 +1820,7 @@ class JobProcessor:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         while not self._queue.empty():
-            job = self._queue.get_nowait()
+            *_, job = self._queue.get_nowait()
             if not job.future.done():
                 job.future.set_exception(WorkerError("Worker stopped before job admission completed"))
             self._pending.pop(job.job_id, None)
