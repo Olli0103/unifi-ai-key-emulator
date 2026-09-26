@@ -213,7 +213,7 @@ def _frame_mode(frame: bytes) -> str:
     return "ir" if chroma < _IR_CHROMA else "color"
 
 
-_PACKAGE_CHECK_KEYS = ("confirmed", "relabelled_animal", "rejected", "failed")
+_PACKAGE_CHECK_KEYS = ("confirmed", "relabelled_animal", "rejected", "failed", "lens_owned")
 _VERIFY_SIDE = 512
 _VERIFY_PROMPT = (
     "This is a close-up crop around one object reported as a delivery package by a home "
@@ -345,7 +345,8 @@ class ApiObjectDetector:
 
     def __init__(self, provider_config: dict[str, Any], state_dir: Path, *,
                  threshold: float, max_requests_per_hour: int | None = None,
-                 transport: Callable[[str, dict, dict], dict] = _post):
+                 transport: Callable[[str, dict, dict], dict] = _post,
+                 package_lens_owned: Callable[[str], bool] | None = None):
         if (type(threshold) not in (float, int) or not 0 < threshold <= 1
                 or max_requests_per_hour is not None
                 and (type(max_requests_per_hour) is not int
@@ -366,6 +367,9 @@ class ApiObjectDetector:
                 or endpoint.hostname in {"localhost", "127.0.0.1", "::1"}):
             raise ApiDetectionError("api_detection_endpoint_not_approved")
         self.threshold = float(threshold)
+        # Cameras whose own package lens owns Package: a main-lens "package"
+        # is dropped before the close-up check, so no crop is uploaded.
+        self._package_lens_owned = package_lens_owned or (lambda _camera: False)
         self.budget = (EventBudget(state_dir, limit=max_requests_per_hour,
                                    namespace="vision-request")
                        if max_requests_per_hour is not None else None)
@@ -499,6 +503,12 @@ class ApiObjectDetector:
                     kinds["near_threshold"][item.kind] += item.score >= 0.5
             for reason, count in rejected.items():
                 kinds["rejected_items"][reason] += count
+            if (any(item.kind == "package" for item in accepted)
+                    and self._package_lens_owned(camera_mac)):
+                checks = self._package_checks.setdefault(
+                    camera_mac, dict.fromkeys(_PACKAGE_CHECK_KEYS, 0))
+                checks["lens_owned"] += sum(item.kind == "package" for item in accepted)
+                accepted = tuple(item for item in accepted if item.kind != "package")
             if any(item.kind == "package" for item in accepted):
                 accepted = tuple(
                     verified for item in accepted

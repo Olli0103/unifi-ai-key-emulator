@@ -384,10 +384,21 @@ def test_package_lens_zones_stay_with_the_doorbell():
     assert [zone.object_types for zone in policy.secondary_lens_zones] == [
         frozenset({"package"})]
     assert policy.zone_ids("person", (0.2, 0.2, 0.5, 0.8)) == (3,)
-    # The secondary lens never scopes a primary-stream package: that is
-    # bounded by the primary detection area (zone 3), never by zone 8.
-    assert policy.package_scope == "detection_area"
-    assert policy.zone_ids("package", (0.2, 0.2, 0.5, 0.8)) == (3,)
+    # Haustür's shape: Package only on the package lens. That lens owns it;
+    # the main lens never announces Package (every native doorbell Package
+    # was a one-shot package-lens event without a box).
+    assert policy.package_scope == "second_lens"
+    assert policy.zone_ids("package", (0.2, 0.2, 0.5, 0.8)) is None
+    assert policy.zones_for("package") == ()
+    # A Package zone drawn on the main lens is the user's explicit choice.
+    raw["zones"]["3"]["objectTypes"] = ["person", "package"]
+    explicit = parse_smart_settings(raw, camera_mac=CAMERA)
+    assert explicit.package_scope == "package_zone"
+    assert explicit.zone_ids("package", (0.2, 0.2, 0.5, 0.8)) == (3,)
+    # Without a package lens, Package keeps the drawn detection area.
+    del raw["secondLensZones"]
+    raw["zones"]["3"]["objectTypes"] = ["person"]
+    assert parse_smart_settings(raw, camera_mac=CAMERA).package_scope == "detection_area"
 
 
 def test_malformed_package_lens_zone_still_rejects_policy():

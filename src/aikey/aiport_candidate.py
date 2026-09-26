@@ -686,7 +686,8 @@ class CandidateService:
                     (lambda: ApiObjectDetector(
                         detector["provider_config"], self.state_dir,
                         threshold=detector["threshold"],
-                        max_requests_per_hour=detector.get("max_requests_per_hour")))
+                        max_requests_per_hour=detector.get("max_requests_per_hour"),
+                        package_lens_owned=self._package_lens_owned))
                     if live_pool and detector.get("inference_backend") == "vision_api" else
                     (lambda: OnnxRFDetrNanoDetector.from_model(
                         detector["model_path"], detector["model_sha256"],
@@ -740,6 +741,11 @@ class CandidateService:
     def _pool_event_enabled(self) -> bool:
         return ("live_pool_detector" in self.config
                 or time.time() < self.config.get("diagnostic_pool_event_until", 0))
+
+    def _package_lens_owned(self, camera_mac: str) -> bool:
+        engine = self._camera_engine
+        policy = engine.current_policy(camera_mac) if engine is not None else None
+        return policy is not None and policy.package_scope == "second_lens"
 
     async def _observe_pool_frame(self, camera_mac: str, frame: bytes) -> None:
         if self._held_followup.tracking(camera_mac):

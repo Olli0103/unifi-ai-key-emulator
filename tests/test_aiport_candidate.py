@@ -3661,3 +3661,90 @@ async def test_shadow_mode_keeps_a_sleeping_cat_read_as_a_package_silent(tmp_pat
     assert health["package_ir_followup"]["mode"] == "shadow"
     assert health["package_ir_followup"]["confirmed"] == 1
     assert calls["detect"] == 2
+
+
+
+@pytest.mark.asyncio
+async def test_a_doorbell_whose_package_lens_owns_package_gets_no_main_lens_package(
+        tmp_path, monkeypatch):
+    # Haustür (G4 Doorbell Pro), live policy shape: main-lens zone for
+    # person/vehicle/animal, Package only on the package lens.
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{"camera_mac": camera, "source_ip": "192.168.10.1",
+                                 "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person", "vehicle", "animal", "package"], "max_events_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    calls = {"detect": 0, "verify": 0}
+
+    def fake_provider(_url, _headers, payload):
+        if "close-up crop" in json.dumps(payload):
+            calls["verify"] += 1
+            answer = {"kind": "package", "label": "package"}
+        else:
+            calls["detect"] += 1
+            answer = {"detections": [{"kind": "package", "label": "package",
+                                      "score": 0.93, "box": [0.3, 0.6, 0.45, 0.8]}]}
+        return {"status": "completed", "output": [{
+            "type": "message", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": json.dumps(answer)}]}]}
+
+    monkeypatch.setattr(
+        "aikey.aiport_candidate.ApiObjectDetector",
+        lambda provider, state_dir, **options: ApiObjectDetector(
+            provider, state_dir, transport=fake_provider, **options))
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    frame_io = BytesIO()
+    Image.new("RGB", (640, 360), (150, 110, 70)).save(frame_io, format="JPEG")
+    try:
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "ChangeSmartDetectSettings", "messageId": 1,
+            "payload": {"deviceID": camera, "algoVersion": "beta",
+                        "enableSmartDetect": ["person", "vehicle", "animal", "package"],
+                        "eventStartMSec": 1000, "eventStopMSec": 3000,
+                        "zones": {"4": {"coord": [0, 0, 1000, 0, 1000, 1000, 0, 1000],
+                                        "objectTypes": ["person", "vehicle", "animal"]}},
+                        "secondLensZones": {"9": {"coord": [0, 0, 1000, 0, 1000, 1000, 0, 1000],
+                                                  "objectTypes": ["package"]}}}}).encode())
+        assert sink.messages[-1]["statusCode"] == 0          # the policy is accepted
+        for _ in range(2):
+            await service._observe_pool_frame(camera, frame_io.getvalue())
+            await service._inference.join()
+        events = [m for m in sink.messages if m.get("functionName") == "EventSmartDetect"]
+        assert events == []                                    # no main-lens Package
+        assert calls["verify"] == 0                            # no close-up crop uploaded
+        health = json.loads((await service._health(None)).text)
+        row = health["pool_cameras"][0]
+        assert row["package_scope"] == "second_lens"
+        assert row["api_response_counts"]["package_checks"]["lens_owned"] >= 1
+        assert row["secondary_lens"]["processed_by"] == "camera"
+        # A package-lens snapshot (what=snapshot2) routed here is never answered
+        # with a main-lens frame.
+        service.ingress.latest_frame = lambda *_a, **_k: frame_io.getvalue()
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "GetRequest", "messageId": 7, "responseExpected": True,
+            "payload": {"what": "snapshot2", "quality": "medium", "timeoutMs": 60000,
+                        "uri": "https://192.168.10.1:7444/internal/camera-upload/Tok3nABCdef4567890xyzQRS"}}).encode())
+        assert sink.messages[-1]["statusCode"] == 5
+        assert health["live_snapshot_uploads"] == 0
+    finally:
+        await service.stop()

@@ -166,7 +166,7 @@ def test_response_counts_distinguish_empty_from_score_rejection(tmp_path):
                             "ir_empty": 0, "ir_low": 0, "ir_objects": 0},
         "last_frame_width": None,
         "package_checks": {"confirmed": 0, "relabelled_animal": 0,
-                           "rejected": 0, "failed": 0},
+                           "rejected": 0, "failed": 0, "lens_owned": 0},
     }
     # Black and white synthetic frames carry no chroma, like night IR.
     assert first["request_profile"] == {

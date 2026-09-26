@@ -221,7 +221,7 @@ class SmartPolicy:
     def zone_ids(self, kind: str,
                  box: tuple[float, float, float, float]) -> tuple[int, ...] | None:
         """Return matching zone IDs, or deny the box if zones are configured."""
-        if not self.allows(kind):
+        if not self.allows(kind) or kind == "package" and self.package_scope == "second_lens":
             return None
         if any(kind in zone.object_types and zone.overlaps_box(box)
                for zone in self.exclude_zones):
@@ -244,14 +244,21 @@ class SmartPolicy:
         """
         if not self.allows("package"):
             return None
+        if any("package" in zone.object_types for zone in self.smart_zones):
+            return "package_zone"   # the user drew Package on the main lens
+        if any("package" in zone.object_types for zone in self.secondary_lens_zones):
+            # A doorbell's package lens owns Package (Haustür: every native
+            # Package came from it, one-shot without a box). Without a main-
+            # lens Package zone the AI Port never announces Package for it.
+            return "second_lens"
         if not self.zones_configured:
             return "full_frame"
-        if any("package" in zone.object_types for zone in self.smart_zones):
-            return "package_zone"
         return "detection_area" if self.smart_zones else "no_zone"
 
     def zones_for(self, kind: str) -> tuple[SmartZone, ...]:
         """Zones that bound ``kind``: its class zones, or Package's area."""
+        if kind == "package" and self.package_scope == "second_lens":
+            return ()
         if kind == "package" and self.package_scope == "detection_area":
             return self.smart_zones
         return tuple(zone for zone in self.smart_zones if kind in zone.object_types)
