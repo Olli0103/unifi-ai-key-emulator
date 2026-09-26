@@ -89,7 +89,8 @@ def test_full_slots_get_a_new_slot_from_the_address_pool_only():
         ("nas-slot-3", "192.168.0.139")]                      # used address skipped
     expected = {("create_slot", "nas-slot-3", None), ("add_to_allowlist", "nas-slot-3", "Keller"),
                 ("deploy_nas_service", "nas-slot-3", None), ("adopt_in_protect", "nas-slot-3", None),
-                ("pair_in_protect", "nas-slot-3", "Keller")}
+                ("pair_in_protect", "nas-slot-3", "Keller"),
+                ("address_conflict", None, None)}                # .135 is the Mac slot's
     assert set(kinds(plan)) == expected
     none = plan_rollout(report(extra=("Keller",), models=heavy), current())
     assert kinds(none) == [("address_needed", None, "Keller")]
@@ -101,7 +102,8 @@ def test_stale_and_vanished_entries_are_removed_offline_cameras_kept():
                         {"Flur", "Schlafzimmer"})
     plan = plan_rollout(report(offline=("Schlafzimmer",)), slots)
     assert set(kinds(plan)) == {("remove_from_allowlist", "mac", "Esszimmer"),
-                                ("remove_from_allowlist", "mac", "unknown camera")}
+                                ("remove_from_allowlist", "mac", "unknown camera"),
+                                ("restart_mac_container", "mac", None)}   # edits are local copies
     assert "Schlafzimmer" in public(plan)["slots"]["mac"]["keep"]
 
 
@@ -300,6 +302,9 @@ networks:
 """
 
 
+LIVE_IMAGE = "local-aiport:nas-amd64-held-shadow-r22-20260926"
+
+
 def test_a_compose_service_is_appended_verbatim_and_removed_exactly():
     from aikey.aiport_compose_slots import (
         ComposeSlotError, add_slot_service, remove_slot_service, slot_service)
@@ -320,7 +325,7 @@ def test_a_compose_service_is_appended_verbatim_and_removed_exactly():
 
 
 def _compose_settings(text=COMPOSE):
-    return {"text": text, "template": "aiport_slot_2",
+    return {"text": text, "template": "aiport_slot_2", "live_image": LIVE_IMAGE,
             "state_parent": "/home/olli/aiport-deployment", "service_prefix": "aiport_slot_"}
 
 
@@ -345,7 +350,7 @@ def _one_new_nas_slot(tmp_path, *, model="UVC G4 Pro"):
                              "addresses": ["192.168.10.30"], "health_port": 443},
                "compose": {"path": str(compose_path), "template": "aiport_slot_2",
                            "state_parent": "/home/olli/aiport-deployment",
-                           "health_timeout_seconds": 600}}
+                           "live_image": LIVE_IMAGE, "health_timeout_seconds": 600}}
     slots = {"mac": slot("mac", "192.168.10.20", ["Flur", "Schlafzimmer"],
                          {"Flur", "Schlafzimmer"})}
     inventory = report(extra=("Keller",), models=heavy, drop=("Esszimmer", "Haustuer"))
@@ -451,3 +456,133 @@ def test_a_new_slot_needed_only_by_a_fallback_estimate_is_not_created(tmp_path):
     evidenced = plan_rollout(known, live_slots, new_slot_addresses=["192.168.0.139"],
                              compose=_compose_settings())
     assert evidenced["new_slots"][0]["capacity_basis"] == "evidenced" and local_changes(evidenced)
+
+
+# --- #45 safety gates: stale Compose, addresses, deploy steps, freshness, rollback ---
+
+def test_the_live_nine_camera_plan_with_reserved_addresses_is_still_a_no_op():
+    inventory, slots = live_like()
+    plan = plan_rollout(inventory, slots, new_slot_addresses=["192.168.0.139"],
+                        reserved_addresses=["192.168.0.98", "192.168.0.110", "192.168.0.1"],
+                        compose=_compose_settings())
+    assert plan["actions"] == [] and plan["new_slots"] == [] and not local_changes(plan)
+
+
+def test_a_reserved_address_never_becomes_a_new_slot():
+    heavy = {name: "UVC G4 Pro" for name in CAM}
+    plan = plan_rollout(report(extra=("Keller",), models=heavy), current(),
+                        new_slot_addresses=["192.168.0.98"], reserved_addresses=["192.168.0.98"])
+    assert plan["new_slots"] == []
+    assert set(kinds(plan)) == {("address_conflict", None, None),
+                                ("address_needed", None, "Keller")}
+
+
+@pytest.mark.parametrize("change,reason", [
+    ({"live_image": None}, "live_image_unset"),
+    ({"live_image": "local-aiport:nas-amd64-ai-port-plates-r25-20260926"}, "template_image_differs"),
+])
+def test_a_stale_compose_copy_never_clones_a_service(tmp_path, change, reason):
+    root, compose_path, rollout_path, rollout, slots, inventory = _one_new_nas_slot(tmp_path)
+    settings = {**_compose_settings(), **change}
+    plan = plan_rollout(inventory, slots, new_slot_addresses=["192.168.10.30"], compose=settings)
+    stale, = [a for a in plan["actions"] if a["kind"] == "compose_copy_stale"]
+    assert stale["reason"] == reason and not stale["automated"]
+    assert not any(a["automated"] for a in plan["actions"]
+                   if a["kind"] in {"create_slot", "compose_add_service"})
+    rollout["compose"]["live_image"] = change["live_image"]
+    assert apply_and_register(rollout_path, rollout, plan) == []
+    assert compose_path.read_text() == COMPOSE and not (root / "nas-slot-1").exists()
+
+
+def test_mixed_images_in_the_compose_copy_are_stale():
+    from aikey.aiport_compose_slots import add_slot_service
+    from aikey.aiport_rollout import _compose_staleness
+    two = add_slot_service(COMPOSE, template="aiport_slot_2", service="aiport_slot_3",
+                           source="/home/olli/aiport-deployment/slot-3",
+                           ipv4="192.168.10.31", mac="02AABBCCDD03")
+    assert _compose_staleness(_compose_settings(two)) is None            # all on the live image
+    older = two.replace(LIVE_IMAGE, "local-aiport:older", 2).replace(
+        "local-aiport:older", LIVE_IMAGE, 1)                                # slot 3 left behind
+    assert _compose_staleness(_compose_settings(older)) == "mixed_images"
+
+
+def test_existing_slot_edits_list_the_upload_and_restart_steps():
+    slots = current()
+    slots["nas-slot-2"] = slot("nas", "192.168.0.136", ["Esszimmer", "Haustuer", "Dach"],
+                               {"Esszimmer", "Haustuer"})
+    plan = plan_rollout(report(extra=("Keller",)), slots)
+    manual = {(a["kind"], a.get("slot")) for a in plan["actions"] if not a["automated"]}
+    assert {("upload_slot_config", "nas-slot-2"), ("restart_nas_slot", "nas-slot-2")} <= manual
+    assert ("pair_in_protect", plan["actions"][0].get("slot")) in manual or any(
+        a["kind"] == "pair_in_protect" for a in plan["actions"])
+
+
+def test_hypothetical_add_then_remove_keeps_every_other_identity(tmp_path):
+    root, template = _provisioned(tmp_path)
+    before = (template / "config.json").read_text()
+    identity = json.loads(before)["mac"], json.loads(before)["device_ip"]
+    slots = {"mac": slot("mac", "192.168.10.20", ["Flur", "Schlafzimmer"],
+                         {"Flur", "Schlafzimmer"})}
+    add = plan_rollout(report(extra=("Keller",), drop=("Esszimmer", "Haustuer")), slots)
+    assert [(a["kind"], a.get("camera")) for a in add["actions"] if a["automated"]] == [
+        ("add_to_allowlist", "Keller")]
+    assert apply_rollout(add, {"mac": template}, new_slot_parent=root,
+                         template_label="mac") == ["mac"]
+    added = json.loads((template / "config.json").read_text())
+    assert [s["camera_mac"] for s in added["paired_streams"]][-1] == CAM["Keller"]
+    # Later the camera is removed from Protect, which then stops sending its policy.
+    slots = {"mac": slot("mac", "192.168.10.20", ["Flur", "Schlafzimmer", "Keller"],
+                         {"Flur", "Schlafzimmer"})}
+    gone = plan_rollout(report(drop=("Esszimmer", "Haustuer")), slots)
+    assert [(a["kind"], a.get("camera")) for a in gone["actions"] if a["automated"]] == [
+        ("remove_from_allowlist", "unknown camera")]
+    apply_rollout(gone, {"mac": template}, new_slot_parent=root, template_label="mac")
+    final = json.loads((template / "config.json").read_text())
+    assert [s["camera_mac"] for s in final["paired_streams"]] == [CAM["Flur"], CAM["Schlafzimmer"]]
+    assert (final["mac"], final["device_ip"]) == identity                 # identity untouched
+    assert (template / "config.json.before-rollout").read_text() == before
+
+
+def test_rollback_restores_allowlists_and_removes_only_pending_slots(tmp_path):
+    from aikey.aiport_rollout import rollback
+    root, compose_path, rollout_path, rollout, slots, inventory = _one_new_nas_slot(tmp_path)
+    template = Path(rollout["slots"][0]["state_dir"])
+    original = (template / "config.json").read_bytes()
+    # an allowlist edit on the existing slot, then a pending new NAS slot
+    edit = plan_rollout(report(extra=("Keller",), drop=("Esszimmer", "Haustuer")),
+                        {"mac": slot("mac", "192.168.10.20", ["Flur", "Schlafzimmer"],
+                                     {"Flur", "Schlafzimmer"})})
+    apply_rollout(edit, {"mac": template}, new_slot_parent=root, template_label="mac")
+    assert (template / "config.json").read_bytes() != original
+    plan = plan_rollout(inventory, slots, new_slot_addresses=["192.168.10.30"],
+                        compose=_compose_settings())
+    apply_and_register(rollout_path, rollout, plan)
+    assert compose_path.read_text() != COMPOSE
+    result = rollback(rollout_path, rollout)
+    assert result == {"mac": "allowlist_restored", "nas-slot-1": "pending_slot_removed"}
+    assert (template / "config.json").read_bytes() == original           # exact bytes
+    assert compose_path.read_text() == COMPOSE                           # exact inverse
+    assert [s["label"] for s in json.loads(rollout_path.read_text())["slots"]] == ["mac"]
+    assert (root / "nas-slot-1" / "device.key").exists()                 # identity kept for retry
+    assert rollback(rollout_path, rollout) == {}                         # idempotent
+
+
+def test_a_healthy_registered_slot_is_never_rolled_back(tmp_path):
+    from aikey.aiport_rollout import rollback, verify_new_slots
+    root, compose_path, rollout_path, rollout, slots, inventory = _one_new_nas_slot(tmp_path)
+    plan = plan_rollout(inventory, slots, new_slot_addresses=["192.168.10.30"],
+                        compose=_compose_settings())
+    apply_and_register(rollout_path, rollout, plan)
+    verify_new_slots(rollout_path, rollout, health=lambda *_a: {"adopted": True})
+    after = compose_path.read_text()
+    assert rollback(rollout_path, rollout) == {}
+    assert compose_path.read_text() == after
+    assert [s["label"] for s in rollout["slots"]] == ["mac", "nas-slot-1"]
+
+
+def test_apply_refuses_a_stale_inventory():
+    from aikey.aiport_rollout import MAX_INVENTORY_AGE_S, check_inventory_fresh
+    check_inventory_fresh({"fetched_at": 1_000_000}, now=1_000_000 + MAX_INVENTORY_AGE_S)
+    for report_value in ({"fetched_at": 1_000_000}, {}, {"fetched_at": "x"}):
+        with pytest.raises(RolloutError):
+            check_inventory_fresh(report_value, now=1_000_000 + MAX_INVENTORY_AGE_S + 1)

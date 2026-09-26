@@ -40,7 +40,8 @@ from .aiport_deployment import (
     _CAPACITY, _PROTECT_MODEL_MAX_PIXELS, AiPortPlanError, stream_capacity_points,
 )
 from .aiport_compose_slots import (
-    ComposeSlotError, add_slot_service, colon_mac, remove_slot_service, slot_service,
+    ComposeSlotError, add_slot_service, colon_mac, remove_slot_service, service_images,
+    slot_service,
 )
 from .aiport_ingest import IngressError, normalize_mac
 from .aiport_instance_state import InstanceStateError, provision_slot
@@ -53,6 +54,7 @@ _LABEL = re.compile(r"[a-z0-9][a-z0-9-]{0,31}\Z")
 _MAX_CAMERAS_PER_SLOT = 5   # AiPortIngressPool accepts at most five streams
 _TARGETS = frozenset({"mac", "nas"})
 _MIN_WEIGHT = Fraction(1, 5)   # the smallest ingress reservation (<=1080p)
+MAX_INVENTORY_AGE_S = 900      # --apply refuses an older inventory report
 
 
 class RolloutError(ValueError):
@@ -153,7 +155,8 @@ def _slot_mac(label: str, host_ip: str, used: set[str]) -> str:
 def plan_rollout(report: dict, slots: dict[str, dict], *,
                  new_slot_addresses: list[str] = (), new_slot_target: str = "nas",
                  new_slot_prefix: str = "nas-slot-", compose: dict | None = None,
-                 allow_estimated_capacity: bool = False) -> dict:
+                 allow_estimated_capacity: bool = False,
+                 reserved_addresses: list[str] = ()) -> dict:
     """Diff slots against eligible cameras; ``slots[label]`` holds
     ``target``, ``host_ip``, optionally ``mac`` and the :func:`observe_slot`
     result. ``compose`` (text, template, state_parent, service_prefix) enables
@@ -219,12 +222,21 @@ def plan_rollout(report: dict, slots: dict[str, dict], *,
                             "camera": name(mac), "automated": False})
         if slot["paired"] is None:
             actions.append({"kind": "slot_unobserved", "slot": label, "automated": False})
+        if remove:
+            _deploy_edit_actions(actions, label, slot["target"])
         if result[label]["load"] > 1:
             actions.append({"kind": "capacity_estimate_exceeded", "slot": label,
                             "automated": False})
 
     used_addresses = {slot.get("host_ip") for slot in slots.values()}
-    pool = [address for address in new_slot_addresses if address not in used_addresses]
+    reserved = set(reserved_addresses) | used_addresses
+    pool = []
+    for address in new_slot_addresses:
+        if address in reserved:
+            # The AI Key, the NAS, the controller or a slot already use it.
+            actions.append({"kind": "address_conflict", "automated": False})
+        else:
+            pool.append(address)
     numbers = [int(label[len(new_slot_prefix):]) for label in slots
                if label.startswith(new_slot_prefix) and label[len(new_slot_prefix):].isdigit()]
     next_number = max(numbers, default=0) + 1
@@ -267,6 +279,11 @@ def plan_rollout(report: dict, slots: dict[str, dict], *,
                             "_mac": mac, "automated": True})
             actions.append({"kind": "pair_in_protect", "slot": label, "camera": name(mac),
                             "automated": False})
+        if slot["add"] and not slot["remove"]:
+            _deploy_edit_actions(actions, label, slot["target"])
+    stale_compose = None
+    if compose is not None and any(s["target"] == "nas" for s in new_slots):
+        stale_compose = _compose_staleness(compose)
     for slot in new_slots:
         # A new slot is justified only if its cameras do not fit an existing
         # slot at the smallest reservation, or their weight is evidenced.
@@ -276,6 +293,11 @@ def plan_rollout(report: dict, slots: dict[str, dict], *,
             + len(result[label]["add"]) < _MAX_CAMERAS_PER_SLOT for label in result)]
         slot["capacity_basis"] = "unverified" if unverified else "evidenced"
         automated = not unverified or allow_estimated_capacity
+        if slot["target"] == "nas" and stale_compose is not None:
+            # Never clone a service from a Compose copy that is not the live one.
+            actions.append({"kind": "compose_copy_stale", "slot": slot["label"],
+                            "reason": stale_compose, "automated": False})
+            automated = False
         for mac in unverified:
             actions.append({"kind": "capacity_unverified", "slot": slot["label"],
                             "camera": name(mac), "automated": False})
@@ -324,6 +346,31 @@ def plan_rollout(report: dict, slots: dict[str, dict], *,
     plan["revision"] = hashlib.sha256(json.dumps(
         public(plan), sort_keys=True).encode()).hexdigest()
     return plan
+
+
+def _deploy_edit_actions(actions: list, label: str, target: str) -> None:
+    """Apply edits only the local copy; the running slot needs these steps."""
+    if target == "nas":
+        actions.append({"kind": "upload_slot_config", "slot": label, "automated": False})
+        actions.append({"kind": "restart_nas_slot", "slot": label, "automated": False})
+    else:
+        actions.append({"kind": "restart_mac_container", "slot": label, "automated": False})
+
+
+def _compose_staleness(compose: dict) -> str | None:
+    """Why the private Compose copy may not be the deployed one, or None."""
+    live = compose.get("live_image")
+    if not isinstance(live, str) or not live:
+        return "live_image_unset"
+    try:
+        images = service_images(compose["text"], compose.get("service_prefix", "aiport_slot_"))
+    except ComposeSlotError:
+        return "unreadable"
+    if images.get(compose["template"]) != live:
+        return "template_image_differs"
+    if any(image != live for image in images.values()):
+        return "mixed_images"
+    return None
 
 
 def public(plan: dict) -> dict:
@@ -507,6 +554,51 @@ def verify_new_slots(rollout_path: Path, rollout: dict, *,
     return result
 
 
+def rollback(rollout_path: Path, rollout: dict) -> dict[str, str]:
+    """Undo local rollout changes: allowlist edits and not-yet-healthy slots.
+
+    Each edited slot gets its ``config.json.before-rollout`` back (then the
+    backup is removed so a later apply takes a fresh one). A pending new slot
+    has exactly its Compose service removed and is unregistered; its identity
+    directory stays. Healthy, adopted slots are never removed here.
+    """
+    result = {}
+    for slot in rollout["slots"]:
+        backup = Path(slot["state_dir"]) / "config.json.before-rollout"
+        if backup.exists():
+            atomic_private(Path(slot["state_dir"]) / "config.json", backup.read_bytes())
+            backup.unlink()
+            result[slot["label"]] = "allowlist_restored"
+    compose = rollout.get("compose")
+    keep = []
+    for slot in rollout["slots"]:
+        pending = slot.get("pending")
+        if not pending:
+            keep.append(slot)
+            continue
+        if compose is not None:
+            path = Path(compose["path"])
+            try:
+                text = remove_slot_service(path.read_text(), block=pending["block"])
+            except ComposeSlotError as exc:
+                raise RolloutError("Rollback needs a manual Compose edit") from exc
+            atomic_private(path, text.encode())
+        result[slot["label"]] = "pending_slot_removed"
+    if len(keep) != len(rollout["slots"]):
+        updated = {**rollout, "slots": keep}
+        atomic_private(Path(rollout_path), (json.dumps(updated, indent=2) + "\n").encode())
+        rollout.clear()
+        rollout.update(updated)
+    return result
+
+
+def check_inventory_fresh(report: dict, *, now: float | None = None) -> None:
+    fetched = report.get("fetched_at") if isinstance(report, dict) else None
+    now = time.time() if now is None else now
+    if type(fetched) is not int or not 0 <= now - fetched <= MAX_INVENTORY_AGE_S:
+        raise RolloutError("The camera inventory is stale; refresh it before apply")
+
+
 def load_rollout_config(path: Path) -> dict:
     value = json.loads(Path(path).read_text())
     if (not isinstance(value, dict) or value.get("schema") != SCHEMA
@@ -526,7 +618,8 @@ def load_rollout_config(path: Path) -> dict:
     if compose is not None and (
             not isinstance(compose, dict)
             or not {"path", "template", "state_parent"} <= set(compose)
-            <= {"path", "template", "state_parent", "service_prefix", "health_timeout_seconds"}
+            <= {"path", "template", "state_parent", "service_prefix", "health_timeout_seconds",
+                "live_image"}
             or not all(isinstance(compose[k], str) for k in ("path", "template", "state_parent"))
             or type(compose.get("health_timeout_seconds", 1800)) is not int
             or not 60 <= compose.get("health_timeout_seconds", 1800) <= 86400):
@@ -548,6 +641,7 @@ def compute(rollout: dict, report: dict, *,
     new = rollout["new_slots"]
     compose = rollout.get("compose")
     plan = plan_rollout(report, slots, new_slot_addresses=list(new.get("addresses", [])),
+                        reserved_addresses=list(new.get("reserved_addresses", [])),
                         new_slot_target=new.get("target", "nas"),
                         new_slot_prefix=new.get("label_prefix", "nas-slot-"),
                         allow_estimated_capacity=allow_estimated_capacity,
@@ -555,6 +649,7 @@ def compute(rollout: dict, report: dict, *,
                             "text": Path(compose["path"]).read_text(),
                             "template": compose["template"],
                             "state_parent": compose["state_parent"],
+                            "live_image": compose.get("live_image"),
                             "service_prefix": compose.get("service_prefix", "aiport_slot_")})
     return plan, dirs
 
@@ -575,6 +670,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--revision", help="Apply only if the plan still has this revision")
     parser.add_argument("--allow-estimated-capacity", action="store_true",
                         help="Also create a new slot needed only by a fallback capacity guess")
+    parser.add_argument("--rollback", action="store_true",
+                        help="Restore allowlist backups and remove not-yet-healthy new slots")
     parser.add_argument("--verify", action="store_true",
                         help="Settle pending new slots by their pinned health (rolls back "
                              "a slot silent past its deadline)")
@@ -584,6 +681,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.verify:
             print(json.dumps(verify_new_slots(args.rollout, rollout), indent=2))
             return 0
+        if args.rollback:
+            print(json.dumps(rollback(args.rollout, rollout), indent=2))
+            return 0
         report = (asyncio.run(fetch_inventory(args.controller, api_key_file=args.api_key_file,
                                               trust_file=args.web_trust_file,
                                               cert_file=args.web_cert_file))
@@ -591,6 +691,7 @@ def main(argv: list[str] | None = None) -> int:
         plan, dirs = compute(rollout, report,
                              allow_estimated_capacity=args.allow_estimated_capacity)
         if args.apply:
+            check_inventory_fresh(report)
             if args.revision is None or args.revision != plan["revision"]:
                 raise RolloutError("The plan changed; review the dry run and pass its revision")
             apply_and_register(args.rollout, rollout, plan)

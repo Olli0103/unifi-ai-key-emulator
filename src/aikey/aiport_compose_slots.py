@@ -49,6 +49,13 @@ def _load(text: str) -> dict:
     return value
 
 
+def service_images(text: str, prefix: str = "aiport_slot_") -> dict[str, str]:
+    """Image of every AI Port service in the Compose text, by service name."""
+    services = _load(text)["services"]
+    return {name: str(service.get("image", "")) for name, service in services.items()
+            if name.startswith(prefix) and isinstance(service, dict)}
+
+
 def _network(service: dict) -> tuple[str, dict]:
     networks = service.get("networks")
     if not isinstance(networks, dict) or len(networks) != 1:

@@ -85,20 +85,29 @@ The plan never moves a paired camera and never renames or re-addresses a slot. A
 
 | Action | Applied locally | Still needs you |
 |---|---|---|
-| `add_to_allowlist` for a new eligible camera (existing slot with capacity) | yes | `pair_in_protect` |
-| `remove_from_allowlist` (paired to another slot, or no longer eligible) | yes, backup `config.json.before-rollout` | — |
+| `add_to_allowlist` for a new eligible camera (existing slot with capacity) | yes, backup `config.json.before-rollout` | `upload_slot_config` and `restart_nas_slot` (NAS) or `restart_mac_container` (Mac), then `pair_in_protect` |
+| `remove_from_allowlist` (paired to another slot, or no longer eligible) | yes, backup `config.json.before-rollout` | `upload_slot_config` and `restart_nas_slot`, or `restart_mac_container` |
 | `create_slot` from `new_slots.addresses` (identity via `provision_slot` with the plan's MAC, detector copied from the template slot, no request cap) | yes, and registered in the rollout file | `deploy_nas_service` (without `compose`) or `start_mac_container`, `adopt_in_protect`, `pair_in_protect` |
 | `compose_add_service` for a new NAS slot (needs `compose`) | yes: the reviewed block is appended to the private Compose copy, backup `<file>.before-<slot>` | `upload_slot_state`, `redeploy_nas_project`, `verify_slot_health`, `adopt_in_protect`, `pair_in_protect` |
 | `capacity_unverified`: the new slot is needed only by a fallback weight (unknown model) and the camera would fit an existing slot at the 2-point minimum | no, unless `--allow-estimated-capacity` | review |
+| `compose_copy_stale`: the Compose copy's template or any slot service is not on `compose.live_image` (or it is unset) | no: no service is cloned and no slot is created | refresh the copy from the NAS editor, set `live_image`, dry run again |
+| `address_conflict`: a `new_slots.addresses` entry is reserved (`reserved_addresses`) or used by a slot | no, the address is skipped | fix the address pool |
 | `address_needed`, `slot_unobserved`, `idle_slot`, `capacity_estimate_exceeded` | no | review |
 
-A second run after applying reports no local action; only pending Protect or NAS steps remain. Capacity uses observed stream points first, then the model's main-lens weight, then a fallback.
+A second run after applying reports no local action; only pending Protect or NAS steps remain. `--apply` also refuses an inventory report older than 15 minutes (`--controller` always fetches a fresh one). Capacity uses observed stream points first, then the model's main-lens weight, then a fallback.
 
 **NAS Compose additions.** With a `compose` section, a new NAS slot gets a service copied from the template service. Only four fields change: the service name, the bind source (`<state_parent>/slot-N`), `ipv4_address`, and `mac_address`. The MAC is derived from the slot label and address, so a dry run and its apply agree. The exact block, service, address, MAC and state path are shown on the rollout page before apply, and the Compose file's hash is part of the plan revision. Apply refuses if the file changed since the dry run. It verifies that every existing service and the networks are unchanged, and appending the same service again is a no-op. The new slot is registered as `pending` with a deadline.
 
 `local-aiport-rollout --rollout … --verify` settles pending slots:
 - if the slot's pinned `/healthz` answers, it is kept;
 - if it is still silent after the deadline, exactly its service block is removed from the Compose copy again, the slot is unregistered, and its identity is kept for a later reviewed retry.
+
+`local-aiport-rollout --rollout … --rollback` undoes local rollout changes:
+- every `config.json.before-rollout` is restored byte for byte, then removed, so a later apply takes a fresh backup;
+- every still-`pending` new slot has exactly its Compose block removed and is unregistered (its identity directory stays);
+- a slot that has answered health is never removed.
+
+Run it before uploading anything to the NAS. After an upload, restore the running NAS copy the same way (upload the restored file, restart the slot).
 
 The NAS project itself is still redeployed by uploading or pasting the Compose copy, and the new slot's state directory is uploaded to `<state_parent>/slot-N`. After a rollback, redeploy the restored copy. Pairing stays a Protect action. Compose editing needs the `rollout` extra (PyYAML).
 
@@ -111,7 +120,17 @@ The rollout file is private (mode 600):
  "new_slots": {"target": "nas", "label_prefix": "nas-slot-", "state_parent": "/…/aiport-slots",
                "addresses": [], "health_port": 443, "template": "nas-slot-2"},
  "compose": {"path": "/…/aiport-slots/compose-live.yaml", "template": "aiport_slot_2",
-             "state_parent": "/home/olli/aiport-deployment", "health_timeout_seconds": 1800}}
+             "state_parent": "/home/olli/aiport-deployment", "health_timeout_seconds": 1800,
+             "live_image": "local-aiport:nas-amd64-ai-port-plates-r25-20260926"}}
 ```
+
+`new_slots.reserved_addresses` lists addresses a new slot may never take: the controller, the AI Key, the NAS and every Protect camera.
+
+**Steps that still need a person.** The rollout never adopts, pairs, unpairs, redeploys or reserves addresses:
+1. **Address:** reserve a LAN address outside DHCP in UniFi Network, then add it to `new_slots.addresses`.
+2. **NAS:** upload the new slot's state directory (or an edited `config.json`) and the Compose copy through the UGREEN app, redeploy `local-aiport-nas`, or restart the one slot, without pulling images.
+3. **Adoption:** adopt the new AI Port in Protect (Devices, then the pending AI Port, then Adopt).
+4. **Pairing:** pair each camera with that AI Port in Protect. A camera is never moved between AI Ports automatically, because the native pairing and rollback contract (#6) is not proven.
+5. **Verify:** run `--verify`, and confirm in Protect that the AI Port is `CONNECTED` with its intended cameras.
 
 The control site shows the page when it is started with `--aiport-rollout` and the `--inventory-*` settings.
