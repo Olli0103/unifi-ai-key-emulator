@@ -43,6 +43,7 @@ class _Track:
     last_seen: float
     hits: int = 1
     active: bool = False
+    held: bool = False      # confirmed, but its enter was not announced
 
     def change(self, edge: str) -> TrackChange:
         return TrackChange(edge, self.track_id, self.observation.kind,
@@ -144,6 +145,16 @@ class TemporalTracker:
         """Whether an unconfirmed sighting still needs a second sample."""
         return any(not track.active for track in self._tracks.values())
 
+    def hold(self, track_id: int, held: bool = True) -> None:
+        """Keep a confirmed track open to the animal/package resolution.
+
+        The engine holds a track whose enter it did not announce (a night-IR
+        package); an animal sighting of it then enters as a new Animal.
+        """
+        track = self._tracks.get(track_id)
+        if track is not None and track.active:
+            track.held = held
+
     def update(self, observations: tuple[ObjectObservation, ...], *,
                now: float) -> tuple[TrackChange, ...]:
         if (type(now) not in (int, float) or not math.isfinite(now)
@@ -169,7 +180,7 @@ class TemporalTracker:
         for index, observation in enumerate(observations):
             for track_id, track in self._tracks.items():
                 crossed = observation.kind != track.observation.kind
-                if crossed and not (not track.active and {observation.kind,
+                if crossed and not ((not track.active or track.held) and {observation.kind,
                                     track.observation.kind} == _CONFUSED_KINDS):
                     continue
                 offset = 2 if crossed else 0   # same-class matches win
@@ -193,16 +204,20 @@ class TemporalTracker:
             if observation.kind != track.observation.kind:
                 # A night-IR cat alternated between animal and package from
                 # one sample to the next, so neither class confirmed. An
-                # unconfirmed track resolves the pair to animal.
+                # unconfirmed or held track resolves the pair to animal.
                 self.stats["class_resolved"] += 1
                 if observation.kind != "animal":
                     observation = ObjectObservation(
                         "animal", track.observation.label, observation.score,
                         observation.box)
+            resolved = track.observation.kind != observation.kind
             track.observation = observation
             track.last_seen = now
             track.hits += 1
-            if track.active:
+            if track.active and track.held and resolved:
+                track.held = False
+                changes.append(track.change("enter"))
+            elif track.active:
                 changes.append(track.change("moving"))
             elif track.hits >= self.min_hits:
                 track.active = True

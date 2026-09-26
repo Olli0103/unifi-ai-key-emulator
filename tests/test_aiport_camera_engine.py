@@ -2,7 +2,7 @@
 
 import pytest
 
-from aikey.aiport_camera_engine import CameraPolicyEngine
+from aikey.aiport_camera_engine import CameraPolicyEngine, _IR_PACKAGE_DWELL_SECONDS
 from aikey.aiport_detection import ObjectObservation
 from aikey.aiport_event_budget import EventBudget, EventBudgetError, _HOUR_NS
 from aikey.aiport_ingest import IngressError
@@ -604,24 +604,68 @@ def test_only_the_confused_pair_on_an_unconfirmed_track_crosses_classes():
     assert (counts["package"], counts["animal"]) == (1, 1)
 
 
-def test_night_ir_package_never_starts_a_package_event_but_a_colour_parcel_does():
+def _night_engine():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                                max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, _multi(FIRST))
+    return engine
+
+
+def test_ir_cat_read_only_as_package_starts_no_package_and_confirms_as_animal():
     parcel = ObjectObservation("package", "package", 0.9, (0.60, 0.80, 0.70, 0.95))
-    # Cat read as package in every IR sample (Flur 00:47, Esszimmer 00:55).
-    night = CameraPolicyEngine([FIRST], max_events_per_camera=5,
-                               max_track_gap_seconds=20, max_center_distance=1.5)
-    night.replace_policy(FIRST, _multi(FIRST))
+    cat = ObjectObservation("animal", "cat", 0.85, (0.61, 0.79, 0.71, 0.96))
+    night = _night_engine()
+    # Flur 00:47: the cat was read as package in both confirming samples.
     night.observe(FIRST, (parcel,), now=1, infrared=True)
     assert night.observe(FIRST, (parcel,), now=2, infrared=True) == ()
-    assert night.package_ir_suppressed == 1
-    assert night.camera_snapshot(now=3)[0]["events_entered_by_kind"]["package"] == 0
-    # A real parcel in a colour frame is still announced.
-    day = CameraPolicyEngine([FIRST], max_events_per_camera=5,
-                             max_track_gap_seconds=20, max_center_distance=1.5)
-    day.replace_policy(FIRST, _multi(FIRST))
+    assert night.package_ir_held == 1
+    # The held track, already active in the tracker, still resolves to Animal.
+    entered, = night.observe(FIRST, (cat,), now=5, infrared=True)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "animal")
+    assert night.package_ir_as_animal == 1
+    counts = night.camera_snapshot(now=6)[0]["events_entered_by_kind"]
+    assert (counts["package"], counts["animal"]) == (0, 1)
+
+
+def test_moving_ir_package_never_becomes_a_package_event():
+    night = _night_engine()
+    for step in range(8):   # a cat walking along the hallway, read as package
+        x = 0.10 + 0.08 * step
+        box = (x, 0.80, x + 0.10, 0.95)
+        assert night.observe(FIRST, (ObjectObservation("package", "package", 0.9, box),),
+                             now=1 + 6 * step, infrared=True) == ()
+    assert night.package_ir_confirmed == 0
+
+
+def test_real_ir_parcel_becomes_package_after_a_stationary_dwell():
+    parcel = ObjectObservation("package", "package", 0.9, (0.60, 0.80, 0.70, 0.95))
+    night = _night_engine()
+    night.observe(FIRST, (parcel,), now=1, infrared=True)
+    assert night.observe(FIRST, (parcel,), now=2, infrared=True) == ()
+    assert night.observe(FIRST, (parcel,), now=10, infrared=True) == ()
+    entered, = night.observe(FIRST, (parcel,), now=2 + _IR_PACKAGE_DWELL_SECONDS,
+                             infrared=True)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "package")
+    assert night.package_ir_confirmed == 1
+    assert night.camera_snapshot(now=40)[0]["events_entered_by_kind"]["package"] == 1
+
+
+def test_held_ir_package_seen_in_colour_is_announced_at_once():
+    parcel = ObjectObservation("package", "package", 0.9, (0.60, 0.80, 0.70, 0.95))
+    night = _night_engine()
+    night.observe(FIRST, (parcel,), now=1, infrared=True)
+    night.observe(FIRST, (parcel,), now=2, infrared=True)
+    entered, = night.observe(FIRST, (parcel,), now=4)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "package")
+
+
+def test_colour_parcel_is_announced_without_a_hold():
+    parcel = ObjectObservation("package", "package", 0.9, (0.60, 0.80, 0.70, 0.95))
+    day = _night_engine()
     day.observe(FIRST, (parcel,), now=1)
     entered, = day.observe(FIRST, (parcel,), now=2)
     assert (entered.change.edge, entered.change.kind) == ("enter", "package")
-    assert day.package_ir_suppressed == 0
+    assert day.package_ir_held == 0
 
 
 def test_ir_package_then_animal_still_confirms_the_animal():

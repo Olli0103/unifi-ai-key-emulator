@@ -3250,5 +3250,5 @@ async def test_night_ir_package_starts_no_package_event(tmp_path, monkeypatch):
 
     enters, health = await run_once()
     assert enters == []
-    assert health["package_ir_suppressed"] == 1
+    assert health["package_ir_held"] == 1
     assert health["pool_cameras"][0]["events_entered_by_kind"]["package"] == 0

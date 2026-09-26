@@ -8,7 +8,7 @@ them before any native Protect result can be claimed.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
 from .aiport_detection import ObjectObservation
@@ -16,7 +16,7 @@ from .aiport_event_budget import EventBudget, EventBudgetError
 from .aiport_ingest import IngressError, normalize_mac
 from .aiport_smart_settings import SmartPolicy
 from .aiport_tracking import (
-    TemporalTracker, TrackChange, TrackingError, validate_observation,
+    TemporalTracker, TrackChange, TrackingError, _iou, validate_observation,
 )
 
 
@@ -25,6 +25,11 @@ _KIND_ORDER = ("person", "vehicle", "animal", "package")
 # A package stays put, so a later sparse sample would re-detect it as a new
 # track. Protect saves each package as its own one-shot event.
 _PACKAGE_COOLDOWN_SECONDS = 1800.0
+# A package first confirmed in night IR is held: the Flur cat was read as a
+# package in IR, while a parcel stays put. It is announced once it stays in
+# place this long (or is seen in colour); an animal sighting makes it Animal.
+_IR_PACKAGE_DWELL_SECONDS = 20.0
+_IR_PACKAGE_STATIONARY_IOU = 0.5
 
 
 @dataclass(frozen=True)
@@ -103,10 +108,16 @@ class CameraPolicyEngine:
         } for camera in cameras}
         self._last_moving: dict[str, dict[int, float]] = {
             camera: {} for camera in cameras}
+        # track_id -> (since, box) of night-IR packages not yet announced.
+        self._ir_held: dict[str, dict[int, tuple[float, tuple[float, ...]]]] = {
+            camera: {} for camera in cameras}
         self._generations = dict.fromkeys(cameras, 0)
         self.policy_repeats = 0
         self.package_cooldown_skips = 0
-        self.package_ir_suppressed = 0
+        self.package_ir_held = 0
+        self.package_ir_confirmed = 0
+        self.package_ir_as_animal = 0
+        self.package_ir_dropped = 0
         self._max_events = max_events_per_camera
         self._event_window_seconds = event_window_seconds
         self._event_budget = event_budget
@@ -145,6 +156,7 @@ class CameraPolicyEngine:
             for _, (previous, zones) in sorted(self._active[camera].items()))
         self._active[camera] = {}
         self._last_moving[camera] = {}
+        self._ir_held[camera] = {}
         for name, count in self._trackers[camera].stats.items():
             self._association_totals[camera][name] += count
         for kind, count in self._trackers[camera].tentative_by_kind.items():
@@ -211,13 +223,36 @@ class CameraPolicyEngine:
             budget_used = (len(self._event_times[camera])
                            if self._event_window_seconds is not None
                            else self._event_counts[camera])
-            if (change.kind == "package" and change.edge == "enter"
+            held = self._ir_held[camera]
+            if change.track_id in held and active is None:
+                since, box = held[change.track_id]
+                if change.edge == "leave":
+                    del held[change.track_id]
+                    self.package_ir_dropped += 1
+                    continue
+                if change.kind == "animal":
+                    # The tracker resolved the held package track as a cat.
+                    del held[change.track_id]
+                    self.package_ir_as_animal += 1
+                elif infrared and (
+                        _iou(box, change.box) < _IR_PACKAGE_STATIONARY_IOU
+                        or now - since < _IR_PACKAGE_DWELL_SECONDS):
+                    if _iou(box, change.box) < _IR_PACKAGE_STATIONARY_IOU:
+                        held[change.track_id] = (now, change.box)  # it moved
+                    continue
+                else:
+                    # Stationary through the dwell, or seen in colour.
+                    del held[change.track_id]
+                    self._trackers[camera].hold(change.track_id, False)
+                    self.package_ir_confirmed += 1
+                    change = replace(change, edge="enter")
+            elif (change.kind == "package" and change.edge == "enter"
                     and active is None and infrared):
-                # Every indoor Package in night IR was a pet or non-parcel
-                # (4/4, user ground truth for Flur); 0 of 24 real parcels in
-                # 30 days were IR. The track still exists, so a later animal
-                # sighting of the same object confirms it as Animal.
-                self.package_ir_suppressed += 1
+                # Every indoor Package in night IR so far was the user's cat
+                # (Flur, Esszimmer); 0 of 24 real parcels in 30 days were IR.
+                held[change.track_id] = (now, change.box)
+                self._trackers[camera].hold(change.track_id)
+                self.package_ir_held += 1
                 continue
             if (change.kind == "package" and change.edge == "enter"
                     and active is None):

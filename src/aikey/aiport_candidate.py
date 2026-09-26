@@ -1517,8 +1517,14 @@ class CandidateService:
             "smart_settings_rejection_reasons": dict(self.smart_settings_rejection_reasons),
             "package_cooldown_skips": (self._camera_engine.package_cooldown_skips
                                        if self._camera_engine is not None else 0),
-            "package_ir_suppressed": (self._camera_engine.package_ir_suppressed
-                                      if self._camera_engine is not None else 0),
+            "package_ir_held": (self._camera_engine.package_ir_held
+                                  if self._camera_engine is not None else 0),
+            "package_ir_confirmed": (self._camera_engine.package_ir_confirmed
+                                  if self._camera_engine is not None else 0),
+            "package_ir_as_animal": (self._camera_engine.package_ir_as_animal
+                                  if self._camera_engine is not None else 0),
+            "package_ir_dropped": (self._camera_engine.package_ir_dropped
+                                  if self._camera_engine is not None else 0),
             "smart_events_entered": self.smart_events_entered,
             "smart_events_moved": self.smart_events_moved,
             "smart_events_left": self.smart_events_left,
