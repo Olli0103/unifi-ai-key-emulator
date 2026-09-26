@@ -76,6 +76,7 @@ class CameraPolicyEngine:
         self._trackers = {camera: self._new_tracker() for camera in cameras}
         self._association_totals = {camera: {
             "iou_matches": 0, "proximity_matches": 0, "tentative_unmatched": 0,
+            "class_resolved": 0,
         } for camera in cameras}
         self._tentative_totals = {camera: dict.fromkeys(_KIND_ORDER, 0)
                                   for camera in cameras}

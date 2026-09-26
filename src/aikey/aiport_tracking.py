@@ -17,6 +17,11 @@ _MAX_OBSERVATIONS_PER_FRAME = 100
 _MAX_REACQUIRE_SECONDS = 30.0
 
 
+# Classes the vision model swapped for one object between samples (a cat in
+# night IR read as a package); only these may confirm an unconfirmed track.
+_CONFUSED_KINDS = frozenset({"animal", "package"})
+
+
 class TrackingError(ValueError):
     """Fixed failure code without media, object coordinates or camera data."""
 
@@ -123,7 +128,7 @@ class TemporalTracker:
                                     else float(max_center_distance))
         # Content-free association counters for private health.
         self.stats = {"iou_matches": 0, "proximity_matches": 0,
-                      "tentative_unmatched": 0}
+                      "tentative_unmatched": 0, "class_resolved": 0}
         # One unconfirmed sighting per class, e.g. a cat seen only once.
         self.tentative_by_kind = dict.fromkeys(sorted(_KINDS), 0)
         self.min_hits = min_hits
@@ -163,15 +168,18 @@ class TemporalTracker:
         candidates = []
         for index, observation in enumerate(observations):
             for track_id, track in self._tracks.items():
-                if observation.kind != track.observation.kind:
+                crossed = observation.kind != track.observation.kind
+                if crossed and not (not track.active and {observation.kind,
+                                    track.observation.kind} == _CONFUSED_KINDS):
                     continue
+                offset = 2 if crossed else 0   # same-class matches win
                 overlap = _iou(observation.box, track.observation.box)
                 if overlap >= self.iou_threshold:
-                    candidates.append((0, -overlap, track_id, index))
+                    candidates.append((offset, -overlap, track_id, index))
                 elif self.max_center_distance is not None:
                     distance = _proximity(observation.box, track.observation.box)
                     if distance <= self.max_center_distance:
-                        candidates.append((1, distance, track_id, index))
+                        candidates.append((offset + 1, distance, track_id, index))
         matched_tracks: set[int] = set()
         matched_observations: set[int] = set()
         for tier, _, track_id, index in sorted(candidates):
@@ -179,9 +187,19 @@ class TemporalTracker:
                 continue
             matched_tracks.add(track_id)
             matched_observations.add(index)
-            self.stats["proximity_matches" if tier else "iou_matches"] += 1
+            self.stats["proximity_matches" if tier % 2 else "iou_matches"] += 1
             track = self._tracks[track_id]
-            track.observation = observations[index]
+            observation = observations[index]
+            if observation.kind != track.observation.kind:
+                # A night-IR cat alternated between animal and package from
+                # one sample to the next, so neither class confirmed. An
+                # unconfirmed track resolves the pair to animal.
+                self.stats["class_resolved"] += 1
+                if observation.kind != "animal":
+                    observation = ObjectObservation(
+                        "animal", track.observation.label, observation.score,
+                        observation.box)
+            track.observation = observation
             track.last_seen = now
             track.hits += 1
             if track.active:

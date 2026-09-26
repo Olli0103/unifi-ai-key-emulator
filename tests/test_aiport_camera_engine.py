@@ -442,7 +442,8 @@ def test_sparse_api_samples_confirm_a_walking_person_without_box_overlap():
     assert strict.observe(FIRST, (person(box=WALK_START),), now=1) == ()
     assert strict.observe(FIRST, (person(box=WALK_NEXT),), now=3.2) == ()
     assert strict.camera_snapshot(now=4)[0]["track_associations"] == {
-        "iou_matches": 0, "proximity_matches": 0, "tentative_unmatched": 1}
+        "iou_matches": 0, "proximity_matches": 0, "tentative_unmatched": 1,
+        "class_resolved": 0}
 
     sparse = CameraPolicyEngine([FIRST], max_track_gap_seconds=20,
                                 max_center_distance=1.5)
@@ -451,7 +452,8 @@ def test_sparse_api_samples_confirm_a_walking_person_without_box_overlap():
     entered, = sparse.observe(FIRST, (person(box=WALK_NEXT),), now=3.2)
     assert entered.change.edge == "enter"
     assert sparse.camera_snapshot(now=4)[0]["track_associations"] == {
-        "iou_matches": 0, "proximity_matches": 1, "tentative_unmatched": 0}
+        "iou_matches": 0, "proximity_matches": 1, "tentative_unmatched": 0,
+        "class_resolved": 0}
 
 
 def test_sparse_association_still_rejects_distant_or_other_class_objects():
@@ -547,3 +549,56 @@ def test_package_cooldown_survives_an_engine_restart(tmp_path):
     later.replace_policy(FIRST, policy(FIRST, zone=True, kind="package"))
     later.observe(FIRST, (package,), now=1)
     assert later.observe(FIRST, (package,), now=2)[0].change.edge == "enter"
+
+
+def _multi(camera):
+    return parse_smart_settings({
+        "deviceID": camera, "algoVersion": "beta",
+        "enableSmartDetect": ["person", "animal", "package"],
+        "eventStartMSec": 1000, "eventStopMSec": 3000}, camera_mac=camera)
+
+
+def test_a_cat_read_as_animal_then_package_confirms_as_animal():
+    # Esszimmer, 25 Sep 23:38: one moving object was reported once as animal
+    # and three times as package, and no class ever confirmed.
+    engine = CameraPolicyEngine([FIRST], max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, _multi(FIRST))
+    cat = ObjectObservation("animal", "cat", 0.9, (0.60, 0.70, 0.70, 0.85))
+    parcel = ObjectObservation("package", "package", 0.88, (0.61, 0.71, 0.71, 0.86))
+    assert engine.observe(FIRST, (cat,), now=1) == ()
+    entered, = engine.observe(FIRST, (parcel,), now=4)
+    assert (entered.change.edge, entered.change.kind, entered.change.label) == (
+        "enter", "animal", "cat")
+    assert engine.camera_snapshot(now=5)[0]["track_associations"]["class_resolved"] == 1
+    # Package first, then animal, resolves to animal as well.
+    engine = CameraPolicyEngine([FIRST], max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, _multi(FIRST))
+    engine.observe(FIRST, (parcel,), now=1)
+    entered, = engine.observe(FIRST, (cat,), now=4)
+    assert (entered.change.kind, entered.change.label) == ("animal", "cat")
+
+
+def test_only_the_confused_pair_on_an_unconfirmed_track_crosses_classes():
+    engine = CameraPolicyEngine([FIRST], max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, _multi(FIRST))
+    box = (0.40, 0.20, 0.60, 0.90)
+    walker = ObjectObservation("person", "person", 0.95, box)
+    parcel = ObjectObservation("package", "package", 0.9, box)
+    engine.observe(FIRST, (walker,), now=1)
+    assert engine.observe(FIRST, (parcel,), now=2) == ()          # person never crosses
+    # A confirmed package stays a package when an animal passes over it.
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                                max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, _multi(FIRST))
+    engine.observe(FIRST, (parcel,), now=1)
+    entered, = engine.observe(FIRST, (parcel,), now=2)
+    assert entered.change.kind == "package"
+    cat = ObjectObservation("animal", "cat", 0.9, box)
+    first = engine.observe(FIRST, (parcel, cat), now=3)
+    assert all(item.change.kind == "package" for item in first)   # parcel keeps its class
+    second = engine.observe(FIRST, (parcel, cat), now=5)
+    animal = [item.change for item in second if item.change.kind == "animal"]
+    assert [(c.edge, c.label) for c in animal] == [("enter", "cat")]
+    assert animal[0].track_id != entered.change.track_id         # its own track
+    counts = engine.camera_snapshot(now=6)[0]["events_entered_by_kind"]
+    assert (counts["package"], counts["animal"]) == (1, 1)
