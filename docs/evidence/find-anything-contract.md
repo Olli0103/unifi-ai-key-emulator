@@ -345,3 +345,37 @@ So a `completed` run is terminal for this processor record. The only reset is a 
 **Tested artifact.** `aikey.retroactive_plan` (11 tests) encodes these rules without I/O. For the live state (`completed`, flag on) it refuses start, cancel, resume and pause, and reports `continue_older_events: false`. Any future tool or admin control can use it to refuse an action before it reaches Protect.
 
 **Post-run retries.** The held-back live tasks were retried natively, which closes that gap. From 19:45 Protect ran `Retrying 30 failed tasks.` at 19:45 and 19:48, then smaller retries. The 19:48 retry dispatched 11 key-frame, 11 crop, 9 speech and 1 reverification task to the AI Key.
+
+## Staged, resumable index rebuild for a future encoder revision (#18, 27 Sep 2026)
+
+`aikey.index_rebuild` rebuilds the search index for a new CLIP revision without touching the live index until cutover.
+
+**Stages**
+- **Stage:** each live object's source image is embedded with the target encoder, which is pinned to its revision, into the isolated table `aikey_rebuild."stage_<rev12>"`.
+  - The staged profile lives in `<state>/index-rebuild/<rev12>/`.
+  - Each batch selects live rows without a staged vector, so an interrupted run resumes and a repeated batch is an idempotent upsert.
+  - The target encoder's revision is checked before every batch.
+- **Verify:** every staged row must carry the target revision and 768 values, and every live row must be covered. `ramDetections.embedding` is NOT NULL, so rows cannot be cleared: a missing source blocks cutover.
+- **Cutover:**
+  - It needs a quiesced AI Key and a verified backup whose counts match the live index.
+  - One transaction locks `ramDetections`, re-checks coverage, snapshots the previous vectors into `aikey_rebuild."prev_<rev12>"` and swaps in the staged ones. It checks that the swapped count equals the live count, and rolls back otherwise.
+  - The target profile then replaces `search-profile.json`. If that fails, the previous vectors and profile are restored.
+  - If a crash hits after the swap committed but before the journal recorded it, the retry detects the finished swap and keeps the original snapshot.
+- **Rollback:** it restores the snapshot and the previous profile. It refuses when rows were indexed after cutover, unless an embedder for the previous revision re-embeds them.
+
+**Tests**
+- 14 in-memory tests: interruption and resume; mixed revisions at staging, mid-run and in verify; missing sources; cutover gates; a failed cutover transaction; a failed profile swap and its retry; idempotent cutover and rollback; the crash-window retry; rollback with rows added after cutover; a moved live revision; and the CLIP adapter.
+- 2 opt-in SQL tests (`AIKEY_TEST_PG_DSN`) ran against a throwaway `pgvector/pgvector:0.8.6-pg14` container, which was removed afterwards. They cover staging with crash and resume; a cutover refused because a row appeared after verify (transaction rolled back); swap and rollback; and the committed-swap retry.
+
+**Live (read-only).** Nothing was staged or cut over:
+- `status` lists no generations;
+- the live search database has no `aikey_rebuild` schema;
+- the pinned revision is still `77d5c9711edb`, with 4546 rows of 768 values.
+
+**Acceptance gaps**
+- **No image source for a live rebuild:** the AI Key receives object crops only inside Protect tasks (retroactive `multipleImages` or live key moments). Re-embedding stored objects needs an approved crop source. Until then staging runs only as a library call with an injected source, and no camera media is fetched.
+- **Native validation needs cutover:** Protect searches only `public."ramDetections"`, so a staged index cannot be read back natively before cutover.
+  - The acceptance test would be: after cutover, a native `detection-nls` positive and negative readback, with rollback on failure.
+  - Before cutover, only a local ranking comparison is possible, and that is not native evidence.
+- **Operator steps around cutover:** run a second CLIP server for the target revision, stop the AI Key, then switch `find_anything.clip_server` to the target server. The AI Key refuses to start search while its config and the profile disagree, which is the intended safety net.
+- **Admin UI:** separating visual-model changes from index migrations remains open.

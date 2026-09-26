@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-27.1",
+ "manifest_version": "ai-key/2026-09-27.2",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -2123,20 +2123,26 @@
     "tests/test_find_anything.py::test_a_changed_profile_is_not_upgraded_with_a_revision",
     "tests/test_find_anything.py::test_worker_clip_calls_follow_the_pinned_revision",
     "tests/test_search_backup.py::test_backup_then_verify_round_trips_through_a_scratch_database",
-    "tests/test_search_backup.py::test_a_restore_with_different_counts_fails_and_still_drops_the_scratch_database"
+    "tests/test_search_backup.py::test_a_restore_with_different_counts_fails_and_still_drops_the_scratch_database",
+    "tests/test_index_rebuild.py::test_an_interrupted_stage_resumes_without_re_embedding",
+    "tests/test_index_rebuild.py::test_verify_rejects_vectors_of_another_revision",
+    "tests/test_index_rebuild.py::test_a_failed_profile_swap_rolls_the_vectors_back",
+    "tests/test_index_rebuild.py::test_cutover_and_rollback_are_idempotent_and_restore_the_previous_index"
    ],
    "implementation": [
     "src/aikey/embedding_profile.py",
     "src/aikey/clip_server.py",
     "src/aikey/clip.py",
     "src/aikey/search.py",
-    "src/aikey/search_backup.py"
+    "src/aikey/search_backup.py",
+    "src/aikey/index_rebuild.py"
    ],
    "activation": "default",
    "missing_evidence": [
     "Controller reconciliation writes null embeddings and does not regenerate them (7.2.105 static)",
     "Live recovery test after a controller restart (only the Mac relay restart was tested on 7.3.68)",
-    "Staged rebuild of an index for new encoder weights, with native search readback before cutover (issue #18)"
+    "A live staged rebuild needs an approved object-crop source; the AI Key receives crops only inside Protect tasks",
+    "Native validation of a rebuilt index is possible only after cutover (Protect searches only public.ramDetections)"
    ]
   }
  ],
