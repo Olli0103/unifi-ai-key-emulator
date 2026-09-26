@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-26.6). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-26.7). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-26.6` for the `ai-key` profile, based on commit `c55ffab`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-26.7` for the `ai-key` profile, based on commit `b9eac9a`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -209,7 +209,9 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `index.search_snapshots`: Effect of extra snapshot thumbnails on event presentation is not reviewed by the owner
 - `index.thumbnail_tags`: A live task with in-export thumbnailMeta objects or a retroactive multipleImages task
 - `search.index_recovery` (needs_evidence): Controller reconciliation writes null embeddings and does not regenerate them (7.2.105 static)
-- `search.index_recovery` (needs_evidence): Live recovery test after a controller restart or encoder change (only the Mac relay restart was tested on 7.3.68)
+- `search.index_recovery` (needs_evidence): Live recovery test after a controller restart (only the Mac relay restart was tested on 7.3.68)
+- `search.index_recovery` (needs_evidence): Staged rebuild of an index for new encoder weights, with native search readback before cutover (issue #18)
+- `search.index_recovery` (needs_evidence): Native Protect search readback after the pinned-revision deploy (browser selection ambiguous on 26 Sep)
 
 ## Contradictions and stale records
 
@@ -258,3 +260,4 @@ Every live trial must record each experimental activation below that was in effe
 - **N11** (`search.native_retrieval`, `search.index_recovery`, `database.controller_migrations`): After a planned controller restart, confirm isSearchHost true, that existing ramDetections rows survive, and that a known positive text search still returns its object.
 - **N12** (`search.tags_and_time_filters`): In a signed-in console session, run detection-nls for "a car", "person today" and "person yesterday"; confirm the first returns only vehicle objects, the second reports searchCondition startTime at local midnight, and the third returns no hits for a day without indexed objects.
 - **N13** (`control.request_ai.second_stage_verification`): Owner decision: enable find_anything.reverification for a bounded window, then read back one reverified event's detectedThumbnails (preReverificationObjectType and confidence) and confirm unsure verdicts left events unchanged.
+- **N14** (`search.index_recovery`, `search.native_retrieval`): In a signed-in console session, rerun one known positive and one negative detection-nls text search after the pinned-revision AI Key deploy and confirm the same ranking as the 15:55 record.

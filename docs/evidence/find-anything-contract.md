@@ -145,3 +145,28 @@ Options for the owner:
 Enabling the opt-in would resume that run at once. That means backfilling up to 5000 recorded events on every camera, with live AI tasks paused for about 100 minutes by Protect's own estimate.
 
 **Status:** the live retroactive run is `needs_evidence`. It needs Olli's decision to cancel the stale run and approve a bounded one (for example a single camera and a few events). Per Olli's boundary, no recorded Flur, Garage or Esszimmer frames went to any external provider, and no run was started.
+
+## Encoder pin and index backup (#18, 26 Sep 2026 20:16)
+
+**Why.** Protect ranks stored `ramDetections.embedding` vectors against each new query vector. If the CLIP weights change, new queries and new rows come from a different vector space than the stored rows, and retrieval degrades silently. Before this change, `search-profile.json` recorded the model name and server address, not the weights.
+
+**Encoder pin (b9eac9a).**
+- The CLIP server reports `revision`: a SHA-256 over both ONNX encoders and the tokenizer, in every reply and in `/healthz`.
+- The search profile records that revision. A profile written before pinning, and otherwise identical, is upgraded **once**; the old file is kept as `search-profile.json.before-upgrade`. A profile that differs in any other field is refused.
+- Afterwards the Key refuses replies from other weights for text queries, image queries, indexing, retroactive crops and reverification. A search query then fails, and no mixed vector is stored. The only way forward is a rebuilt index with a new profile.
+
+**Index backup (b9eac9a).** `python -m aikey.search_backup backup --out <dir> --profile <search-profile.json>` writes a `pg_dump -Fc` (mode 0600) with a manifest of row counts, embedding counts, vector dimensions, the dump digest and the pinned profile. If the index changed during the dump, the dump is discarded. `verify <manifest>` checks the digest, restores into a scratch database in the same container, compares counts, and drops the scratch database. The live database is only read.
+
+**Live, Mac search host.**
+- **Backup:** 53 rows, 53 embeddings, all 768 values, 152 KB; restored into a scratch database with identical counts, and the scratch database was dropped. The list of databases afterwards: `postgres`, `unifi-protect` and the two templates.
+- **Deploy:** CLIP sidecar `local-clip-revision` (revision `77d5c9711edb…`), then AI Key `local-aikey-mac-findanything12`, swapped when the worker was idle. The previous containers are kept stopped for rollback.
+- **Upgrade readback:** the profile now carries the revision and the pre-upgrade copy exists. The Key is adopted and connected; search is connected and reports the same revision.
+
+**Rollback.**
+- **Encoder or Key change:** stop the new containers, start `local-clip-vitl14` and `local-aikey-mac-findanything11`, and move `search-profile.json.before-upgrade` back into place. The old Key does not know the `revision` field, so it would otherwise refuse the upgraded profile.
+- **Index contents:** with the relay stopped, so Protect is disconnected from the search host, drop and recreate `unifi-protect`, then `pg_restore --no-owner` the verified dump. Restart the relay and read back `isSearchHost` and a known positive search. This step is manual and has not been exercised on the live index.
+
+**Still open (#18).**
+- A staged rebuild for new weights: a new profile generation and a re-embed of the stored crops, cut over after native readback.
+- Resumable rebuilds and admin-site controls.
+- Native Protect search readback after this deploy (`needs_evidence`, N14). On 26 Sep two Chrome browsers were connected and none was selected, so no browser prompt was sent.
