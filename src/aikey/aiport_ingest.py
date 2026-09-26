@@ -573,6 +573,8 @@ class AiPortIngressPool:
             ingress = self._ingresses[camera]
             result.append({
                 "stream_active": bool(ingress.list_streams()),
+                # Capacity points reserved for the stream Protect requested.
+                "stream_points": ingress.reserved_points,
                 "stream_restart_attempts": ingress.restart_attempts,
                 "stream_restart_successes": ingress.restart_successes,
                 "stream_restart_observed_states": dict(

@@ -45,6 +45,9 @@ _PROTECT_MODEL_MAX_PIXELS = {
     "UVC G4 Bullet": (2688, 1512),
     "UVC G4 Dome": (2688, 1512),
     "UVC G5 Flex": (2688, 1512),
+    # Main-lens channel 0 that Protect 7.3.68 streams to a paired AI Port
+    # (Haustür, 26 Sep 2026); without it the doorbell counted as 4K.
+    "UVC G4 Doorbell Pro": (1600, 1200),
 }
 
 

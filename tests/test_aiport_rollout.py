@@ -194,3 +194,72 @@ def test_apply_removes_stale_entries_with_a_backup(tmp_path):
     assert saved[1:] == [CAM["Esszimmer"], CAM["Haustuer"]] or saved[1:] == [
         CAM["Haustuer"], CAM["Esszimmer"]]                             # unassigned, now reserved
     assert (template / "config.json.before-rollout").exists()
+
+
+LIVE_MODELS = {   # the paired nine, by slot, with their live main-lens streams
+    "mac": [("Flur", "UVC G3 Instant"), ("Schlafzimmer", "UVC G3 Instant"),
+            ("Buero", "UVC G5 Flex")],
+    "nas-slot-2": [("Esszimmer", "UVC G4 Instant"), ("Haustuer", "UVC G4 Doorbell Pro")],
+    "nas-slot-3": [("Einfahrt", "UVC G4 Pro"), ("Giebel Vorn", "UVC G4 Bullet")],
+    "nas-slot-4": [("Garage", "UVC G4 Dome"), ("Giebel hinten", "UVC G4 Bullet")],
+}
+
+
+def live_like(extra=(), points=None):
+    rows, slots, index = [], {}, 0
+    for label, members in LIVE_MODELS.items():
+        macs = []
+        for name, model in members:
+            index += 1
+            mac = f"2A1100AA{index:04X}"
+            macs.append(mac)
+            rows.append({"id": f"{index:024x}", "mac": mac, "name": name, "model": model,
+                         "state": "CONNECTED", "processing_class": "smart_event_candidate"})
+        config = {"paired_streams": [{"camera_mac": mac} for mac in macs]}
+        health = {"pool_cameras": [{"policy_enabled": True,
+                                    **({"stream_points": points[mac]} if points and mac in points
+                                       else {})} for mac in macs]}
+        slots[label] = {"target": "mac" if label == "mac" else "nas",
+                        "host_ip": f"192.168.0.{135 + len(slots)}", **observe_slot(config, health)}
+    for index, (name, model) in enumerate(extra, 50):
+        rows.append({"id": f"{index:024x}", "mac": f"2A1100BB{index:04X}", "name": name,
+                     "model": model, "state": "CONNECTED",
+                     "processing_class": "smart_event_candidate"})
+    return {"schema": "aikey-camera-preflight/1", "cameras": rows}, slots
+
+
+def test_live_nine_camera_loads_follow_the_ingress_point_rule():
+    inventory, slots = live_like()
+    plan = plan_rollout(inventory, slots)
+    assert plan["actions"] == []
+    assert {label: str(slot["load"]) for label, slot in plan["slots"].items()} == {
+        "mac": "9/10", "nas-slot-2": "7/10", "nas-slot-3": "1", "nas-slot-4": "1"}
+
+
+def test_one_hypothetical_hd_camera_fits_the_doorbell_slot_without_a_fifth_ai_port():
+    inventory, slots = live_like(extra=[("Neu", "UVC G3 Instant")])
+    plan = plan_rollout(inventory, slots, new_slot_addresses=["192.168.0.139"])
+    assert plan["new_slots"] == []                          # old estimate made a fifth
+    assert ("add_to_allowlist", "nas-slot-2", "Neu") in kinds(plan)
+    assert str(plan["slots"]["nas-slot-2"]["load"]) == "9/10"
+    assert all(slot["load"] <= 1 for slot in plan["slots"].values())
+
+
+def test_a_hypothetical_five_point_camera_still_needs_a_new_slot():
+    inventory, slots = live_like(extra=[("Neu", "UVC G4 Bullet")])
+    plan = plan_rollout(inventory, slots)
+    assert kinds(plan) == [("address_needed", None, "Neu")]  # 7+5 > 10 everywhere
+    unknown, slots = live_like(extra=[("Neu", "UVC G5 Future")])   # unknown G5: 5 points
+    assert kinds(plan_rollout(unknown, slots)) == [("address_needed", None, "Neu")]
+
+
+def test_observed_stream_points_override_a_model_estimate():
+    inventory, _ = live_like()
+    doorbell = next(row["mac"] for row in inventory["cameras"] if row["name"] == "Haustuer")
+    esszimmer = next(row["mac"] for row in inventory["cameras"] if row["name"] == "Esszimmer")
+    # e.g. Protect switched Esszimmer to a 2K stream: 3 points instead of 5.
+    inventory, slots = live_like(extra=[("Neu", "UVC G4 Bullet")],
+                                 points={esszimmer: 3, doorbell: 2})
+    plan = plan_rollout(inventory, slots)
+    assert ("add_to_allowlist", "nas-slot-2", "Neu") in kinds(plan)
+    assert str(plan["slots"]["nas-slot-2"]["load"]) == "1"

@@ -193,6 +193,7 @@ async def test_pool_recovers_one_decoder_without_interrupting_other(tmp_path):
         assert diagnostics[0]["stream_restart_attempts"] == 1
         assert diagnostics[1]["stream_restart_attempts"] == 0
         assert diagnostics[1]["stream_active"] is True
+        assert diagnostics[1]["stream_points"] == 2      # 1920x1080 request
         assert CAMERA_MAC not in repr(diagnostics)
         reversed_rows = pool.camera_diagnostics((other_mac, CAMERA_MAC))
         assert reversed_rows[0]["stream_restart_attempts"] == 0

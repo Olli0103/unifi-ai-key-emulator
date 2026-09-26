@@ -115,14 +115,17 @@ def observe_slot(config: dict, health: dict | None) -> dict:
     if not isinstance(config, dict) or not isinstance(config.get("paired_streams"), list):
         raise RolloutError("Slot config needs paired_streams")
     allowlist = [_mac(stream.get("camera_mac")) for stream in config["paired_streams"]]
-    paired = None
+    paired, points = None, {}
     if isinstance(health, dict) and isinstance(health.get("pool_cameras"), list):
         rows = health["pool_cameras"]
         if len(rows) == len(allowlist):
             paired = {mac for mac, row in zip(allowlist, rows)
                       if isinstance(row, dict)
                       and (row.get("policy_enabled") is True or row.get("stream_active") is True)}
-    return {"allowlist": allowlist, "paired": paired}
+            # The stream Protect actually requested beats any model estimate.
+            points = {mac: row["stream_points"] for mac, row in zip(allowlist, rows)
+                      if isinstance(row, dict) and row.get("stream_points") in (2, 3, 5)}
+    return {"allowlist": allowlist, "paired": paired, "points": points}
 
 
 def plan_rollout(report: dict, slots: dict[str, dict], *,
@@ -143,7 +146,14 @@ def plan_rollout(report: dict, slots: dict[str, dict], *,
     def name(mac: str) -> str:
         return eligible[mac]["name"] if mac in eligible else "unknown camera"
 
+    observed_points = {mac: value for slot in slots.values()
+                       for mac, value in slot.get("points", {}).items()}
+
     def weight(mac: str) -> Fraction:
+        # The ingress enforces ten points per AI Port on the stream Protect
+        # sends: observed points first, then the model's main-lens estimate.
+        if mac in observed_points:
+            return Fraction(observed_points[mac], 10)
         return eligible[mac]["weight"] if mac in eligible else Fraction(1, 2)
 
     result: dict[str, dict] = {}
