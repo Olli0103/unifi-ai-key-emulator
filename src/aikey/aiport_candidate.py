@@ -30,7 +30,7 @@ from .aiport_ingest import (
     normalize_mac, private_source_ip,
 )
 from .aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
-from .aiport_api_detection import ApiObjectDetector
+from .aiport_api_detection import ApiObjectDetector, _frame_mode
 from .aiport_motion import (MotionDetector, MotionSettingsError,
                             motion_event_payload, parse_motion_settings)
 from .aiport_onnx_detection import OnnxRFDetrNanoDetector
@@ -776,7 +776,10 @@ class CandidateService:
                 or not self._pool_event_enabled()
                 or generation != engine.policy_generation(camera_mac)):
             return
-        candidates = engine.observe(camera_mac, observations, now=time.monotonic())
+        candidates = engine.observe(
+            camera_mac, observations, now=time.monotonic(),
+            infrared=(frame is not None and any(item.kind == "package" for item in observations)
+                      and _frame_mode(frame) == "ir"))
         # A confirming paid sample only helps a new, unconfirmed object. When
         # every sampled object already belongs to an active track, keep the
         # bounded hourly allowance for later arrivals such as a passing cat.
@@ -1514,6 +1517,8 @@ class CandidateService:
             "smart_settings_rejection_reasons": dict(self.smart_settings_rejection_reasons),
             "package_cooldown_skips": (self._camera_engine.package_cooldown_skips
                                        if self._camera_engine is not None else 0),
+            "package_ir_suppressed": (self._camera_engine.package_ir_suppressed
+                                      if self._camera_engine is not None else 0),
             "smart_events_entered": self.smart_events_entered,
             "smart_events_moved": self.smart_events_moved,
             "smart_events_left": self.smart_events_left,

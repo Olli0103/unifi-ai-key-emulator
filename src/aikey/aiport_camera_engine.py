@@ -106,6 +106,7 @@ class CameraPolicyEngine:
         self._generations = dict.fromkeys(cameras, 0)
         self.policy_repeats = 0
         self.package_cooldown_skips = 0
+        self.package_ir_suppressed = 0
         self._max_events = max_events_per_camera
         self._event_window_seconds = event_window_seconds
         self._event_budget = event_budget
@@ -154,7 +155,7 @@ class CameraPolicyEngine:
         return result
 
     def observe(self, camera_mac: str, observations: tuple[ObjectObservation, ...],
-                *, now: float) -> tuple[CameraEventCandidate, ...]:
+                *, now: float, infrared: bool = False) -> tuple[CameraEventCandidate, ...]:
         camera = self._camera(camera_mac)
         if (not isinstance(observations, tuple) or len(observations) > 100
                 or any(not isinstance(value, ObjectObservation)
@@ -210,6 +211,14 @@ class CameraPolicyEngine:
             budget_used = (len(self._event_times[camera])
                            if self._event_window_seconds is not None
                            else self._event_counts[camera])
+            if (change.kind == "package" and change.edge == "enter"
+                    and active is None and infrared):
+                # Every indoor Package in night IR was a pet or non-parcel
+                # (4/4, user ground truth for Flur); 0 of 24 real parcels in
+                # 30 days were IR. The track still exists, so a later animal
+                # sighting of the same object confirms it as Animal.
+                self.package_ir_suppressed += 1
+                continue
             if (change.kind == "package" and change.edge == "enter"
                     and active is None):
                 # Protect 7.3.68 resolves an AI Port's packageDetected edge by

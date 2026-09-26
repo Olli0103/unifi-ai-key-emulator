@@ -602,3 +602,35 @@ def test_only_the_confused_pair_on_an_unconfirmed_track_crosses_classes():
     assert animal[0].track_id != entered.change.track_id         # its own track
     counts = engine.camera_snapshot(now=6)[0]["events_entered_by_kind"]
     assert (counts["package"], counts["animal"]) == (1, 1)
+
+
+def test_night_ir_package_never_starts_a_package_event_but_a_colour_parcel_does():
+    parcel = ObjectObservation("package", "package", 0.9, (0.60, 0.80, 0.70, 0.95))
+    # Cat read as package in every IR sample (Flur 00:47, Esszimmer 00:55).
+    night = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                               max_track_gap_seconds=20, max_center_distance=1.5)
+    night.replace_policy(FIRST, _multi(FIRST))
+    night.observe(FIRST, (parcel,), now=1, infrared=True)
+    assert night.observe(FIRST, (parcel,), now=2, infrared=True) == ()
+    assert night.package_ir_suppressed == 1
+    assert night.camera_snapshot(now=3)[0]["events_entered_by_kind"]["package"] == 0
+    # A real parcel in a colour frame is still announced.
+    day = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                             max_track_gap_seconds=20, max_center_distance=1.5)
+    day.replace_policy(FIRST, _multi(FIRST))
+    day.observe(FIRST, (parcel,), now=1)
+    entered, = day.observe(FIRST, (parcel,), now=2)
+    assert (entered.change.edge, entered.change.kind) == ("enter", "package")
+    assert day.package_ir_suppressed == 0
+
+
+def test_ir_package_then_animal_still_confirms_the_animal():
+    engine = CameraPolicyEngine([FIRST], max_events_per_camera=5,
+                                max_track_gap_seconds=20, max_center_distance=1.5)
+    engine.replace_policy(FIRST, _multi(FIRST))
+    parcel = ObjectObservation("package", "package", 0.9, (0.60, 0.80, 0.70, 0.95))
+    cat = ObjectObservation("animal", "cat", 0.85, (0.61, 0.79, 0.71, 0.96))
+    engine.observe(FIRST, (parcel,), now=1, infrared=True)
+    entered, = engine.observe(FIRST, (cat,), now=4, infrared=True)
+    assert (entered.change.edge, entered.change.kind, entered.change.label) == (
+        "enter", "animal", "cat")
