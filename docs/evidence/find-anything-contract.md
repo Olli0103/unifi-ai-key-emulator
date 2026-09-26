@@ -144,7 +144,57 @@ Options for the owner:
 
 Enabling the opt-in would resume that run at once. That means backfilling up to 5000 recorded events on every camera, with live AI tasks paused for about 100 minutes by Protect's own estimate.
 
-**Status:** the live retroactive run is `needs_evidence`. It needs Olli's decision to cancel the stale run and approve a bounded one (for example a single camera and a few events). Per Olli's boundary, no recorded Flur, Garage or Esszimmer frames went to any external provider, and no run was started.
+**Status (18:05):** the live retroactive run was `needs_evidence` pending Olli's decision. It is now on; see the next section.
+
+## Retroactive processing on (Olli's decision, 26 Sep 2026 20:57)
+
+Olli asked for retroactive processing on the current deployment, resuming the stored run. The run was **not** cancelled or replaced.
+
+**Resume semantics (7.3.60 static).**
+- **Start trigger:** Protect's `onConnected` starts the runner when the stored state is `running` and a connected processor advertises `supportRetroactiveProcessing`.
+- **Cursor and order:** the runner resumes from `nextProcessedFrom` (else `startedAt`, 22 Sep 15:42 UTC). It walks events newest first and skips events that already have an `aiprocessorTasks` row.
+- **Batches:** each 10 s cycle pushes `min(remaining, 50 − tasksInQueue)` events. `tasksInQueue` is the Key's `getTaskQueueInfo` `UI_TASK_NUM` (queued + active), polled every 5 s, so the Key's honest queue depth is the backpressure.
+- **Pausing:** with the flag off, the loop stops and the state stays `running`. Turning the flag off is a pause, not a cancel.
+- **Live AI Key tasks:** while the run is active, Protect fails every live AI Key task with `NO_FREE_AIPROCESSORS` and the retry flag. After the run, `retryFailTasks` re-runs them (30 per minute, no age limit for that reason). Live AI Key work is **deferred**, not dropped.
+- **AI Ports:** AI Port detection does not use this task manager.
+
+**Preparation (commit after b9eac9a, "Prepare the AI Key for Protect's retroactive backfill").**
+- **Ledger rollover:** completed local index jobs now roll out of the 1024-entry worker ledger after a minute. Otherwise the ledger (364 entries) would have filled after about 660 events, and Protect would have counted every later rejected push as processed.
+- **Queue and deadline:** worker `max_queue` went from 24 to 64, so Protect's 50-task window always fits. Crop jobs get a 600 s budget.
+- **Refusals before any fetch:** backfilled audio thumbnails (`ramType: image`) and crops from cameras outside the index are refused before any fetch. Only the offline "Wohnzimmer alt" is outside the index.
+- **Provider boundary:** backfilled crops go only to the local CLIP server. Backfilled speech goes to local Whisper. No old frame, crop or audio reaches the external provider.
+- **Checkpoints:** search-index backup `search-20260926T205550` (71 rows, scratch restore verified) and `config.json.before-retroactive-20260926`.
+
+**Live progress (AI Key `findanything13`, enabled 20:57:47 local).**
+
+| Time (UTC) | Backfilled rows stored by Protect (event start before 22 Sep 15:42) | Oldest indexed event | Key tasks / crops / completed / failed |
+|---|---|---|---|
+| 18:57:30 | 0 (baseline, 74 rows total) | — | — |
+| 18:59:19 | 106 (5 cameras) | 22 Sep 13:57 | 105 / 107 / 64 / 2 |
+| 19:11:45 | 1005 (6 cameras) | 21 Sep 12:03 | 629 / 1013 / 575 / 10 |
+| 19:13:45 | 1154 | 21 Sep 06:07 | 723 / 1161 / 675 / 10 |
+| 19:15:59 | 1345 | 20 Sep 17:37 | 823 / 1352 / 768 / 11 |
+
+- **Rate:** about 50 events per minute. The ledger stays near 430 entries because 747 completed jobs have rolled over.
+- **Failures:** mostly HTTP 404 for crops of old events that no longer exist. There were also timeouts of face, speech and index jobs queued around the swap.
+- **Refusals:** 13 audio thumbnails; no crops from unindexed cameras.
+
+**Retrieval check (not native).** CLIP text queries ranked over only the backfilled rows, in the same vectors Protect ranks, separate cleanly by Protect's own labels:
+- "a car": 19 of the top 20 carry label 679;
+- "a person": 19 of 20 carry label 265;
+- "a cat": 15 of 20 carry label 802.
+
+**Resource impact.**
+- **Whisper:** backfilled speech drove Whisper to about 9 CPUs, and the Mac AI Port dropped about 38 inference frames per minute (about 4 per minute before).
+- **Whisper cap attempt:** capping Whisper at 4 threads failed (wrong arguments). The original container was restored after a 40 s speech outage, 21:10:56–21:11:35 local. The cap was dropped.
+- **AI Port afterwards:** 0 dropped frames per minute, about 6 fps decoded, controller connected.
+
+**Rollback.** Restore `config.json.before-retroactive-20260926` and restart the Key; Protect then pauses the run without cancelling it. Restore the search index from the verified backup if needed. The previous Key container `local-aikey-mac-findanything12` is kept stopped.
+
+**needs_evidence**
+- A native Protect search readback of a backfilled object: neither Chrome connection exposed the signed-in Protect tab group to this session.
+- Protect's own `processedNumberOfEvents`, `nextProcessedFrom` and completion state (private API, browser).
+- Completion of the run, and the re-run of deferred live tasks afterwards.
 
 ## Encoder pin and index backup (#18, 26 Sep 2026 20:16)
 
