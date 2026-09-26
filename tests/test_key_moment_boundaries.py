@@ -32,7 +32,7 @@ def shaped(start, end, moments):
 @pytest.mark.parametrize("start,end,moments,served", [
     (1000, 11000, [1000, 6000], True),          # a moment at the first exported frame
     (1000, 121000, [60000], True),              # exactly the 120 s bound
-    (1000, 11000, [6000, 11000], False),        # a moment at the exclusive end
+    (1000, 11000, [6000, 11000], True),         # a moment exactly at end (Protect's endTime)
     (1000, 11000, [999, 6000], False),          # 1 ms before the export
     (1000, 11000, [6000, 11001], False),        # 1 ms after the export
     (5000, 5000, [5000], False),                # zero-length interval
@@ -76,3 +76,28 @@ async def test_position_and_interval_details_are_counted_without_values(tmp_path
     encoded = json.dumps(device.status)
     for value in ("13500", "14000", "200000", "400000"):
         assert value not in encoded
+
+
+async def test_a_key_moment_at_end_decodes_the_exports_last_frame(services, tmp_path):
+    import asyncio
+    import shutil
+    from test_basic_descriptions import DESCRIPTION
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("Real ffmpeg executable unavailable")
+    video = tmp_path / "synthetic-ten-seconds.mp4"
+    process = await asyncio.create_subprocess_exec(
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+        "color=c=blue:s=32x32:r=2:d=10", "-c:v", "mpeg4", "-y", str(video))
+    assert await process.wait() == 0
+    services.video = video.read_bytes()
+    config = options(services)
+    config["worker"]["ffmpeg_path"] = ffmpeg
+    worker = JobProcessor(config, tmp_path)
+    try:
+        result = await worker.handle(shaped(1000, 11000, [6000, 11000]))
+        assert result["result"]["description"] == DESCRIPTION
+        assert len(services.requests[0]["messages"][0]["content"]) == 3     # prompt + 2 frames
+        assert len(services.callbacks) == 1
+    finally:
+        await worker.stop()

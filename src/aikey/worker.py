@@ -569,8 +569,10 @@ class JobProcessor:
                 or body["end"] - body["start"] > self.max_video_duration_ms):
             raise WorkerError("recognizeKeyFrames video exceeds configured duration bound")
         moments = body["keyMoments"]
+        # Protect places a key moment exactly at the export's endTime (26 Sep,
+        # 13 of 39 live requests); that last frame is part of the video.
         if (not isinstance(moments, list) or not 1 <= len(moments) <= 128
-                or any(type(value) is not int or not body["start"] <= value < body["end"]
+                or any(type(value) is not int or not body["start"] <= value <= body["end"]
                        for value in moments)):
             raise WorkerError("recognizeKeyFrames requires at most 128 integer timestamps inside the video")
         callback = self._url(body["resUrl"], "callback")
@@ -849,6 +851,10 @@ class JobProcessor:
         if len(data) < 12 or data[4:8] != b"ftyp":
             raise WorkerError("Only MP4 video is supported; UBV requires a separate verified converter")
         offset = 0.0
+        # A key moment at the interval end is the export's last frame: seeking
+        # to the very end yields no frame, so decode the final second instead.
+        at_end = (job.operation == "recognizeKeyFrames" and timestamp is not None
+                  and timestamp == job.payload.get("end"))
         if job.operation == "on_demand" or timestamp is not None:
             lowered = {key.lower(): value for key, value in headers.items()}
             start = lowered.get("x-start-timestamp")
@@ -867,10 +873,12 @@ class JobProcessor:
         with tempfile.TemporaryDirectory(prefix="aikey-video-", dir=self.state_dir) as temporary:
             source, output = Path(temporary) / "input.mp4", Path(temporary) / "frame.jpg"
             source.write_bytes(data)
+            seek = ["-sseof", "-1"] if at_end else ["-ss", str(offset)]
+            frames = ["-update", "1"] if at_end else ["-frames:v", "1"]
             process = await asyncio.create_subprocess_exec(
                 executable, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-                "-protocol_whitelist", "file,pipe", "-f", "mp4", "-ss", str(offset),
-                "-i", str(source), "-an", "-frames:v", "1", "-vf", "scale=1280:1280:force_original_aspect_ratio=decrease",
+                "-protocol_whitelist", "file,pipe", "-f", "mp4", *seek,
+                "-i", str(source), "-an", *frames, "-vf", "scale=1280:1280:force_original_aspect_ratio=decrease",
                 "-c:v", "mjpeg", "-fs", str(self.max_bytes), str(output),
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
             try:
