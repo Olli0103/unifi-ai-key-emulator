@@ -300,6 +300,14 @@ class DeviceService:
             "key_moments_counts": dict.fromkeys(("missing", "invalid_type", "empty", "at_or_below_sampling_limit",
                 "above_sampling_limit", "over_128_inputs", "duplicates", "non_integer", "outside_interval",
                 "interval_not_comparable"), 0),
+            # Per request, content-free: where key moments fall against the
+            # exported interval, and why an interval is unusable.
+            "key_moment_position_counts": dict.fromkeys((
+                "all_inside", "some_outside", "all_outside", "any_at_end",
+                "before_start_up_to_1s", "before_start_over_1s",
+                "after_end_up_to_1s", "after_end_over_1s"), 0),
+            "interval_detail_counts": dict.fromkeys((
+                "zero_length", "reversed", "over_limit_up_to_5min", "over_5min"), 0),
             "matching_camera_result_code_counts": _result_counts(),
             "matching_cameraId_result_code_counts": _result_counts(),
             "phase_counts": dict.fromkeys(("scope_disabled", "camera_mismatch", "worker_admission",
@@ -847,10 +855,18 @@ class DeviceService:
             "invalid_order_or_range" if not interval_valid else
             "over_10_seconds" if end - start > 10000 else "up_to_10_seconds")
         _increment(self._recognize_diagnostics["video_interval_counts"], interval_category)
+        details = self._recognize_diagnostics["interval_detail_counts"]
+        if type(start) is int and type(end) is int:
+            if start == end:
+                _increment(details, "zero_length")
+            elif start > end:
+                _increment(details, "reversed")
         duration_limit = self.config.get("worker", {}).get("max_video_duration_ms", 120000)
         duration_limit = duration_limit if type(duration_limit) is int and duration_limit > 0 else 120000
         duration_category = ("not_comparable" if not interval_valid else
                              "exceeds" if end - start > duration_limit else "within")
+        if duration_category == "exceeds":
+            _increment(details, "over_limit_up_to_5min" if end - start <= 300000 else "over_5min")
         _increment(self._recognize_diagnostics["duration_limit_counts"], duration_category)
         moments = body.get("keyMoments")
         moment_counts = self._recognize_diagnostics["key_moments_counts"]
@@ -873,8 +889,23 @@ class DeviceService:
                     _increment(moment_counts, "duplicates")
                 if not interval_valid:
                     _increment(moment_counts, "interval_not_comparable")
-                elif any(not start <= moment < end for moment in moments):
-                    _increment(moment_counts, "outside_interval")
+                else:
+                    if any(not start <= moment < end for moment in moments):
+                        _increment(moment_counts, "outside_interval")
+                    positions = self._recognize_diagnostics["key_moment_position_counts"]
+                    inside = [start <= moment < end for moment in moments]
+                    _increment(positions, "all_inside" if all(inside) else
+                               "all_outside" if not any(inside) else "some_outside")
+                    if end in moments:
+                        _increment(positions, "any_at_end")
+                    before = [start - moment for moment in moments if moment < start]
+                    after = [moment - end for moment in moments if moment > end]
+                    if before:
+                        _increment(positions, "before_start_up_to_1s" if max(before) <= 1000
+                                   else "before_start_over_1s")
+                    if after:
+                        _increment(positions, "after_end_up_to_1s" if max(after) <= 1000
+                                   else "after_end_over_1s")
         return tuple(matches)
 
     async def _command(self, action: str, body: dict, *, _connection=None) -> dict:
