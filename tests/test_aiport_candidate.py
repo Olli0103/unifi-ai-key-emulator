@@ -3518,7 +3518,7 @@ async def _live_request_raw(service, sink, message_id):
         "payload": {"what": "snapshot", "deviceID": _LIVE_A, "uri": _LIVE_URI}}).encode())
 
 
-async def _night_restart_scene(tmp_path, monkeypatch, frames):
+async def _night_restart_scene(tmp_path, monkeypatch, frames, *, mode="announce"):
     """Startup pair plus 2 fps decoded frames of one IR scene; fake provider."""
     from test_aiport_held_followup import BOX
     camera = "2A1122334455"
@@ -3533,6 +3533,8 @@ async def _night_restart_scene(tmp_path, monkeypatch, frames):
                             "base_url": "https://api.openai.com/v1",
                             "allow_remote": True, "max_output_tokens": 256,
                             "api_key_file": str(tmp_path / "api-key")}}
+    if mode is not None:
+        config["live_pool_detector"]["held_package_followup"] = mode
     calls = {"detect": 0, "verify": 0}
 
     def fake_provider(_url, _headers, payload):
@@ -3612,3 +3614,38 @@ async def test_a_resting_cat_read_as_a_package_at_a_night_restart_gets_no_packag
     enters, _calls, _detect, health = await _night_restart_scene(tmp_path, monkeypatch, frames)
     assert [e["objectTypes"] for e in enters if "package" in e["objectTypes"]] == []
     assert health["package_ir_followup"]["animated"] == 1
+
+
+@pytest.mark.asyncio
+async def test_the_default_shadow_follow_up_only_counts_what_it_would_announce(
+        tmp_path, monkeypatch):
+    from test_aiport_held_followup import _scene
+    enters, calls, _detect, health = await _night_restart_scene(
+        tmp_path, monkeypatch, [_scene(seed) for seed in range(60)], mode=None)
+    assert [e for e in enters if "package" in e["objectTypes"]] == []
+    assert health["package_ir_followup"]["mode"] == "shadow"
+    assert health["package_ir_followup"]["confirmed"] == 1   # would have announced
+    assert calls["detect"] == 2
+
+
+def test_the_follow_up_mode_accepts_only_shadow_or_announce(tmp_path):
+    config = fixture_state(tmp_path)
+    config["paired_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1", "ffmpeg_path": sys.executable}
+        for mac in ("2A1122334455", "2A1122334456")]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["package"], "max_events_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+    for mode in ("shadow", "announce"):
+        config["live_pool_detector"]["held_package_followup"] = mode
+        private_file(tmp_path / "config.json", json.dumps(config).encode())
+        assert load_config(tmp_path / "config.json")["live_pool_detector"][
+            "held_package_followup"] == mode
+    config["live_pool_detector"]["held_package_followup"] = "always"
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError):
+        load_config(tmp_path / "config.json")

@@ -249,8 +249,12 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
         if ("paired_streams" not in value or not isinstance(detector, dict)
                 or not (set(detector) == (api_fields if is_api else
                                           onnx_fields if is_onnx else pytorch_fields)
-                        # The API request cap is an optional cost control.
-                        or is_api and set(detector) == api_fields - {"max_requests_per_hour"})
+                        # The API request cap is an optional cost control; the
+                        # held-package follow-up mode is optional (shadow).
+                        or is_api and (api_fields - {"max_requests_per_hour"}
+                                       <= set(detector)
+                                       <= api_fields | {"held_package_followup"}))
+                or detector.get("held_package_followup", "shadow") not in {"shadow", "announce"}
                 or backend is not None and not (is_api or is_onnx)
                 or not is_api and (
                     not isinstance(detector["model_path" if is_onnx else
@@ -647,6 +651,9 @@ class CandidateService:
         self._inference: FairInference | None = None
         self._pool_camera_order: tuple[str, ...] = ()
         self._held_followup = HeldPackageFollowup()
+        # "shadow" (default) only counts what the follow-up would decide.
+        self._held_followup_announce = (
+            (config.get("live_pool_detector") or {}).get("held_package_followup") == "announce")
         self._pool_policy_errors: dict[str, str] = {}
         self._pool_secondary_lens_shapes: dict[str, dict[str, int | bool]] = {}
         self._pool_recognition_accuracy_shapes: dict[
@@ -803,7 +810,8 @@ class CandidateService:
             for track_id, box in held.items():
                 if (track_id not in self._held_followup.tracking(camera_mac)
                         and await asyncio.to_thread(self._held_followup.start,
-                                                    camera_mac, track_id, box, frame, now)):
+                                                    camera_mac, track_id, box, frame, now)
+                        and self._held_followup_announce):
                     engine.watch_held(camera_mac, track_id)
         # A confirming paid sample only helps a new, unconfirmed object. When
         # every sampled object already belongs to an active track, keep the
@@ -821,6 +829,8 @@ class CandidateService:
         now = time.monotonic()
         decisions = await asyncio.to_thread(self._held_followup.observe,
                                             camera_mac, frame, now)
+        if not self._held_followup_announce:
+            return          # shadow: decisions are only counted
         for track_id, decision in decisions.items():
             if decision == "keep":
                 engine.keep_held(camera_mac, track_id, now=now)
@@ -1563,7 +1573,9 @@ class CandidateService:
             "smart_settings_rejection_reasons": dict(self.smart_settings_rejection_reasons),
             "package_cooldown_skips": (self._camera_engine.package_cooldown_skips
                                        if self._camera_engine is not None else 0),
-            "package_ir_followup": dict(self._held_followup.decisions),
+            "package_ir_followup": {
+                "mode": "announce" if self._held_followup_announce else "shadow",
+                **self._held_followup.decisions},
             "package_ir_held": (self._camera_engine.package_ir_held
                                   if self._camera_engine is not None else 0),
             "package_ir_confirmed": (self._camera_engine.package_ir_confirmed
