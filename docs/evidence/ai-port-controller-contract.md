@@ -52,3 +52,29 @@ The device-side streaming, event-ingress, timebase, PTZ, edge-recording and resu
 - **Protect's own channel list** for the exact channel index of each stream (needs the private camera API in a console session).
 - **PTZ:** no PTZ camera is paired, and the AI Port implements no PTZ commands.
 - **Edge recording:** the AI Port sends no recording controls. That recordings stay unchanged on paired cameras has not been read back natively on 7.3.68.
+
+## Recording continuity around the 19:40 Mac AI Port restart (read back 26 Sep 2026, 21:15 UTC)
+
+Read-only, from the signed-in console. No video was exported or transmitted. The probe is Protect's `GET /video/export/estimate` (7.3.60 route): it sizes the recording files in a range, and fails with "No files found" (HTTP 500) when none overlap.
+
+**The restart.** The Mac AI Port container restarted at 17:40:00 UTC and relays Flur, Schlafzimmer and Büro.
+
+**Five-minute windows, 17:25–17:55 UTC.** All three cameras answer 200 for every window, including the one spanning 17:38–17:43.
+
+**30-second windows, 17:39:00–17:42:00 UTC.**
+
+| Camera | Size estimate per window |
+|---|---|
+| Flur | 1060, 1060, 4231, 7623, 6355, 3857 kB (motion from 17:40) |
+| Büro | 571 kB in every window |
+| Schlafzimmer | 1154 kB in every window |
+
+- **Reading the sizes:** the constant values for Büro and Schlafzimmer show the estimate reflects file segments, not duration. So this proves **file coverage of every 30-second window**, not bitrate.
+- **Events:** Flur's 5 motion events between 17:30 and 17:50 stay on Flur, one spanning 17:40. Büro and Schlafzimmer had no events. There were no smart events on the three cameras (the household is away).
+- **Pairing and recording settings:** all nine AI Port cameras remain `isPairedWithAiPort: true`, `recordingSettings.mode: adaptive`, `CONNECTED`. The unpaired cameras are Wohnzimmer (G6) and the offline "Wohnzimmer alt".
+
+**Result.** Native recordings of the Mac-paired cameras covered the restart, with no gap of 30 s or more, and events kept their original cameras.
+
+**Still open:**
+- gaps shorter than 30 s cannot be excluded;
+- an export byte-length check was not done, because camera media must not be exported.
