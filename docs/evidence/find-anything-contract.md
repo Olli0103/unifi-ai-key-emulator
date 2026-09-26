@@ -233,3 +233,52 @@ Olli asked for retroactive processing on the current deployment, resuming the st
 - A staged rebuild for new weights: a new profile generation and a re-embed of the stored crops, cut over after native readback.
 - Resumable rebuilds and admin-site controls.
 - Native Protect search readback after this deploy (`needs_evidence`, N14). On 26 Sep two Chrome browsers were connected and none was selected, so no browser prompt was sent.
+
+## Retroactive run: native readback and completion (26 Sep 2026, 21:00 UTC)
+
+Read-only, from a tab in the signed-in Chrome profile. Only metadata, counts and timestamps were read; no media was fetched or exported.
+
+**Protect's run record (`/proxy/protect/api/aiprocessors`).**
+- **Run:** state **`completed`**, `startedAt` 22 Sep 15:42:19 UTC, all cameras, `numberOfEvents` 5000.
+- **Cursor:** `nextProcessedFrom` is **18 Sep 19:10:02.881 UTC**, the end time of a real event.
+- **Queue:** `tasksInQueue` is 0. `processedNumberOfEvents` is not in the response.
+- **AI Key:** connected, `supportRetroactiveProcessing` on. Retroactive stays on.
+
+**Native Find Anything readback (`detection-nls`, `minSimilarity=20`; results are object metadata only).**
+- **"a car":** 50 vehicle results, **36 backfilled** (event before 22 Sep 15:42) on 2 cameras. The first backfilled result is at rank 15: a vehicle at 22 Sep 14:21:25 UTC, similarity 39.
+- **"a cat":** 50 animal results, **41 backfilled**. The first is at rank 10: an animal at 22 Sep 14:57:43 UTC, similarity 43.
+- **"a person":** the top 50 are all newer person objects (0 backfilled).
+- **Cross-check:** both first backfilled objects exist in the search host with those detection times, written 26 Sep 18:58 UTC during the backfill, with 768 values.
+
+**Coverage.**
+- **Covered window:** 18 Sep 19:10 → 22 Sep 15:42 UTC.
+- **Events Protect could send:** 2386 retroactive-type events in the window (all `smartDetectZone`). 2310 carry tracker-ID crops, which is what Protect can send; the Key received 2315 crop tasks.
+- **Indexed:** search rows exist for 2271 of the 2310 events. **39 are missing**, exactly the number of in-flight jobs dropped at the 19:25 live-first swap.
+
+| Camera | Eligible events | Indexed | Missing |
+|---|---|---|---|
+| Haustür | 548 | 542 | 6 |
+| Wohnzimmer | 584 | 573 | 11 |
+| Einfahrt | 396 | 387 | 9 |
+| Garage | 377 | 377 | 0 |
+| Esszimmer | 182 | 182 | 0 |
+| Büro | 178 | 169 | 9 |
+| Giebel hinten | 43 | 39 | 4 |
+| Giebel Vorn | 2 | 2 | 0 |
+
+**Why the 39 cannot be reconciled safely.**
+- **No automatic retry:** Protect gave each dropped task a task row, and it fails after its 30-minute timeout as `timeout`, without the retry flag. So `retryFailTasks`, which picks only `failedRetry`, never re-sends it.
+- **A new run would not help:** a new run would skip these events too, because a task row exists, and it would replace the stored run record.
+- **No self-initiated fetch:** answering without a Protect task would mean fetching crops unprompted and posting unsolicited results. That was not done.
+- **Result:** these 39 events keep their objects and labels but have no embedding.
+- **Prevention:** swapping the Key mid-run drops its in-memory queue. Swap only with an empty queue, or pause first (flag off).
+
+**Why the run completed early.**
+- **Not the cap:** Protect completes when a batch query returns no eligible event, or when every push in a batch fails. Here it completed after about 2386 events, well short of 5000.
+- **Older events exist:** smart events go back to 19 Aug, most with tracker IDs, and 282 end earlier on 18 Sep alone.
+- **Adoption date:** the AI Key was adopted 22 Sep 15:13 UTC, so no earlier AI Key tasks explain task rows on older events.
+- **Open:** the exact reason needs Protect's `aiprocessorTasks` rows, which the API does not expose. `needs_evidence`.
+
+**Live work.**
+- **No late retries:** there are no late index rows (events during the run, written more than 10 minutes later). Protect sent no retried live index work afterwards.
+- **Live indexing continued during the run:** 22 fresh rows in the 18:00 UTC hour and 18 in the 19:00 UTC hour.

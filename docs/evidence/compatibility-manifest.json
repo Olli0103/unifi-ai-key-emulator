@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-26.8",
+ "manifest_version": "ai-key/2026-09-26.9",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -1122,8 +1122,8 @@
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Native Protect text-search readback of a backfilled object (browser session unavailable on 26 Sep; CLIP ranking over backfilled rows separates Protect's labels)",
-    "Crops of older events can be gone (HTTP 404); those events stay unindexed"
+    "Crops of older events can be gone (HTTP 404); those events stay unindexed",
+    "39 events whose tasks were dropped at a mid-run Key swap stay unindexed; Protect does not retry timed-out tasks"
    ]
   },
   {
@@ -1694,8 +1694,7 @@
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Run completion state and Protect's processedNumberOfEvents readback (private API, browser)",
-    "Re-run of live AI Key tasks deferred with NO_FREE_AIPROCESSORS during the run"
+    "Why Protect completed the stored run after about 2386 events at an 18 Sep 19:10 cursor although older tracker-ID events exist (aiprocessorTasks rows are not exposed)"
    ]
   },
   {
@@ -2423,7 +2422,7 @@
     "control.recognize_key_frames.multiple_images",
     "index.thumbnail_tags"
    ],
-   "procedure": "The stored 5000-event run resumed on 26 Sep 20:57 with Olli's approval. In a signed-in console session, read back aiprocessors retroactiveProcessing (processedNumberOfEvents, nextProcessedFrom, final state) and one detection-nls text search that returns a backfilled object (event before 22 Sep 15:42 UTC); after completion confirm deferred live tasks were retried."
+   "procedure": "Run completion and native readback were observed on 26 Sep. Remaining: explain the early completion at the 18 Sep 19:10 cursor (read aiprocessorTasks for events before it, for example from a Protect support file), and decide with Olli whether a bounded run for older events is wanted."
   },
   {
    "id": "N11",
