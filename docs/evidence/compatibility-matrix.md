@@ -50,8 +50,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | **worker** | |  |  |  | | |
 | `worker.private_journal_rollover`: Private terminal-job tombstones keep duplicate protection while bounding the active journal | fixture-tested | not_observed | not_observed | not_observed | — | experimental_opt_in |
 | **control** | |  |  |  | | |
-| `control.recognize_key_frames.other_variants`: recognizeKeyFrames image variant (one cropped audio-event thumbnail) | unsupported | — | — | indirect | vendor docs, Protect 7.2.105, AI Key 2.2.8 | default |
-| `control.recognize_key_frames.multiple_images`: recognizeKeyFrames multipleImages (retroactive backfill of saved object crops) | fixture-tested | — | — | not_observed | vendor docs | explicit_opt_in |
+| `control.recognize_key_frames.other_variants`: recognizeKeyFrames image variant (one cropped audio-event thumbnail) | unsupported | — | — | indirect | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | default |
+| `control.recognize_key_frames.multiple_images`: recognizeKeyFrames multipleImages (retroactive backfill of saved object crops) | fixture-tested | — | — | not_observed | Protect 7.3.60 bundle | explicit_opt_in |
 | `control.host_management`: reboot, factoryReset, firmware install, SSH management, support upload and hardware statistics | unsupported | — | — | — | AI Key 2.2.8 | default |
 | `control.ai_settings_commands`: changeAiInferAgentSettings, changeDescribePrompts, networkStatus and sshService | unsupported | — | — | indirect | — | default |
 | `control.unknown_command`: Any other command name | unsupported | — | — | indirect | — | default |
@@ -81,27 +81,27 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `capability.face_recognition`: supportFaceRecognition advertised with local face recognition | fixture-tested | — | — | indirect | Protect 7.2.105 | explicit_opt_in |
 | `capability.license_plate_recognition`: License-plate recognition | unsupported | — | — | indirect | Protect 7.2.105 | default |
 | `capability.face_enhancement`: Automatic and manual face enhancement | unsupported | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
-| `capability.retroactive_processing`: supportRetroactiveProcessing opt-in for Find Anything backfill | fixture-tested | — | — | not_observed | vendor docs | explicit_opt_in |
+| `capability.retroactive_processing`: supportRetroactiveProcessing opt-in for Find Anything backfill | fixture-tested | — | — | not_observed | Protect 7.3.60 bundle | explicit_opt_in |
 | `capability.recognize_anything_tagging`: Recognize Anything tags, detections and key-moment snapshots | unsupported | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
-| `capability.audio_speech`: Speech transcription (speechToText) | fixture-tested | — | — | indirect | vendor docs, AI Key 2.2.8 | explicit_opt_in |
+| `capability.audio_speech`: Speech transcription (speechToText) | fixture-tested | — | — | indirect | Protect 7.3.60 bundle, AI Key 2.2.8 | explicit_opt_in |
 | **callbacks** | |  |  |  | | |
-| `callback.speech_to_text_transcriptions`: speechToText callback saved as native transcription rows | native-verified | — | — | native-verified | vendor docs, AI Key 2.2.8 | explicit_opt_in |
-| `callback.face_recognition_part`: face multipart callback saved as native face thumbnails linked to person trackers | native-verified | — | — | native-verified | vendor docs | explicit_opt_in |
+| `callback.speech_to_text_transcriptions`: speechToText callback saved as native transcription rows | native-verified | — | — | native-verified | Protect 7.3.60 bundle, AI Key 2.2.8 | explicit_opt_in |
+| `callback.face_recognition_part`: face multipart callback saved as native face thumbnails linked to person trackers | native-verified | — | — | native-verified | Protect 7.3.60 bundle | explicit_opt_in |
 | **capabilities** | |  |  |  | | |
 | `capability.ai_alarms`: AI query matches in Alarm Manager | unsupported | — | — | — | — | default |
 | **database** | |  |  |  | | |
-| `database.credential_rotation_hook`: PostgreSQL unifi-protect role rotated before management-password rotation | native-verified | — | — | native-verified | vendor docs, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
+| `database.credential_rotation_hook`: PostgreSQL unifi-protect role rotated before management-password rotation | native-verified | — | — | native-verified | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
 | `database.supports_db_credential_handoff`: supportsDbCredential console capability and controller access-rule update | needs_evidence | — | — | indirect | Protect 7.2.105, AI Key 2.2.8 | default |
-| `database.controller_migrations`: Protect migrations and extensions applied to the processor database | native-verified | — | — | native-verified | vendor docs, Protect 7.2.105 | explicit_opt_in |
+| `database.controller_migrations`: Protect migrations and extensions applied to the processor database | native-verified | — | — | native-verified | Protect 7.3.60 bundle, Protect 7.2.105 | explicit_opt_in |
 | `database.bm25_rerank`: pg_tokenizer, vchord_bm25 and rerank function | unsupported | — | — | — | Protect 7.2.105 | default |
 | **search** | |  |  |  | | |
 | `search.e5_nl_parse`: NL_PARSE with multilingual-e5-small returns a 384-value query embedding | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105 | explicit_opt_in |
 | `search.description_embedding`: 384-value passage embedding attached to task descriptions | fixture-tested | — | — | — | Protect 7.2.105 | explicit_opt_in |
-| `search.legacy_clip_image`: 768-value CLIP ViT-L/14 NL_PARSE text vectors and IMAGE_SEARCH image vectors (basic Find Anything) | native-verified | — | — | native-verified | vendor docs, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
+| `search.legacy_clip_image`: 768-value CLIP ViT-L/14 NL_PARSE text vectors and IMAGE_SEARCH image vectors (basic Find Anything) | native-verified | — | — | native-verified | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
 | `search.tags_and_time_filters`: NL_PARSE tag extraction, object types and time filters | unsupported | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
-| `search.native_retrieval`: Find Anything retrieval of processor results in Protect | native-verified | — | — | native-verified | vendor docs, Protect 7.2.105 | explicit_opt_in |
-| `index.search_snapshots`: Key-moment regions indexed as keyMomentsTags search snapshots with local CLIP crop embeddings | native-verified | — | — | native-verified | vendor docs | explicit_opt_in |
-| `index.thumbnail_tags`: thumbnailTags for existing smart-detect objects (thumbnailMeta and retroactive crops) | fixture-tested | — | — | not_observed | vendor docs | explicit_opt_in |
+| `search.native_retrieval`: Find Anything retrieval of processor results in Protect | native-verified | — | — | native-verified | Protect 7.3.60 bundle, Protect 7.2.105 | explicit_opt_in |
+| `index.search_snapshots`: Key-moment regions indexed as keyMomentsTags search snapshots with local CLIP crop embeddings | native-verified | — | — | native-verified | Protect 7.3.60 bundle | explicit_opt_in |
+| `index.thumbnail_tags`: thumbnailTags for existing smart-detect objects (thumbnailMeta and retroactive crops) | fixture-tested | — | — | not_observed | Protect 7.3.60 bundle | explicit_opt_in |
 | `search.index_recovery`: Search index recovery after restart or model change | needs_evidence | — | — | — | Protect 7.2.105 | default |
 
 ## Missing evidence
