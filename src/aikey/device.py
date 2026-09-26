@@ -366,6 +366,26 @@ class DeviceService:
                     + (["recognizeKeyFrames"] if basic_enabled else [])
                     + (["speechToText"] if self._speech_cameras() else [])}
 
+    def _served_capabilities(self) -> dict:
+        """Which Protect AI features this configuration actually answers."""
+        search = self.config.get("search", {})
+        find_anything = self.config.get("find_anything")
+        faces = self.config.get("face_recognition")
+        image_search = (search.get("enabled") is True and search.get("profile") == "clip-basic-v1"
+                        and isinstance(find_anything, dict))
+        # Recognize Anything means object indexing; captions are supportAiSummary.
+        indexing = image_search and bool(find_anything.get("index_camera_ids"))
+        face_cameras = faces.get("camera_ids") if isinstance(faces, dict) else None
+        return {
+            "supportImageSearch": image_search,
+            "supportRecognizeAnything": indexing,
+            "supportTts": bool(self._speech_cameras()),
+            "supportFaceRecognition": isinstance(face_cameras, list) and bool(face_cameras)
+                                      and isinstance(faces.get("server"), str),
+            # No AI Key plate reader: plates come from paired AI Ports (#19).
+            "supportLicensePlateRecognition": False,
+        }
+
     def _speech_cameras(self) -> frozenset:
         speech = self.config.get("speech_to_text")
         cameras = speech.get("camera_ids") if isinstance(speech, dict) else None
@@ -500,13 +520,15 @@ class DeviceService:
                           and Path(decoder).is_file() and scope_supported)
             if not configured:
                 flags["supportAiSummary"] = {**summary, "enabled": False}
-        # Search by image is answered only by the local CLIP search profile.
-        search = self.config.get("search", {})
-        image_search = (search.get("enabled") is True and search.get("profile") == "clip-basic-v1"
-                        and isinstance(self.config.get("find_anything"), dict))
-        requested = overrides.get("supportImageSearch")
-        if not (isinstance(requested, dict) and requested.get("enabled") is False):
-            flags["supportImageSearch"] = {"enabled": image_search, "version": "v1"}
+        # Capabilities follow what this Key is configured to serve. Protect's
+        # getInfo treats an *absent* face/LPR/RAM flag as enabled but keeps an
+        # explicit false, and shows Speech to Text from supportTts (7.3.60
+        # FEATURE_TYPE_CONFIG); its dispatcher also refuses face and LPR
+        # settings whose flag is off. An explicit false override still wins.
+        for name, available in self._served_capabilities().items():
+            requested = overrides.get(name)
+            if not (isinstance(requested, dict) and requested.get("enabled") is False):
+                flags[name] = {"enabled": available, "version": "v1"}
         return {"type": self.device.get("model", "UP-AI-KEY"), "sysid": self.device.get("sysid", "0xa5f0"),
                 "version": self.device.get("firmware_version", "2.2.8"), "mac": self.mac,
                 "uptime": int(time.monotonic() - self._started_at), "poeType": self.device.get("poe_type", "unknown"),

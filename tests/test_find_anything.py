@@ -567,3 +567,27 @@ def test_image_search_is_advertised_only_with_the_clip_profile(tmp_path):
     options["device"]["feature_flags"] = {"supportImageSearch": {"enabled": False, "version": "v1"}}
     assert DeviceService(options, tmp_path / "c", admit).get_info()["featureFlags"]["supportImageSearch"][
         "enabled"] is False
+
+
+def test_capability_flags_follow_the_served_features(tmp_path):
+    async def admit(body):
+        return {"accepted": True}
+    options = device_config()
+    options["worker"] = {}
+    flags = DeviceService(options, tmp_path / "a", admit).get_info()["featureFlags"]
+    for name in ("supportTts", "supportFaceRecognition", "supportRecognizeAnything",
+                 "supportLicensePlateRecognition", "supportImageSearch"):
+        assert flags[name] == {"enabled": False, "version": "v1"}, name
+    options["speech_to_text"] = {"provider": "openai-compatible", "camera_ids": ["cam-w"]}
+    options["face_recognition"] = {"server": "http://127.0.0.1:8179", "camera_ids": ["cam-w"]}
+    options["search"] = {"enabled": True, "profile": clip.PROFILE}
+    options["find_anything"] = {"clip_server": "http://127.0.0.1:8180", "index_camera_ids": ["cam-w"]}
+    flags = DeviceService(options, tmp_path / "b", admit).get_info()["featureFlags"]
+    assert {name: flags[name]["enabled"] for name in (
+        "supportTts", "supportFaceRecognition", "supportRecognizeAnything",
+        "supportLicensePlateRecognition", "supportImageSearch")} == {
+        "supportTts": True, "supportFaceRecognition": True, "supportRecognizeAnything": True,
+        "supportLicensePlateRecognition": False, "supportImageSearch": True}
+    options["device"]["feature_flags"] = {"supportTts": {"enabled": False, "version": "v1"}}
+    assert DeviceService(options, tmp_path / "c", admit).get_info()["featureFlags"]["supportTts"][
+        "enabled"] is False
