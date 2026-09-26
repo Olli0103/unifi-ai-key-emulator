@@ -174,6 +174,19 @@ Olli asked for retroactive processing on the current deployment, resuming the st
 | 19:11:45 | 1005 (6 cameras) | 21 Sep 12:03 | 629 / 1013 / 575 / 10 |
 | 19:13:45 | 1154 | 21 Sep 06:07 | 723 / 1161 / 675 / 10 |
 | 19:15:59 | 1345 | 20 Sep 17:37 | 823 / 1352 / 768 / 11 |
+| 19:25:03 | — | — | Key swap to `findanything14` (live-first queue); counters restart; 39 in-flight backfill jobs dropped |
+| 19:31:09 | 2742 (8 cameras) | 19 Sep 18:10 | 350 / 701 / 313 / 9 |
+| 19:44:16 | 4296 | 18 Sep 21:37 | 1137 / 2254 / 1062 / 31 |
+| 20:08:57 | 4446 | 18 Sep 19:06 | 1175 / 2403 / 1143 / 32 |
+
+**Phase after 19:50 UTC.**
+- **What reaches the Key:** no new backfill image tasks. Protect still sends about one old audio event per minute; the Key refuses its thumbnail, and local Whisper transcribes its speech.
+- **Why (7.3.60 static):** Protect's own queued-task count covers only embedding and description tasks, so the runner is not throttled by the Key. Events whose saved thumbnails lack tracker IDs fail inside Protect (`FAILED_TO_FIND_DETECTED_THUMBNAILS`) and never reach the Key.
+- **Likely reading:** the runner is walking events older than 18 Sep 19:06 UTC that have nothing indexable. This is an inference; Protect's own counters need the browser.
+- **Indexed coverage so far:** 4446 backfilled objects, 18 Sep 19:06 → 22 Sep 15:42 UTC, on 8 cameras.
+- **Totals across both containers:** 2315 backfill tasks, 4453 crops embedded, 2223 completed.
+- **Uncertain callbacks:** 54 in the first 52 minutes (Protect answered late); the stored rows match the embedded crops within 7.
+- **Live work during the run:** fresh live index rows kept arriving (1–3 per minute), and live face and speech jobs completed. Some face and index jobs timed out waiting on Protect's video exports.
 
 - **Rate:** about 50 events per minute. The ledger stays near 430 entries because 747 completed jobs have rolled over.
 - **Failures:** mostly HTTP 404 for crops of old events that no longer exist. There were also timeouts of face, speech and index jobs queued around the swap.
