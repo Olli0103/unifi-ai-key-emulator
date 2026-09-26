@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-26.5). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-26.6). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-26.5` for the `ai-key` profile, based on commit `c55ffab`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-26.6` for the `ai-key` profile, based on commit `c55ffab`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -45,6 +45,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `control.request_ai.on_demand_inference`: RequestAI :7968/on_demand_inference, admitted before inference | native-verified | not_observed | native-verified | not_observed | Protect 7.2.105, AI Key 2.2.8 | experimental_opt_in |
 | `control.request_ai.describe`: RequestAI :7968/describe session task with image or video inputs | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105 | default |
 | `control.request_ai.unknown_target`: RequestAI with an unimplemented or malformed targetUri | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105, AI Key 2.2.8 | default |
+| `control.request_ai.second_stage_verification`: RequestAI second_verifier_mlabel classify (Second Stage Verification) answered by local CLIP zero-shot | fixture-tested | — | — | not_observed | Protect 7.3.60 bundle | explicit_opt_in |
 | `control.recognize_key_frames`: recognizeKeyFrames video caption command within explicit one-use camera scopes | native-verified | not_observed | native-verified | native-verified | Protect 7.2.105, AI Key 2.2.8 | experimental_opt_in |
 | `control.continuous_caption_admission`: Opt-in automatic captions admitted by fresh Protect inventory, model-family policy and a durable global budget | fixture-tested | not_observed | not_observed | not_observed | — | experimental_opt_in |
 | **worker** | |  |  |  | | |
@@ -140,6 +141,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `control.request_ai.describe`: Whether 7.3.60 dispatches /describe at all (issue #10)
 - `control.request_ai.describe`: promptProfile session-v1 behavior is not reproduced
 - `control.request_ai.unknown_target`: Protect's retry treatment of errorCode 95 versus 5 for RequestAI
+- `control.request_ai.second_stage_verification`: A live reverification task and its saved result: enabling it changes live event classification (saveReverification retypes matched thumbnails and objects), so it needs the owner's approval
+- `control.request_ai.second_stage_verification`: Zero-shot accuracy on real low-confidence crops is not measured
 - `control.recognize_key_frames`: Continuous and all-camera operation (issue #12)
 - `control.recognize_key_frames`: Persistence after a controller restart
 - `control.continuous_caption_admission`: Native Protect dispatch and persistence under continuous admission
@@ -254,3 +257,4 @@ Every live trial must record each experimental activation below that was in effe
 - **N10** (`capability.retroactive_processing`, `control.recognize_key_frames.multiple_images`, `index.thumbnail_tags`): Owner decision: cancel the stored all-camera 5000-event retroactive run, start a bounded one (one camera, a few events), enable find_anything.retroactive, and read back new ramDetections rows and a search hit for a backfilled object; live AI tasks pause during the run.
 - **N11** (`search.native_retrieval`, `search.index_recovery`, `database.controller_migrations`): After a planned controller restart, confirm isSearchHost true, that existing ramDetections rows survive, and that a known positive text search still returns its object.
 - **N12** (`search.tags_and_time_filters`): In a signed-in console session, run detection-nls for "a car", "person today" and "person yesterday"; confirm the first returns only vehicle objects, the second reports searchCondition startTime at local midnight, and the third returns no hits for a day without indexed objects.
+- **N13** (`control.request_ai.second_stage_verification`): Owner decision: enable find_anything.reverification for a bounded window, then read back one reverified event's detectedThumbnails (preReverificationObjectType and confidence) and confirm unsure verdicts left events unchanged.

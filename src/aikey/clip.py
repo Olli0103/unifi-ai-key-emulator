@@ -57,11 +57,13 @@ def normalize(values: Any) -> list[float]:
 def validate_find_anything_config(value: Any) -> dict:
     """Return a normalized copy of ``find_anything`` or raise ClipError."""
     if (not isinstance(value, dict)
-            or set(value) - {"clip_server", "index_camera_ids", "max_objects", "retroactive"}
+            or set(value) - {"clip_server", "index_camera_ids", "max_objects", "retroactive",
+                             "reverification"}
             or "clip_server" not in value):
         raise ClipError("find_anything needs clip_server and optional index_camera_ids, max_objects, retroactive")
-    if type(value.get("retroactive", False)) is not bool:
-        raise ClipError("find_anything.retroactive must be a JSON boolean")
+    for flag in ("retroactive", "reverification"):
+        if type(value.get(flag, False)) is not bool:
+            raise ClipError(f"find_anything.{flag} must be a JSON boolean")
     server = value["clip_server"]
     parsed = urlsplit(server) if isinstance(server, str) else None
     try:
@@ -83,7 +85,8 @@ def validate_find_anything_config(value: Any) -> dict:
     if type(limit) is not int or not 1 <= limit <= 16:
         raise ClipError("find_anything.max_objects must be 1..16")
     return {"clip_server": server.rstrip("/"), "index_camera_ids": list(cameras), "max_objects": limit,
-            "retroactive": value.get("retroactive", False)}
+            "retroactive": value.get("retroactive", False),
+            "reverification": value.get("reverification", False)}
 
 
 class ClipClient:

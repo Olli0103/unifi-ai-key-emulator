@@ -36,6 +36,8 @@ class Controller:
         self.video = b""
         self.callbacks, self.clip_requests, self.vision_requests, self.text_requests = [], [], [], []
         self.vision_reply = None
+        self.region_vectors = None                # per-region image vectors, when set
+        self.reverifications = []
 
     async def export(self, request):
         return web.Response(body=self.video, content_type="video/mp4",
@@ -48,8 +50,9 @@ class Controller:
             parts[part.name] = await part.read(decode=False)
         regions = json.loads(parts["regions"])
         self.clip_requests.append({"regions": regions, "jpeg": parts["image"][:3] == b"\xff\xd8\xff"})
-        return web.json_response({"model": clip.MODEL, "dim": 768,
-                                  "embeddings": [vector(i) for i in range(len(regions))]})
+        vectors = (self.region_vectors[:len(regions)] if self.region_vectors
+                   else [vector(i) for i in range(len(regions))])
+        return web.json_response({"model": clip.MODEL, "dim": 768, "embeddings": vectors})
 
     async def crop(self, request):
         self.crop_requests = getattr(self, "crop_requests", []) + [request.match_info["image"]]
@@ -59,8 +62,16 @@ class Controller:
         return web.Response(body=out.getvalue(), content_type="image/jpeg")
 
     async def text(self, request):
-        self.text_requests.append(await request.json())
-        return web.json_response({"model": clip.MODEL, "dim": 768, "embeddings": [vector(5)]})
+        body = await request.json()
+        self.text_requests.append(body)
+        from aikey.worker import _VERIFY_PROMPTS
+        prompts = list(_VERIFY_PROMPTS.values())
+        index = 10 + prompts.index(body["texts"][0]) if body["texts"][0] in prompts else 5
+        return web.json_response({"model": clip.MODEL, "dim": 768, "embeddings": [vector(index)]})
+
+    async def reverification(self, request):
+        self.reverifications.append(await request.json())
+        return web.json_response({"reverification": 1})
 
     async def vision(self, request):
         self.vision_requests.append(True)
@@ -98,6 +109,7 @@ async def controller(tmp_path):
     app.router.add_post("/v1/text", service.text)
     app.router.add_post("/v1/chat/completions", service.vision)
     app.router.add_post("/internal/aiprocessors/recognize-anything", service.callback)
+    app.router.add_post("/internal/aiprocessors/reverification", service.reverification)
     runner = web.AppRunner(app, shutdown_timeout=1)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -722,3 +734,94 @@ async def test_nl_parse_reply_carries_protects_filter_fields(controller, tmp_pat
     assert body["objectTypes"] == ["animal"] and body["timeTag"] == "today"
     assert body["startTime"] < body["endTime"] and len(body["txtEmbed"]) == 768
     assert service.status["time_filters"] == 1
+
+
+# --- Second Stage Verification (reverification) with local CLIP ---
+
+def mix(**weights):
+    """A unit vector in the prompt space: person=10, vehicle=11, animal=12, package=13, background=14."""
+    axes = {"person": 10, "vehicle": 11, "animal": 12, "package": 13, "background": 14}
+    values = [0.0] * 768
+    for kind, weight in weights.items():
+        values[axes[kind]] = weight
+    norm = sum(v * v for v in values) ** 0.5
+    return [v / norm for v in values]
+
+
+def reverification_request(service, meta):
+    query = {"camera": CAMERA, "event": EVENT, "channel": "0", "start": str(START), "end": str(END),
+             "type": "rotating", "mute": "true", "format": "ubv", "createEvent": "false"}
+    return {"targetUri": ":7788/v1/models/second_verifier_mlabel/inference", "timeoutMs": 30000,
+            "resUrl": service.origin + "/internal/aiprocessors/reverification",
+            "payload": {"action": "classify", "params": {
+                "reqUrl": service.origin + "/internal/aiprocessors/video/export?" + urlencode(query),
+                "thumbnailMs": [m["ts"] for m in meta], "thumbnailMeta": meta,
+                "camera": CAMERA, "event": EVENT, "score_threshold": 0.8}}}
+
+
+def verify_roi(tracker, kind, coord=(100, 100, 300, 500), confidence=0.6):
+    return {"trackerID": tracker, "objectType": kind, "coord": list(coord), "confidence": confidence}
+
+
+def reverification_config(controller, enabled=True):
+    options = config(controller)
+    options["find_anything"]["reverification"] = enabled
+    options["worker"]["request_mp4_exports"] = True
+    return options
+
+
+async def test_second_stage_verification_is_answered_by_local_clip(controller, tmp_path):
+    controller.region_vectors = [
+        mix(person=1.0),                          # tracker 1 person: confirmed
+        mix(animal=1.0),                          # tracker 2 "vehicle": clearly an animal -> retyped
+        mix(animal=0.5, vehicle=0.5),             # tracker 3 animal: unsure -> none
+        mix(background=1.0)]                      # tracker 4 person: background -> none, invalid
+    meta = [{"ts": START + 1500, "roi": [verify_roi(1, "person"), verify_roi(2, "vehicle"),
+                                         verify_roi(3, "animal"), verify_roi(4, "person")]}]
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        result = await worker.handle(reverification_request(controller, meta))
+    finally:
+        await worker.stop()
+    assert controller.vision_requests == []                     # never the vision provider
+    [posted] = controller.reverifications
+    assert posted["action"] == "classify" and posted["model"] == clip.MODEL
+    outcome = posted["result"]
+    assert outcome["cameraId"] == CAMERA and outcome["eventId"] == EVENT and outcome["status"] == "success"
+    verdicts = {r["trackerID"]: (r["objectType"], r["detectedAs"], r["isValidDetection"])
+                for r in outcome["verificationResults"]}
+    assert verdicts == {1: ("person", "person", True), 2: ("vehicle", "animal", False),
+                        3: ("animal", "none", True), 4: ("person", "none", False)}
+    assert all(r["thumbnailMs"] == START + 1500 and 0 < r["detectionConfidence"] <= 1
+               for r in outcome["verificationResults"])
+    assert result["result"] == {"confirmed": 1, "retyped": 1, "unchanged": 2}
+
+
+async def test_second_stage_verification_is_refused_unless_opted_in(controller, tmp_path):
+    meta = [{"ts": START + 1500, "roi": [verify_roi(1, "person")]}]
+    worker = JobProcessor(reverification_config(controller, enabled=False), tmp_path)
+    try:
+        with pytest.raises(WorkerError, match="Unsupported RequestAI targetUri"):
+            await worker.handle(reverification_request(controller, meta))
+    finally:
+        await worker.stop()
+    assert controller.reverifications == [] and controller.clip_requests == []
+
+
+@pytest.mark.parametrize("change", [
+    lambda r: r.__setitem__("resUrl", r["resUrl"].replace("reverification", "recognize-anything")),
+    lambda r: r["payload"].__setitem__("action", "detect"),
+    lambda r: r["payload"]["params"].__setitem__("thumbnailMeta", [{"ts": START + 1, "roi": [
+        {"trackerID": 1, "objectType": "package", "coord": [1, 1, 10, 10], "confidence": 1}]}]),
+    lambda r: r["payload"]["params"].__setitem__("camera", "other-camera"),
+])
+async def test_malformed_verification_requests_are_refused_before_media(controller, tmp_path, change):
+    request = reverification_request(controller, [{"ts": START + 1500, "roi": [verify_roi(1, "person")]}])
+    change(request)
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError):
+            await worker.handle(request)
+    finally:
+        await worker.stop()
+    assert controller.reverifications == [] and controller.clip_requests == []

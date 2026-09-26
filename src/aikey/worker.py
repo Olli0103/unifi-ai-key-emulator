@@ -82,6 +82,17 @@ _CALLBACK_TASK = re.compile(r"^/internal/aiprocessors/descriptions/([A-Za-z0-9_-
 _CALLBACK_UPLOAD = re.compile(r"^/internal/camera-upload/[A-Za-z0-9_-]+$")
 _LEGACY_CALLBACK = "/internal/aiprocessors/recognize-anything"
 _SPEECH_CALLBACK = "/internal/aiprocessors/speech-to-text"
+_REVERIFICATION_CALLBACK = "/internal/aiprocessors/reverification"
+_REVERIFICATION_TARGET = ":7788/v1/models/second_verifier_mlabel/inference"
+# Zero-shot prompts for second-stage verification with the local CLIP encoder.
+_VERIFY_PROMPTS = {
+    "person": "a photo of a person",
+    "vehicle": "a photo of a car, truck or other vehicle",
+    "animal": "a photo of an animal such as a cat, dog or bird",
+    "package": "a photo of a parcel or cardboard package",
+    "background": "a photo of an empty scene with no person, vehicle or animal",
+}
+_RETYPE_CONFIDENCE = 0.9
 # A face found inside a person region gets its own tracker ID, linked to the person.
 _PERSON_FACE_OFFSET = 1_000_000
 _SPEECH_EXPORT = {"camera", "event", "channel", "start", "end", "type", "format", "skipVideo",
@@ -531,7 +542,7 @@ class JobProcessor:
         if purpose == "callback":
             if parsed.query or not (_CALLBACK_TASK.fullmatch(parsed.path)
                                     or _CALLBACK_UPLOAD.fullmatch(parsed.path)
-                                    or parsed.path in {_LEGACY_CALLBACK, _SPEECH_CALLBACK}):
+                                    or parsed.path in {_LEGACY_CALLBACK, _SPEECH_CALLBACK, _REVERIFICATION_CALLBACK}):
                 raise WorkerError("Unsupported callback path")
         elif not (_IMAGE_PATH.fullmatch(parsed.path) or parsed.path in _SNAPSHOT_PATHS
                   or parsed.path in _VIDEO_PATHS):
@@ -560,6 +571,10 @@ class JobProcessor:
             return self._normalize_index(command)
         if "command" in command:
             return self._normalize_recognize_key_frames(command)
+        if command.get("targetUri") == _REVERIFICATION_TARGET:
+            if not (self.find_anything and self.find_anything.get("reverification") is True):
+                raise WorkerError("Unsupported RequestAI targetUri")
+            return self._normalize_reverification(command)
         if self.continuous:
             raise WorkerError("Continuous mode accepts only automatic video captions")
         target = command.get("targetUri")
@@ -743,6 +758,61 @@ class JobProcessor:
                     snapshots[tracker] = (confidence, ts, _padded(coord, 0.1), kind)
         ranked = sorted(snapshots.items(), key=lambda item: (-item[1][0], item[0]))
         return [[tracker, ts, region, kind] for tracker, (_, ts, region, kind) in ranked[:limit]]
+
+    def _normalize_reverification(self, command):
+        """Protect's Second Stage Verification task, answered by local CLIP.
+
+        7.3.60 ``dispatchReverification`` sends RequestAI to
+        ``:7788/v1/models/second_verifier_mlabel/inference`` with
+        ``{action: classify, params: {reqUrl, thumbnailMs, thumbnailMeta,
+        camera, event, score_threshold}}`` and the reverification callback.
+        ``saveReverification`` retypes a tracker only when ``detectedAs`` is an
+        object type, so an unsure or background verdict answers ``none`` and
+        leaves the event unchanged. Crops go only to the local CLIP server.
+        """
+        if set(command) - {"targetUri", "timeoutMs", "resUrl", "payload"}:
+            raise WorkerError("Unsupported reverification fields")
+        callback = self._url(command.get("resUrl"), "callback")
+        if urlsplit(callback).path != _REVERIFICATION_CALLBACK:
+            raise WorkerError("Reverification requires the reverification callback")
+        payload = command.get("payload")
+        params = payload.get("params") if isinstance(payload, dict) else None
+        if (not isinstance(payload, dict) or payload.get("action") != "classify"
+                or not isinstance(params, dict)
+                or set(params) - {"reqUrl", "thumbnailMs", "thumbnailMeta", "camera", "event",
+                                  "score_threshold"}):
+            raise WorkerError("Unsupported reverification payload")
+        body = json.loads(_json(params))
+        if (not isinstance(body.get("camera"), str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["camera"])
+                or not isinstance(body.get("event"), str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])):
+            raise WorkerError("Reverification needs a camera and event")
+        media_url = self._mp4_export_url(self._url(body.get("reqUrl"), "media"))
+        query = dict(parse_qsl(urlsplit(media_url).query))
+        try:
+            start, end = int(query["start"]), int(query["end"])
+        except (KeyError, ValueError) as exc:
+            raise WorkerError("Reverification export needs a start and end") from exc
+        if query.get("camera") != body["camera"] or not 0 <= start <= end or end - start > self.max_video_duration_ms:
+            raise WorkerError("Reverification export must match the camera and a bounded interval")
+        chosen = {}
+        for tracker, ts, coord, kind, confidence in _meta_regions(body.get("thumbnailMeta")):
+            if kind in ("person", "vehicle", "animal") and start <= ts <= end and (
+                    tracker not in chosen or confidence > chosen[tracker][3]):
+                chosen[tracker] = (ts, _padded(coord, 0.1), kind, confidence)
+        if not chosen:
+            raise WorkerError("Reverification has no person, vehicle or animal regions")
+        body["_objects"] = [[tracker, ts, region, kind]
+                            for tracker, (ts, region, kind, _) in sorted(chosen.items())[:32]]
+        body["_start"] = start
+        normalized = {"operation": "reverify", "payload": body, "callback": callback,
+                      "callbackKind": "reverification", "media": [("video", media_url)]}
+        fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
+        job_id = hashlib.sha256(f"reverification:{body['camera']}:{body['event']}".encode()).hexdigest()
+        timeout = command.get("timeoutMs", 30000)
+        budget = min(self.timeout_s, timeout / 1000) if type(timeout) is int and timeout > 0 else 30
+        return (job_id, fingerprint, "reverify", body, callback, "reverification",
+                [("video", media_url)], budget)
 
     def _normalize_multiple_images(self, command):
         """Protect's retroactive task: the saved object crops of a past event.
@@ -992,7 +1062,7 @@ class JobProcessor:
 
     def _reserve_test_scope(self, job):
         if not self.test_scopes or job.operation in {"speechToText", "recognizeFaces", "indexKeyFrames",
-                                                     "indexImages"}:
+                                                     "indexImages", "reverify"}:
             return
         camera_id = job.payload.get("camera") if job.operation == "recognizeKeyFrames" else job.payload.get("cameraId")
         scope = self._scopes_by_camera.get(camera_id)
@@ -1062,7 +1132,7 @@ class JobProcessor:
         await self.start()
         job_id, fingerprint, operation, body, callback, kind, media, budget = normalized
         if (self.continuous and operation not in {"speechToText", "recognizeFaces", "indexKeyFrames",
-                                                  "indexImages"}
+                                                  "indexImages", "reverify"}
                 and not self.camera_registry.allows(body["camera"])):
             raise WorkerError("Camera inventory changed before admission")
         if job_id in self._pending:
@@ -1100,7 +1170,8 @@ class JobProcessor:
         try:
             self._reserve_test_scope(job)
             if self.caption_budget is not None and operation not in {"speechToText", "recognizeFaces",
-                                                                     "indexKeyFrames", "indexImages"}:
+                                                                     "indexKeyFrames", "indexImages",
+                                                                     "reverify"}:
                 try:
                     receipt = self.caption_budget.reserve(job_id, fingerprint, body["camera"])
                 except CaptionBudgetExhausted as exc:
@@ -1215,7 +1286,7 @@ class JobProcessor:
         offset = 0.0
         # A key moment at the interval end is the export's last frame: seeking
         # to the very end yields no frame, so decode the final second instead.
-        at_end = (job.operation in {"recognizeKeyFrames", "recognizeFaces", "indexKeyFrames"}
+        at_end = (job.operation in {"recognizeKeyFrames", "recognizeFaces", "indexKeyFrames", "reverify"}
                   and timestamp is not None
                   and timestamp == job.payload.get("end"))
         if job.operation == "on_demand" or timestamp is not None:
@@ -1232,7 +1303,7 @@ class JobProcessor:
                 raise WorkerError("Video start timestamp is missing or invalid") from exc
             maximum_offset = (self.max_video_duration_ms / 1000
                               if job.operation in {"recognizeKeyFrames", "recognizeFaces",
-                                                   "indexKeyFrames"} else 3600)
+                                                   "indexKeyFrames", "reverify"} else 3600)
             if not 0 <= offset <= maximum_offset:
                 raise WorkerError("Requested video frame is outside the supported interval")
         with tempfile.TemporaryDirectory(prefix="aikey-video-", dir=self.state_dir) as temporary:
@@ -1468,6 +1539,75 @@ class JobProcessor:
                 images.append((str(tracker), out.getvalue()))
         return tags, moments, images
 
+    async def _verify_vectors(self):
+        """L2-normalized CLIP text vectors of the verification prompts, cached."""
+        if getattr(self, "_prompt_vectors", None) is None:
+            vectors = {}
+            for kind, prompt in _VERIFY_PROMPTS.items():
+                try:
+                    vectors[kind] = await self._clip.embed_text(prompt)
+                except clip.ClipError as exc:
+                    raise WorkerError(str(exc)) from exc
+            self._prompt_vectors = vectors
+        return self._prompt_vectors
+
+    @staticmethod
+    def _verdict(image_vector, prompts, original):
+        """Zero-shot class probabilities (CLIP logit scale 100) and the answer."""
+        logits = {kind: 100.0 * sum(a * b for a, b in zip(image_vector, vector))
+                  for kind, vector in prompts.items()}
+        peak = max(logits.values())
+        weights = {kind: math.exp(value - peak) for kind, value in logits.items()}
+        total = sum(weights.values())
+        probs = {kind: weight / total for kind, weight in weights.items()}
+        best = max(probs, key=probs.get)
+        if best == original:
+            return original, True, probs[best]
+        if best != "background" and probs[best] >= _RETYPE_CONFIDENCE:
+            return best, False, probs[best]
+        # Unsure or background: "none" is not an object type, so Protect keeps
+        # the original detection unchanged.
+        return "none", best != "background", probs[best]
+
+    async def _execute_reverification(self, job):
+        started = time.monotonic()
+        if self._clip is None:
+            self._clip = clip.ClipClient(self.find_anything, timeout_s=60)
+        prompts = await self._verify_vectors()
+        (_, url), = job.media
+        data, headers = await self._fetch(url, "video")
+        prepared = time.monotonic()
+        by_time = {}
+        for tracker, ts, region, kind in job.payload["_objects"]:
+            by_time.setdefault(ts, []).append((tracker, region, kind))
+        results, counts = [], {"confirmed": 0, "retyped": 0, "unchanged": 0}
+        for ts, objects in sorted(by_time.items()):
+            frame = await self._video_frame(data, headers, url, job, timestamp=ts)
+            try:
+                vectors = await self._clip.embed_regions(frame, [region for _, region, _ in objects])
+            except clip.ClipError as exc:
+                raise WorkerError(str(exc)) from exc
+            for (tracker, _, kind), vector in zip(objects, vectors):
+                detected, valid, confidence = self._verdict(vector, prompts, kind)
+                counts["confirmed" if detected == kind else "unchanged" if detected == "none"
+                       else "retyped"] += 1
+                results.append({"thumbnailMs": ts, "trackerID": tracker, "objectType": kind,
+                                "isValidDetection": valid, "detectedAs": detected,
+                                "detectionConfidence": round(confidence, 4)})
+        inferred = time.monotonic()
+        payload = {"model": clip.MODEL, "action": "classify",
+                   "inference_time_ms": round((inferred - prepared) * 1000),
+                   "result": {"cameraId": job.payload["camera"], "eventId": job.payload["event"],
+                              "verificationResults": results, "status": "success",
+                              "preProcessMs": round((prepared - started) * 1000),
+                              "inferMs": round((inferred - prepared) * 1000),
+                              "timeElapsedMs": round((inferred - started) * 1000)}}
+        if self.callback_mode == "disabled":
+            return {"status": "processed", "jobId": job.job_id, "callback": "disabled", "result": counts}
+        result = await self._post_callback(job, payload)
+        result["result"] = counts
+        return result
+
     async def _execute_index_images(self, job):
         started = time.monotonic()
         if self._clip is None:
@@ -1528,6 +1668,8 @@ class JobProcessor:
             return await self._execute_index(job)
         if job.operation == "indexImages":
             return await self._execute_index_images(job)
+        if job.operation == "reverify":
+            return await self._execute_reverification(job)
         if job.operation == "recognizeFaces":
             return await self._execute_faces(job)
         started = time.monotonic()
