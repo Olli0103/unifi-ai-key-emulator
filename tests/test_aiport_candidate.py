@@ -3252,3 +3252,117 @@ async def test_night_ir_package_starts_no_package_event(tmp_path, monkeypatch):
     assert enters == []
     assert health["package_ir_held"] == 1
     assert health["pool_cameras"][0]["events_entered_by_kind"]["package"] == 0
+
+
+async def _person_event_service(tmp_path, monkeypatch):
+    camera = "2A1122334455"
+    config = fixture_state(tmp_path)
+    private_file(tmp_path / "api-key", b"synthetic-test-key\n")
+    config["paired_streams"] = [{
+        "camera_mac": camera, "source_ip": "192.168.10.1",
+        "ffmpeg_path": sys.executable}]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api", "threshold": 0.8,
+        "smart_types": ["person"], "max_events_per_hour": 12,
+        "provider_config": {"provider": "openai", "model": "gpt-6-luna",
+                            "base_url": "https://api.openai.com/v1",
+                            "allow_remote": True, "max_output_tokens": 256,
+                            "api_key_file": str(tmp_path / "api-key")}}
+
+    def fake_provider(_url, _headers, _payload):
+        return {"status": "completed", "output": [{
+            "type": "message", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": json.dumps({
+                "detections": [{"kind": "person", "label": "person",
+                                "score": 0.95, "box": [0.2, 0.1, 0.4, 0.8]}]})}],
+        }]}
+
+    monkeypatch.setattr(
+        "aikey.aiport_candidate.ApiObjectDetector",
+        lambda provider, state_dir, **options: ApiObjectDetector(
+            provider, state_dir, transport=fake_provider, **options))
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": camera}]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    frame_io = BytesIO()
+    Image.new("RGB", (640, 360), "gray").save(frame_io, format="JPEG")
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "ChangeSmartDetectSettings", "messageId": 1,
+        "payload": {"deviceID": camera, "enableSmartDetect": ["person"],
+                    "eventStartMSec": 1000, "eventStopMSec": 3000,
+                    "zones": {}}}).encode())
+    for _ in range(2):
+        await service._observe_pool_frame(camera, frame_io.getvalue())
+        await service._inference.join()
+    return service, sink, frame_io.getvalue()
+
+
+def _edges(sink, edge):
+    return [message["payload"] for message in sink.messages
+            if message.get("functionName") == "EventSmartDetect"
+            and message["payload"]["edgeType"] == edge]
+
+
+@pytest.mark.asyncio
+async def test_stopping_during_an_active_event_closes_it_with_a_leave(tmp_path, monkeypatch):
+    # Esszimmer, 26 Sep 03:46: the AI Port was redeployed mid-event and
+    # Protect kept the Animal event open for about six minutes.
+    service, sink, _frame = await _person_event_service(tmp_path, monkeypatch)
+    assert len(_edges(sink, "enter")) == 1
+    await service.stop()
+    leave, = _edges(sink, "leave")
+    assert leave["objectTypes"] == ["person"]
+    # The stopping AI Port could not serve a snapshot upload afterwards.
+    assert "smartDetectSnapshots" not in leave
+    assert service.smart_events_closed_on_stop == 1
+    assert service._pool_sessions == {}
+
+
+@pytest.mark.asyncio
+async def test_an_ordinarily_closed_event_gets_no_second_leave_on_stop(tmp_path, monkeypatch):
+    service, sink, frame = await _person_event_service(tmp_path, monkeypatch)
+    later = time.monotonic() + 21
+    monkeypatch.setattr("aikey.aiport_candidate.time",
+                        SimpleNamespace(monotonic=lambda: later, time=time.time))
+    await service._observe_pool_frame(service.ingress.list_streams()[0]["deviceID"], frame)
+    await service._inference.join()
+    leave, = _edges(sink, "leave")
+    assert len(leave["smartDetectSnapshots"]) == 1      # ordinary leave unchanged
+    await service.stop()
+    assert len(_edges(sink, "leave")) == 1
+    assert service.smart_events_closed_on_stop == 0
+
+
+@pytest.mark.asyncio
+async def test_stop_without_a_control_link_skips_the_close(tmp_path, monkeypatch):
+    service, sink, _frame = await _person_event_service(tmp_path, monkeypatch)
+    service._current_ws = None
+    await service.stop()
+    assert _edges(sink, "leave") == []
+    assert service.smart_events_closed_on_stop == 0
+
+
+@pytest.mark.asyncio
+async def test_a_hanging_control_link_cannot_block_stop(tmp_path, monkeypatch):
+    service, _sink, _frame = await _person_event_service(tmp_path, monkeypatch)
+
+    class Stuck:
+        async def send_bytes(self, _raw):
+            await asyncio.sleep(3600)
+
+    service._current_ws = Stuck()
+    started = time.monotonic()
+    await service.stop()
+    assert time.monotonic() - started < 5
+    assert service.smart_events_closed_on_stop == 0

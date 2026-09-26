@@ -69,6 +69,8 @@ _VERSION = re.compile(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\Z")
 _PROBE_NONCE = re.compile(r"[0-9a-f]{32}\Z")
 _MAX_MANAGE = 8192
 _DISCONNECT_GRACE_SECONDS = 15
+# Bound on closing open native events while stopping (e.g. a redeploy).
+_STOP_CLOSE_SECONDS = 2.0
 _ALLOWED_TOP_LEVEL = frozenset(("username", "password", "mgmt", "hosts", "protocol", "mode"))
 _ALLOWED_MGMT = frozenset(("token", "hosts", "protocol", "mode", "nvr",
                            "username", "password", "controller", "consoleId",
@@ -577,6 +579,7 @@ class CandidateService:
         self.smart_events_entered = 0
         self.smart_events_moved = 0
         self.smart_events_left = 0
+        self.smart_events_closed_on_stop = 0
         self.synthetic_probe_claimed = 0
         self.synthetic_probe_errors = 0
         self.recorded_probe_claimed = 0
@@ -1528,6 +1531,7 @@ class CandidateService:
             "smart_events_entered": self.smart_events_entered,
             "smart_events_moved": self.smart_events_moved,
             "smart_events_left": self.smart_events_left,
+            "smart_events_closed_on_stop": self.smart_events_closed_on_stop,
             "snapshot_requests": self.snapshot_requests,
             "snapshot_uploads": self.snapshot_uploads,
             "snapshot_rejections": self.snapshot_rejections,
@@ -2301,7 +2305,36 @@ class CandidateService:
             await self.stop()
             raise
 
+    async def _close_open_events_on_stop(self) -> None:
+        """Send a leave for each open native event before the link closes.
+
+        Without it Protect keeps the event open until its own timeout (about
+        six minutes after a redeploy, Esszimmer 26 Sep 03:46). The leave has
+        no snapshots: a stopping AI Port cannot serve their upload.
+        """
+        ws = self._current_ws
+        if ws is None or not self._params_agreed:
+            return
+        for camera in tuple(self._pool_sessions):
+            session = self._pool_sessions.pop(camera)
+            if not session["active"]:
+                continue
+            try:
+                payload = camera_event_payload(
+                    camera, "leave", tuple(session["seen"].values()),
+                    clock_wall_ms=int(time.time() * 1000))
+            except SmartEventError:
+                continue
+            await self._send_control_event(ws, "EventSmartDetect", payload)
+            self.smart_events_left += 1
+            self.smart_events_closed_on_stop += 1
+
     async def stop(self):
+        try:
+            await asyncio.wait_for(self._close_open_events_on_stop(),
+                                   _STOP_CLOSE_SECONDS)
+        except (asyncio.TimeoutError, aiohttp.ClientError, ConnectionError, RuntimeError):
+            pass  # best effort; Protect's own timeout still closes the event
         if self._snapshot_cleanup_task is not None:
             self._snapshot_cleanup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
