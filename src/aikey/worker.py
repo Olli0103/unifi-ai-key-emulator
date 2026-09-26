@@ -43,9 +43,16 @@ def validate_test_scope_config(value):
             or value.get("kind", "on_demand") not in {"on_demand", "recognizeKeyFrames"}):
         raise WorkerError("Test scope kind must be on_demand or recognizeKeyFrames")
     profile = value.get("callback_profile", "full")
-    if (type(profile) is not str or profile not in {"full", "description_only"}
-            or (profile != "full" and value.get("kind") != "recognizeKeyFrames")):
-        raise WorkerError("Description-only callback requires a recognizeKeyFrames test scope")
+    if profile == "description_only":
+        # Protect 7.3.x routes a description-only RAM result to
+        # saveRamDescriptionEnhancement, which only updates an existing RAM
+        # row. On Wohnzimmer (G6, 23 Sep) it set ramState "done" with an empty
+        # ramDescription; the full tagging callback saved the caption and kept
+        # the event's detections (Esszimmer, Büro).
+        raise WorkerError("Description-only callback does not persist on Protect 7.3.x; "
+                          "use the full RAM callback")
+    if type(profile) is not str or profile != "full":
+        raise WorkerError("Test scope callback_profile must be full")
     return dict(value)
 
 
@@ -583,9 +590,7 @@ class JobProcessor:
         if len(pairs) != len(expected) or dict(pairs) != expected:
             raise WorkerError("recognizeKeyFrames export must exactly match the command camera and interval")
         media = [("video", self._mp4_export_url(original_media))]
-        callback_kind = ("legacy_description" if scope is not None
-                         and scope.get("callback_profile", "full") == "description_only"
-                         else "legacy_tagging")
+        callback_kind = "legacy_tagging"
         normalized = {"operation": "recognizeKeyFrames", "payload": body,
                       "callback": callback, "callbackKind": callback_kind, "media": media}
         fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
@@ -933,9 +938,6 @@ class JobProcessor:
                        "inferTxtMs": round((inferred - prepared) * 1000),
                        "preProcessMs": round((prepared - started) * 1000),
                        "timeElapsedMs": round((inferred - started) * 1000)}
-        elif job.callback_kind == "legacy_description":
-            payload = {"cameraId": job.payload["camera"], "eventId": job.payload["event"],
-                       "description": description, "status": "success"}
         elif job.callback_kind == "legacy":
             payload = {"eventId": job.payload["event"], "status": "success", "description": description}
             if self.options["legacy_profile"] == "protect-7.2.105":
@@ -960,7 +962,7 @@ class JobProcessor:
     async def _post_callback(self, job, payload):
         self._record(job, "callback_sending")
         try:
-            if job.callback_kind in {"legacy", "legacy_tagging", "legacy_description"}:
+            if job.callback_kind in {"legacy", "legacy_tagging"}:
                 form = aiohttp.FormData()
                 form.add_field("ram", _json(payload), filename="description.json", content_type="application/json")
                 kwargs = {"data": form}

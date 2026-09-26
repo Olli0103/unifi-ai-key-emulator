@@ -105,11 +105,20 @@ async def test_each_camera_spends_only_its_own_permit_and_replays_after_restart(
         await restarted.stop()
 
 
-async def test_description_only_scope_leaves_native_tag_fields_out(services, tmp_path, monkeypatch):
+def test_description_only_scope_is_refused_because_protect_7_3_does_not_save_it(tmp_path):
+    # Wohnzimmer (G6), 23 Sep: the description-only callback was accepted,
+    # ramState became "done", but ramDescription stayed empty.
+    config = defaults(tmp_path / "state", "020000000001")
+    config["worker"]["test_scopes"] = [
+        {"kind": "recognizeKeyFrames", "camera_id": "g6", "permit_id": "g6-once",
+         "callback_profile": "description_only"}]
+    with pytest.raises(ConfigError, match="does not persist on Protect 7.3"):
+        validate_config(config)
+
+
+async def test_every_scoped_camera_uses_the_persisting_full_callback(services, tmp_path, monkeypatch):
     config = options(services)
     two_scopes(config["worker"])
-    config["worker"]["test_scopes"][1]["callback_profile"] = "description_only"
-    first = config["worker"]["test_scopes"][0]
     second = config["worker"]["test_scopes"][1]
 
     async def decode(*args, **kwargs):
@@ -120,16 +129,9 @@ async def test_description_only_scope_leaves_native_tag_fields_out(services, tmp
     try:
         result = await worker.handle(second_camera(command("g6-event"), second["camera_id"]))
         assert result["callback"] == "http_accepted"
-        assert result["result"] == {
-            "cameraId": second["camera_id"], "eventId": "g6-event",
-            "description": result["result"]["description"], "status": "success",
-        }
-        assert services.callbacks[0]["payload"]["payload"] == result["result"]
-        assert worker._read_scope_reservation(second)["callback_profile"] == "description_only"
-        assert worker._read_scope_reservation(first) is None
-        with pytest.raises(WorkerError, match="consumed"):
-            await worker.submit(second_camera(command("another-event"), second["camera_id"]))
-        assert len(services.requests) == len(services.callbacks) == 1
+        assert result["result"]["keyMomentsTags"] == []
+        assert result["result"]["cameraId"] == second["camera_id"]
+        assert result["result"]["description"]
     finally:
         await worker.stop()
 
@@ -169,7 +171,7 @@ async def test_third_legacy_camera_probe_has_its_own_permit(services, tmp_path, 
 def test_description_only_profile_is_explicit_and_bounded(tmp_path, scope):
     config = defaults(tmp_path / "state", "020000000001")
     config["worker"]["test_scope"] = scope
-    with pytest.raises(ConfigError, match="Description-only"):
+    with pytest.raises(ConfigError, match="Description-only|callback_profile must be full"):
         validate_config(config)
 
 
