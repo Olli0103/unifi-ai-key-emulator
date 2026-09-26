@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-26.7). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-26.8). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-26.7` for the `ai-key` profile, based on commit `b9eac9a`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-26.8` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -52,7 +52,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `worker.private_journal_rollover`: Private terminal-job tombstones keep duplicate protection while bounding the active journal | fixture-tested | not_observed | not_observed | not_observed | — | experimental_opt_in |
 | **control** | |  |  |  | | |
 | `control.recognize_key_frames.other_variants`: recognizeKeyFrames image variant (one cropped audio-event thumbnail) | unsupported | — | — | indirect | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | default |
-| `control.recognize_key_frames.multiple_images`: recognizeKeyFrames multipleImages (retroactive backfill of saved object crops) | fixture-tested | — | — | not_observed | Protect 7.3.60 bundle | explicit_opt_in |
+| `control.recognize_key_frames.multiple_images`: recognizeKeyFrames multipleImages (retroactive backfill of saved object crops) | native-verified | — | — | native-verified | Protect 7.3.60 bundle | explicit_opt_in |
 | `control.host_management`: reboot, factoryReset, firmware install, SSH management, support upload and hardware statistics | unsupported | — | — | — | AI Key 2.2.8 | default |
 | `control.ai_settings_commands`: changeAiInferAgentSettings, changeDescribePrompts, networkStatus and sshService | unsupported | — | — | indirect | — | default |
 | `control.unknown_command`: Any other command name | unsupported | — | — | indirect | — | default |
@@ -82,7 +82,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `capability.face_recognition`: supportFaceRecognition advertised with local face recognition | fixture-tested | — | — | indirect | Protect 7.2.105 | explicit_opt_in |
 | `capability.license_plate_recognition`: License-plate recognition | unsupported | — | — | indirect | Protect 7.2.105 | default |
 | `capability.face_enhancement`: Automatic and manual face enhancement | unsupported | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
-| `capability.retroactive_processing`: supportRetroactiveProcessing opt-in for Find Anything backfill | fixture-tested | — | — | not_observed | Protect 7.3.60 bundle | explicit_opt_in |
+| `capability.retroactive_processing`: supportRetroactiveProcessing opt-in for Find Anything backfill | fixture-tested | — | — | indirect | Protect 7.3.60 bundle | explicit_opt_in |
 | `capability.recognize_anything_tagging`: Recognize Anything tags, detections and key-moment snapshots | unsupported | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
 | `capability.audio_speech`: Speech transcription (speechToText) | fixture-tested | — | — | indirect | Protect 7.3.60 bundle, AI Key 2.2.8 | explicit_opt_in |
 | **callbacks** | |  |  |  | | |
@@ -151,7 +151,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `worker.private_journal_rollover`: Multi-day live endurance and disk-full recovery
 - `worker.private_journal_rollover`: Operator retention and backup policy for private tombstones
 - `control.recognize_key_frames.other_variants`: Dispatched live on 7.3.68 for audio events (216 in one morning), but the thumbnail has no tracker ID, so no object match for an embedding is established
-- `control.recognize_key_frames.multiple_images`: Sent only during a retroactive run, which needs the owner (see capability.retroactive_processing)
+- `control.recognize_key_frames.multiple_images`: Native Protect text-search readback of a backfilled object (browser session unavailable on 26 Sep; CLIP ranking over backfilled rows separates Protect's labels)
+- `control.recognize_key_frames.multiple_images`: Crops of older events can be gone (HTTP 404); those events stay unindexed
 - `control.ai_settings_commands`: These names appear in the device diagnostic allowlist, but no public record states their source or when Protect sends them
 - `framing.ucp_two_record`: No raw native frame capture or independently recorded two-record layout
 - `framing.compressed_or_other_format`: Whether any Protect version sends compressed or other-format records
@@ -173,7 +174,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `capability.face_recognition`: Camera Coverage counts only legacy cameras; no eligible legacy camera is selected here
 - `capability.license_plate_recognition`: An eligible camera and an owner decision (issue #19)
 - `capability.face_enhancement`: Native contract (issue #23)
-- `capability.retroactive_processing`: A bounded live run: Protect stores an older run (all cameras, 5000 events) that would resume on enable and pause live AI tasks; needs the owner
+- `capability.retroactive_processing`: Run completion state and Protect's processedNumberOfEvents readback (private API, browser)
+- `capability.retroactive_processing`: Re-run of live AI Key tasks deferred with NO_FREE_AIPROCESSORS during the run
 - `capability.recognize_anything_tagging`: Structured object results (issue #14)
 - `capability.audio_speech`: A persisted native transcript on Protect 7.3.68 after a reload (issue #15)
 - `capability.audio_speech`: An alrmSpeak-enabled camera and the AI Key Speech to Text setting, both user actions
@@ -256,7 +258,7 @@ Every live trial must record each experimental activation below that was in effe
 - **N7** (`control.request_ai.describe`, `search.e5_nl_parse`, `search.native_retrieval`): Issue #10: determine whether 7.3.60 dispatches /describe and which search path it uses, before any search trial.
 - **N8** (`lifecycle.abnormal_closure_backoff`): Interrupt the network path briefly and record reconnect timing and adoption state.
 - **N9** (`control.continuous_caption_admission`, `worker.private_journal_rollover`): In an isolated, reviewed rollout, confirm fresh model-family inventory, Protect-side dispatch, persistence, budget exhaustion, additions/removals, reconnect and journal rollover. Keep richer native-AI models excluded until tag preservation is verified.
-- **N10** (`capability.retroactive_processing`, `control.recognize_key_frames.multiple_images`, `index.thumbnail_tags`): Owner decision: cancel the stored all-camera 5000-event retroactive run, start a bounded one (one camera, a few events), enable find_anything.retroactive, and read back new ramDetections rows and a search hit for a backfilled object; live AI tasks pause during the run.
+- **N10** (`capability.retroactive_processing`, `control.recognize_key_frames.multiple_images`, `index.thumbnail_tags`): The stored 5000-event run resumed on 26 Sep 20:57 with Olli's approval. In a signed-in console session, read back aiprocessors retroactiveProcessing (processedNumberOfEvents, nextProcessedFrom, final state) and one detection-nls text search that returns a backfilled object (event before 22 Sep 15:42 UTC); after completion confirm deferred live tasks were retried.
 - **N11** (`search.native_retrieval`, `search.index_recovery`, `database.controller_migrations`): After a planned controller restart, confirm isSearchHost true, that existing ramDetections rows survive, and that a known positive text search still returns its object.
 - **N12** (`search.tags_and_time_filters`): In a signed-in console session, run detection-nls for "a car", "person today" and "person yesterday"; confirm the first returns only vehicle objects, the second reports searchCondition startTime at local midnight, and the third returns no hits for a day without indexed objects.
 - **N13** (`control.request_ai.second_stage_verification`): Owner decision: enable find_anything.reverification for a bounded window, then read back one reverified event's detectedThumbnails (preReverificationObjectType and confidence) and confirm unsure verdicts left events unchanged.

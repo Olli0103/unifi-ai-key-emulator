@@ -1,8 +1,8 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-26.7",
+ "manifest_version": "ai-key/2026-09-26.8",
  "processor_profile": "ai-key",
- "base_commit": "b9eac9a",
+ "base_commit": "7241dcb",
  "emulated_identity": {
   "type": "UP-AI-KEY",
   "sysid": "0xa5f0",
@@ -1104,23 +1104,26 @@
    "id": "control.recognize_key_frames.multiple_images",
    "area": "control",
    "title": "recognizeKeyFrames multipleImages (retroactive backfill of saved object crops)",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
-    "live-protect-7.3.68": "not_observed"
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-protect-7.3.60-bundle"
    ],
    "tests": [
     "tests/test_find_anything.py::test_retroactive_crops_are_embedded_locally_as_thumbnail_tags",
-    "tests/test_find_anything.py::test_malformed_retroactive_tasks_are_refused_before_media"
+    "tests/test_find_anything.py::test_malformed_retroactive_tasks_are_refused_before_media",
+    "tests/test_find_anything.py::test_completed_index_jobs_roll_over_so_a_backfill_never_fills_the_ledger",
+    "tests/test_find_anything.py::test_retroactive_image_and_unindexed_camera_tasks_are_refused_before_any_fetch"
    ],
    "implementation": [
     "src/aikey/worker.py"
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Sent only during a retroactive run, which needs the owner (see capability.retroactive_processing)"
+    "Native Protect text-search readback of a backfilled object (browser session unavailable on 26 Sep; CLIP ranking over backfilled rows separates Protect's labels)",
+    "Crops of older events can be gone (HTTP 404); those events stay unindexed"
    ]
   },
   {
@@ -1677,7 +1680,7 @@
    "title": "supportRetroactiveProcessing opt-in for Find Anything backfill",
    "status": "fixture-tested",
    "live": {
-    "live-protect-7.3.68": "not_observed"
+    "live-protect-7.3.68": "indirect"
    },
    "static": [
     "static-protect-7.3.60-bundle"
@@ -1691,7 +1694,8 @@
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "A bounded live run: Protect stores an older run (all cameras, 5000 events) that would resume on enable and pause live AI tasks; needs the owner"
+    "Run completion state and Protect's processedNumberOfEvents readback (private API, browser)",
+    "Re-run of live AI Key tasks deferred with NO_FREE_AIPROCESSORS during the run"
    ]
   },
   {
@@ -2419,7 +2423,7 @@
     "control.recognize_key_frames.multiple_images",
     "index.thumbnail_tags"
    ],
-   "procedure": "Owner decision: cancel the stored all-camera 5000-event retroactive run, start a bounded one (one camera, a few events), enable find_anything.retroactive, and read back new ramDetections rows and a search hit for a backfilled object; live AI tasks pause during the run."
+   "procedure": "The stored 5000-event run resumed on 26 Sep 20:57 with Olli's approval. In a signed-in console session, read back aiprocessors retroactiveProcessing (processedNumberOfEvents, nextProcessedFrom, final state) and one detection-nls text search that returns a backfilled object (event before 22 Sep 15:42 UTC); after completion confirm deferred live tasks were retried."
   },
   {
    "id": "N11",
