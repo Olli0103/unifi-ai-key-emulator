@@ -57,9 +57,9 @@ class Service:
     name: str
     container: str
     image: str
-    host_address: str
-    host_port: int
-    state_source: str
+    host_address: str | None      # None: publishes no port (e.g. a sibling-only backend)
+    host_port: int | None
+    state_source: str             # the container's single bind mount
 
 
 def _service(raw: object) -> Service:
@@ -73,10 +73,13 @@ def _service(raw: object) -> Service:
         raise SupervisorError("Invalid container name")
     if not isinstance(raw["image"], str) or not raw["image"] or len(raw["image"]) > 200:
         raise SupervisorError("Invalid image reference")
-    address = str(ipaddress.IPv4Address(raw["host_address"]))
-    port = raw["host_port"]
-    if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
-        raise SupervisorError("Invalid host port")
+    address, port = raw["host_address"], raw["host_port"]
+    if (address is None) != (port is None):
+        raise SupervisorError("Host address and port are set together or not at all")
+    if address is not None:
+        address = str(ipaddress.IPv4Address(address))
+        if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+            raise SupervisorError("Invalid host port")
     source = raw["state_source"]
     if not isinstance(source, str) or not source.startswith("/") or ".." in source.split("/"):
         raise SupervisorError("The state directory must be an absolute path")
@@ -113,7 +116,8 @@ def _observed(entry: dict) -> dict:
     ports = [(p.get("hostAddress"), p.get("hostPort"))
              for p in config.get("publishedPorts") or [] if isinstance(p, dict)]
     mounts = [m.get("source") for m in config.get("mounts") or []
-              if isinstance(m, dict) and m.get("destination") == "/state"]
+              if isinstance(m, dict) and isinstance(m.get("type"), dict)
+              and "virtiofs" in m["type"]]
     return {"id": entry.get("id"),
             "state": (entry.get("status") or {}).get("state"),
             "image": (config.get("image") or {}).get("reference"),
@@ -131,8 +135,9 @@ def decide(services: list[Service], listing: list[dict], addresses: set[str],
         if mine is None:
             result[service.name] = "blocked:missing"
             continue
-        if (mine["image"] != service.image
-                or (service.host_address, service.host_port) not in mine["ports"]
+        published = ([(service.host_address, service.host_port)]
+                     if service.host_address is not None else [])
+        if (mine["image"] != service.image or mine["ports"] != published
                 or mine["state_sources"] != [service.state_source]):
             result[service.name] = "blocked:drift"
             continue
@@ -144,12 +149,12 @@ def decide(services: list[Service], listing: list[dict], addresses: set[str],
             result[service.name] = "held"
             continue
         if any(other["id"] != service.container and other["state"] == "running"
-               and ((service.host_address, service.host_port) in other["ports"]
+               and (any(port in other["ports"] for port in published)
                     or service.state_source in other["state_sources"])
                for other in observed):
             result[service.name] = "blocked:conflict"
             continue
-        if service.host_address not in addresses:
+        if service.host_address is not None and service.host_address not in addresses:
             result[service.name] = "blocked:address_absent"
             continue
         recent = [t for t in runtime.get("starts", {}).get(service.name, [])
@@ -228,9 +233,9 @@ def pin(state_dir: Path, name: str, container: str, run: Runner = _run) -> Servi
     if entry is None:
         raise SupervisorError("That container does not exist")
     seen = _observed(entry)
-    if len(seen["ports"]) != 1 or len(seen["state_sources"]) != 1:
-        raise SupervisorError("The container needs one published port and one /state mount")
-    (address, port), = seen["ports"]
+    if len(seen["ports"]) > 1 or len(seen["state_sources"]) != 1:
+        raise SupervisorError("The container needs at most one published port and one bind mount")
+    address, port = seen["ports"][0] if seen["ports"] else (None, None)
     service = _service({"name": name, "container": container, "image": seen["image"],
                         "host_address": address, "host_port": port,
                         "state_source": seen["state_sources"][0]})

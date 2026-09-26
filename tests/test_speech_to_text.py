@@ -33,12 +33,14 @@ class Controller:
         self.reply = {"text": "hello there", "segments": [
             {"start": 0.5, "end": 1.75, "text": " Hello there. ", "no_speech_prob": 0.01}]}
         self.reply_status = 200
+        self.delay = 0.0
 
     async def export(self, request):
         self.media_requests.append(request.query_string)
         return web.Response(body=self.audio, content_type="video/mp4", headers=self.export_headers)
 
     async def transcribe(self, request):
+        await asyncio.sleep(self.delay)
         fields, audio = {}, b""
         reader = await request.multipart()
         while (part := await reader.next()) is not None:
@@ -257,3 +259,29 @@ def test_a_text_only_reply_covers_the_clip_and_long_text_is_marked_uncertain():
     [(begin, end, text)] = provider.parse(
         {"segments": [{"start": 1, "end": 99, "text": "a" * 1200}]}, 5000)
     assert (begin, end) == (1000, 5000) and text.endswith("[inaudible]") and len(text) < 1100
+
+
+def test_a_private_network_server_needs_an_explicit_opt_in():
+    base = {"provider": "openai-compatible", "model": "m"}
+    with pytest.raises(SpeechError):
+        SpeechProvider({**base, "base_url": "http://192.168.64.20:8178/v1"})
+    local = SpeechProvider({**base, "base_url": "http://192.168.64.20:8178/v1",
+                            "local_network": True})
+    assert local.url == "http://192.168.64.20:8178/v1/audio/transcriptions"
+    for public in ("http://8.8.8.8/v1", "https://transcribe.example.com/v1",
+                   "http://169.254.1.1/v1"):
+        with pytest.raises(SpeechError):
+            SpeechProvider({**base, "base_url": public, "local_network": True})
+
+
+async def test_a_slow_local_transcriber_gets_the_speech_budget_not_the_caption_timeout(
+        controller, tmp_path):
+    controller.delay = 1.5
+    options = config(controller)
+    options["worker"].update({"timeout_s": 1, "speech_timeout_s": 10})
+    worker = JobProcessor(options, tmp_path)
+    try:
+        result = await worker.handle(task())
+    finally:
+        await worker.stop()
+    assert result["result"] == {"segments": 1} and len(controller.callbacks) == 1

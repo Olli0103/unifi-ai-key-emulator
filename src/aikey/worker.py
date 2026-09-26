@@ -231,6 +231,8 @@ class JobProcessor:
         self._check_inference_config()
         self.speech, self.speech_cameras = None, frozenset()
         self.max_audio_ms = self._positive("max_audio_ms", 120000)
+        # A local CPU Whisper needs about real time; keep speech off the caption timeout.
+        self.speech_timeout_s = min(self._positive("speech_timeout_s", 300), 900)
         if self.config.get("speech_to_text") is not None:
             try:
                 self.speech, self.speech_cameras = validate_speech_config(
@@ -659,7 +661,7 @@ class JobProcessor:
         fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
         job_id = hashlib.sha256(f"speechToText:{body['camera']}:{body['event']}".encode()).hexdigest()
         return (job_id, fingerprint, "speechToText", body, callback, "speech",
-                [("audio", media)], min(self.timeout_s, 120))
+                [("audio", media)], self.speech_timeout_s)
 
     def _read_scope_reservation(self, scope=None):
         if scope is None:
@@ -1007,7 +1009,8 @@ class JobProcessor:
         for name, value in self.speech.form_fields():
             form.add_field(name, value)
         form.add_field("file", wav, filename="audio.wav", content_type="audio/wav")
-        async with self._inference_session.post(self.speech.url, data=form,
+        timeout = aiohttp.ClientTimeout(total=self.speech_timeout_s, connect=10)
+        async with self._inference_session.post(self.speech.url, data=form, timeout=timeout,
                     headers=self.speech.headers, allow_redirects=False) as response:
             if response.status != 200:
                 raise WorkerError(f"Speech backend returned HTTP {response.status}")

@@ -17,8 +17,10 @@ def _entry(name, state, *, image="local-aiport:new", address="192.168.0.135", po
             "configuration": {"image": {"reference": image},
                               "publishedPorts": [{"hostAddress": address, "hostPort": port,
                                                   "containerPort": port}],
-                              "mounts": [{"destination": "/tmp", "source": "tmpfs"},
-                                         {"destination": "/state", "source": source}]}}
+                              "mounts": [{"destination": "/tmp", "source": "tmpfs",
+                                          "type": {"tmpfs": {}}},
+                                         {"destination": "/state", "source": source,
+                                          "type": {"virtiofs": {}}}]}}
 
 
 class Host:
@@ -186,3 +188,19 @@ def test_the_launch_agent_runs_one_tick_a_minute(tmp_path):
                                          "tick", "--state-dir", str(tmp_path)]
     assert agent["StartInterval"] == 60 and agent["RunAtLoad"] is True
     assert "KeepAlive" not in agent
+
+
+def test_a_sibling_only_backend_without_published_ports_is_supervised(tmp_path):
+    backend = _entry("whisper", "running", image="local-whisper:1", source="/models")
+    backend["configuration"]["publishedPorts"] = []
+    backend["configuration"]["mounts"][1]["destination"] = "/models"
+    sup.pin(tmp_path, "whisper", "whisper", run=Host([backend]))
+    spec = json.loads((tmp_path / sup.SPEC_FILE).read_text())["services"][0]
+    assert (spec["host_address"], spec["host_port"], spec["state_source"]) == (None, None, "/models")
+    backend["status"]["state"] = "stopped"
+    host = Host([backend], addresses=())
+    assert sup.tick(tmp_path, run=host, now=1.0)["services"] == {"whisper": "started"}
+    backend["configuration"]["publishedPorts"] = [{"hostAddress": "0.0.0.0", "hostPort": 8178}]
+    backend["status"]["state"] = "stopped"
+    assert sup.tick(tmp_path, run=Host([backend]), now=2.0)["services"] == {
+        "whisper": "blocked:drift"}

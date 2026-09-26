@@ -44,6 +44,15 @@ def _loopback(host: str | None) -> bool:
         return False
 
 
+def _private(host: str | None) -> bool:
+    try:
+        address = ipaddress.ip_address(host or "")
+    except ValueError:
+        return False
+    return address.is_private and not (address.is_loopback or address.is_link_local
+                                       or address.is_multicast or address.is_unspecified)
+
+
 class SpeechProvider:
     """``openai`` (official endpoint) or a loopback ``openai-compatible`` server."""
 
@@ -75,9 +84,13 @@ class SpeechProvider:
                         and port == 443 and url.path == "/v1")
             if not (official or (lab and _loopback(url.hostname))):
                 raise SpeechError("OpenAI speech requires https://api.openai.com/v1")
-        elif not _loopback(url.hostname):
-            # Audio from a home camera goes only to the official API or a local server.
-            raise SpeechError("openai-compatible speech must be a loopback server")
+        elif not (_loopback(url.hostname)
+                  or config.get("local_network") is True and _private(url.hostname)):
+            # Audio from a home camera goes only to the official API or a local
+            # server: loopback, or an explicitly allowed private address such as
+            # a sibling container on the host-only container network.
+            raise SpeechError("openai-compatible speech must be a loopback or explicitly "
+                              "allowed private-network server")
         self.url = self.base_url + "/audio/transcriptions"
         language = config.get("language")
         if language is not None and (not isinstance(language, str)
