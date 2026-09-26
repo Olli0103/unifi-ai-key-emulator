@@ -87,10 +87,20 @@ The plan never moves a paired camera and never renames or re-addresses a slot. A
 |---|---|---|
 | `add_to_allowlist` for a new eligible camera (existing slot with capacity) | yes | `pair_in_protect` |
 | `remove_from_allowlist` (paired to another slot, or no longer eligible) | yes, backup `config.json.before-rollout` | — |
-| `create_slot` from `new_slots.addresses` (identity via `provision_slot`, detector copied from the template slot, no request cap) | yes, and registered in the rollout file | `deploy_nas_service` or `start_mac_container`, `adopt_in_protect`, `pair_in_protect` |
+| `create_slot` from `new_slots.addresses` (identity via `provision_slot` with the plan's MAC, detector copied from the template slot, no request cap) | yes, and registered in the rollout file | `deploy_nas_service` (without `compose`) or `start_mac_container`, `adopt_in_protect`, `pair_in_protect` |
+| `compose_add_service` for a new NAS slot (needs `compose`) | yes: the reviewed block is appended to the private Compose copy, backup `<file>.before-<slot>` | `upload_slot_state`, `redeploy_nas_project`, `verify_slot_health`, `adopt_in_protect`, `pair_in_protect` |
+| `capacity_unverified`: the new slot is needed only by a fallback weight (unknown model) and the camera would fit an existing slot at the 2-point minimum | no, unless `--allow-estimated-capacity` | review |
 | `address_needed`, `slot_unobserved`, `idle_slot`, `capacity_estimate_exceeded` | no | review |
 
-A second run after applying reports no local action; only pending Protect or NAS steps remain. Capacity uses the planner's conservative model-maximum weights, so the existing four slots count as full and new cameras get a new slot.
+A second run after applying reports no local action; only pending Protect or NAS steps remain. Capacity uses observed stream points first, then the model's main-lens weight, then a fallback.
+
+**NAS Compose additions.** With a `compose` section, a new NAS slot gets a service copied from the template service. Only four fields change: the service name, the bind source (`<state_parent>/slot-N`), `ipv4_address`, and `mac_address`. The MAC is derived from the slot label and address, so a dry run and its apply agree. The exact block, service, address, MAC and state path are shown on the rollout page before apply, and the Compose file's hash is part of the plan revision. Apply refuses if the file changed since the dry run. It verifies that every existing service and the networks are unchanged, and appending the same service again is a no-op. The new slot is registered as `pending` with a deadline.
+
+`local-aiport-rollout --rollout … --verify` settles pending slots:
+- if the slot's pinned `/healthz` answers, it is kept;
+- if it is still silent after the deadline, exactly its service block is removed from the Compose copy again, the slot is unregistered, and its identity is kept for a later reviewed retry.
+
+The NAS project itself is still redeployed by uploading or pasting the Compose copy, and the new slot's state directory is uploaded to `<state_parent>/slot-N`. After a rollback, redeploy the restored copy. Pairing stays a Protect action. Compose editing needs the `rollout` extra (PyYAML).
 
 The rollout file is private (mode 600):
 
@@ -99,7 +109,9 @@ The rollout file is private (mode 600):
  "slots": [{"label": "mac", "target": "mac", "state_dir": "/…/aiport-mac", "health_port": 8443},
            {"label": "nas-slot-2", "target": "nas", "state_dir": "/…/aiport-slots/slot-2", "health_port": 443}],
  "new_slots": {"target": "nas", "label_prefix": "nas-slot-", "state_parent": "/…/aiport-slots",
-               "addresses": [], "health_port": 443, "template": "nas-slot-2"}}
+               "addresses": [], "health_port": 443, "template": "nas-slot-2"},
+ "compose": {"path": "/…/aiport-slots/compose-live.yaml", "template": "aiport_slot_2",
+             "state_parent": "/home/olli/aiport-deployment", "health_timeout_seconds": 1800}}
 ```
 
 The control site shows the page when it is started with `--aiport-rollout` and the `--inventory-*` settings.

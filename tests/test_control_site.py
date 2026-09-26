@@ -406,3 +406,60 @@ async def test_rollout_page_shows_the_diff_and_applies_only_local_allowlist(
     finally:
         await client.close()
         await server.close()
+
+
+@pytest.mark.asyncio
+async def test_rollout_page_shows_the_exact_compose_service_before_apply(tmp_path, monkeypatch):
+    from test_aiport_rollout import COMPOSE
+    key_config, port_config = fixture(tmp_path)
+
+    def health(state_dir, port):
+        config = json.loads((Path(state_dir) / "config.json").read_text())
+        return {"pool_cameras": [{"policy_enabled": True} for _ in config["paired_streams"]]}
+
+    monkeypatch.setattr("aikey.aiport_rollout.read_slot_health", health)
+    cameras = [("2A1122334455", "Flur"), ("2A1122334456", "Büro"), ("2A1122334457", "Keller")]
+
+    async def inventory():   # three 4K cameras: the third needs a new AI Port
+        return {"schema": "aikey-camera-preflight/1", "fetched_at": 1, "protect_version": "7.3.68",
+                "cameras": [{"id": f"{i:024x}", "mac": mac, "name": name,
+                             "model": "UVC G4 Pro", "state": "CONNECTED",
+                             "processing_class": "smart_event_candidate"}
+                            for i, (mac, name) in enumerate(cameras, 1)]}
+
+    compose = tmp_path / "compose.yaml"
+    compose.write_text(COMPOSE)
+    rollout = tmp_path / "rollout.json"
+    rollout.write_text(json.dumps({
+        "schema": "aikey-aiport-rollout/1",
+        "slots": [{"label": "mac", "target": "mac", "state_dir": str(port_config.parent),
+                   "health_port": 8443}],
+        "new_slots": {"target": "nas", "state_parent": str(tmp_path),
+                      "addresses": ["192.168.10.30"]},
+        "compose": {"path": str(compose), "template": "aiport_slot_2",
+                    "state_parent": "/home/olli/aiport-deployment"}}))
+    password = "synthetic-admin-passphrase"
+    site = ControlSite(key_config, port_config, signing_key=b"s" * 32,
+                       password_record=AdminSecurity.create_password_record(password),
+                       port=8765, inventory_loader=inventory, rollout_path=rollout)
+    server = TestServer(site.app(), host="127.0.0.1")
+    await server.start_server()
+    site.origin = f"http://127.0.0.1:{server.port}"
+    site.security = AdminSecurity(b"s" * 32, site.origin, allow_loopback_http=True)
+    client = TestClient(server, cookie_jar=aiohttp.CookieJar(unsafe=True))
+    await client.start_server()
+    try:
+        await client.post("/login", data={"password": password},
+                          headers={"Origin": site.origin}, allow_redirects=False)
+        page = await (await client.get("/aiport-rollout")).text()
+        assert "compose_add_service · nas-slot-1" in page
+        assert "service aiport_slot_1 · 192.168.10.30" in page
+        assert "state /home/olli/aiport-deployment/slot-1" in page
+        assert "ipv4_address: 192.168.10.30" in page and "<pre>" in page
+        assert "nas-slot-1: capacity evidenced" in page
+        assert "redeploy_nas_project" in page and "adopt_in_protect" in page
+        assert "2A1122" not in page                     # camera identities stay hidden
+        assert compose.read_text() == COMPOSE           # nothing applied by viewing
+    finally:
+        await client.close()
+        await server.close()

@@ -15,7 +15,8 @@ Issues = "https://github.com/Olli0103/unifi-ai-key-emulator/issues"
 
 [project.optional-dependencies]
 dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "ruff==0.16.8", "build==1.6.1",
-       "numpy>=2,<3", "pillow>=11,<13"]
+       "numpy>=2,<3", "pillow>=11,<13", "pyyaml==6.0.3"]
+rollout = ["pyyaml==6.0.3"]
 models = ["sentence-transformers>=5,<6"]
 detector = ["rfdetr==1.9.1"]
 detector-onnx-cpu = ["rfdetr==1.9.1", "onnxruntime==1.28.0"]

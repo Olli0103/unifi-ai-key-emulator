@@ -176,9 +176,20 @@ class ControlSite:
         manual = [a for a in view["actions"] if not a["automated"]]
 
         def items(actions: list[dict]) -> str:
+            def detail(action: dict) -> str:
+                if action["kind"] != "compose_add_service":
+                    return ""
+                # The exact service appended to the private Compose copy.
+                return ("<br><span class='muted'>" + _safe(
+                    f"service {action['service']} · {action['ipv4_address']} · "
+                    f"{action['mac_address']} · state {action['bind_source']}")
+                    + "</span><pre>" + _safe(action["block"]) + "</pre>")
             return "".join("<li>" + _safe(" · ".join(str(a[k]) for k in (
-                "kind", "slot", "camera", "target") if a.get(k))) + "</li>"
+                "kind", "slot", "camera", "target") if a.get(k))) + detail(a) + "</li>"
                 for a in actions) or "<li>None</li>"
+        basis = "".join(
+            f"<li>{_safe(slot['label'])}: capacity {_safe(slot['capacity_basis'])}</li>"
+            for slot in view["new_slots"] if "capacity_basis" in slot)
         form = ("<form method='post' action='/aiport-rollout'>"
                 f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
                 f"<input type='hidden' name='revision' value='{_safe(view['revision'])}'>"
@@ -191,7 +202,8 @@ class ControlSite:
                 "paired, adopted, uploaded or restarted from here.</p>"
                 "<table><tr><th>Slot</th><th>Target</th><th>Load</th><th>Observed</th>"
                 "<th>Keep</th><th>Add</th><th>Remove</th><th>Awaiting pairing</th></tr>"
-                + rows + "</table><h2>Applied by this page (local files only)</h2><ul>"
+                + rows + "</table>" + (f"<ul>{basis}</ul>" if basis else "")
+                + "<h2>Applied by this page (local files only)</h2><ul>"
                 + items(local) + "</ul><h2>Requires you</h2><ul>" + items(manual) + "</ul>"
                 + form + f"<p class='muted'>Plan revision {_safe(view['revision'][:12])}</p>")
         return _page("AI Port rollout", body)
