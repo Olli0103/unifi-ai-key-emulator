@@ -1,8 +1,8 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-26.3",
+ "manifest_version": "ai-key/2026-09-26.4",
  "processor_profile": "ai-key",
- "base_commit": "54160ce",
+ "base_commit": "c55ffab",
  "emulated_identity": {
   "type": "UP-AI-KEY",
   "sysid": "0xa5f0",
@@ -99,18 +99,29 @@
     "one automatic G6 Instant recognizeKeyFrames event with a full RAM callback; exact-event GET returned metadata.ramState done and a non-empty metadata.ramDescription, with the camera's own detections kept",
     "a description-only RAM result from 23 Sep read back as ramState done with an empty ramDescription",
     "recognizeKeyFrames key moments placed exactly at the export end in 13 of 39 requests",
-    "four Wohnzimmer (G6 Instant) alrmSpeak audio events dispatched speechToText; the local Whisper backend answered; Protect saved 10, 13, 6 and 6 transcription rows (35, equal to the posted segments), all with text and times inside their events, and set metadata sttState done, sttDetected and sttSearchable (26 Sep, readback by the event transcriptions route)"
+    "four Wohnzimmer (G6 Instant) alrmSpeak audio events dispatched speechToText; the local Whisper backend answered; Protect saved 10, 13, 6 and 6 transcription rows (35, equal to the posted segments), all with text and times inside their events, and set metadata sttState done, sttDetected and sttSearchable (26 Sep, readback by the event transcriptions route)",
+    "search host: after the AI Key connected with database rotation enabled, Protect ran its aiprocessor migrations on the Key's PostgreSQL (pgvector) at the Key's address, created 6 tables and set isSearchHost true (26 Sep 15:00)",
+    "changeUserPassword on connect carried the device's current password as the new one; the credential rotation hook applied it to the real unifi-protect role (result 0) and Protect's connect-time PostgreSQL login then succeeded",
+    "basic Find Anything text search: NL_PARSE with model clip-ViT-L-14 answered with a 768-value local CLIP text vector; Protect's detection-nls vector search returned person objects for person queries and 0 hits for unrelated text at minSimilarity 35, before and after relay restarts",
+    "search snapshots: keyMomentsTags searchSnapshots with image parts made Protect create thumbnails and smart-detect objects and store their 768-value embeddings in ramDetections (7 rows at first readback, later more); thumbnailMeta was empty on 6 of 7 key-moment tasks and region entries carry roi lists",
+    "search by image: with featureFlags.supportImageSearch enabled, Protect sent IMAGE_SEARCH with an imgUri on its cameraHttps port; the uploaded query (Protect's own saved thumbnail of an indexed object) returned that object first at similarity 92, and a synthetic image returned 0 hits at minSimilarity 70",
+    "AI Key face parts: after list-shaped person regions were accepted, Protect saved AI Key face results as face thumbnails linked to person trackers and placed them in face groups (2 at readback); none named",
+    "capability flags: with supportTts, supportFaceRecognition and supportRecognizeAnything sent enabled, Protect's AI Key Camera Coverage showed Speech to Text 1 and Face Recognition 0 instead of Off; License Plate Recognition stayed Off with the flag disabled"
    ],
    "not_observed": [
-    "fresh adoption, credential rotation or factory-login changes on 7.3.68",
-    "search, database, deep mode, /describe tasks or on-demand RequestAI targets",
-    "continuous multi-camera admission",
-    "persistence across a controller restart"
+    "fresh adoption, a password change to a new value, or factory-login changes on 7.3.68",
+    "deep mode, E5 session search, hybrid search, /describe tasks or on-demand RequestAI targets",
+    "a retroactive processing run (a stored 22 Sep run was left untouched)",
+    "continuous multi-camera caption admission",
+    "persistence across a controller restart, including the search host",
+    "named face recognition and AI Key plate recognition"
    ],
-   "limits": "One persisted caption on one camera family under a single-use permit; not continuous operation.",
+   "limits": "Captions: one persisted caption on one camera family under a single-use permit. Search: one Mac-hosted PostgreSQL search host behind a source-filtering relay, a local CLIP ViT-L/14 encoder, and a small index; retrieval quality is not benchmarked.",
    "records": [
     "docs/evidence/live-protect-7.3.68.md",
-    "docs/basic-descriptions.md"
+    "docs/basic-descriptions.md",
+    "docs/evidence/find-anything-contract.md",
+    "docs/evidence/ai-key-capability-status.md"
    ],
    "raw_traces_public": false
   },
@@ -1040,10 +1051,13 @@
   {
    "id": "control.recognize_key_frames.other_variants",
    "area": "control",
-   "title": "recognizeKeyFrames image, multipleImages, audio and retroactive variants",
+   "title": "recognizeKeyFrames image variant (one cropped audio-event thumbnail)",
    "status": "unsupported",
-   "live": {},
+   "live": {
+    "live-protect-7.3.68": "indirect"
+   },
    "static": [
+    "static-protect-7.3.60-bundle",
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
    ],
@@ -1056,9 +1070,32 @@
    ],
    "activation": "default",
    "missing_evidence": [
-    "Which variants 7.3.60 sends in normal operation"
+    "Dispatched live on 7.3.68 for audio events (216 in one morning), but the thumbnail has no tracker ID, so no object match for an embedding is established"
    ],
-   "rejection": "Worker rejects before media or inference; the UCP response is errorCode 5 with generic text."
+   "rejection": "Refused before media with result 5 (unsupported payload fields); nothing is posted."
+  },
+  {
+   "id": "control.recognize_key_frames.multiple_images",
+   "area": "control",
+   "title": "recognizeKeyFrames multipleImages (retroactive backfill of saved object crops)",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.68": "not_observed"
+   },
+   "static": [
+    "static-protect-7.3.60-bundle"
+   ],
+   "tests": [
+    "tests/test_find_anything.py::test_retroactive_crops_are_embedded_locally_as_thumbnail_tags",
+    "tests/test_find_anything.py::test_malformed_retroactive_tasks_are_refused_before_media"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Sent only during a retroactive run, which needs the owner (see capability.retroactive_processing)"
+   ]
   },
   {
    "id": "control.host_management",
@@ -1460,19 +1497,16 @@
   {
    "id": "capability.explicit_disabled_flags",
    "area": "capabilities",
-   "title": "Object capabilities advertised as {enabled:false, version:v1} because the controller fills missing flags as enabled",
+   "title": "Capability flags derived from served features; unserved ones sent explicitly disabled",
    "status": "fixture-tested",
    "live": {
-    "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed",
-    "live-protect-7.3.68": "not_observed"
+    "live-protect-7.3.68": "indirect"
    },
    "static": [
     "static-protect-7.2.105"
    ],
    "tests": [
-    "tests/test_device.py::test_info_reports_observed_fields_and_explicit_disabled_capabilities",
-    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+    "tests/test_find_anything.py::test_capability_flags_follow_the_served_features"
    ],
    "implementation": [
     "src/aikey/device.py"
@@ -1550,28 +1584,34 @@
   {
    "id": "capability.face_recognition",
    "area": "capabilities",
-   "title": "Face grouping, enrollment and recognition",
-   "status": "unsupported",
-   "live": {},
+   "title": "supportFaceRecognition advertised with local face recognition",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.68": "indirect"
+   },
    "static": [
     "static-protect-7.2.105"
    ],
-   "tests": [],
+   "tests": [
+    "tests/test_find_anything.py::test_capability_flags_follow_the_served_features"
+   ],
    "implementation": [
     "src/aikey/device.py"
    ],
-   "activation": "default",
+   "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Native contract (issue #20)"
-   ],
-   "rejection": "supportFaceRecognition disabled; faceMeta accepted and ignored."
+    "Named recognition: Protect names face groups itself; a group named by the owner and a later AI Key face landing in it are not observed (issue #20)",
+    "Camera Coverage counts only legacy cameras; no eligible legacy camera is selected here"
+   ]
   },
   {
    "id": "capability.license_plate_recognition",
    "area": "capabilities",
    "title": "License-plate recognition",
    "status": "unsupported",
-   "live": {},
+   "live": {
+    "live-protect-7.3.68": "indirect"
+   },
    "static": [
     "static-protect-7.2.105"
    ],
@@ -1581,9 +1621,9 @@
    ],
    "activation": "default",
    "missing_evidence": [
-    "Native contract (issue #19)"
+    "An eligible camera and an owner decision (issue #19)"
    ],
-   "rejection": "supportLicensePlateRecognition disabled; vehicleMeta accepted and ignored."
+   "rejection": "supportLicensePlateRecognition sent disabled: the Key has no plate reader, and no connected camera is eligible (unpaired G4/G5 or Doorbell Lite). Paired cameras get plates from the AI Port (issue #19)."
   },
   {
    "id": "capability.face_enhancement",
@@ -1608,21 +1648,25 @@
   {
    "id": "capability.retroactive_processing",
    "area": "capabilities",
-   "title": "Retroactive processing of older footage",
-   "status": "unsupported",
-   "live": {},
+   "title": "supportRetroactiveProcessing opt-in for Find Anything backfill",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.68": "not_observed"
+   },
    "static": [
-    "static-protect-7.2.105"
+    "static-protect-7.3.60-bundle"
    ],
-   "tests": [],
+   "tests": [
+    "tests/test_find_anything.py::test_retroactive_processing_is_advertised_only_on_opt_in"
+   ],
    "implementation": [
-    "src/aikey/device.py"
+    "src/aikey/device.py",
+    "src/aikey/clip.py"
    ],
-   "activation": "default",
+   "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Native media forms for retroactive jobs"
-   ],
-   "rejection": "supportRetroactiveProcessing disabled."
+    "A bounded live run: Protect stores an older run (all cameras, 5000 events) that would resume on enable and pause live AI tasks; needs the owner"
+   ]
   },
   {
    "id": "capability.recognize_anything_tagging",
@@ -1643,14 +1687,16 @@
    "missing_evidence": [
     "Structured object results (issue #14)"
    ],
-   "rejection": "supportRecognizeAnything disabled; captions report keyMomentsTags [] and never invent tags."
+   "rejection": "No RAM tag words are produced (tags are empty). supportRecognizeAnything is sent enabled only with Find Anything object indexing, which supplies embeddings."
   },
   {
    "id": "capability.audio_speech",
    "area": "capabilities",
    "title": "Speech transcription (speechToText)",
    "status": "fixture-tested",
-   "live": {},
+   "live": {
+    "live-protect-7.3.68": "indirect"
+   },
    "static": [
     "static-protect-7.3.60-bundle",
     "static-aikey-2.2.8"
@@ -1705,6 +1751,34 @@
    "notes": "Verified by transcription rows read back per event (counts and time bounds only, no text inspected), not by HTTP 200. Backend: local whisper.cpp; audio never left the Mac."
   },
   {
+   "id": "callback.face_recognition_part",
+   "area": "callbacks",
+   "title": "face multipart callback saved as native face thumbnails linked to person trackers",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.60-bundle"
+   ],
+   "tests": [
+    "tests/test_local_faces.py::test_live_list_shaped_person_regions_reach_local_faces",
+    "tests/test_local_faces.py::test_without_face_regions_the_face_is_searched_in_person_regions_and_linked",
+    "tests/test_local_faces.py::test_face_processing_is_local_only"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/faces.py",
+    "src/aikey/face_server.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Named matches (owner must name a face group)",
+    "Persistence after a controller restart"
+   ],
+   "notes": "Verified by face thumbnails with AI Key tracker range and Protect face groups read back as types and counts; no image or name inspected. Faces never reached the vision provider."
+  },
+  {
    "id": "capability.ai_alarms",
    "area": "capabilities",
    "title": "AI query matches in Alarm Manager",
@@ -1723,13 +1797,12 @@
    "id": "database.credential_rotation_hook",
    "area": "database",
    "title": "PostgreSQL unifi-protect role rotated before management-password rotation",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
-    "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed",
-    "live-protect-7.3.68": "not_observed"
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
+    "static-protect-7.3.60-bundle",
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
    ],
@@ -1743,16 +1816,19 @@
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "A real PostgreSQL transaction",
-    "Protect connecting with the rotated password"
-   ]
+    "Protect only re-sent the current password; a change to a genuinely new value was not observed",
+    "Pending/uncertain rotation recovery on a live controller"
+   ],
+   "notes": "Protect's per-connect changeUserPassword (credential confirmation) was applied to the real unifi-protect role, after which Protect's own PostgreSQL login succeeded."
   },
   {
    "id": "database.supports_db_credential_handoff",
    "area": "database",
    "title": "supportsDbCredential console capability and controller access-rule update",
    "status": "needs_evidence",
-   "live": {},
+   "live": {
+    "live-protect-7.3.68": "indirect"
+   },
    "static": [
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
@@ -1763,8 +1839,7 @@
    ],
    "activation": "default",
    "missing_evidence": [
-    "Live setConsoleInfo sequence and flag value",
-    "Access-rule behavior expected by 7.3.x"
+    "setConsoleInfo stored supportsDbCredential true on 7.3.68, but the access-rule behavior 7.3.x expects from it is not established"
    ],
    "notes": "setConsoleInfo stores the flag; no access rules are edited."
   },
@@ -1772,18 +1847,28 @@
    "id": "database.controller_migrations",
    "area": "database",
    "title": "Protect migrations and extensions applied to the processor database",
-   "status": "needs_evidence",
-   "live": {},
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "native-verified"
+   },
    "static": [
+    "static-protect-7.3.60-bundle",
     "static-protect-7.2.105"
    ],
-   "tests": [],
-   "implementation": [],
-   "activation": "default",
+   "tests": [
+    "tests/test_pg_relay.py::test_an_allowed_peer_reaches_postgres_and_bytes_pass_unchanged",
+    "tests/test_pg_relay.py::test_other_sources_are_refused_before_any_upstream_connection"
+   ],
+   "implementation": [
+    "src/aikey/pg_relay.py",
+    "deployment/postgres/entrypoint.sh"
+   ],
+   "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Real PostgreSQL/pgvector execution",
-    "Migration acceptance and restart recovery on 7.3.x"
-   ]
+    "Migration replay after a controller upgrade or restart",
+    "Hybrid search objects (pg_tokenizer, vchord_bm25) are not installed"
+   ],
+   "notes": "Observed as isSearchHost true and Protect-created tables on the Key's PostgreSQL; table contents were read only as row counts."
   },
   {
    "id": "database.bm25_rerank",
@@ -1825,7 +1910,7 @@
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Which search path 7.3.60 uses (issue #10)",
+    "On 7.3.68 basic Find Anything uses CLIP (verified); E5 is used only by deep session search (encodeSessionSearchQuery), not observed live",
     "Encoder compatibility with vendor vectors"
    ]
   },
@@ -1854,22 +1939,34 @@
   {
    "id": "search.legacy_clip_image",
    "area": "search",
-   "title": "Legacy 768-value CLIP text/image search and IMAGE_SEARCH",
-   "status": "unsupported",
-   "live": {},
+   "title": "768-value CLIP ViT-L/14 NL_PARSE text vectors and IMAGE_SEARCH image vectors (basic Find Anything)",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "native-verified"
+   },
    "static": [
+    "static-protect-7.3.60-bundle",
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
    ],
    "tests": [
-    "tests/test_search.py::test_unsupported_queries_have_error_without_fake_success"
+    "tests/test_find_anything.py::test_nl_parse_is_answered_with_a_local_clip_text_vector",
+    "tests/test_find_anything.py::test_search_by_image_returns_a_local_clip_vector",
+    "tests/test_find_anything.py::test_search_by_image_fetches_only_the_console_upload_route",
+    "tests/test_find_anything.py::test_real_clip_weights_rank_the_matching_text_first"
    ],
    "implementation": [
-    "src/aikey/search.py"
+    "src/aikey/search.py",
+    "src/aikey/clip.py",
+    "src/aikey/clip_server.py"
    ],
-   "activation": "default",
-   "missing_evidence": [],
-   "rejection": "Nonzero error code without embedding data; no padded or fabricated vectors."
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Vectors come from the project's own local CLIP ViT-L/14 export; equivalence with the vendor encoder is not established, so only indexes built by this Key are compatible",
+    "Protect 7.3.56 and 7.3.60 not observed",
+    "Tag extraction and time filters remain unsupported"
+   ],
+   "notes": "Verified by Protect's own detection-nls and by-image search results read back, not by counters."
   },
   {
    "id": "search.tags_and_time_filters",
@@ -1893,18 +1990,81 @@
    "id": "search.native_retrieval",
    "area": "search",
    "title": "Find Anything retrieval of processor results in Protect",
-   "status": "needs_evidence",
-   "live": {},
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "native-verified"
+   },
    "static": [
+    "static-protect-7.3.60-bundle",
     "static-protect-7.2.105"
    ],
-   "tests": [],
-   "implementation": [],
-   "activation": "default",
+   "tests": [
+    "tests/test_find_anything.py::test_key_moment_regions_become_search_snapshots_with_crops",
+    "tests/test_find_anything.py::test_nl_parse_is_answered_with_a_local_clip_text_vector",
+    "tests/test_find_anything.py::test_search_by_image_returns_a_local_clip_vector"
+   ],
+   "implementation": [
+    "src/aikey/search.py",
+    "src/aikey/worker.py",
+    "src/aikey/clip.py",
+    "src/aikey/pg_relay.py"
+   ],
+   "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Any live search result",
-    "Matched query/document encoders",
-    "Index population by the controller"
+    "Retrieval quality benchmark with labelled positives and negatives (issue #7)",
+    "Persistence of the search host across a controller restart",
+    "Deep (E5 session) and hybrid retrieval",
+    "A real host reboot of the Mac search host (relay kill and login reload were tested)"
+   ]
+  },
+  {
+   "id": "index.search_snapshots",
+   "area": "search",
+   "title": "Key-moment regions indexed as keyMomentsTags search snapshots with local CLIP crop embeddings",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.60-bundle"
+   ],
+   "tests": [
+    "tests/test_find_anything.py::test_key_moment_regions_become_search_snapshots_with_crops",
+    "tests/test_find_anything.py::test_live_list_shaped_thumbnail_meta_is_indexed"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/clip.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Face-camera recognition tasks go to local faces and are not indexed",
+    "Audio-event image tasks are not indexed",
+    "Effect of extra snapshot thumbnails on event presentation is not reviewed by the owner"
+   ],
+   "notes": "Verified by ramDetections rows with 768-value embeddings and Protect search hits linked to the created thumbnails; frames went only to the local encoder."
+  },
+  {
+   "id": "index.thumbnail_tags",
+   "area": "search",
+   "title": "thumbnailTags for existing smart-detect objects (thumbnailMeta and retroactive crops)",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.68": "not_observed"
+   },
+   "static": [
+    "static-protect-7.3.60-bundle"
+   ],
+   "tests": [
+    "tests/test_find_anything.py::test_objects_are_embedded_locally_and_posted_as_thumbnail_tags",
+    "tests/test_find_anything.py::test_retroactive_crops_are_embedded_locally_as_thumbnail_tags"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "A live task with in-export thumbnailMeta objects or a retroactive multipleImages task"
    ]
   },
   {
@@ -1921,7 +2081,7 @@
    "activation": "default",
    "missing_evidence": [
     "Controller reconciliation writes null embeddings and does not regenerate them (7.2.105 static)",
-    "Live recovery test"
+    "Live recovery test after a controller restart or encoder change (only the Mac relay restart was tested on 7.3.68)"
    ]
   }
  ],
@@ -2046,6 +2206,26 @@
    ],
    "statement": "Protect 7.2.105 fills missing capability flags with enabled values, so an absent flag reads as support.",
    "resolution": "Unsupported capabilities are sent explicitly disabled. A capability flag is never treated as evidence."
+  },
+  {
+   "id": "C13",
+   "type": "stale_record",
+   "sources": [
+    "docs/evidence/find-anything-contract.md",
+    "live-protect-7.3.68"
+   ],
+   "statement": "The 26 Sep morning record said basic Find Anything was blocked on a search host and listed search as needs_evidence; the same day the Key became Protect's search host and native text and image search results were read back.",
+   "resolution": "The record keeps the blocker as history; the manifest now records search on 7.3.68 only."
+  },
+  {
+   "id": "C14",
+   "type": "static_contract",
+   "sources": [
+    "static-protect-7.3.60-bundle",
+    "docs/evidence/ai-key-capability-status.md"
+   ],
+   "statement": "Sending face, plate and object-indexing flags explicitly disabled (C12) made Protect show Speech to Text, Face and License Plate Recognition as Off although native transcripts and face results existed; supportTts, not a speech flag, drives Speech to Text.",
+   "resolution": "Flags follow the configured served features; unserved ones stay explicitly disabled. Flags remain configuration, never evidence."
   }
  ],
  "trial_activation": {
@@ -2180,6 +2360,24 @@
     "worker.private_journal_rollover"
    ],
    "procedure": "In an isolated, reviewed rollout, confirm fresh model-family inventory, Protect-side dispatch, persistence, budget exhaustion, additions/removals, reconnect and journal rollover. Keep richer native-AI models excluded until tag preservation is verified."
+  },
+  {
+   "id": "N10",
+   "features": [
+    "capability.retroactive_processing",
+    "control.recognize_key_frames.multiple_images",
+    "index.thumbnail_tags"
+   ],
+   "procedure": "Owner decision: cancel the stored all-camera 5000-event retroactive run, start a bounded one (one camera, a few events), enable find_anything.retroactive, and read back new ramDetections rows and a search hit for a backfilled object; live AI tasks pause during the run."
+  },
+  {
+   "id": "N11",
+   "features": [
+    "search.native_retrieval",
+    "search.index_recovery",
+    "database.controller_migrations"
+   ],
+   "procedure": "After a planned controller restart, confirm isSearchHost true, that existing ramDetections rows survive, and that a known positive text search still returns its object."
   }
  ]
 }

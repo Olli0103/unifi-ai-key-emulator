@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-26.3). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-26.4). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-26.3` for the `ai-key` profile, based on commit `54160ce`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-26.4` for the `ai-key` profile, based on commit `c55ffab`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -50,7 +50,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | **worker** | |  |  |  | | |
 | `worker.private_journal_rollover`: Private terminal-job tombstones keep duplicate protection while bounding the active journal | fixture-tested | not_observed | not_observed | not_observed | — | experimental_opt_in |
 | **control** | |  |  |  | | |
-| `control.recognize_key_frames.other_variants`: recognizeKeyFrames image, multipleImages, audio and retroactive variants | unsupported | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `control.recognize_key_frames.other_variants`: recognizeKeyFrames image variant (one cropped audio-event thumbnail) | unsupported | — | — | indirect | vendor docs, Protect 7.2.105, AI Key 2.2.8 | default |
+| `control.recognize_key_frames.multiple_images`: recognizeKeyFrames multipleImages (retroactive backfill of saved object crops) | fixture-tested | — | — | not_observed | vendor docs | explicit_opt_in |
 | `control.host_management`: reboot, factoryReset, firmware install, SSH management, support upload and hardware statistics | unsupported | — | — | — | AI Key 2.2.8 | default |
 | `control.ai_settings_commands`: changeAiInferAgentSettings, changeDescribePrompts, networkStatus and sshService | unsupported | — | — | indirect | — | default |
 | `control.unknown_command`: Any other command name | unsupported | — | — | indirect | — | default |
@@ -73,31 +74,34 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `callback.origin_allowlist`: Callbacks only to configured controller origins and known routes | fixture-tested | — | — | — | — | default |
 | `callback.journal_and_uncertain_delivery`: Private job journal; completed callbacks deduplicated and uncertain callbacks never replayed | fixture-tested | — | — | — | — | default |
 | **capabilities** | |  |  |  | | |
-| `capability.explicit_disabled_flags`: Object capabilities advertised as {enabled:false, version:v1} because the controller fills missing flags as enabled | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105 | default |
+| `capability.explicit_disabled_flags`: Capability flags derived from served features; unserved ones sent explicitly disabled | fixture-tested | — | — | indirect | Protect 7.2.105 | default |
 | `capability.ai_mode_basic`: aiMode reported as basic | fixture-tested | — | — | — | Protect 7.2.105 | default |
 | `capability.support_ai_summary`: supportAiSummary advertised only with explicit opt-in and a configured caption path | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105 | experimental_opt_in |
 | `capability.deep_mode_vlm`: supportDeepMode / supportVlm | unsupported | — | — | — | Protect 7.2.105 | default |
-| `capability.face_recognition`: Face grouping, enrollment and recognition | unsupported | — | — | — | Protect 7.2.105 | default |
-| `capability.license_plate_recognition`: License-plate recognition | unsupported | — | — | — | Protect 7.2.105 | default |
+| `capability.face_recognition`: supportFaceRecognition advertised with local face recognition | fixture-tested | — | — | indirect | Protect 7.2.105 | explicit_opt_in |
+| `capability.license_plate_recognition`: License-plate recognition | unsupported | — | — | indirect | Protect 7.2.105 | default |
 | `capability.face_enhancement`: Automatic and manual face enhancement | unsupported | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
-| `capability.retroactive_processing`: Retroactive processing of older footage | unsupported | — | — | — | Protect 7.2.105 | default |
+| `capability.retroactive_processing`: supportRetroactiveProcessing opt-in for Find Anything backfill | fixture-tested | — | — | not_observed | vendor docs | explicit_opt_in |
 | `capability.recognize_anything_tagging`: Recognize Anything tags, detections and key-moment snapshots | unsupported | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
-| `capability.audio_speech`: Speech transcription (speechToText) | fixture-tested | — | — | — | vendor docs, AI Key 2.2.8 | explicit_opt_in |
+| `capability.audio_speech`: Speech transcription (speechToText) | fixture-tested | — | — | indirect | vendor docs, AI Key 2.2.8 | explicit_opt_in |
 | **callbacks** | |  |  |  | | |
 | `callback.speech_to_text_transcriptions`: speechToText callback saved as native transcription rows | native-verified | — | — | native-verified | vendor docs, AI Key 2.2.8 | explicit_opt_in |
+| `callback.face_recognition_part`: face multipart callback saved as native face thumbnails linked to person trackers | native-verified | — | — | native-verified | vendor docs | explicit_opt_in |
 | **capabilities** | |  |  |  | | |
 | `capability.ai_alarms`: AI query matches in Alarm Manager | unsupported | — | — | — | — | default |
 | **database** | |  |  |  | | |
-| `database.credential_rotation_hook`: PostgreSQL unifi-protect role rotated before management-password rotation | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
-| `database.supports_db_credential_handoff`: supportsDbCredential console capability and controller access-rule update | needs_evidence | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
-| `database.controller_migrations`: Protect migrations and extensions applied to the processor database | needs_evidence | — | — | — | Protect 7.2.105 | default |
+| `database.credential_rotation_hook`: PostgreSQL unifi-protect role rotated before management-password rotation | native-verified | — | — | native-verified | vendor docs, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
+| `database.supports_db_credential_handoff`: supportsDbCredential console capability and controller access-rule update | needs_evidence | — | — | indirect | Protect 7.2.105, AI Key 2.2.8 | default |
+| `database.controller_migrations`: Protect migrations and extensions applied to the processor database | native-verified | — | — | native-verified | vendor docs, Protect 7.2.105 | explicit_opt_in |
 | `database.bm25_rerank`: pg_tokenizer, vchord_bm25 and rerank function | unsupported | — | — | — | Protect 7.2.105 | default |
 | **search** | |  |  |  | | |
 | `search.e5_nl_parse`: NL_PARSE with multilingual-e5-small returns a 384-value query embedding | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105 | explicit_opt_in |
 | `search.description_embedding`: 384-value passage embedding attached to task descriptions | fixture-tested | — | — | — | Protect 7.2.105 | explicit_opt_in |
-| `search.legacy_clip_image`: Legacy 768-value CLIP text/image search and IMAGE_SEARCH | unsupported | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `search.legacy_clip_image`: 768-value CLIP ViT-L/14 NL_PARSE text vectors and IMAGE_SEARCH image vectors (basic Find Anything) | native-verified | — | — | native-verified | vendor docs, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
 | `search.tags_and_time_filters`: NL_PARSE tag extraction, object types and time filters | unsupported | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
-| `search.native_retrieval`: Find Anything retrieval of processor results in Protect | needs_evidence | — | — | — | Protect 7.2.105 | default |
+| `search.native_retrieval`: Find Anything retrieval of processor results in Protect | native-verified | — | — | native-verified | vendor docs, Protect 7.2.105 | explicit_opt_in |
+| `index.search_snapshots`: Key-moment regions indexed as keyMomentsTags search snapshots with local CLIP crop embeddings | native-verified | — | — | native-verified | vendor docs | explicit_opt_in |
+| `index.thumbnail_tags`: thumbnailTags for existing smart-detect objects (thumbnailMeta and retroactive crops) | fixture-tested | — | — | not_observed | vendor docs | explicit_opt_in |
 | `search.index_recovery`: Search index recovery after restart or model change | needs_evidence | — | — | — | Protect 7.2.105 | default |
 
 ## Missing evidence
@@ -143,7 +147,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `control.continuous_caption_admission`: Fair scheduling and a multi-day live endurance run
 - `worker.private_journal_rollover`: Multi-day live endurance and disk-full recovery
 - `worker.private_journal_rollover`: Operator retention and backup policy for private tombstones
-- `control.recognize_key_frames.other_variants`: Which variants 7.3.60 sends in normal operation
+- `control.recognize_key_frames.other_variants`: Dispatched live on 7.3.68 for audio events (216 in one morning), but the thumbnail has no tracker ID, so no object match for an embedding is established
+- `control.recognize_key_frames.multiple_images`: Sent only during a retroactive run, which needs the owner (see capability.retroactive_processing)
 - `control.ai_settings_commands`: These names appear in the device diagnostic allowlist, but no public record states their source or when Protect sends them
 - `framing.ucp_two_record`: No raw native frame capture or independently recorded two-record layout
 - `framing.compressed_or_other_format`: Whether any Protect version sends compressed or other-format records
@@ -161,10 +166,11 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `capability.ai_mode_basic`: How 7.3.x interprets aiMode
 - `capability.support_ai_summary`: Whether supportAiSummary was advertised as enabled during the 7.3.60 caption trial is not in the public records
 - `capability.deep_mode_vlm`: Whether 7.3.x still couples the two flags
-- `capability.face_recognition`: Native contract (issue #20)
-- `capability.license_plate_recognition`: Native contract (issue #19)
+- `capability.face_recognition`: Named recognition: Protect names face groups itself; a group named by the owner and a later AI Key face landing in it are not observed (issue #20)
+- `capability.face_recognition`: Camera Coverage counts only legacy cameras; no eligible legacy camera is selected here
+- `capability.license_plate_recognition`: An eligible camera and an owner decision (issue #19)
 - `capability.face_enhancement`: Native contract (issue #23)
-- `capability.retroactive_processing`: Native media forms for retroactive jobs
+- `capability.retroactive_processing`: A bounded live run: Protect stores an older run (all cameras, 5000 events) that would resume on enable and pause live AI tasks; needs the owner
 - `capability.recognize_anything_tagging`: Structured object results (issue #14)
 - `capability.audio_speech`: A persisted native transcript on Protect 7.3.68 after a reload (issue #15)
 - `capability.audio_speech`: An alrmSpeak-enabled camera and the AI Key Speech to Text setting, both user actions
@@ -172,23 +178,32 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `callback.speech_to_text_transcriptions`: Persistence after a controller restart
 - `callback.speech_to_text_transcriptions`: Non-German speech, noise and overlapping speakers on live events
 - `callback.speech_to_text_transcriptions`: Search by transcript text in the Protect UI
+- `callback.face_recognition_part`: Named matches (owner must name a face group)
+- `callback.face_recognition_part`: Persistence after a controller restart
 - `capability.ai_alarms`: Native contract (issue #26)
-- `database.credential_rotation_hook`: A real PostgreSQL transaction
-- `database.credential_rotation_hook`: Protect connecting with the rotated password
-- `database.supports_db_credential_handoff` (needs_evidence): Live setConsoleInfo sequence and flag value
-- `database.supports_db_credential_handoff` (needs_evidence): Access-rule behavior expected by 7.3.x
-- `database.controller_migrations` (needs_evidence): Real PostgreSQL/pgvector execution
-- `database.controller_migrations` (needs_evidence): Migration acceptance and restart recovery on 7.3.x
+- `database.credential_rotation_hook`: Protect only re-sent the current password; a change to a genuinely new value was not observed
+- `database.credential_rotation_hook`: Pending/uncertain rotation recovery on a live controller
+- `database.supports_db_credential_handoff` (needs_evidence): setConsoleInfo stored supportsDbCredential true on 7.3.68, but the access-rule behavior 7.3.x expects from it is not established
+- `database.controller_migrations`: Migration replay after a controller upgrade or restart
+- `database.controller_migrations`: Hybrid search objects (pg_tokenizer, vchord_bm25) are not installed
 - `database.bm25_rerank`: Whether 7.3.x requires hybrid search
-- `search.e5_nl_parse`: Which search path 7.3.60 uses (issue #10)
+- `search.e5_nl_parse`: On 7.3.68 basic Find Anything uses CLIP (verified); E5 is used only by deep session search (encodeSessionSearchQuery), not observed live
 - `search.e5_nl_parse`: Encoder compatibility with vendor vectors
 - `search.description_embedding`: Document preprocessing used by the vendor
 - `search.description_embedding`: Native retrieval with positive and negative examples
-- `search.native_retrieval` (needs_evidence): Any live search result
-- `search.native_retrieval` (needs_evidence): Matched query/document encoders
-- `search.native_retrieval` (needs_evidence): Index population by the controller
+- `search.legacy_clip_image`: Vectors come from the project's own local CLIP ViT-L/14 export; equivalence with the vendor encoder is not established, so only indexes built by this Key are compatible
+- `search.legacy_clip_image`: Protect 7.3.56 and 7.3.60 not observed
+- `search.legacy_clip_image`: Tag extraction and time filters remain unsupported
+- `search.native_retrieval`: Retrieval quality benchmark with labelled positives and negatives (issue #7)
+- `search.native_retrieval`: Persistence of the search host across a controller restart
+- `search.native_retrieval`: Deep (E5 session) and hybrid retrieval
+- `search.native_retrieval`: A real host reboot of the Mac search host (relay kill and login reload were tested)
+- `index.search_snapshots`: Face-camera recognition tasks go to local faces and are not indexed
+- `index.search_snapshots`: Audio-event image tasks are not indexed
+- `index.search_snapshots`: Effect of extra snapshot thumbnails on event presentation is not reviewed by the owner
+- `index.thumbnail_tags`: A live task with in-export thumbnailMeta objects or a retroactive multipleImages task
 - `search.index_recovery` (needs_evidence): Controller reconciliation writes null embeddings and does not regenerate them (7.2.105 static)
-- `search.index_recovery` (needs_evidence): Live recovery test
+- `search.index_recovery` (needs_evidence): Live recovery test after a controller restart or encoder change (only the Mac relay restart was tested on 7.3.68)
 
 ## Contradictions and stale records
 
@@ -204,6 +219,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - **C10** (vendor_docs): Audio eligibility differs between the AI Key FAQ and the camera capability guide. Resolution: Audio is unsupported; eligibility needs evidence per camera.
 - **C11** (misleading_label): lab-results.json reports native_protect_7_3_56 as needs_evidence although native adoption was observed on 7.3.56. The field describes the synthetic lab run, not project evidence. Resolution: Treat lab output as synthetic only. The lab's schema is outside this issue.
 - **C12** (static_contract): Protect 7.2.105 fills missing capability flags with enabled values, so an absent flag reads as support. Resolution: Unsupported capabilities are sent explicitly disabled. A capability flag is never treated as evidence.
+- **C13** (stale_record): The 26 Sep morning record said basic Find Anything was blocked on a search host and listed search as needs_evidence; the same day the Key became Protect's search host and native text and image search results were read back. Resolution: The record keeps the blocker as history; the manifest now records search on 7.3.68 only.
+- **C14** (static_contract): Sending face, plate and object-indexing flags explicitly disabled (C12) made Protect show Speech to Text, Face and License Plate Recognition as Off although native transcripts and face results existed; supportTts, not a speech flag, drives Speech to Text. Resolution: Flags follow the configured served features; unserved ones stay explicitly disabled. Flags remain configuration, never evidence.
 
 ## Experimental activation during live trials
 
@@ -231,3 +248,5 @@ Every live trial must record each experimental activation below that was in effe
 - **N7** (`control.request_ai.describe`, `search.e5_nl_parse`, `search.native_retrieval`): Issue #10: determine whether 7.3.60 dispatches /describe and which search path it uses, before any search trial.
 - **N8** (`lifecycle.abnormal_closure_backoff`): Interrupt the network path briefly and record reconnect timing and adoption state.
 - **N9** (`control.continuous_caption_admission`, `worker.private_journal_rollover`): In an isolated, reviewed rollout, confirm fresh model-family inventory, Protect-side dispatch, persistence, budget exhaustion, additions/removals, reconnect and journal rollover. Keep richer native-AI models excluded until tag preservation is verified.
+- **N10** (`capability.retroactive_processing`, `control.recognize_key_frames.multiple_images`, `index.thumbnail_tags`): Owner decision: cancel the stored all-camera 5000-event retroactive run, start a bounded one (one camera, a few events), enable find_anything.retroactive, and read back new ramDetections rows and a search hit for a backfilled object; live AI tasks pause during the run.
+- **N11** (`search.native_retrieval`, `search.index_recovery`, `database.controller_migrations`): After a planned controller restart, confirm isSearchHost true, that existing ramDetections rows survive, and that a known positive text search still returns its object.
