@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, parse_qsl, urljoin, urlsplit, urlunsplit
 
 import aiohttp
 
+from .worker_archive import valid_tombstone
 from .caption_budget import (CaptionBudget, CaptionBudgetDeferred, CaptionBudgetError,
                              CaptionBudgetExhausted)
 from .providers import ProviderError, validate_inference_config
@@ -527,15 +528,7 @@ class JobProcessor:
             if len(raw) > 65536:
                 raise ValueError
             record = json.loads(raw)
-            if (not isinstance(record, dict)
-                    or set(record) != {"schema", "jobId", "fingerprint", "state", "updatedAt"}
-                    or record["schema"] != 1 or record["jobId"] != job_id
-                    or record["state"] not in {"completed", "failed"}
-                    or not isinstance(record.get("fingerprint"), str)
-                    or not re.fullmatch(r"[0-9a-f]{64}", record["fingerprint"])
-                    or type(record["updatedAt"]) not in {int, float}
-                    or not math.isfinite(record["updatedAt"])
-                    or not 0 < record["updatedAt"] < time.time() + 300):
+            if not valid_tombstone(record, job_id):
                 raise ValueError
             return record
         except (OSError, ValueError, AttributeError, TypeError) as exc:
