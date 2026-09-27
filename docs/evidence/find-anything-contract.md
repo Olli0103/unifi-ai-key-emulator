@@ -399,3 +399,30 @@ So a `completed` run is terminal for this processor record. The only reset is a 
 - **`needs_evidence`, controller-gated:** without Deep Understanding, Protect dispatches no description or embedding tasks and has no sessions to rank.
 - **No bounded emulator fix exists:** answering E5 queries would still return 0 sessions, and changing AI settings is out of scope.
 - **Emulator coverage stays fixture-tested:** `search.e5_nl_parse`, `search.description_embedding`.
+
+## AI Trigger alarms in Alarm Manager (#26, 27 Sep 2026)
+
+**Contract (7.3.60 static).**
+- **The trigger:** Alarm Manager's **AI Trigger** (`camerasTriggers.nls`: "AI Key is required to use AI-powered Trigger alarms") stores a condition with source `ai_nls`, the rule sentence (`nlsSentence`) and `nlsThreshold`. Protect keeps up to 50 such sentences.
+- **Rule fill:** `checkAndFillNlsResultToAlarmRule` fills each sentence once from the AI Key's `NL_PARSE`: `txtEmbed`, `keyTags` mapped to RAM tag IDs, `objectTypes` mapped to label IDs, and `exact_match`. A filled rule is cached; an empty tag list is still cached.
+- **Matching:** after saving each AI Key RAM detection with an embedding, `saveEventTagging` publishes `aiprocessor.matchRules` with the detection's RAM tag IDs (from our per-object `tags`) and Protect's own labels for the object. The similarity matcher then:
+  - **requires at least one shared RAM tag ID** between detection and rule;
+  - requires the object's label to match when the sentence named a type;
+  - scores `(1 − cosine distance − 0.08) / 0.32 × 100` against the threshold.
+  - A match publishes `automationManager.onAiNlsSentence`, an `ai_nls` event on the camera.
+- **Vocabulary:** Protect loads RAM tag names from a TSV it ships (`fixtures/ram_tags.csv` in 7.3.60: 7341 tags, 5375 enabled, including person, vehicle, animal and package) into its own `ramTags` table. Tag names are mapped to its own IDs; unknown names are skipped with a warning.
+
+**Gap (fixed in 9de93fd).**
+- **Before:** the Key sent `keyTags: []` and per-object `tags: []`, so the tag intersection was always empty and **no AI Trigger alarm could ever fire on an AI Key detection**.
+- **Now:** `NL_PARSE` returns `keyTags` for class words (English and German), and indexed objects, key-moment snapshots and retroactive crops carry their class as one RAM tag (`{confScore, tag}`). No vendor vocabulary is shipped: only the four class names.
+
+**Native checks (7.3.68, read-only).**
+- **Alarm rules:** 32, all enabled, **0 AI Trigger rules**. Alarm Manager is external (`useExternalAlarmManager: true`).
+- **Find Anything after the deploy** (`findanything16`, 03:21:30 UTC): "a car", "person today", "a person walking", "a cat" and "a sailing boat on the lake" return **identical result sets** (object-ID hash, mode, count and types) before and after. Basic search applies `keyTags` as a filter only in exact mode, which the Key never reports.
+- **New index rows with RAM tag IDs:** none yet. There was no activity between 03:21 and 03:31 UTC.
+
+**needs_evidence.**
+- **An owner-created AI Trigger alarm** (for example "a person in the hallway" with a threshold) on an AI Key-indexed camera. Its rule is filled from the Key's `keyTags`.
+- **The native readbacks that follow:** an `ai_nls` trigger in the rule's history on the original event, and a negative control (an event of another class) that does not trigger.
+- **The tag readback:** new `ramDetections` rows with non-empty `ramTagIds`.
+- **This session creates no alarm.**

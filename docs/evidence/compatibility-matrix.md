@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.6). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.7). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-27.6` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-27.7` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -201,8 +201,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `search.legacy_clip_image`: Vectors come from the project's own local CLIP ViT-L/14 export; equivalence with the vendor encoder is not established, so only indexes built by this Key are compatible
 - `search.legacy_clip_image`: Protect 7.3.56 and 7.3.60 not observed
 - `search.legacy_clip_image`: Tag extraction and time filters remain unsupported
-- `search.tags_and_time_filters`: keyTags need Protect's ramTags vocabulary, which is not established; none are sent
 - `search.tags_and_time_filters`: Only English and German phrases; no model-based parsing
+- `search.tags_and_time_filters`: keyTags are class-level RAM tags only (person, vehicle, animal, package); an AI Trigger alarm match on them needs an owner-created rule (#26)
 - `search.native_retrieval`: Retrieval quality benchmark with labelled positives and negatives (issue #7)
 - `search.native_retrieval`: Persistence of the search host across a controller restart
 - `search.native_retrieval`: Deep (E5 session) and hybrid retrieval

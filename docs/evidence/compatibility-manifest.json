@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-27.6",
+ "manifest_version": "ai-key/2026-09-27.7",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -2019,15 +2019,16 @@
    "tests": [
     "tests/test_find_anything.py::test_query_filters_are_parsed_locally",
     "tests/test_find_anything.py::test_nl_parse_reply_carries_protects_filter_fields",
-    "tests/test_find_anything.py::test_an_unknown_timezone_falls_back_to_utc"
+    "tests/test_find_anything.py::test_an_unknown_timezone_falls_back_to_utc",
+    "tests/test_find_anything.py::test_key_tags_name_the_class_of_object_words_only"
    ],
    "implementation": [
     "src/aikey/search.py"
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "keyTags need Protect's ramTags vocabulary, which is not established; none are sent",
-    "Only English and German phrases; no model-based parsing"
+    "Only English and German phrases; no model-based parsing",
+    "keyTags are class-level RAM tags only (person, vehicle, animal, package); an AI Trigger alarm match on them needs an owner-created rule (#26)"
    ],
    "notes": "Protect maps each objectType to the label smartDetectType:<type> and falls back to a pure vector search (keeping the time window) when the labels match nothing (7.3.60 searchDetections)."
   },
