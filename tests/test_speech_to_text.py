@@ -285,3 +285,24 @@ async def test_a_slow_local_transcriber_gets_the_speech_budget_not_the_caption_t
     finally:
         await worker.stop()
     assert result["result"] == {"segments": 1} and len(controller.callbacks) == 1
+
+
+async def test_protect_sees_speech_to_text_only_when_a_camera_is_configured(tmp_path):
+    """Protect shows the AI Key's Speech to Text from getInfo supportTts (#15)."""
+    async def admit(_body):
+        return {"accepted": True}
+    speech = {"provider": "openai-compatible", "model": "m",
+              "base_url": "http://127.0.0.1:9/v1", "camera_ids": [CAMERA]}
+    on = device_config()
+    on["speech_to_text"] = dict(speech)
+    flags = DeviceService(on, tmp_path / "on", admit).get_info()["featureFlags"]
+    assert flags["supportTts"] == {"enabled": True, "version": "v1"}
+    # No speech cameras: an explicit false, which Protect keeps (an absent flag reads as on).
+    off = device_config()
+    flags = DeviceService(off, tmp_path / "off", admit).get_info()["featureFlags"]
+    assert flags["supportTts"]["enabled"] is False
+    device = DeviceService(off, tmp_path / "off2", admit)
+    assert "speechToText" not in device.status["supported_commands"]
+    empty = device_config()
+    empty["speech_to_text"] = dict(speech, camera_ids=[])
+    assert DeviceService(empty, tmp_path / "empty", admit).get_info()["featureFlags"]["supportTts"]["enabled"] is False
