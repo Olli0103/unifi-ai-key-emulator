@@ -712,8 +712,13 @@ class JobProcessor:
             return job
         if (command.get("command") == "recognizeKeyFrames" and isinstance(command.get("payload"), dict)
                 and command["payload"].get("camera") in self.index_cameras
-                and command["payload"].get("camera") not in self._scopes_by_camera
-                and not (self.continuous and self.camera_registry.allows(command["payload"].get("camera")))):
+                and (command["payload"].get("postVLM") is not True
+                     or (command["payload"].get("camera") not in self._scopes_by_camera
+                         and not (self.continuous
+                                  and self.camera_registry.allows(command["payload"].get("camera")))))):
+            # Only postVLM tasks ask for a caption. Index-only key-moment tasks of
+            # a camera that also has a caption scope still go to local CLIP (#1);
+            # otherwise a (consumed) permit silently stops its Find Anything index.
             return self._normalize_index(command)
         if "command" in command:
             return self._normalize_recognize_key_frames(command)

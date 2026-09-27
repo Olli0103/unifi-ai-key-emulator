@@ -80,6 +80,10 @@ async def test_camera_shape_categories_never_retain_values(tmp_path, value, shap
 
 @pytest.mark.parametrize("error,phase,reason,code", [
     (WorkerError("recognizeKeyFrames video must span at most 10 seconds"), "worker_rejected", "video_interval", 5),
+    (WorkerError("recognizeKeyFrames image tasks are not processed"), "worker_rejected", "image_variant_refused", 5),
+    (WorkerError("multipleImages camera is not a Find Anything index camera"), "worker_rejected", "unindexed_camera", 5),
+    (WorkerError("recognizeKeyFrames image tasks are not processed; private"), "worker_rejected",
+     "unclassified_worker_error", 5),                                       # exact match only
     (WorkerError("private-token=canary; https://private.invalid/value"), "worker_rejected", "unclassified_worker_error", 5),
     (ValueError("private-token=canary"), "admission_exception", None, 22),
     (asyncio.TimeoutError("private-token=canary"), "admission_timeout", None, 110),

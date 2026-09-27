@@ -61,6 +61,10 @@ _WORKER_REJECTION_REASONS = {
     "Camera inventory changed before admission": "inventory_changed",
     "Unsupported recognizeKeyFrames payload fields": "payload_fields",
     "recognizeKeyFrames is limited to captioned, muted target-camera video": "video_contract",
+    # Deliberate refusals before any fetch (#21): audio-event thumbnails and
+    # crops from cameras outside the Find Anything index.
+    "recognizeKeyFrames image tasks are not processed": "image_variant_refused",
+    "multipleImages camera is not a Find Anything index camera": "unindexed_camera",
     "recognizeKeyFrames video must span at most 10 seconds": "video_interval",
     "recognizeKeyFrames video exceeds configured duration bound": "video_interval",
     "recognizeKeyFrames requires bounded distinct timestamps inside the video": "key_moments",

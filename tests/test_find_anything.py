@@ -1114,3 +1114,50 @@ def test_the_retype_bar_is_calibrated_at_the_documented_probability(probability,
     # Background never retypes, even when certain.
     certain_background = [0.2 if kind == "background" else 0.0 for kind in kinds]
     assert JobProcessor._verdict(certain_background, prompts, "person")[:2] == ("none", False)
+
+
+async def test_an_index_task_of_a_caption_scope_camera_is_still_indexed(controller, tmp_path):
+    """#1: a one-use caption scope must not shadow the camera's Find Anything index."""
+    options = config(controller)
+    options["worker"]["test_scope"] = {"kind": "recognizeKeyFrames", "permit_id": "once",
+                                       "camera_id": CAMERA}
+    worker = JobProcessor(options, tmp_path)
+    try:
+        result = await worker.handle(task())                          # postVLM false: index only
+    finally:
+        await worker.stop()
+    assert result["result"] == {"indexed": 2, "snapshots": 0}
+    assert controller.vision_requests == []                           # no provider call
+    assert list((tmp_path / "worker-test-scopes").glob("*.json")) == []   # permit untouched
+
+
+async def test_an_index_task_of_a_scope_camera_outside_the_index_is_still_refused(controller, tmp_path):
+    options = config(controller)
+    options["worker"]["test_scope"] = {"kind": "recognizeKeyFrames", "permit_id": "once",
+                                       "camera_id": "caption-only-camera"}
+    worker = JobProcessor(options, tmp_path)
+    try:
+        with pytest.raises(WorkerError, match="captioned, muted"):
+            await worker.handle(task(camera="caption-only-camera"))
+    finally:
+        await worker.stop()
+    assert controller.clip_requests == [] and controller.vision_requests == []
+
+
+async def test_a_continuous_camera_keeps_its_index_tasks_local_and_unbudgeted(controller, tmp_path):
+    class Registry:
+        allowed_ids = frozenset({CAMERA})
+
+        def allows(self, camera_id):
+            return camera_id in self.allowed_ids
+
+    options = config(controller)
+    options["worker"]["continuous"] = {"enabled": True, "camera_models": ["Fixture"]}
+    worker = JobProcessor(options, tmp_path, camera_registry=Registry())
+    try:
+        result = await worker.handle(task())
+    finally:
+        await worker.stop()
+    assert result["result"] == {"indexed": 2, "snapshots": 0}
+    assert controller.vision_requests == []
+    assert not (tmp_path / "caption-budget.json").exists()            # no caption permit spent
