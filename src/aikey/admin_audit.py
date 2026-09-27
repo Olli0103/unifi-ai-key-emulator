@@ -16,7 +16,8 @@ import re
 import stat
 import time
 
-ACTIONS = frozenset({"login", "logout", "provider_save", "provider_rollback", "rollout_apply"})
+ACTIONS = frozenset({"login", "logout", "provider_save", "provider_rollback", "rollout_apply",
+                     "role_model"})
 _RESULT = re.compile(r"[a-z][a-z0-9_]{0,39}\Z")
 _PROFILE = re.compile(r"(aikey|aiport|aiport:[a-z0-9-]{1,32})\Z")
 _MAX_BYTES = 256 * 1024

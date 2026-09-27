@@ -64,6 +64,9 @@ class AiPortPreview:
     restart_required: bool
 
 
+_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+/-]{0,127}\Z")
+
+
 class AiPortConfigurationStore:
     """Change AI Port inference without touching its identity or paired streams."""
 
@@ -151,6 +154,46 @@ class AiPortConfigurationStore:
                 raise AiPortConfigurationError("aiport_config_write_uncertain")
             # After the new bytes are verified, so a crash never offers an undo
             # for the wrong revision (#17).
+            self._write_provider_journal(before, self._revision(persisted))
+            return self._public(persisted, checked)
+
+    # --- detection role model (#17) ------------------------------------------
+
+    def role_models(self) -> dict[str, dict[str, Any]]:
+        _, current = self._read()
+        detector = current.get("live_pool_detector", {})
+        if detector.get("inference_backend") != "vision_api":
+            return {"detection": {"model": None, "editable": False,
+                                  "reason": "vision_provider_not_configured"}}
+        return {"detection": {"model": detector.get("provider_config", {}).get("model"),
+                              "editable": True, "reason": None}}
+
+    def apply_role_model(self, expected_revision: str, role: str, model: str) -> AiPortSettings:
+        """Change only the detection model; provider, endpoint, key and streams stay."""
+        if role != "detection":
+            raise AiPortConfigurationError("unknown_role")
+        if (not isinstance(model, str) or not _MODEL_ID.fullmatch(model) or ".." in model):
+            raise AiPortConfigurationError("invalid_model_id")
+        with self._locked():
+            content, current = self._read()
+            before = self._revision(content)
+            if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                    or not hmac.compare_digest(before, expected_revision)):
+                raise AiPortRevisionConflict("aiport_config_changed")
+            detector = current.get("live_pool_detector", {})
+            if detector.get("inference_backend") != "vision_api":
+                raise AiPortConfigurationError("vision_provider_not_configured")
+            if detector.get("provider_config", {}).get("model") == model:
+                return self._public(content, current)
+            candidate = deepcopy(current)
+            candidate["live_pool_detector"]["provider_config"]["model"] = model
+            self._validate(candidate)
+            encoded = self._encode(candidate)
+            self._archive(content)
+            atomic_private(self.path, encoded)
+            persisted, checked = self._read()
+            if persisted != encoded:
+                raise AiPortConfigurationError("aiport_config_write_uncertain")
             self._write_provider_journal(before, self._revision(persisted))
             return self._public(persisted, checked)
 

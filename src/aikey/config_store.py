@@ -135,6 +135,13 @@ def _merge_patch(target: Any, patch: Any, path: tuple[str, ...] = ()) -> Any:
     return result
 
 
+# Model roles (#17). Caption and speech may change model here; the paired
+# search encoders are pinned by the index and change only through #18.
+EDITABLE_ROLE_PATHS = {"caption": ("inference", "model"), "speech": ("speech_to_text", "model")}
+FIXED_ROLE_MODELS = {"search_image_text": "clip-ViT-L-14", "text_embedding": "multilingual-e5-small"}
+_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+/-]{0,127}\Z")
+
+
 class ConfigurationStore:
     """Validate, version and atomically replace one configuration file.
 
@@ -214,6 +221,52 @@ class ConfigurationStore:
             # Written only after the new revision is verified: a crash before this
             # leaves no undo offer, never one for the wrong revision (#17).
             self._write_provider_journal(_revision(content), _revision(persisted))
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
+
+    # --- per-role model settings (#17) -------------------------------------
+
+    def role_models(self) -> dict[str, dict[str, Any]]:
+        """Each AI Key model role, its current model and whether it may be edited here."""
+        _, current = self._read(self.path)
+        speech = current.get("speech_to_text")
+        roles = {
+            "caption": {"model": current["inference"].get("model"), "editable": True, "reason": None},
+            "speech": ({"model": speech.get("model"), "editable": True, "reason": None}
+                       if isinstance(speech, dict) else
+                       {"model": None, "editable": False, "reason": "role_not_configured"}),
+        }
+        for role, model in FIXED_ROLE_MODELS.items():
+            roles[role] = {"model": model, "editable": False, "reason": "index_migration_required"}
+        return roles
+
+    def apply_role_model(self, expected_revision: str, role: str, model: str) -> ConfigurationSnapshot:
+        """Change only one role's model; provider, endpoint and key stay as they are."""
+        if role in FIXED_ROLE_MODELS:
+            raise UnsafeConfigurationChange("role_not_editable: index_migration_required")
+        if role not in EDITABLE_ROLE_PATHS:
+            raise UnsafeConfigurationChange("unknown_role")
+        if not isinstance(model, str) or not _MODEL_ID.fullmatch(model) or ".." in model:
+            raise UnsafeConfigurationChange("invalid_model_id")
+        section, field = EDITABLE_ROLE_PATHS[role]
+        with self._locked():
+            content, current = self._read(self.path)
+            revision = _revision(content)
+            if (not isinstance(expected_revision, str)
+                    or not hmac.compare_digest(revision, expected_revision)):
+                raise RevisionConflict("Configuration changed since it was read")
+            if not isinstance(current.get(section), dict):
+                raise UnsafeConfigurationChange("role_not_configured")
+            if current[section].get(field) == model:
+                return ConfigurationSnapshot(revision, _public(current))
+            candidate = deepcopy(current)
+            candidate[section][field] = model
+            encoded = self._encode(self._validate(candidate))
+            self._archive(content)
+            self._replace(encoded)
+            persisted, checked = self._read(self.path)
+            if _revision(persisted) != _revision(encoded):
+                raise ConfigurationStoreError("Configuration replacement could not be verified")
+            self._write_provider_journal(revision, _revision(persisted))
             return ConfigurationSnapshot(_revision(persisted), _public(checked))
 
     # --- one-step provider rollback (#17) ----------------------------------

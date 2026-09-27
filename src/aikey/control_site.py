@@ -156,6 +156,7 @@ class ControlSite:
         app.router.add_post("/login", self.login)
         app.router.add_post("/provider", self.save_provider)
         app.router.add_post("/provider/rollback", self.rollback_provider)
+        app.router.add_post("/role-model", self.save_role_model)
         app.router.add_post("/logout", self.logout)
         app.router.add_get("/healthz", self.health)
         return app
@@ -597,7 +598,7 @@ class ControlSite:
                   "<a href='/audit'>Audit log</a> · "
                   "<a href='/caption-preflight'>Caption preflight</a> · "
                   "<a href='/state-backup-preflight'>Backup preflight</a></p>"
-                + undo_form
+                + undo_form + self._role_models_section(csrf)
                 + "<div class='grid'>")
         body += self._provider_form("AI Key", "aikey", key.revision, inference,
                                     key_configured, csrf)
@@ -770,6 +771,68 @@ class ControlSite:
                 f"<input type='hidden' name='profile' value='{_safe(profile)}'>"
                 f"<input type='hidden' name='revision' value='{_safe(status['revision'])}'>"
                 f"<button>Roll back the last {_safe(title)} provider change</button></form>")
+
+    _ROLE_LABELS = {"caption": "Captions (vision)", "speech": "Speech to text",
+                    "detection": "AI Port detection", "search_image_text": "Search image/text encoder",
+                    "text_embedding": "Text embeddings"}
+    _ROLE_REASONS = {"index_migration_required": "Pinned by the search index; change it through the "
+                     "index migration", "role_not_configured": "Not configured",
+                     "vision_provider_not_configured": "No vision provider configured"}
+
+    def _role_models_section(self, csrf: str) -> str:
+        """Per-role models, one revision-checked form per editable role (#17)."""
+        rows = []
+        stores = [("aikey", "AI Key", self.aikey)] + [
+            (profile, "this AI Port" if profile == "aiport" else "AI Port " + profile.partition(":")[2],
+             store) for profile, store in self.aiports.items()]
+        for profile, title, store in stores:
+            try:
+                revision = store.snapshot().revision
+                roles = store.role_models()
+            except (ConfigurationStoreError, AiPortConfigurationError):
+                rows.append(f"<tr><td>{_safe(title)}</td><td colspan='3'>unavailable</td></tr>")
+                continue
+            for role, info in roles.items():
+                label = self._ROLE_LABELS.get(role, role)
+                if info["editable"]:
+                    control = ("<form method='post' action='/role-model'>"
+                               f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
+                               f"<input type='hidden' name='profile' value='{_safe(profile)}'>"
+                               f"<input type='hidden' name='role' value='{_safe(role)}'>"
+                               f"<input type='hidden' name='revision' value='{_safe(revision)}'>"
+                               f"<input name='model' required maxlength='128' "
+                               f"value='{_safe(info['model'] or '')}' aria-label='{_safe(label)} model'>"
+                               "<button>Save model</button></form>")
+                else:
+                    control = _safe(self._ROLE_REASONS.get(info["reason"], info["reason"]))
+                rows.append(f"<tr><td>{_safe(title)}</td><td>{_safe(label)}</td>"
+                            f"<td>{_safe(info['model'] or '—')}</td><td>{control}</td></tr>")
+        return ("<section><h2>Models by role</h2><p class='muted'>Changes only the model of one role; "
+                "the provider, endpoint and key stay as they are. Search encoders are pinned by the "
+                "index.</p><table><tr><th>Profile</th><th>Role</th><th>Model</th><th>Change</th></tr>"
+                + "".join(rows) + "</table></section>")
+
+    async def save_role_model(self, request: web.Request) -> web.Response:
+        fields = await request.post()
+        if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
+            self._audit("role_model", "forbidden")
+            raise web.HTTPForbidden()
+        profile = fields.get("profile", "")
+        store = self.aikey if profile == "aikey" else self.aiports.get(profile)
+        if store is None:
+            self._audit("role_model", "unknown_profile")
+            raise web.HTTPBadRequest(text="Unknown profile")
+        try:
+            await asyncio.to_thread(store.apply_role_model, fields.get("revision"),
+                                    fields.get("role"), fields.get("model"))
+        except (ConfigurationStoreError, RevisionConflict, AiPortConfigurationError,
+                AiPortRevisionConflict, OSError):
+            self._audit("role_model", "rejected", profile)
+            return _page("Model not saved", "<h1>Model not saved</h1><p class='error'>The role, "
+                         "model name or revision was not accepted. Nothing was changed.</p>"
+                         "<p><a href='/'>Back to settings</a></p>")
+        self._audit("role_model", "saved", profile)
+        raise web.HTTPSeeOther("/?saved=1")
 
     async def rollback_provider(self, request: web.Request) -> web.Response:
         """Restore one profile's local settings from before its last provider save (#17)."""
