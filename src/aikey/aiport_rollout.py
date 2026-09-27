@@ -156,7 +156,8 @@ def plan_rollout(report: dict, slots: dict[str, dict], *,
                  new_slot_addresses: list[str] = (), new_slot_target: str = "nas",
                  new_slot_prefix: str = "nas-slot-", compose: dict | None = None,
                  allow_estimated_capacity: bool = False,
-                 reserved_addresses: list[str] = ()) -> dict:
+                 reserved_addresses: list[str] = (),
+                 template_label: str | None = None) -> dict:
     """Diff slots against eligible cameras; ``slots[label]`` holds
     ``target``, ``host_ip``, optionally ``mac`` and the :func:`observe_slot`
     result. ``compose`` (text, template, state_parent, service_prefix) enables
@@ -292,6 +293,7 @@ def plan_rollout(report: dict, slots: dict[str, dict], *,
     stale_compose = None
     if compose is not None and any(s["target"] == "nas" for s in new_slots):
         stale_compose = _compose_staleness(compose)
+    template_problem = _template_problem(slots, template_label) if new_slots else None
     for slot in new_slots:
         # A new slot is justified only if its cameras do not fit an existing
         # slot at the smallest reservation, or their weight is evidenced.
@@ -305,6 +307,12 @@ def plan_rollout(report: dict, slots: dict[str, dict], *,
             # Never clone a service from a Compose copy that is not the live one.
             actions.append({"kind": "compose_copy_stale", "slot": slot["label"],
                             "reason": stale_compose, "automated": False})
+            automated = False
+        if template_problem is not None:
+            # The new slot copies the template's detector settings; never copy
+            # them from a config that may not be the one the template runs.
+            actions.append({"kind": "template_config_unverified", "slot": slot["label"],
+                            "reason": template_problem, "automated": False})
             automated = False
         for mac in unverified:
             actions.append({"kind": "capacity_unverified", "slot": slot["label"],
@@ -354,6 +362,22 @@ def plan_rollout(report: dict, slots: dict[str, dict], *,
     plan["revision"] = hashlib.sha256(json.dumps(
         public(plan), sort_keys=True).encode()).hexdigest()
     return plan
+
+
+def _template_problem(slots: dict, label: str | None) -> str | None:
+    """Why the new-slot template config may not be what that slot runs, or None."""
+    if label is None:
+        return None
+    template = slots.get(label)
+    if template is None:
+        return "template_unknown"
+    if template.get("config_drift"):
+        return "template_config_drift"
+    if template.get("target") == "nas" and not template.get("deployed_config_known"):
+        # A NAS slot's local copy is only an upload source; without the
+        # deployed copy there is nothing to compare it with (#19, #45).
+        return "template_deployed_config_unset"
+    return None
 
 
 def config_drift(local: dict, deployed: dict) -> list[str]:
@@ -464,13 +488,15 @@ def apply_rollout(plan: dict, slot_dirs: dict[str, Path], *, new_slot_parent: Pa
         one_slot_plan = {"schema": "aikey-aiport-deployment-plan/2", "ai_key": {},
                          "instances": [{"slot": 1, "source_kind": "protect",
                                         "camera_ids": ["0" * 24], "host_ip": address}]}
+        existing = _existing_new_slot(state_dir, slot, address)
         try:
-            provision_slot(one_slot_plan, 1, state_dir,
-                           controller_ip=template["controller_ip"],
-                           controller_cert_file=slot_dirs[template_label] / "controller-ca.pem",
-                           controller_pin=template["controller_pin"],
-                           firmware_version=template["firmware_version"],
-                           mac=slot.get("mac"))
+            if not existing:
+                provision_slot(one_slot_plan, 1, state_dir,
+                               controller_ip=template["controller_ip"],
+                               controller_cert_file=slot_dirs[template_label] / "controller-ca.pem",
+                               controller_pin=template["controller_pin"],
+                               firmware_version=template["firmware_version"],
+                               mac=slot.get("mac"))
         except (InstanceStateError, AiPortPlanError) as exc:
             raise RolloutError("New slot identity could not be provisioned") from exc
         path = state_dir / "config.json"
@@ -479,7 +505,8 @@ def apply_rollout(plan: dict, slot_dirs: dict[str, Path], *, new_slot_parent: Pa
             config["paired_streams"] = [
                 {"camera_mac": mac, "source_ip": config["controller_ip"],
                  "ffmpeg_path": "/usr/bin/ffmpeg"} for mac in slot["add"]]
-            config["live_pool_detector"] = deepcopy(template["live_pool_detector"])
+            config["live_pool_detector"] = _cloned_detector(template["live_pool_detector"],
+                                                            slot["add"])
             atomic_private(path, json.dumps(config, separators=(",", ":")).encode())
             changed.append(slot["label"])
         if slot.get("compose") and _automated(plan, "compose_add_service", slot["label"]):
@@ -508,14 +535,73 @@ def apply_rollout(plan: dict, slot_dirs: dict[str, Path], *, new_slot_parent: Pa
     return changed
 
 
+def _existing_new_slot(state_dir: Path, slot: dict, address: str) -> bool:
+    """True when a retry finds exactly this plan's new slot already written.
+
+    A partial apply can leave the new identity with its planned cameras; a
+    retry then continues with the remaining steps instead of re-provisioning.
+    Any other content in the directory is refused, never overwritten.
+    """
+    path = Path(state_dir) / "config.json"
+    if not path.exists():
+        return False
+    try:
+        config = json.loads(path.read_text())
+        streams = {_mac(s["camera_mac"]) for s in config.get("paired_streams", [])}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RolloutError("The new slot directory holds an unreadable config") from exc
+    if "paired_streams" not in config:
+        return False                      # identity only: provision_slot verifies it
+    if (str(config.get("mac", "")).upper() != str(slot.get("mac", "")).upper()
+            or config.get("device_ip") != address or streams != {_mac(m) for m in slot["add"]}
+            or not (Path(state_dir) / "device.key").is_file()):
+        raise RolloutError("The new slot directory differs from the reviewed plan")
+    return True
+
+
+def _cloned_detector(detector: dict, cameras: list[str]) -> dict:
+    """The template's detector settings for a slot streaming ``cameras``.
+
+    Camera-bound keys keep only this slot's cameras: the AI Port refuses a
+    ``plate_cameras`` entry it does not stream, so a template that reads
+    plates would otherwise produce a slot that cannot start.
+    """
+    clone = deepcopy(detector)
+    if "plate_cameras" in clone:
+        mine = {_mac(mac) for mac in cameras}
+        kept = [mac for mac in clone["plate_cameras"] if _mac(mac) in mine]
+        if kept:
+            clone["plate_cameras"] = kept
+        else:
+            del clone["plate_cameras"]
+    return clone
+
+
 def apply_and_register(rollout_path: Path, rollout: dict, plan: dict) -> list[str]:
     """Apply a plan's local actions and record new slots for the next run."""
     new = rollout["new_slots"]
     dirs = {slot["label"]: Path(slot["state_dir"]) for slot in rollout["slots"]}
     compose = rollout.get("compose")
-    changed = apply_rollout(plan, dirs, new_slot_parent=Path(new["state_parent"]),
-                            template_label=new.get("template", rollout["slots"][0]["label"]),
-                            compose_path=Path(compose["path"]) if compose else None)
+    # Undo this run's own writes if any step fails, so a partial apply never
+    # leaves edited allowlists or a changed Compose file behind (#45). New
+    # identity directories stay: they are unregistered and verified on retry.
+    touched = [dirs[label] / name for label in dirs
+               for name in ("config.json", "config.json.before-rollout")]
+    if compose:
+        touched.append(Path(compose["path"]))
+    before = {path: (path.read_bytes() if path.exists() else None) for path in touched}
+    try:
+        changed = apply_rollout(plan, dirs, new_slot_parent=Path(new["state_parent"]),
+                                template_label=new.get("template", rollout["slots"][0]["label"]),
+                                compose_path=Path(compose["path"]) if compose else None)
+    except BaseException:
+        for path, content in before.items():
+            if content is None:
+                if path.exists():
+                    path.unlink()
+            elif not path.exists() or path.read_bytes() != content:
+                atomic_private(path, content)
+        raise
     applied = [slot for slot in plan["new_slots"]
                if _automated(plan, "create_slot", slot["label"])]
     if applied:
@@ -665,6 +751,7 @@ def compute(rollout: dict, report: dict, *,
         if slot.get("deployed_config"):
             slots[slot["label"]]["config_drift"] = config_drift(
                 config, json.loads(Path(slot["deployed_config"]).read_text()))
+            slots[slot["label"]]["deployed_config_known"] = True
         dirs[slot["label"]] = state_dir
     new = rollout["new_slots"]
     compose = rollout.get("compose")
@@ -673,6 +760,7 @@ def compute(rollout: dict, report: dict, *,
                         new_slot_target=new.get("target", "nas"),
                         new_slot_prefix=new.get("label_prefix", "nas-slot-"),
                         allow_estimated_capacity=allow_estimated_capacity,
+                        template_label=new.get("template", rollout["slots"][0]["label"]),
                         compose=None if compose is None else {
                             "text": Path(compose["path"]).read_text(),
                             "template": compose["template"],

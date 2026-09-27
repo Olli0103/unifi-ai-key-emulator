@@ -400,11 +400,31 @@ def test_repeated_apply_changes_nothing_more(tmp_path):
     second = plan_rollout(inventory, slots, new_slot_addresses=["192.168.10.30"],
                           compose=_compose_settings(after))
     assert not local_changes(second) and second["new_slots"] == []
-    # Re-applying the first plan is refused: the Compose file has moved on.
-    with pytest.raises(RolloutError):
+    # Re-applying the already applied plan changes nothing: the identity is
+    # verified unchanged and the Compose service is already present (#45).
+    identity = (root / "nas-slot-1" / "device.key").read_bytes()
+    assert apply_rollout(plan, {"mac": Path(rollout["slots"][0]["state_dir"])},
+                         new_slot_parent=root, template_label="mac",
+                         compose_path=compose_path) == []
+    assert compose_path.read_text() == after
+    assert (root / "nas-slot-1" / "device.key").read_bytes() == identity
+
+
+def test_a_new_slot_directory_that_differs_from_the_plan_is_refused(tmp_path):
+    root, compose_path, rollout_path, rollout, slots, inventory = _one_new_nas_slot(tmp_path)
+    plan = plan_rollout(inventory, slots, new_slot_addresses=["192.168.10.30"],
+                        compose=_compose_settings())
+    apply_and_register(rollout_path, rollout, plan)
+    path = root / "nas-slot-1" / "config.json"
+    config = json.loads(path.read_text())
+    config["paired_streams"].append({"camera_mac": CAM["Garten"], "source_ip": "192.168.10.1",
+                                     "ffmpeg_path": "/usr/bin/ffmpeg"})
+    path.write_text(json.dumps(config))
+    edited = path.read_bytes()
+    with pytest.raises(RolloutError, match="differs from the reviewed plan"):
         apply_rollout(plan, {"mac": Path(rollout["slots"][0]["state_dir"])},
                       new_slot_parent=root, template_label="mac", compose_path=compose_path)
-    assert compose_path.read_text() == after
+    assert path.read_bytes() == edited
 
 
 def test_a_new_slot_silent_past_its_deadline_is_rolled_back(tmp_path):
@@ -647,3 +667,108 @@ def test_rollout_config_accepts_only_a_string_deployed_config(tmp_path):
     path.write_text(json.dumps(base))
     with pytest.raises(RolloutError):
         load_rollout_config(path)
+
+
+def _nas_template(slots, *, known=True, drift=()):
+    """Make the plan's template a NAS slot with a known (or unknown) deployed copy."""
+    slots = dict(slots)
+    template = dict(slots["mac"], target="nas")
+    if known:
+        template["deployed_config_known"] = True
+    if drift:
+        template["config_drift"] = list(drift)
+    slots["nas-template"] = template
+    del slots["mac"]
+    return slots
+
+
+def test_the_live_nine_camera_plan_stays_a_no_op_with_a_verified_nas_template():
+    inventory, slots = live_like()
+    for label in slots:
+        slots[label]["deployed_config_known"] = slots[label]["target"] == "nas"
+    template = next(label for label in slots if slots[label]["target"] == "nas")
+    plan = plan_rollout(inventory, slots, new_slot_addresses=["192.168.0.139"],
+                        compose=_compose_settings(), template_label=template)
+    assert plan["actions"] == [] and not local_changes(plan)
+
+
+def test_a_new_slot_is_automated_only_from_a_verified_template(tmp_path):
+    root, compose_path, rollout_path, rollout, slots, inventory = _one_new_nas_slot(tmp_path)
+    verified = plan_rollout(inventory, _nas_template(slots), new_slot_addresses=["192.168.10.30"],
+                            compose=_compose_settings(), template_label="nas-template")
+    create = next(a for a in verified["actions"] if a["kind"] == "create_slot")
+    assert create["automated"] is True
+    for kwargs, reason in (({"drift": ["live_pool_detector.threshold"]}, "template_config_drift"),
+                           ({"known": False}, "template_deployed_config_unset")):
+        plan = plan_rollout(inventory, _nas_template(slots, **kwargs),
+                            new_slot_addresses=["192.168.10.30"], compose=_compose_settings(),
+                            template_label="nas-template")
+        problem = [a for a in plan["actions"] if a["kind"] == "template_config_unverified"]
+        assert problem and problem[0]["reason"] == reason
+        assert all(not a["automated"] for a in plan["actions"]
+                   if a["kind"] in {"create_slot", "compose_add_service", "add_to_allowlist"})
+        assert not local_changes(plan)
+        assert apply_rollout(plan, {"nas-template": Path(rollout["slots"][0]["state_dir"])},
+                             new_slot_parent=root, template_label="nas-template",
+                             compose_path=compose_path) == []
+        assert compose_path.read_text() == COMPOSE and not (root / "nas-slot-1").exists()
+
+
+def test_a_cloned_detector_keeps_only_the_new_slots_plate_cameras():
+    from aikey.aiport_rollout import _cloned_detector
+    detector = {"threshold": 0.8, "plate_cameras": [CAM["Flur"], CAM["Keller"]]}
+    assert _cloned_detector(detector, [CAM["Keller"]]) == {"threshold": 0.8,
+                                                            "plate_cameras": [CAM["Keller"]]}
+    assert _cloned_detector(detector, [CAM["Garten"]]) == {"threshold": 0.8}
+    assert detector["plate_cameras"] == [CAM["Flur"], CAM["Keller"]]      # template unchanged
+
+
+def test_a_failed_step_undoes_this_runs_allowlist_edit_and_registers_nothing(tmp_path, monkeypatch):
+    root, compose_path, rollout_path, rollout, slots, inventory = _one_new_nas_slot(tmp_path)
+    template = Path(rollout["slots"][0]["state_dir"])
+    config = json.loads((template / "config.json").read_text())
+    config["paired_streams"].append({"camera_mac": CAM["Dach"], "source_ip": "192.168.10.1",
+                                     "ffmpeg_path": "/usr/bin/ffmpeg"})     # a stale entry
+    (template / "config.json").write_text(json.dumps(config))
+    slots["mac"] = slot("mac", "192.168.10.20", ["Flur", "Schlafzimmer", "Dach"],
+                        {"Flur", "Schlafzimmer"})
+    rollout_path.write_text(json.dumps(rollout))
+    plan = plan_rollout(inventory, slots, new_slot_addresses=["192.168.10.30"],
+                        compose=_compose_settings())
+    assert {a["kind"] for a in plan["actions"] if a["automated"]} >= {
+        "remove_from_allowlist", "create_slot", "compose_add_service"}
+    before = (template / "config.json").read_bytes()
+    registered = rollout_path.read_bytes()
+
+    def fail(*args, **kwargs):
+        raise OSError("disk full while writing the Compose file")
+    monkeypatch.setattr("aikey.aiport_rollout.add_slot_service", fail)
+    with pytest.raises(OSError):
+        apply_and_register(rollout_path, rollout, plan)
+    assert (template / "config.json").read_bytes() == before              # allowlist edit undone
+    assert not (template / "config.json.before-rollout").exists()
+    assert compose_path.read_text() == COMPOSE
+    assert rollout_path.read_bytes() == registered and len(rollout["slots"]) == 1
+    # The provisioned identity stays unregistered; a reviewed retry reuses it unchanged.
+    identity = (root / "nas-slot-1" / "device.key").read_bytes()
+    monkeypatch.undo()
+    apply_and_register(rollout_path, rollout, plan)
+    assert (root / "nas-slot-1" / "device.key").read_bytes() == identity
+    assert [s["label"] for s in rollout["slots"]] == ["mac", "nas-slot-1"]
+    assert CAM["Dach"] not in (template / "config.json").read_text()
+
+
+def test_applying_fresh_plans_twice_converges(tmp_path):
+    root, compose_path, rollout_path, rollout, slots, inventory = _one_new_nas_slot(tmp_path)
+    first = plan_rollout(inventory, slots, new_slot_addresses=["192.168.10.30"],
+                         compose=_compose_settings())
+    apply_and_register(rollout_path, rollout, first)
+    new_config = json.loads((root / "nas-slot-1" / "config.json").read_text())
+    slots["nas-slot-1"] = {"target": "nas", "host_ip": "192.168.10.30", "mac": new_config["mac"],
+                           **observe_slot(new_config, None)}
+    for _ in range(2):
+        again = plan_rollout(inventory, slots, new_slot_addresses=["192.168.10.30"],
+                             compose=_compose_settings(compose_path.read_text()))
+        assert not local_changes(again) and again["new_slots"] == []
+        assert apply_and_register(rollout_path, rollout, again) == []
+    assert len(rollout["slots"]) == 2

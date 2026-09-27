@@ -143,3 +143,24 @@ A NAS slot's canonical config (`state/aiport-slots/slot-N/config.json`) is what 
   - reports `slot_config_drift` with the differing key names (never their values);
   - makes that slot's allowlist additions and removals manual until the copies match.
 - **After every NAS deploy:** point `deployed_config` at the new build copy and re-run the dry run. A no-op means the canonical copy matches what runs.
+
+### Applying a reviewed new-slot plan (#45, 27 Sep 2026)
+
+`--apply` changes only local files, and only when all of these hold:
+- **Review:** the dry run's plan revision is passed (`--revision`), and the inventory is fresh.
+- **Template:** the new slot copies its detector settings from the template slot, so that template must be verified. A Mac template counts, because its config is mounted. A NAS template counts only with `deployed_config` set and no drift. Otherwise the plan shows `template_config_unverified` (`template_config_drift`, `template_deployed_config_unset` or `template_unknown`) and every step stays manual.
+- **Compose:** the Compose copy is the live one (`compose_copy_stale` otherwise).
+- **Existing slots:** a slot with `slot_config_drift` gets no automated allowlist edits.
+
+**What apply guarantees**
+- **Partial failure:** if any step fails, this run's own writes are undone (allowlist edits, backups, the Compose change) before the error surfaces. The new identity directory stays unregistered.
+- **Idempotent retry:** a retry that finds exactly the planned identity (MAC, address and cameras) continues with the remaining steps. A directory that differs from the plan is refused, never overwritten. Re-applying an applied plan is a no-op.
+- **Plate cameras:** the new slot's `plate_cameras` keeps only cameras it streams. The AI Port refuses entries it does not stream.
+- **Failed health:** a pending new slot still silent after `health_timeout_seconds` has exactly its Compose service removed again by `--verify`, and is unregistered.
+
+**Always manual:** reserving an address, uploading slot state, redeploying the NAS project, adopting the AI Port in Protect, and pairing cameras.
+
+**Live state on 27 Sep:**
+- the nine-camera, four-slot plan is a no-op (revision `3ff9bd41d50a`);
+- a hypothetical extra camera needs an address first;
+- with one, `nas-slot-5` is planned entirely manual, because `nas-slot-2` has no verified `deployed_config` yet.
