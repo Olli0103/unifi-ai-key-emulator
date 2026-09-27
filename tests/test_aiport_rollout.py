@@ -772,3 +772,35 @@ def test_applying_fresh_plans_twice_converges(tmp_path):
         assert not local_changes(again) and again["new_slots"] == []
         assert apply_and_register(rollout_path, rollout, again) == []
     assert len(rollout["slots"]) == 2
+
+
+def test_compute_marks_a_stale_nas_template_from_its_deployed_copy(tmp_path, monkeypatch):
+    """End to end through compute(): a template whose deployed copy differs stays manual."""
+    from aikey.aiport_rollout import compute
+    root, compose_path, rollout_path, rollout, slots, inventory = _one_new_nas_slot(tmp_path)
+    template = Path(rollout["slots"][0]["state_dir"])
+    local = json.loads((template / "config.json").read_text())
+    deployed = json.loads(json.dumps(local))
+    deployed["live_pool_detector"]["threshold"] = 0.6          # the NAS runs another value
+    deployed_path = tmp_path / "deployed-slot.json"
+    deployed_path.write_text(json.dumps(deployed))
+    rollout["slots"][0].update(label="nas-template", target="nas",
+                               deployed_config=str(deployed_path))
+    rollout["new_slots"]["template"] = "nas-template"
+    paired = {CAM["Flur"], CAM["Schlafzimmer"]}
+    monkeypatch.setattr("aikey.aiport_rollout.read_slot_health", lambda d, p: {
+        "pool_cameras": [{"policy_enabled": s["camera_mac"] in paired}
+                         for s in local["paired_streams"]]})
+    before = {p: p.read_bytes() for p in (template / "config.json", compose_path)}
+    plan, dirs = compute(rollout, inventory)
+    problem = [a for a in plan["actions"] if a["kind"] == "template_config_unverified"]
+    assert problem and problem[0]["reason"] == "template_config_drift"
+    assert all(not a["automated"] for a in plan["actions"]
+               if a["kind"] in {"create_slot", "compose_add_service", "add_to_allowlist"})
+    assert apply_and_register(rollout_path, rollout, plan) == []
+    assert {p: p.read_bytes() for p in before} == before and not (root / "nas-slot-1").exists()
+    # Once the deployed copy matches, the same plan automates the new slot.
+    deployed_path.write_text(json.dumps(local))
+    plan, dirs = compute(rollout, inventory)
+    assert not any(a["kind"] == "template_config_unverified" for a in plan["actions"])
+    assert next(a for a in plan["actions"] if a["kind"] == "create_slot")["automated"] is True

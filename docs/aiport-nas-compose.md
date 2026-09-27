@@ -164,3 +164,11 @@ A NAS slot's canonical config (`state/aiport-slots/slot-N/config.json`) is what 
 - the nine-camera, four-slot plan is a no-op (revision `3ff9bd41d50a`);
 - a hypothetical extra camera needs an address first;
 - with one, `nas-slot-5` is planned entirely manual, because `nas-slot-2` has no verified `deployed_config` yet.
+
+**nas-slot-2 deployed copy (27 Sep 2026): needs_evidence.**
+- **Why it isn't read:** the NAS file cannot be read without a UGREEN NAS sign-in, and both Chrome profiles show the login page.
+- **Corroboration (not verification):**
+  - The upload staging copy (`aiport-deployment/slot-2/config.json` in the iCloud Drive of the `claw` Mac, over SMB) is byte-identical to the canonical config. Its slot 3 and 4 copies match the deployed r25 configs.
+  - Slot 2's pinned health agrees on 2 streams, `live_pool` on the vision API, no request cap, and an event budget.
+- **Decision:** Olli chose to leave `deployed_config` unset, so new NAS slots from this template stay manual (`template_deployed_config_unset`).
+- **To verify:** sign in to the NAS, read `slot-2/config.json` read-only, compare its hash with the canonical copy, and only then set `deployed_config`.
