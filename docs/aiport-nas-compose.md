@@ -134,3 +134,12 @@ The rollout file is private (mode 600):
 5. **Verify:** run `--verify`, and confirm in Protect that the AI Port is `CONNECTED` with its intended cameras.
 
 The control site shows the page when it is started with `--aiport-rollout` and the `--inventory-*` settings.
+
+### Deployed-config drift guard (#19, 27 Sep 2026)
+
+A NAS slot's canonical config (`state/aiport-slots/slot-N/config.json`) is what the rollout planner and the control site edit, and what `upload_slot_config` pushes to the NAS. When a deploy writes the NAS copy from another directory, the two can drift.
+- **What happened:** on 26 Sep the r25 build added `live_pool_detector.plate_cameras` to slots 3 and 4 on the NAS only. The next allowlist or provider edit would have uploaded a config without plate reading.
+- **The guard:** set `deployed_config` on each NAS slot in `aiport-rollout.json` to the config last deployed to it. The planner then:
+  - reports `slot_config_drift` with the differing key names (never their values);
+  - makes that slot's allowlist additions and removals manual until the copies match.
+- **After every NAS deploy:** point `deployed_config` at the new build copy and re-run the dry run. A no-op means the canonical copy matches what runs.

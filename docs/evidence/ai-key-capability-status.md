@@ -102,3 +102,24 @@ Read-only from Protect 7.3.68. Only counts were read; group IDs were compared in
 - **Fresh readback:** new Wohnzimmer events with camera faces and no new AI Key faces, plus the Key's `skipped_native_face_camera` counter. Wohnzimmer has had no smart events since 23:05 UTC, and the household is away.
 - **Existing groups:** the 65 singleton groups made earlier stay in Protect. Removing them is a face-gallery action for the owner.
 - **Named recognition:** it still requires an owner-named group on a camera the Key may serve. No such legacy camera is eligible today.
+
+## License plates: AI Key Off vs AI Port results (#19, 27 Sep 2026)
+
+Read-only from Protect 7.3.68. Counts only; no plate text or images.
+
+- **AI Key LPR is Off by eligibility.**
+  - `supportLicensePlateRecognition` is false and `licensePlateRecognitionSettings.enabled` is false.
+  - `isLprDetectionSupportedViaAiprocessor` admits only unpaired G4/G5/Doorbell Lite cameras. Every connected G4/G5 is paired to an AI Port; the only unpaired G4 ("Wohnzimmer alt") is offline.
+  - The one camera with plate hardware, the Wohnzimmer G6, is unpaired, indoors and not an AI Key candidate.
+- **AI Port plates.**
+  - In 7 days there is 1 native plate event: Einfahrt, 26 Sep 13:58 UTC.
+  - It carries `licensePlate` in the event's smart types and a plate on the vehicle thumbnail, and no separate `licensePlate` thumbnail.
+  - Since then Einfahrt had 8 vehicle events and Garage 13, all between 16:00 and 22:00 local, most after dark, and **0 plate events**.
+- **Gap fixed: config drift.** The canonical slot 3 and 4 configs lacked the `plate_cameras` that the deployed r25 configs carry. Any allowlist or provider edit uploaded from them would have silently turned plate reading off.
+  - The planner now reports `slot_config_drift` and blocks automated edits on a drifted slot.
+  - The canonical copies were re-synced from the deployed ones (backups `config.bak-before-plate-sync-20260927.json`).
+  - The live dry run went from a no-op, to a drift report with `deployed_config` set, back to a no-op with the original plan revision.
+  - Nothing was uploaded to the NAS, and no pairing changed.
+- **needs_evidence.**
+  - **Transport:** a fresh native plate event on Einfahrt or Garage, on the original camera timeline (a daytime vehicle with a legible plate).
+  - **Plate accuracy:** needs Olli's ground truth.

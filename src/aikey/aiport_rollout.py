@@ -216,7 +216,8 @@ def plan_rollout(report: dict, slots: dict[str, dict], *,
                          "load": sum((weight(mac) for mac in members), Fraction())}
         for mac in remove:
             actions.append({"kind": "remove_from_allowlist", "slot": label,
-                            "camera": name(mac), "_mac": mac, "automated": True})
+                            "camera": name(mac), "_mac": mac,
+                            "automated": not slot.get("config_drift")})
         for mac in awaiting:
             actions.append({"kind": "pair_in_protect", "slot": label,
                             "camera": name(mac), "automated": False})
@@ -274,9 +275,16 @@ def plan_rollout(report: dict, slots: dict[str, dict], *,
         result[target]["add"].append(mac)
         result[target]["load"] += weight(mac)
     for label, slot in sorted(result.items()):
+        drift = list(slots[label].get("config_drift") or ())
+        if drift:
+            # The local copy differs from the config deployed to this slot. An
+            # edit here would be uploaded over the deployed one and silently
+            # revert those keys (26 Sep: plate_cameras on NAS slots 3 and 4).
+            actions.append({"kind": "slot_config_drift", "slot": label, "keys": drift,
+                            "automated": False})
         for mac in slot["add"]:
             actions.append({"kind": "add_to_allowlist", "slot": label, "camera": name(mac),
-                            "_mac": mac, "automated": True})
+                            "_mac": mac, "automated": not drift})
             actions.append({"kind": "pair_in_protect", "slot": label, "camera": name(mac),
                             "automated": False})
         if slot["add"] and not slot["remove"]:
@@ -346,6 +354,22 @@ def plan_rollout(report: dict, slots: dict[str, dict], *,
     plan["revision"] = hashlib.sha256(json.dumps(
         public(plan), sort_keys=True).encode()).hexdigest()
     return plan
+
+
+def config_drift(local: dict, deployed: dict) -> list[str]:
+    """Dotted key paths whose values differ between two slot configs (names only)."""
+    def flat(value, prefix=""):
+        if isinstance(value, dict) and (value or not prefix):
+            out = {}
+            for key, item in value.items():
+                out.update(flat(item, f"{prefix}.{key}" if prefix else str(key)))
+            return out
+        return {prefix: value}
+    a, b = flat(local), flat(deployed)
+    return sorted(key for key in set(a) | set(b) if a.get(key, _MISSING) != b.get(key, _MISSING))
+
+
+_MISSING = object()
 
 
 def _deploy_edit_actions(actions: list, label: str, target: str) -> None:
@@ -610,6 +634,7 @@ def load_rollout_config(path: Path) -> dict:
                 or slot.get("target") not in _TARGETS
                 or type(slot.get("health_port")) is not int
                 or not isinstance(slot.get("state_dir"), str)
+                or not isinstance(slot.get("deployed_config", ""), str)
                 or "pending" in slot and not (
                     isinstance(slot["pending"], dict)
                     and set(slot["pending"]) == {"since", "deadline", "service", "block"})):
@@ -637,6 +662,9 @@ def compute(rollout: dict, report: dict, *,
         observed = observe_slot(config, read_slot_health(state_dir, slot["health_port"]))
         slots[slot["label"]] = {"target": slot["target"], "host_ip": config.get("device_ip"),
                                 "mac": config.get("mac"), **observed}
+        if slot.get("deployed_config"):
+            slots[slot["label"]]["config_drift"] = config_drift(
+                config, json.loads(Path(slot["deployed_config"]).read_text()))
         dirs[slot["label"]] = state_dir
     new = rollout["new_slots"]
     compose = rollout.get("compose")

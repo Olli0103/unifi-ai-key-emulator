@@ -586,3 +586,64 @@ def test_apply_refuses_a_stale_inventory():
     for report_value in ({"fetched_at": 1_000_000}, {}, {"fetched_at": "x"}):
         with pytest.raises(RolloutError):
             check_inventory_fresh(report_value, now=1_000_000 + MAX_INVENTORY_AGE_S + 1)
+
+
+def test_config_drift_names_only_the_differing_keys():
+    from aikey.aiport_rollout import config_drift
+    base = {"mac": "X", "live_pool_detector": {"threshold": 0.3, "smart_types": ["person"]}}
+    assert config_drift(base, json.loads(json.dumps(base))) == []
+    deployed = json.loads(json.dumps(base))
+    deployed["live_pool_detector"]["plate_cameras"] = ["2A1122334455"]
+    assert config_drift(base, deployed) == ["live_pool_detector.plate_cameras"]
+    deployed["live_pool_detector"]["threshold"] = 0.4
+    assert config_drift(base, deployed) == ["live_pool_detector.plate_cameras",
+                                            "live_pool_detector.threshold"]
+    assert config_drift({"a": None}, {}) == ["a"]            # a missing key is not a null value
+
+
+def test_a_drifted_slot_is_never_edited_or_uploaded_automatically():
+    slots = current()
+    slots["mac"]["config_drift"] = ["live_pool_detector.plate_cameras"]
+    plan = plan_rollout(report(extra=("Keller",)), slots)
+    drift = [a for a in plan["actions"] if a["kind"] == "slot_config_drift"]
+    assert drift == [{"kind": "slot_config_drift", "slot": "mac",
+                      "keys": ["live_pool_detector.plate_cameras"], "automated": False}]
+    add = next(a for a in plan["actions"] if a["kind"] == "add_to_allowlist")
+    assert add["slot"] == "mac" and add["automated"] is False
+    assert not local_changes(plan)
+    # Without drift the same camera is added locally as before.
+    clean = plan_rollout(report(extra=("Keller",)), current())
+    assert next(a for a in clean["actions"] if a["kind"] == "add_to_allowlist")["automated"] is True
+
+
+def test_a_drifted_slot_without_edits_only_reports_the_drift():
+    slots = current()
+    slots["nas-slot-2"]["config_drift"] = ["live_pool_detector.plate_cameras"]
+    plan = plan_rollout(report(), slots)
+    assert kinds(plan) == [("slot_config_drift", "nas-slot-2", None)]
+    assert not local_changes(plan)
+    assert "plate_cameras" in json.dumps(public(plan)) and "2A11" not in json.dumps(public(plan))
+
+
+def test_a_drifted_slot_keeps_stale_removals_manual():
+    slots = current()
+    slots["mac"] = slot("mac", "192.168.0.135", ["Flur", "Schlafzimmer", "Dach"],
+                        {"Flur", "Schlafzimmer"})
+    slots["mac"]["config_drift"] = ["live_pool_detector.plate_cameras"]
+    plan = plan_rollout(report(), slots)
+    removal = [a for a in plan["actions"] if a["kind"] == "remove_from_allowlist"]
+    assert removal and all(a["automated"] is False for a in removal)
+
+
+def test_rollout_config_accepts_only_a_string_deployed_config(tmp_path):
+    from aikey.aiport_rollout import RolloutError, load_rollout_config
+    base = {"schema": "aikey-aiport-rollout/1", "new_slots": {"target": "nas"},
+            "slots": [{"label": "nas-slot-3", "target": "nas", "health_port": 443,
+                       "state_dir": str(tmp_path), "deployed_config": str(tmp_path / "c.json")}]}
+    path = tmp_path / "rollout.json"
+    path.write_text(json.dumps(base))
+    assert load_rollout_config(path)["slots"][0]["deployed_config"].endswith("c.json")
+    base["slots"][0]["deployed_config"] = 5
+    path.write_text(json.dumps(base))
+    with pytest.raises(RolloutError):
+        load_rollout_config(path)
