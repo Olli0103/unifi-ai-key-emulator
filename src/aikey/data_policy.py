@@ -55,6 +55,17 @@ ROWS = (
      "owner_decision": "How long Protect keeps transcripts, and whether crash leftovers are swept "
                        "automatically",
      "evidence": ("aikey.worker:AUDIO_TEMP_PREFIX", "aikey.worker:JobProcessor._audio")},
+    {"key": "provider_keys", "category": "Provider API key files (write-only secrets)",
+     "local": "Private key files next to each profile config; never shown in the control site",
+     "protect": None,
+     "expiry": "none",
+     "detail": "A replaced key keeps its previous file, because the archived configuration "
+               "revision still references it for rollback. Nothing removes superseded keys.",
+     "controller_decides": False,
+     "owner_decision": "When superseded keys may be deleted, which gives up rolling back to "
+                       "the revision that used them",
+     "evidence": ("aikey.config_store:ConfigurationStore.rollback",
+                  "aikey.control_site:ControlSite.save_provider")},
 )
 
 
@@ -70,7 +81,8 @@ def live_status(state_root: Path | None, backups_dir: Path | None = None) -> dic
     from .worker import AUDIO_TEMP_PREFIX
     from .worker_archive import inventory
     status: dict[str, dict | None] = {"search_backups": None, "worker_archive": None,
-                                      "face_store": None, "transcripts": None}
+                                      "face_store": None, "transcripts": None,
+                                      "provider_keys": None}
     backups = _count_backups(backups_dir)
     if backups is not None:
         status["search_backups"] = {"backups": backups}
@@ -88,4 +100,10 @@ def live_status(state_root: Path | None, backups_dir: Path | None = None) -> dic
     leftovers = (sum(1 for path in jobs.iterdir() if path.name.startswith(AUDIO_TEMP_PREFIX))
                  if jobs.is_dir() and not jobs.is_symlink() else 0)
     status["transcripts"] = {"audio_leftovers": leftovers}
+    config = root / "config.json"
+    if config.is_file() and not config.is_symlink():
+        text = config.read_text()
+        files = [path.name for path in root.glob("provider-key-*") if path.is_file()]
+        status["provider_keys"] = {"files": len(files),
+                                   "superseded": sum(1 for name in files if name not in text)}
     return status

@@ -51,7 +51,8 @@ def _calls(name):
 
 
 def test_every_row_is_complete_and_no_row_claims_automatic_expiry():
-    assert set(ROW) == {"search_backups", "worker_archive", "face_store", "transcripts"}
+    assert set(ROW) == {"search_backups", "worker_archive", "face_store", "transcripts",
+                        "provider_keys"}
     for row in ROWS:
         assert row["expiry"] in EXPIRY_KINDS                   # "automatic" is not a kind
         assert row["category"] and row["local"] and row["detail"] and row["owner_decision"]
@@ -131,9 +132,14 @@ def test_live_status_is_counts_only(tmp_path):
     assert status == {"search_backups": {"backups": 1},
                       "worker_archive": {"markers": 0, "problems": 0},
                       "face_store": {"identities": 1},
-                      "transcripts": {"audio_leftovers": 1}}
+                      "transcripts": {"audio_leftovers": 1},
+                      "provider_keys": None}                 # no config.json in this state
+    (root / "config.json").write_text(json.dumps({"inference": {"api_key_file": "/state/provider-key-aa"}}))
+    (root / "provider-key-aa").write_text("x")
+    (root / "provider-key-bb").write_text("y")
+    assert live_status(root, backups)["provider_keys"] == {"files": 2, "superseded": 1}
     assert "Private Name" not in json.dumps(status)
-    assert live_status(None) == dict.fromkeys(status)
+    assert live_status(None) == dict.fromkeys(live_status(root, backups))
 
 
 async def test_the_page_shows_categories_and_counts_never_values_or_paths(tmp_path):
