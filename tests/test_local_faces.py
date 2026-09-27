@@ -31,6 +31,7 @@ class Controller:
                                       "embedding": ALICE}]}
 
     async def export(self, request):
+        self.exports = getattr(self, "exports", 0) + 1
         return web.Response(body=self.video, content_type="video/mp4",
                             headers={"x-start-timestamp": str(START)})
 
@@ -304,3 +305,86 @@ async def test_person_regions_all_outside_the_export_are_refused_before_media(co
     finally:
         await worker.stop()
     assert controller.face_requests == [] and controller.callbacks == []
+
+
+def inventory(tmp_path, hardware=("person", "face"), enabled=("person", "face"), camera=CAMERA):
+    (tmp_path / "camera-inventory.json").write_text(json.dumps({"cameras": [
+        {"id": camera, "featureFlags": {"smartDetectTypes": list(hardware)},
+         "smartDetectSettings": {"objectTypes": list(enabled)}}]}))
+
+
+async def test_a_camera_with_native_face_detection_gets_no_ai_key_face_and_no_fetch(controller, tmp_path):
+    inventory(tmp_path)
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        result = await worker.handle(task())
+        counts = worker.status()["faces"]
+    finally:
+        await worker.stop()
+    assert getattr(controller, "exports", 0) == 0 and controller.face_requests == []
+    [parts] = controller.callbacks
+    face = parts["face"][1]
+    assert set(parts) == {"face"} and face["status"] == "success"
+    assert face["faceSnapshots"] == [] and face["faceAttrs"] == {}
+    assert result["result"] == {"faces": 0, "matched": 0}
+    assert counts == {"skipped_native_face_camera": 1, "processed": 0, "native_face_cameras": 1}
+    assert controller.vision_requests == []
+
+
+async def test_person_region_tasks_on_a_native_face_camera_are_skipped_too(controller, tmp_path):
+    inventory(tmp_path)
+    worker = JobProcessor(config(controller), tmp_path)
+    command = task(face_meta=False)
+    command["payload"]["personMeta"] = [{"ts": START + 1500, "roi": [
+        {"name": "", "coord": [300, 100, 200, 500], "trackerId": 3, "confidence": 0.9,
+         "objectType": "person", "attributes": {"objectType": "person"}}]}]
+    try:
+        await worker.handle(command)
+    finally:
+        await worker.stop()
+    assert controller.face_requests == [] and controller.callbacks[0]["face"][1]["faceSnapshots"] == []
+
+
+@pytest.mark.parametrize("hardware,enabled", [
+    (("person",), ("person",)),              # no face model on the camera
+    (("person", "face"), ("person",)),       # face detection disabled on the camera
+])
+async def test_cameras_without_active_native_face_detection_still_get_local_faces(
+        controller, tmp_path, hardware, enabled):
+    inventory(tmp_path, hardware, enabled)
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        result = await worker.handle(task())
+    finally:
+        await worker.stop()
+    assert controller.exports == 1 and result["result"]["faces"] == 1
+
+
+async def test_a_missing_inventory_or_the_process_override_keeps_local_faces(controller, tmp_path):
+    worker = JobProcessor(config(controller), tmp_path)          # no inventory file
+    try:
+        assert (await worker.handle(task()))["result"]["faces"] == 1
+    finally:
+        await worker.stop()
+    inventory(tmp_path)
+    options = config(controller)
+    options["face_recognition"]["native_face_cameras"] = "process"
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "camera-inventory.json").write_text((tmp_path / "camera-inventory.json").read_text())
+    worker = JobProcessor(options, other)
+    try:
+        assert (await worker.handle(task()))["result"]["faces"] == 1
+    finally:
+        await worker.stop()
+
+
+def test_the_native_face_policy_is_validated(tmp_path):
+    options = {"runtime": {"mode": "lab"}, "controller_origins": ["http://127.0.0.1:1"],
+               "device": {"mac": "02:00:00:00:00:99"},
+               "inference": {"base_url": "http://127.0.0.1:1/v1", "model": "synthetic-vision"},
+               "face_recognition": {"server": "http://127.0.0.1:1", "camera_ids": [CAMERA],
+                                    "native_face_cameras": "always"},
+               "worker": {"max_queue": 2}}
+    with pytest.raises(WorkerError, match="skip or process"):
+        JobProcessor(options, tmp_path)

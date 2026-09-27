@@ -35,6 +35,33 @@ from . import clip
 _LOCAL_INDEX_OPERATIONS = frozenset({"indexImages", "indexKeyFrames"})
 _INDEX_IMAGES_BUDGET_S = 600
 
+
+def _native_face_cameras(state_root) -> frozenset:
+    """Cameras that detect faces themselves, from the private camera inventory.
+
+    Protect's ``isFaceDetectionSupportedViaAiprocessor`` leaves such cameras to
+    their own face model; the AI Key's Camera Coverage face count excludes them.
+    A camera counts when ``face`` is both a hardware smart type and enabled. A
+    missing or unreadable inventory yields none, which keeps processing on.
+    """
+    try:
+        path = Path(state_root) / "camera-inventory.json"
+        if path.stat().st_size > 2 * 1024 * 1024:
+            return frozenset()
+        value = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return frozenset()
+    cameras = value.get("cameras") if isinstance(value, dict) else value
+    native = set()
+    for camera in cameras if isinstance(cameras, list) else []:
+        if not isinstance(camera, dict) or not isinstance(camera.get("id"), str):
+            continue
+        hardware = (camera.get("featureFlags") or {}).get("smartDetectTypes") or []
+        enabled = (camera.get("smartDetectSettings") or {}).get("objectTypes") or []
+        if "face" in hardware and "face" in enabled:
+            native.add(camera["id"])
+    return frozenset(native)
+
 class WorkerError(RuntimeError):
     """A job was rejected or could not be completed safely."""
 
@@ -329,9 +356,13 @@ class JobProcessor:
         """Local-only face recognition for explicitly listed cameras (#20)."""
         if value is None:
             return None
-        if (not isinstance(value, dict) or set(value) - {"server", "camera_ids", "max_faces"}
+        if (not isinstance(value, dict)
+                or set(value) - {"server", "camera_ids", "max_faces", "native_face_cameras"}
                 or not {"server", "camera_ids"} <= set(value)):
             raise WorkerError("face_recognition needs server and camera_ids")
+        policy = value.get("native_face_cameras", "skip")
+        if policy not in ("skip", "process"):
+            raise WorkerError("face_recognition.native_face_cameras must be skip or process")
         server = value["server"]
         parsed = urlsplit(server) if isinstance(server, str) else None
         try:
@@ -351,7 +382,9 @@ class JobProcessor:
         if type(limit) is not int or not 1 <= limit <= 16:
             raise WorkerError("face_recognition.max_faces must be 1..16")
         return {"url": server.rstrip("/") + "/v1/faces", "cameras": frozenset(cameras),
-                "max_faces": limit, "store": FaceStore(state_root)}
+                "max_faces": limit, "store": FaceStore(state_root),
+                "native": _native_face_cameras(state_root) if policy == "skip" else frozenset(),
+                "counts": {"skipped_native_face_camera": 0, "processed": 0}}
 
     def _positive(self, name, default):
         value = self.options.get(name, default)
@@ -1052,6 +1085,14 @@ class JobProcessor:
         body["_faces"] = [[_PERSON_FACE_OFFSET + tracker if linked else tracker, ts, coord,
                            tracker if linked else None]
                           for tracker, (ts, coord, _) in faces]
+        if body["camera"] in self.faces["native"]:
+            # The camera detects faces itself, and Protect groups its faces by the
+            # camera's own embedding. An AI Key face here duplicates the camera's
+            # and carries no faceEmbed, so Protect gives each one its own group
+            # (26 Sep: 65 AI Key faces in 65 singleton groups). Answer the task
+            # with no faces and fetch no video (#20).
+            body["_faces"] = []
+            self.faces["counts"]["skipped_native_face_camera"] += 1
         normalized = {"operation": "recognizeFaces", "payload": body, "callback": callback,
                       "callbackKind": "face", "media": media}
         fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
@@ -1242,7 +1283,9 @@ class JobProcessor:
         queued = self._queue.qsize()
         return {"queued": queued, "active": max(0, len(self._pending) - queued),
                 "pending": len(self._pending), "capacity": self._queue.maxsize,
-                "ledger": len(self._history), "retroactive": dict(self.retroactive)}
+                "ledger": len(self._history), "retroactive": dict(self.retroactive),
+                **({"faces": dict(self.faces["counts"], native_face_cameras=len(self.faces["native"]))}
+                   if self.faces else {})}
 
     async def _consume(self):
         while True:
@@ -1473,9 +1516,11 @@ class JobProcessor:
     async def _execute_faces(self, job):
         from PIL import Image
         started = time.monotonic()
-        (_, url), = job.media
-        data, headers = await self._fetch(url, "video")
         attrs, snapshots, images, matched = {}, [], [], 0
+        if job.payload["_faces"]:
+            (_, url), = job.media
+            data, headers = await self._fetch(url, "video")
+            self.faces["counts"]["processed"] += 1
         for tracker, ts, coord, person in job.payload["_faces"]:
             frame = await self._video_frame(data, headers, url, job, timestamp=ts)
             x, y, w, h = (v / 1000 for v in coord)
