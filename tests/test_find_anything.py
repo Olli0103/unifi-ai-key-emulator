@@ -1029,3 +1029,88 @@ async def test_retroactive_crops_carry_their_class_tag(controller, tmp_path):
         await worker.stop()
     tags = {t["trackerID"]: [x["tag"] for x in t["tags"]] for t in controller.callbacks[0]["ram"]["thumbnailTags"]}
     assert tags == {11: ["person"], 12: ["vehicle"], 13: []}
+
+
+# --- #14 duplicate tracks, unsupported classes and calibration --------------
+
+async def _verify(controller, tmp_path, meta):
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        result = await worker.handle(reverification_request(controller, meta))
+    finally:
+        await worker.stop()
+    [posted] = controller.reverifications
+    return result, posted["result"]["verificationResults"]
+
+
+async def test_a_duplicate_track_is_answered_once_at_its_best_sighting(controller, tmp_path):
+    controller.region_vectors = [mix(person=1.0)]
+    meta = [{"ts": START + 1000, "roi": [verify_roi(1, "person", confidence=0.4),
+                                         verify_roi(2, "person", confidence=0.7)]},
+            {"ts": START + 2000, "roi": [verify_roi(1, "person", confidence=0.9),
+                                         verify_roi(1, "person", confidence=0.2)]}]
+    result, answers = await _verify(controller, tmp_path, meta)
+    assert sorted((a["trackerID"], a["thumbnailMs"]) for a in answers) == [
+        (1, START + 2000), (2, START + 1000)]                    # one answer per tracker
+    assert result["result"] == {"confirmed": 2, "retyped": 0, "unchanged": 0}
+
+
+async def test_unsupported_and_unnamed_classes_get_no_verdict(controller, tmp_path):
+    controller.region_vectors = [mix(vehicle=1.0)]
+    roi = [verify_roi(1, "person"), verify_roi(2, "package"), verify_roi(3, "face"),
+           verify_roi(4, "licensePlate"), {"trackerID": 5, "coord": [1, 1, 10, 10]}]
+    _, answers = await _verify(controller, tmp_path, [{"ts": START + 1500, "roi": roi}])
+    # Only the person region is judged; Protect keeps the other detections as they are.
+    assert [(a["trackerID"], a["objectType"], a["detectedAs"]) for a in answers] == [(1, "person", "vehicle")]
+
+
+async def test_regions_outside_the_exported_interval_are_not_judged(controller, tmp_path):
+    controller.region_vectors = [mix(person=1.0)]
+    meta = [{"ts": START + 1500, "roi": [verify_roi(1, "person")]},
+            {"ts": END + 1, "roi": [verify_roi(2, "person")]},
+            {"ts": START - 1, "roi": [verify_roi(3, "person")]}]
+    _, answers = await _verify(controller, tmp_path, meta)
+    assert [a["trackerID"] for a in answers] == [1]
+
+
+async def test_only_out_of_interval_regions_are_refused_before_media(controller, tmp_path):
+    request = reverification_request(controller, [{"ts": END + 1, "roi": [verify_roi(1, "person")]}])
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError, match="no person, vehicle or animal regions"):
+            await worker.handle(request)
+    finally:
+        await worker.stop()
+    assert controller.reverifications == [] and controller.clip_requests == []
+
+
+async def test_at_most_32_trackers_are_judged_per_task(controller, tmp_path):
+    controller.region_vectors = [mix(person=1.0)] * 32
+    roi = [verify_roi(tracker, "person") for tracker in range(40)]
+    _, answers = await _verify(controller, tmp_path, [{"ts": START + 1500, "roi": roi}])
+    assert sorted(a["trackerID"] for a in answers) == list(range(32))
+    # One thumbnail with 32 regions is embedded in two calls of at most 16 (#14):
+    # a single call is refused by the CLIP server and used to fail the whole task.
+    image_calls = [len(r["regions"]) for r in controller.clip_requests if "regions" in r]
+    assert image_calls == [16, 16]
+
+
+@pytest.mark.parametrize("probability,expected", [
+    (0.9005, ("animal", False)),      # just above the retype bar: retyped
+    (0.8995, ("none", True)),         # just below: left unchanged, not called invalid
+])
+def test_the_retype_bar_is_calibrated_at_the_documented_probability(probability, expected):
+    import math as _math
+    kinds = ["person", "vehicle", "animal", "package", "background"]
+    prompts = {kind: [1.0 if k == kind else 0.0 for k in kinds] for kind in kinds}
+    # Logit scale 100: with four other classes at 0, p = e^L / (e^L + 4).
+    logit = _math.log(4 * probability / (1 - probability))
+    image = [logit / 100 if kind == "animal" else 0.0 for kind in kinds]
+    detected, valid, confidence = JobProcessor._verdict(image, prompts, "person")
+    assert (detected, valid) == expected and abs(confidence - probability) < 1e-9
+    # The original class winning is always a confirmation, however weak.
+    weak = [0.001 if kind == "person" else 0.0 for kind in kinds]
+    assert JobProcessor._verdict(weak, prompts, "person")[:2] == ("person", True)
+    # Background never retypes, even when certain.
+    certain_background = [0.2 if kind == "background" else 0.0 for kind in kinds]
+    assert JobProcessor._verdict(certain_background, prompts, "person")[:2] == ("none", False)

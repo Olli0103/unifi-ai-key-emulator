@@ -1826,11 +1826,16 @@ class JobProcessor:
         results, counts = [], {"confirmed": 0, "retyped": 0, "unchanged": 0}
         for ts, objects in sorted(by_time.items()):
             frame = await self._video_frame(data, headers, url, job, timestamp=ts)
-            try:
-                vectors = await self._clip.embed_regions(frame, [region for _, region, _ in objects])
-            except clip.ClipError as exc:
-                raise WorkerError(str(exc)) from exc
-            for (tracker, _, kind), vector in zip(objects, vectors):
+            vectors = []
+            # A task may name up to 32 trackers in one thumbnail; the CLIP
+            # server embeds at most 16 regions per frame (#14).
+            for first in range(0, len(objects), 16):
+                try:
+                    vectors += await self._clip.embed_regions(
+                        frame, [region for _, region, _ in objects[first:first + 16]])
+                except clip.ClipError as exc:
+                    raise WorkerError(str(exc)) from exc
+            for (tracker, _, kind), vector in zip(objects, vectors, strict=True):
                 detected, valid, confidence = self._verdict(vector, prompts, kind)
                 counts["confirmed" if detected == kind else "unchanged" if detected == "none"
                        else "retyped"] += 1
