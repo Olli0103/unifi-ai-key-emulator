@@ -107,6 +107,8 @@ def build_nas_compose(plan: dict, state_dirs: dict[int, Path], *,
                 or not item["camera_ids"]):
             raise NasComposeError("Invalid AI Port plan slot")
         raw_address = item.get("host_ip")
+        if item["source_kind"] == "onvif":
+            continue            # planned only: no ONVIF ingest yet (#28)
         if raw_address is None and index not in state_dirs:
             continue
         address = _lan_ip(raw_address, network)

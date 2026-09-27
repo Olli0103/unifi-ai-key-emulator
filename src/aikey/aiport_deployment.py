@@ -26,6 +26,7 @@ AI_PORT_CONTAINER_PORT = 8443
 AI_PORT_DISCOVERY_PORT = 10001
 AI_PORT_CONTROLLER_WS_PORT = 7442
 AI_PORT_PROTECT_RTSP_PORT = 7447
+ONVIF_BLOCKER = "onvif_ingest_not_implemented"
 _CAMERA_ID = re.compile(r"[0-9a-fA-F]{24}\Z")
 _G3_G5_MODEL = re.compile(r"UVC G[345](?:\s|\Z)")
 _SCOPES = frozenset({"legacy-only", "legacy-and-g3-g5"})
@@ -219,6 +220,12 @@ def plan_ai_ports(report: dict, *, device_ips: list[str] | None = None,
             "management_tcp": AI_PORT_MANAGEMENT_PORT,
             "apple_publish": (f"{address}:443:{AI_PORT_CONTAINER_PORT}/tcp" if address else None),
             "state": "planned_only",
+            # The ingest accepts only Protect's RTSP relay (port 7447 on the
+            # controller). An ONVIF camera streams from its own address and
+            # port, which no slot can decode yet, so ONVIF capacity is planned
+            # but not deployed (#28).
+            "deployable": allocation["source_kind"] == "protect",
+            **({"blocked_by": ONVIF_BLOCKER} if allocation["source_kind"] == "onvif" else {}),
         })
     assigned_addresses = [item["host_ip"] for item in instances if item["host_ip"]]
     if (len(set(assigned_addresses)) != len(assigned_addresses)

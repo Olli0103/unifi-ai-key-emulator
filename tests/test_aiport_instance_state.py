@@ -161,3 +161,20 @@ def test_provisioned_certificate_fingerprint_cannot_change_silently(tmp_path):
     with pytest.raises(InstanceStateError, match="differs"):
         provision_slot(plan, 1, state, controller_ip="192.168.10.1",
                        controller_cert_file=cert, controller_pin=pin)
+
+
+def test_an_onvif_slot_is_never_provisioned(tmp_path):
+    controller = tmp_path / "controller"
+    controller.mkdir(mode=0o700)
+    cert, _ = ensure_identity_certificate(controller, "2A1100F0A55E")
+    pin = hashlib.sha256(ssl.PEM_cert_to_DER_cert(cert.read_text())).hexdigest()
+    plan = plan_ai_ports({"schema": "aikey-camera-preflight/1", "cameras": [
+        {"id": f"{1:024x}", "model": "Third-party camera", "state": "CONNECTED",
+         "processing_class": "legacy_ingress_needed", "source_kind": "onvif"}]},
+        device_ips=["192.168.10.20"], ai_key_ip="192.168.10.21")
+    root = tmp_path / "states"
+    root.mkdir(mode=0o700)
+    with pytest.raises(InstanceStateError, match="ONVIF ingest is not implemented"):
+        provision_slot(plan, 1, root / "slot-1", controller_ip="192.168.10.1",
+                       controller_cert_file=cert, controller_pin=pin)
+    assert not (root / "slot-1").exists()

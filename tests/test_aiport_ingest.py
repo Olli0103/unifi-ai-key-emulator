@@ -240,6 +240,12 @@ async def test_optional_observer_receives_frame_and_is_cancelled_on_stop(tmp_pat
 @pytest.mark.parametrize("changes,code", [
     ({"ip": "192.168.10.2"}, "stream_source_not_authorized"),
     ({"port": "7441"}, "stream_source_not_authorized"),
+    # An ONVIF camera streams from its own address and RTSP port; the ingest
+    # accepts only Protect's relay on the controller (#28).
+    ({"ip": "192.168.10.77", "port": "554"}, "stream_source_not_authorized"),
+    ({"port": 554}, "stream_source_not_authorized"),
+    ({"port": "8554"}, "stream_source_not_authorized"),
+    ({"port": "7447 "}, "stream_source_not_authorized"),
     ({"deviceID": "0123456789AB"}, "camera_not_authorized"),
     ({"uri": "../camera"}, "invalid_stream_alias"),
     ({"uri": "name?token=secret"}, "invalid_stream_alias"),

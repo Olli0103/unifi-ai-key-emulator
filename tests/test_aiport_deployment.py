@@ -321,3 +321,13 @@ def test_reconcile_rejects_corrupt_previous_slot(mutation):
     mutation(original)
     with pytest.raises(AiPortPlanError):
         plan_ai_ports(report(camera(1), camera(2)), previous_plan=original)
+
+
+def test_onvif_slots_are_planned_but_marked_not_deployable():
+    plan = plan_ai_ports(report(camera(1), camera(2, model="Third-party camera", source="onvif")))
+    by_kind = {item["source_kind"]: item for item in plan["instances"]}
+    assert by_kind["protect"]["deployable"] is True and "blocked_by" not in by_kind["protect"]
+    assert by_kind["onvif"]["deployable"] is False
+    assert by_kind["onvif"]["blocked_by"] == "onvif_ingest_not_implemented"
+    # Separation is unchanged: one slot per source kind, never shared.
+    assert all(len({item["source_kind"]}) == 1 for item in plan["instances"])

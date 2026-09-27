@@ -46,6 +46,10 @@ def _slot_address(plan: dict, slot: int) -> str:
             or not isinstance(item.get("camera_ids"), list)
             or not item["camera_ids"]):
         raise InstanceStateError("Invalid AI Port plan slot")
+    if item["source_kind"] == "onvif":
+        # Never create an identity for a port that cannot ingest its cameras:
+        # the ingest accepts only Protect's relay, not an ONVIF source (#28).
+        raise InstanceStateError("ONVIF ingest is not implemented; this slot cannot be provisioned")
     try:
         if not isinstance(item.get("host_ip"), str):
             raise CandidateError("Candidate requires an explicit IPv4 address")
