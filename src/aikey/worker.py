@@ -132,6 +132,27 @@ _RETYPE_CONFIDENCE = 0.9
 # Decoded event audio lives only in a temporary directory with this prefix
 # inside the worker journal directory, removed when the job ends (#5).
 AUDIO_TEMP_PREFIX = "aikey-audio-"
+# Terminal states a tombstone may keep. callback_uncertain is deliberately not
+# one: it stays in the active journal for operator review (#40).
+_ARCHIVABLE_STATES = frozenset({"completed", "failed"})
+
+
+def rollover_due(record: dict, now: float, *, continuous: bool) -> bool:
+    """Whether a terminal journal record should move to the archive now."""
+    state, age = record.get("state"), now - record.get("updatedAt", now)
+    # Local-only index jobs (CLIP embeddings, no provider data) leave after a
+    # minute so a retroactive backfill never fills the ledger (#21).
+    if record.get("operation") in _LOCAL_INDEX_OPERATIONS and state == "completed" and age > 60:
+        return True
+    # Every other completed record leaves after a day in every mode (#12):
+    # otherwise the ledger fills and all admission stops with "journal is
+    # full". The tombstone answers a replay with already_completed. Failed
+    # tasks outside continuous mode stay a week so Protect can retry them.
+    if state == "completed":
+        return age > 24 * 3600
+    if state == "failed":
+        return age > (24 if continuous else 7 * 24) * 3600
+    return False
 # A face found inside a person region gets its own tracker ID, linked to the person.
 _PERSON_FACE_OFFSET = 1_000_000
 _SPEECH_EXPORT = {"camera", "event", "channel", "start", "end", "type", "format", "skipVideo",
@@ -542,7 +563,7 @@ class JobProcessor:
         target = self._archive_path(job_id)
         self._private_archive_dir(target.parent)
         record = self._history[job_id]
-        if record.get("state") not in {"completed", "failed"}:
+        if record.get("state") not in _ARCHIVABLE_STATES:
             raise WorkerError("Only terminal worker records may be archived")
         tombstone = {"schema": 1, "jobId": job_id, "fingerprint": record["fingerprint"],
                      "state": record["state"], "updatedAt": record["updatedAt"]}
@@ -585,16 +606,9 @@ class JobProcessor:
         now = time.time()
         candidates = sorted(
             (record["updatedAt"], job_id) for job_id, record in self._history.items()
-            if record.get("state") in {"completed", "failed"}
+            if record.get("state") in _ARCHIVABLE_STATES
             and type(record.get("updatedAt")) in {int, float} and 0 < record["updatedAt"]
-            # Continuous mode archives everything after a day. Local-only index
-            # jobs (CLIP embeddings, no provider data) are archived after a
-            # minute in every mode, so a retroactive backfill of thousands of
-            # events never fills the ledger (#21). Tombstones keep replays out;
-            # failed index jobs stay, so Protect can still retry them.
-            and ((self.continuous and record["updatedAt"] < now - 24 * 3600)
-                 or (record.get("operation") in _LOCAL_INDEX_OPERATIONS
-                     and record["state"] == "completed" and record["updatedAt"] < now - 60)))
+            and rollover_due(record, now, continuous=self.continuous))
         if candidates:
             self._private_archive_dir(self.archive_dir)
         for _, job_id in candidates:
