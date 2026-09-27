@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.3). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.4). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-27.3` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-27.4` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -170,8 +170,9 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `capability.ai_mode_basic`: How 7.3.x interprets aiMode
 - `capability.support_ai_summary`: Whether supportAiSummary was advertised as enabled during the 7.3.60 caption trial is not in the public records
 - `capability.deep_mode_vlm`: Whether 7.3.x still couples the two flags
-- `capability.face_recognition`: Named recognition: Protect names face groups itself; a group named by the owner and a later AI Key face landing in it are not observed (issue #20)
-- `capability.face_recognition`: Camera Coverage counts only legacy cameras; no eligible legacy camera is selected here
+- `capability.face_recognition`: Fresh native readback after the native-face skip (27 Sep 00:21 UTC): new Wohnzimmer events with camera faces and no new AI Key faces
+- `capability.face_recognition`: AI Key faces carry no faceEmbed, so Protect puts each in its own group (65 singleton groups on 26 Sep); grouping needs Protect's camera-model embedding, which the Key cannot produce
+- `capability.face_recognition`: Named recognition needs an owner-named group and an eligible legacy camera; none is eligible today
 - `capability.license_plate_recognition`: An eligible camera and an owner decision (issue #19)
 - `capability.face_enhancement`: Native contract (issue #23)
 - `capability.retroactive_processing`: The stored run completed on an empty batch query at an 18 Sep 19:10 cursor although 2109 older tracker-crop events have no RAM task state; the cause needs Protect's aiprocessorTasks rows or 7.3.68 runner source

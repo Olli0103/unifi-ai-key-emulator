@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-27.3",
+ "manifest_version": "ai-key/2026-09-27.4",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -1622,15 +1622,17 @@
     "static-protect-7.2.105"
    ],
    "tests": [
-    "tests/test_find_anything.py::test_capability_flags_follow_the_served_features"
+    "tests/test_find_anything.py::test_capability_flags_follow_the_served_features",
+    "tests/test_local_faces.py::test_a_camera_with_native_face_detection_gets_no_ai_key_face_and_no_fetch"
    ],
    "implementation": [
     "src/aikey/device.py"
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Named recognition: Protect names face groups itself; a group named by the owner and a later AI Key face landing in it are not observed (issue #20)",
-    "Camera Coverage counts only legacy cameras; no eligible legacy camera is selected here"
+    "Fresh native readback after the native-face skip (27 Sep 00:21 UTC): new Wohnzimmer events with camera faces and no new AI Key faces",
+    "AI Key faces carry no faceEmbed, so Protect puts each in its own group (65 singleton groups on 26 Sep); grouping needs Protect's camera-model embedding, which the Key cannot produce",
+    "Named recognition needs an owner-named group and an eligible legacy camera; none is eligible today"
    ]
   },
   {

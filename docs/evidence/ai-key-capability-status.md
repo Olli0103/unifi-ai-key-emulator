@@ -70,3 +70,35 @@ Read-only, from Protect's API (the private API in a signed-in console session). 
   - re-reading the Camera Coverage tooltip in the UI;
   - names and plate accuracy (Olli).
 - **Reverification:** Protect's `reverificationSettings` is enabled for all cameras. The Key's `find_anything.reverification` opt-in stays off, so it refuses reverification tasks and events keep their type. That is the N13 boundary, and nothing was changed.
+
+## Face detection, grouping and the tooltip's zero (#20, 27 Sep 2026)
+
+Read-only from Protect 7.3.68. Only counts were read; group IDs were compared inside the page and not printed.
+
+**The tooltip's 0 is eligibility, not behavior.**
+- The face line counts *legacy* cameras that can use the Key's face recognition (`isFaceDetectionSupportedViaAiprocessor`: unpaired G4/G5/Doorbell Lite).
+- The Wohnzimmer G6 is excluded because it detects faces itself: `face` is both a hardware smart type and enabled in its inventory.
+- The Key's face setting still covers it, so Protect sent the Key face tasks for it.
+
+**What happened on Wohnzimmer (smart events since the 26 Sep 16:52 local fix).**
+- **Events:** 93 smart events.
+- **Camera faces:** 93, clustered by Protect into 42 groups.
+- **AI Key faces:** 65, 0 named. They landed in **65 distinct groups**:
+  - none of those groups holds another face;
+  - in the 38 events where the camera also saw a face, the AI Key face's group differs from the camera face's.
+- **Why:** Protect's face daemon clusters on `attributes.faceEmbed`; its own face flows use a 512-value camera-model embedding. AI Key faces carry none, so each becomes its own group. A local SFace (128-value) embedding would be a different model space, so it is not sent.
+
+**Fix.** The Key now answers face tasks for cameras with native, enabled face detection with **no AI Key faces and no video fetch**.
+- **Scope:** the face flag, the setting and task completion are unchanged.
+- **Unknown capability:** a missing inventory keeps processing on.
+- **Override:** `face_recognition.native_face_cameras: process` restores it.
+- **Tests:** positive and negative tests in `tests/test_local_faces.py`.
+- **Deploy:** `local-aikey-mac-findanything15`, 27 Sep 00:20:56 UTC.
+  - The Key is adopted and connected, and search is connected.
+  - Protect still stores `supportFaceRecognition` true, with the face setting on 1 camera.
+  - The Key recognizes 1 native-face camera.
+
+**needs_evidence.**
+- **Fresh readback:** new Wohnzimmer events with camera faces and no new AI Key faces, plus the Key's `skipped_native_face_camera` counter. Wohnzimmer has had no smart events since 23:05 UTC, and the household is away.
+- **Existing groups:** the 65 singleton groups made earlier stay in Protect. Removing them is a face-gallery action for the owner.
+- **Named recognition:** it still requires an owner-named group on a camera the Key may serve. No such legacy camera is eligible today.
