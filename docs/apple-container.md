@@ -120,6 +120,28 @@ Earlier stopped containers of the same identity are never started. Otherwise the
 
 For a manual redeploy, run `hold <service> --minutes 20` first. Once the new container is running, run `pin <service> <new-container>`; pinning also clears the hold. LaunchAgents run only while the user is logged in, so a reboot recovers at login.
 
+### Upgrade a pinned service in place
+
+`local-apple-upgrade` replaces one pinned container with a container from a new image on the same host. It takes the run settings from the live container, never from hand-typed flags: user, read-only root, tmpfs, CPUs, memory, DNS, published address and port, bind-mounted state, entrypoint and arguments.
+
+```bash
+local-apple-upgrade plan --state-dir state/supervisor --service aiport-mac --new-name <new-container> --image <new-image>
+```
+
+```bash
+local-apple-upgrade swap --state-dir state/supervisor --service aiport-mac --new-name <new-container> --image <new-image> --kind aiport --slot-state state/aiport-mac --health-port 8443 --streams 3
+```
+
+`plan` is read-only. It checks that the pin matches the running container, the new name is free, the new image exists for the same platform, and every live setting can be reproduced. Otherwise it refuses with a fixed reason, `unsupported:<list>`. For example, custom environment variables are refused rather than passed on the command line, because they may hold secrets.
+
+`swap` does the following:
+1. It waits until the service is idle. For an AI Port that means connected with no open smart event; for the AI Key, an empty worker queue.
+2. It holds the supervisor, stops the old container and starts the new one.
+3. It waits for readiness. For an AI Port: adopted, connected and every expected stream decoding. For the AI Key: adopted, connected and search connected.
+4. On success it pins the new container. Otherwise it deletes the new container, restarts the old one and pins it again.
+
+The old container stays stopped for a later rollback. The output is only the service name and one result code: `swapped`, `not_idle`, `hold_failed`, `stop_failed`, `rolled_back:run_failed`, `rolled_back:not_ready` or `rollback_not_ready`.
+
 On 26 Sep 2026 at 08:41:14 the pinned Mac AI Port was stopped, with no event open. The agent's next tick started the same container at 08:41:18. Within 12 s its control connection was back and all three streams were decoding. Protect showed the AI Port `CONNECTED` with its three paired cameras unchanged. A native Flur Animal event followed at 08:41:59. The AI Key and the NAS AI Ports were untouched.
 
 ## Networking limits and later search work
