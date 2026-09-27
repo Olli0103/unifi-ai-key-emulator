@@ -152,7 +152,11 @@ def parse_cameras(value) -> tuple[Camera, ...]:
             reason = "Camera is not connected."
         elif smart:
             processing_class = "smart_event_candidate"
-            reason = "Camera reports smart detections; AI Key event delivery still needs a live trial."
+            # Protect 7.3.68's private camera record lists AI Port-supplied types
+            # like onboard ones; whether this integration field does is unverified,
+            # so the class cannot prove onboard detection for a paired camera (#9).
+            reason = ("Protect lists smart detections (onboard or AI Port supplied); "
+                      "AI Key event delivery still needs a live trial.")
         else:
             processing_class = "legacy_ingress_needed"
             reason = "No onboard smart detections; an AI Port or verified ingress path is needed."

@@ -291,3 +291,40 @@ async def test_registry_explains_why_each_camera_cannot_caption(monkeypatch, tmp
     assert registry.eligibility("cam-c")["caption"]["reason"] == "inventory_stale"
     assert registry.status() == {"fresh": False, "eligible_cameras": 0, "caption_ineligible": {},
                                  "last_error": "InventoryError"}
+
+
+def _integration_row(number, model, smart):
+    return {"id": f"{number:024x}", "modelKey": "camera", "state": "CONNECTED",
+            "name": f"Synthetic {number}", "type": model, "mac": f"02:00:00:00:01:{number:02x}",
+            "featureFlags": {"smartDetectTypes": list(smart), "smartDetectAudioTypes": []}}
+
+
+@pytest.mark.parametrize("paired_g3_smart", [(), ("person", "vehicle", "animal", "package")])
+async def test_a_paired_g3_never_enters_caption_scope_without_an_explicit_model_policy(
+        monkeypatch, tmp_path, paired_g3_smart):
+    """#9: an AI Port-paired G3 Instant reports the same camera fields as a native
+    smart camera once Protect lists AI Port-supplied types. The registry cannot tell
+    the source apart, so only the explicit camera_models policy may admit it."""
+    from aikey.camera_inventory import parse_cameras
+    native = _integration_row(1, "UVC G4 Bullet", ("person", "vehicle", "animal", "package"))
+    paired_g3 = _integration_row(2, "UVC G3 Instant", paired_g3_smart)
+    cameras = [camera.public() for camera in parse_cameras([native, paired_g3])]
+
+    async def fetch(*args, **kwargs):
+        return {"cameras": deepcopy(cameras)}
+
+    monkeypatch.setattr(camera_registry, "fetch_inventory", fetch)
+    options = dict(policy(tmp_path), camera_models=["UVC G4 Bullet"])
+    registry = CameraRegistry("127.0.0.1", options, clock=lambda: 1000.0)
+    await registry.refresh_once()
+    assert registry.allows(native["id"])                              # native smart, in policy
+    assert not registry.allows(paired_g3["id"])                       # paired G3, either inventory
+    expected = "model_not_allowed" if paired_g3_smart else "legacy_ingress_needed"
+    assert registry.eligibility(paired_g3["id"])["caption"]["reason"] == expected
+    # A native model outside the policy is refused the same way; no ID edit admits it.
+    options = dict(policy(tmp_path), camera_models=["UVC G3 Instant"])
+    narrow = CameraRegistry("127.0.0.1", options, clock=lambda: 1000.0)
+    await narrow.refresh_once()
+    assert not narrow.allows(native["id"])
+    assert narrow.eligibility(native["id"])["caption"]["reason"] == "model_not_allowed"
+    assert narrow.allows(paired_g3["id"]) is bool(paired_g3_smart)
