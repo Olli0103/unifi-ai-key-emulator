@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.9). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.10). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-27.9` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-27.10` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -174,7 +174,9 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `capability.face_recognition`: Fresh native readback after the native-face skip (27 Sep 00:21 UTC): new Wohnzimmer events with camera faces and no new AI Key faces
 - `capability.face_recognition`: AI Key faces carry no faceEmbed, so Protect puts each in its own group (65 singleton groups on 26 Sep); grouping needs Protect's camera-model embedding, which the Key cannot produce
 - `capability.face_recognition`: Named recognition needs an owner-named group and an eligible legacy camera; none is eligible today
-- `capability.license_plate_recognition`: An eligible camera and an owner decision (issue #19)
+- `capability.license_plate_recognition`: The Protect 7.3.68 AI Key plate task, result shape and save callback (LPR_LEGACY dispatch); the backend source is not available locally (issue #19)
+- `capability.license_plate_recognition`: An approved local plate reader on the host; the AI Port reads plates only through the external vision provider (issue #19)
+- `capability.license_plate_recognition`: A connected, unpaired legacy camera offered under Legacy Camera Enhancement, and an owner decision (issues #2, #19)
 - `capability.face_enhancement`: Native contract (issue #23)
 - `capability.retroactive_processing`: The stored run completed on an empty batch query at an 18 Sep 19:10 cursor although 2109 older tracker-crop events have no RAM task state; the cause needs Protect's aiprocessorTasks rows or 7.3.68 runner source
 - `capability.retroactive_processing`: Protect does not allow continuing older events once a run is completed without re-adopting the AI Key (start requires not_started on every processor; nothing resets it)

@@ -21,6 +21,7 @@ from aiohttp import web
 
 from .admin_audit import AuditLog
 from .caption_preflight import preflight as caption_preflight
+from .state_backup_preflight import inventory as backup_inventory
 from .admin_security import AdminSecurity
 from .aiport_config_store import (
     AiPortConfigurationError, AiPortConfigurationStore, AiPortRevisionConflict,
@@ -150,6 +151,7 @@ class ControlSite:
         app.router.add_get("/data-retention", self.data_retention)
         app.router.add_get("/audit", self.audit_page)
         app.router.add_get("/caption-preflight", self.caption_preflight_page)
+        app.router.add_get("/state-backup-preflight", self.state_backup_page)
         app.router.add_get("/login", self.login_page)
         app.router.add_post("/login", self.login)
         app.router.add_post("/provider", self.save_provider)
@@ -271,6 +273,40 @@ class ControlSite:
                 + "</table><p class='muted'>Key health is not read by the control site; run "
                   "<code>python -m aikey.caption_preflight --health</code> for it.</p>")
         return _page("Caption preflight", body)
+
+    def _backup_profiles(self) -> dict:
+        profiles = {"aikey": ("aikey", self.aikey_state_dir)}
+        for profile, store in self.aiports.items():
+            profiles[profile] = ("aiport", store.path.parent)
+        return profiles
+
+    async def state_backup_page(self, request: web.Request) -> web.Response:
+        """Read-only backup/restore preflight (#13): counts and reason codes only."""
+        if self._session(request) is None:
+            raise web.HTTPSeeOther("/login")
+        report = await asyncio.to_thread(backup_inventory, self._backup_profiles())
+        rows = []
+        for label, item in report["profiles"].items():
+            if not item.get("readable"):
+                counts = "unreadable"
+            else:
+                counts = (f"required {item['required_present']}/{item['required']} · secrets "
+                          f"{item['secrets_present']}/{item['secret_references']} · journals "
+                          f"{item['journals_present']} · sensitive {item['sensitive_present']}")
+            codes = ", ".join(f"<code>{_safe(code)}</code>" for code in item["problems"]) or "none"
+            rows.append(f"<tr><td>{_safe(label)}</td><td>{_safe(item['kind'])}</td>"
+                        f"<td>{counts}</td><td>{codes}</td></tr>")
+        body = ("<h1>Backup and restore preflight</h1><p><a href='/'>Settings</a></p>"
+                "<p class='muted'>Read-only. Lists whether each profile's config, adopted identity, "
+                "TLS key, controller trust, referenced secrets and journals are in place for a safe "
+                "backup. Counts and reason codes only; nothing is exported, restored or changed.</p>"
+                f"<p><strong>Ready for backup: {'yes' if report['ready_for_backup'] else 'no'}</strong></p>"
+                "<table><tr><th>Profile</th><th>Kind</th><th>Present</th><th>Problems</th></tr>"
+                + "".join(rows) + "</table>"
+                "<p class='muted'>A candidate backup is checked with "
+                "<code>aikey.state_backup_preflight.validate</code> for identity, stale revision, "
+                "missing secrets, partial archive and cross-slot contamination.</p>")
+        return _page("Backup preflight", body)
 
     async def index_migration(self, request: web.Request) -> web.Response:
         cookie = self._session(request)
@@ -559,7 +595,8 @@ class ControlSite:
                    if self.search_state_dir is not None else "")
                 + "<p><a href='/data-retention'>Data flow and retention (read-only)</a> · "
                   "<a href='/audit'>Audit log</a> · "
-                  "<a href='/caption-preflight'>Caption preflight</a></p>"
+                  "<a href='/caption-preflight'>Caption preflight</a> · "
+                  "<a href='/state-backup-preflight'>Backup preflight</a></p>"
                 + undo_form
                 + "<div class='grid'>")
         body += self._provider_form("AI Key", "aikey", key.revision, inference,

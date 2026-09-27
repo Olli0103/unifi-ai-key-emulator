@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-27.9",
+ "manifest_version": "ai-key/2026-09-27.10",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -1658,7 +1658,9 @@
    ],
    "activation": "default",
    "missing_evidence": [
-    "An eligible camera and an owner decision (issue #19)"
+    "The Protect 7.3.68 AI Key plate task, result shape and save callback (LPR_LEGACY dispatch); the backend source is not available locally (issue #19)",
+    "An approved local plate reader on the host; the AI Port reads plates only through the external vision provider (issue #19)",
+    "A connected, unpaired legacy camera offered under Legacy Camera Enhancement, and an owner decision (issues #2, #19)"
    ],
    "rejection": "supportLicensePlateRecognition sent disabled: the Key has no plate reader, and no connected camera is eligible (unpaired G4/G5 or Doorbell Lite). Paired cameras get plates from the AI Port (issue #19)."
   },
