@@ -211,6 +211,106 @@ class ConfigurationStore:
             persisted, checked = self._read(self.path)
             if _revision(persisted) != _revision(encoded):
                 raise ConfigurationStoreError("Configuration replacement could not be verified")
+            # Written only after the new revision is verified: a crash before this
+            # leaves no undo offer, never one for the wrong revision (#17).
+            self._write_provider_journal(_revision(content), _revision(persisted))
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
+
+    # --- one-step provider rollback (#17) ----------------------------------
+
+    @property
+    def _provider_journal(self) -> Path:
+        return self.history_dir / "provider-change.json"
+
+    def _write_provider_journal(self, previous: str, current: str) -> None:
+        encoded = json.dumps({"schema": 1, "from": previous, "to": current},
+                             separators=(",", ":")).encode()
+        try:
+            atomic_private(self._provider_journal, encoded + b"\n")
+        except OSError:
+            # The change itself is saved. Without a fresh record no undo is offered:
+            # an older record names another revision and reads as stale.
+            pass
+
+    def _read_provider_journal(self) -> dict[str, str] | None:
+        path = self._provider_journal
+        if not path.exists() and not path.is_symlink():
+            return None
+        try:
+            value = json.loads(self._read_regular_bytes(path, 4096))
+        except (OSError, ValueError) as exc:
+            raise ConfigurationStoreError("Provider undo record is unreadable") from exc
+        if (not isinstance(value, dict) or set(value) != {"schema", "from", "to"}
+                or value["schema"] != 1
+                or not all(isinstance(value[k], str) and _REVISION.fullmatch(value[k])
+                           for k in ("from", "to"))):
+            raise ConfigurationStoreError("Provider undo record is invalid")
+        return value
+
+    def _prior_key_present(self, raw_target: dict[str, Any]) -> bool:
+        reference = (raw_target.get("inference") or {}).get("api_key_file")
+        if reference is None:
+            return True
+        if not isinstance(reference, str) or not reference:
+            return False
+        # A container path (e.g. /state/provider-key-…) names a file stored next
+        # to this config on the host; a host path is checked directly.
+        for candidate in (Path(reference), self.path.parent / Path(reference).name):
+            try:
+                metadata = candidate.lstat()
+            except OSError:
+                continue
+            if stat.S_ISREG(metadata.st_mode) and metadata.st_size > 0:
+                return True
+        return False
+
+    def provider_rollback_status(self) -> dict[str, Any]:
+        """Whether the last provider change can be undone; never paths or values."""
+        try:
+            journal = self._read_provider_journal()
+            if journal is None:
+                return {"available": False, "reason": "no_recorded_provider_change"}
+            content, _ = self._read(self.path)
+            if _revision(content) != journal["to"]:
+                return {"available": False, "reason": "configuration_changed_since"}
+            target_content = self._read_regular_bytes(self.history_dir / f"{journal['from']}.json",
+                                                      _MAX_CONFIG_BYTES)
+            if _revision(target_content) != journal["from"]:
+                return {"available": False, "reason": "prior_revision_inconsistent"}
+            if not self._prior_key_present(json.loads(target_content)):
+                return {"available": False, "reason": "prior_key_missing"}
+        except (ConfigurationStoreError, OSError, ValueError):
+            return {"available": False, "reason": "undo_record_unreadable"}
+        return {"available": True, "reason": None, "revision": journal["to"]}
+
+    def rollback_provider(self, expected_revision: str) -> ConfigurationSnapshot:
+        """Restore the exact configuration before the last provider change."""
+        with self._locked():
+            journal = self._read_provider_journal()
+            if journal is None:
+                raise ConfigurationStoreError("No provider change to roll back")
+            content, current = self._read(self.path)
+            revision = _revision(content)
+            if (not isinstance(expected_revision, str)
+                    or not hmac.compare_digest(revision, expected_revision)
+                    or revision != journal["to"]):
+                raise RevisionConflict("Configuration changed since it was read")
+            target_path = self.history_dir / f"{journal['from']}.json"
+            target_content, target = self._read(target_path)
+            if _revision(target_content) != journal["from"]:
+                raise ConfigurationStoreError("Stored configuration revision does not match its identifier")
+            if not self._prior_key_present(json.loads(target_content)):
+                raise ConfigurationStoreError("The prior provider key is no longer stored")
+            self._assert_immutable(current, target)
+            self._assert_search_profile(target)
+            self._archive(content)
+            self._replace(target_content)
+            persisted, checked = self._read(self.path)
+            if _revision(persisted) != journal["from"]:
+                raise ConfigurationStoreError("Configuration replacement could not be verified")
+            # One step only: the undo record is spent once the prior revision is live.
+            self._provider_journal.unlink(missing_ok=True)
+            self._fsync_directory(self.history_dir)
             return ConfigurationSnapshot(_revision(persisted), _public(checked))
 
     def _inference_candidate(self, current: dict[str, Any],

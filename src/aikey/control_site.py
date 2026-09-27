@@ -145,6 +145,7 @@ class ControlSite:
         app.router.add_get("/login", self.login_page)
         app.router.add_post("/login", self.login)
         app.router.add_post("/provider", self.save_provider)
+        app.router.add_post("/provider/rollback", self.rollback_provider)
         app.router.add_post("/logout", self.logout)
         app.router.add_get("/healthz", self.health)
         return app
@@ -450,8 +451,16 @@ class ControlSite:
                          "<p class='error'>Check the private profile config files.</p>")
         inference = key.configuration["inference"]
         key_configured = bool(inference.get("api_key_file", {}).get("configured"))
-        notice = "<p class='notice'>Settings saved. Restart the affected service to apply them.</p>" \
-            if request.query.get("saved") == "1" else ""
+        notice = ("<p class='notice'>Settings saved. Restart the affected service to apply them.</p>"
+                  if request.query.get("saved") == "1" else
+                  "<p class='notice'>The previous AI Key provider settings were restored. Restart "
+                  "the AI Key to apply them.</p>" if request.query.get("rolledback") == "1" else "")
+        undo = self.aikey.provider_rollback_status()
+        undo_form = ("<form method='post' action='/provider/rollback'>"
+                     f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
+                     f"<input type='hidden' name='revision' value='{_safe(undo['revision'])}'>"
+                     "<button>Roll back the last AI Key provider change</button></form>"
+                     if undo["available"] else "")
         body = ("<div class='row'><div><h1>Local AI processor</h1>"
                 "<p class='muted'>Provider and model settings for both Protect profiles.</p>"
                 "</div><form method='post' action='/logout'>"
@@ -464,6 +473,7 @@ class ControlSite:
                 + ("<p><a href='/index-migration'>Search index migration (read-only)</a></p>"
                    if self.search_state_dir is not None else "")
                 + "<p><a href='/data-retention'>Data flow and retention (read-only)</a></p>"
+                + undo_form
                 + "<div class='grid'>")
         body += self._provider_form("AI Key", "aikey", key.revision, inference,
                                     key_configured, csrf)
@@ -619,6 +629,20 @@ class ControlSite:
                          "The configuration may also have changed in another session.</p>"
                          "<p><a href='/'>Back to settings</a></p>")
         raise web.HTTPSeeOther("/?saved=1")
+
+    async def rollback_provider(self, request: web.Request) -> web.Response:
+        """Restore the AI Key's settings from before its last provider change (#17)."""
+        fields = await request.post()
+        if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
+            raise web.HTTPForbidden()
+        try:
+            await asyncio.to_thread(self.aikey.rollback_provider, fields.get("revision"))
+        except (ConfigurationStoreError, RevisionConflict):
+            return _page("Rollback not applied", "<h1>Rollback not applied</h1>"
+                         "<p class='error'>The settings changed in another session, or the "
+                         "previous provider key is no longer stored. Nothing was changed.</p>"
+                         "<p><a href='/'>Back to settings</a></p>")
+        raise web.HTTPSeeOther("/?rolledback=1")
 
     async def logout(self, request: web.Request) -> web.Response:
         fields = await request.post()
