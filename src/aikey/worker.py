@@ -129,6 +129,9 @@ _VERIFY_PROMPTS = {
     "background": "a photo of an empty scene with no person, vehicle or animal",
 }
 _RETYPE_CONFIDENCE = 0.9
+# Decoded event audio lives only in a temporary directory with this prefix
+# inside the worker journal directory, removed when the job ends (#5).
+AUDIO_TEMP_PREFIX = "aikey-audio-"
 # A face found inside a person region gets its own tracker ID, linked to the person.
 _PERSON_FACE_OFFSET = 1_000_000
 _SPEECH_EXPORT = {"camera", "event", "channel", "start", "end", "type", "format", "skipVideo",
@@ -1589,7 +1592,7 @@ class JobProcessor:
         if len(data) < 12 or data[4:8] != b"ftyp":
             raise WorkerError("Only MP4 audio exports are supported; UBV needs a verified converter")
         limit = 32 * self.max_audio_ms + 4096          # 16 kHz x 16 bit, plus header
-        with tempfile.TemporaryDirectory(prefix="aikey-audio-", dir=self.state_dir) as temporary:
+        with tempfile.TemporaryDirectory(prefix=AUDIO_TEMP_PREFIX, dir=self.state_dir) as temporary:
             source, output = Path(temporary) / "input.mp4", Path(temporary) / "audio.wav"
             source.write_bytes(data)
             process = await asyncio.create_subprocess_exec(

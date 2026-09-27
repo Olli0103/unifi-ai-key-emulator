@@ -29,6 +29,7 @@ from .aiport_rollout import (
 )
 from .camera_inventory import InventoryError, fetch_inventory
 from .config import atomic_private, load_config
+from .data_policy import ROWS, live_status
 from .config_store import (
     ConfigurationStore, ConfigurationStoreError, RevisionConflict,
 )
@@ -103,7 +104,8 @@ class ControlSite:
                  rollout_path: Path | None = None,
                  search_state_dir: Path | None = None,
                  search_backups_dir: Path | None = None,
-                 search_live_rows: Callable[[], Awaitable[int]] | None = None):
+                 search_live_rows: Callable[[], Awaitable[int]] | None = None,
+                 aikey_state_dir: Path | None = None):
         if type(port) is not int or not 1024 <= port <= 65535:
             raise ValueError("Invalid control-site port")
         self.origin = f"http://127.0.0.1:{port}"
@@ -129,6 +131,7 @@ class ControlSite:
         self.search_state_dir = search_state_dir
         self.search_backups_dir = search_backups_dir
         self.search_live_rows = search_live_rows
+        self.aikey_state_dir = aikey_state_dir
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=8192)
@@ -138,6 +141,7 @@ class ControlSite:
         app.router.add_post("/aiport-rollout", self.rollout_apply)
         # Read-only: no POST route exists, so nothing can be applied from here (#18).
         app.router.add_get("/index-migration", self.index_migration)
+        app.router.add_get("/data-retention", self.data_retention)
         app.router.add_get("/login", self.login_page)
         app.router.add_post("/login", self.login)
         app.router.add_post("/provider", self.save_provider)
@@ -153,6 +157,36 @@ class ControlSite:
         rollout = load_rollout_config(self.rollout_path)
         plan, _ = await asyncio.to_thread(compute_rollout, rollout, report)
         return rollout, plan
+
+    async def data_retention(self, request: web.Request) -> web.Response:
+        """Read-only data-flow and retention table (#5): categories and counts only."""
+        if self._session(request) is None:
+            raise web.HTTPSeeOther("/login")
+        status = await asyncio.to_thread(live_status, self.aikey_state_dir, self.search_backups_dir)
+        labels = {"manual": "Manual only (not scheduled)", "none": "No expiry",
+                  "per_job": "Removed after each job", "not_stored": "Not stored locally"}
+
+        def counts(value):
+            if value is None:
+                return "not configured"
+            return ", ".join(f"{_safe(key.replace('_', ' '))}: "
+                             f"{_safe(item if item is not None else 'unavailable')}"
+                             for key, item in value.items())
+        rows = "".join(
+            "<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in (
+                row["category"], row["local"], row["protect"] or "No Protect copy",
+                labels[row["expiry"]] + " · " + row["detail"],
+                "Controller decides Protect's copy (needs_evidence)" if row["controller_decides"]
+                else "Local only")) + f"<td>{counts(status[row['key']])}</td>"
+            f"<td>{_safe(row['owner_decision'])}</td></tr>" for row in ROWS)
+        body = ("<h1>Data flow and retention</h1><p><a href='/'>Settings</a></p>"
+                "<p class='muted'>Read-only. Shows data categories, how each expires today and "
+                "counts; never names, text, embeddings or paths. Nothing is deleted from this "
+                "page, and no retention period is chosen here.</p>"
+                "<table><tr><th>Data</th><th>Local copy</th><th>Protect copy</th>"
+                "<th>Current expiry</th><th>Retention owner</th><th>Live count</th>"
+                "<th>Operator decision</th></tr>" + rows + "</table>")
+        return _page("Data flow and retention", body)
 
     async def index_migration(self, request: web.Request) -> web.Response:
         cookie = self._session(request)
@@ -428,7 +462,9 @@ class ControlSite:
                 + ("<p><a href='/cameras'>View current Protect cameras</a></p>"
                    if self.inventory_loader is not None else "")
                 + ("<p><a href='/index-migration'>Search index migration (read-only)</a></p>"
-                   if self.search_state_dir is not None else "") + "<div class='grid'>")
+                   if self.search_state_dir is not None else "")
+                + "<p><a href='/data-retention'>Data flow and retention (read-only)</a></p>"
+                + "<div class='grid'>")
         body += self._provider_form("AI Key", "aikey", key.revision, inference,
                                     key_configured, csrf)
         for profile, port in ports.items():
@@ -614,6 +650,8 @@ def _cli() -> argparse.ArgumentParser:
     run.add_argument("--search-state-dir", type=Path,
                      help="AI Key state directory holding search-profile.json (read-only)")
     run.add_argument("--search-backups", type=Path, help="search_backup output directory (read-only)")
+    run.add_argument("--aikey-state-dir", type=Path,
+                     help="AI Key state directory, for read-only retention counts")
     run.add_argument("--search-container",
                      help="PostgreSQL container for a read-only live row count")
     run.add_argument("--inventory-controller")
@@ -703,6 +741,7 @@ def main(argv: list[str] | None = None) -> int:
                            rollout_path=args.aiport_rollout,
                            search_state_dir=args.search_state_dir,
                            search_backups_dir=args.search_backups,
+                           aikey_state_dir=args.aikey_state_dir,
                            search_live_rows=_live_rows(args.search_container)
                            if args.search_container else None)
         site.aikey.snapshot()
