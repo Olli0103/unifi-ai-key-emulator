@@ -25,7 +25,8 @@ from urllib.parse import parse_qs, parse_qsl, urljoin, urlsplit, urlunsplit
 
 import aiohttp
 
-from .caption_budget import CaptionBudget, CaptionBudgetError, CaptionBudgetExhausted
+from .caption_budget import (CaptionBudget, CaptionBudgetDeferred, CaptionBudgetError,
+                             CaptionBudgetExhausted)
 from .providers import ProviderError, validate_inference_config
 from .speech import SpeechError, validate_speech_config
 from .faces import FaceStore, FaceStoreError
@@ -323,6 +324,8 @@ class JobProcessor:
             raise WorkerError("Continuous mode requires a camera registry")
         self.camera_registry = camera_registry
         self.caption_budget = CaptionBudget(state_dir) if self.continuous else None
+        # Sanitized admission counts only (#12); no camera or event identifiers.
+        self.captions = {"admitted": 0, "exhausted": 0, "deferred_fair_share": 0}
         self.archive_dir = Path(state_dir) / "worker-archive"
         if self.continuous:
             self._private_archive_dir(self.archive_dir)
@@ -1395,13 +1398,19 @@ class JobProcessor:
                                                                      "indexKeyFrames", "indexImages",
                                                                      "reverify"}:
                 try:
-                    receipt = self.caption_budget.reserve(job_id, fingerprint, body["camera"])
+                    receipt = self.caption_budget.reserve(job_id, fingerprint, body["camera"],
+                                                          self.camera_registry.allowed_ids)
                 except CaptionBudgetExhausted as exc:
+                    self.captions["exhausted"] += 1
                     raise WorkerError("Global caption budget is exhausted") from exc
+                except CaptionBudgetDeferred as exc:
+                    self.captions["deferred_fair_share"] += 1
+                    raise WorkerError("Caption permits are held for cameras not yet served") from exc
                 except CaptionBudgetError as exc:
                     raise WorkerError("Global caption budget is unavailable") from exc
                 if not receipt.new:
                     raise WorkerError("Caption reservation exists without completed job")
+                self.captions["admitted"] += 1
             self._queue.put_nowait((1 if job.operation == "indexImages" else 0, next(self._sequence), job))
         except asyncio.QueueFull as exc:
             future.cancel()
@@ -1436,7 +1445,8 @@ class JobProcessor:
                 "ledger": len(self._history), "retroactive": dict(self.retroactive),
                 **({"faces": dict(self.faces["counts"], native_face_cameras=len(self.faces["native"]))}
                    if self.faces else {}),
-                **({"enhance": dict(self.enhance["counts"])} if self.enhance else {})}
+                **({"enhance": dict(self.enhance["counts"])} if self.enhance else {}),
+                **({"captions": dict(self.captions)} if self.continuous else {})}
 
     async def _consume(self):
         while True:

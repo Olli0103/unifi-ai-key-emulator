@@ -219,3 +219,31 @@ async def test_inventory_change_during_start_never_reserves_or_fetches(services,
         assert not services.requests and not services.callbacks
     finally:
         await worker.stop()
+
+
+async def test_a_busy_camera_cannot_take_the_permits_held_for_a_quiet_one(services, tmp_path, monkeypatch):
+    config = continuous_options(services, tmp_path)
+    registry = MutableRegistry("camera-fixture", "camera-fixture-two")
+    worker = JobProcessor(config, tmp_path, camera_registry=registry)
+    release = asyncio.Event()
+
+    async def execute(job):
+        await release.wait()
+        return {"status": "processed"}
+
+    monkeypatch.setattr(worker, "_execute", execute)
+    try:
+        for index in range(11):
+            assert (await worker.submit(command(f"busy-{index}")))["accepted"] is True
+        with pytest.raises(WorkerError, match="held for cameras not yet served"):
+            await worker.submit(command("busy-11"))
+        quiet = second_camera(command("quiet-0"), "camera-fixture-two")
+        assert (await worker.submit(quiet))["accepted"] is True
+        with pytest.raises(WorkerError, match="budget is exhausted"):
+            await worker.submit(command("busy-12"))
+        assert worker.status()["captions"] == {"admitted": 12, "exhausted": 1, "deferred_fair_share": 1}
+        assert not services.requests and not services.callbacks
+    finally:
+        release.set()
+        await worker.wait_for_idle()
+        await worker.stop()
