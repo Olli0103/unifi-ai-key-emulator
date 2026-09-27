@@ -133,6 +133,12 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
             if field in options and type(options[field]) is not bool:
                 raise ConfigError(f"{section}.{field} must be a JSON boolean")
     runtime, device, controller = config["runtime"], config["device"], config["controller"]
+    if "diagnostic_command_fingerprints_until" in device:
+        until = device["diagnostic_command_fingerprints_until"]
+        if (type(until) is not int or until <= 0
+                or until > time.time() + 14 * 24 * 3600):
+            raise ConfigError("device.diagnostic_command_fingerprints_until must be a Unix time "
+                              "at most 14 days ahead")
     if "max_video_duration_ms" in config["worker"]:
         duration = config["worker"]["max_video_duration_ms"]
         if type(duration) is not int or duration <= 0:

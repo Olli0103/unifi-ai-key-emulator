@@ -50,6 +50,33 @@ _COUNTER_LIMIT = 2 ** 31 - 1
 _JSON_SHAPES = ("missing", "null", "string", "boolean", "number", "array", "object", "other")
 _RAM_TYPES = ("video", "videoWithRecognition", "image", "multipleImages")
 # Exact local validation messages only. Never expose an arbitrary exception string.
+# Names of commands and RequestAI targets that appear in this project's
+# documented evidence but are not handled. A match is reported by name; it
+# says only that the controller sent a documented identifier (#1).
+DOCUMENTED_COMMAND_CANDIDATES = frozenset({
+    "timeSync", "requestAi", "setDbCredential", "getDbCredential", "setClientCertificate"})
+DOCUMENTED_TARGET_CANDIDATES = {
+    ":7968/describe": "describe", ":7968/on_demand_inference": "on_demand_inference",
+    ":7968/vlm_inference": "vlm_inference", ":7968/anything": "anything",
+    ":7788/v1/models/second_verifier_mlabel/inference": "second_verifier"}
+_FINGERPRINT_LIMIT = 8
+_FINGERPRINT_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}\Z")
+_FINGERPRINT_TARGET = re.compile(r":\d{1,5}/[A-Za-z0-9_/-]{1,200}\Z")
+
+
+def command_fingerprint(value: str) -> str:
+    """Stable comparison key: the first 16 hex digits of SHA-256 over the UTF-8 name.
+
+    Compare offline against a documented candidate name; a fingerprint alone
+    identifies nothing.
+    """
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _unlisted_bucket() -> dict:
+    return {"candidates": {}, "fingerprints": {}, "not_recorded": 0, "malformed": 0, "overflow": 0}
+
+
 _WORKER_REJECTION_REASONS = {
     "Invalid or oversized RequestAI command": "command_size_or_shape",
     "Job must contain finite JSON": "invalid_json",
@@ -298,6 +325,7 @@ class DeviceService:
             "changeUserPassword", "RequestAI", "recognizeKeyFrames", "speechToText",
             "enhanceImage", "changeAiInferAgentSettings",
             "changeDescribePrompts", "networkStatus", "sshService", "unknown")}
+        self._unlisted = {"command": _unlisted_bucket(), "request_ai_target": _unlisted_bucket()}
         self._recognize_diagnostics = {
             "camera_shape_counts": dict.fromkeys(_JSON_SHAPES, 0),
             "cameraId_shape_counts": dict.fromkeys(_JSON_SHAPES, 0),
@@ -365,6 +393,7 @@ class DeviceService:
                 "last_close_code": self._last_close_code,
                 "management": dict(self._management_diagnostics),
                 "control_commands": deepcopy(self._control_diagnostics),
+                "unlisted": deepcopy(self._unlisted),
                 "recognize_key_frames": deepcopy(self._recognize_diagnostics),
                 "clock_offset_ms": self._clock_offset_ms, "discovery": "unsupported",
                 "compatibility": self._compatibility_status(),
@@ -405,6 +434,34 @@ class DeviceService:
         speech = self.config.get("speech_to_text")
         cameras = speech.get("camera_ids") if isinstance(speech, dict) else None
         return frozenset(c for c in cameras if isinstance(c, str)) if isinstance(cameras, list) else frozenset()
+
+    def _record_unlisted(self, kind: str, value: str) -> None:
+        """Count one unhandled command name or RequestAI target without keeping it.
+
+        A documented candidate is counted by its fixed name. Anything else is
+        a 16-digit fingerprint, only while the operator's bounded diagnostic
+        window (device.diagnostic_command_fingerprints_until) is open, at most
+        eight distinct ones; never the raw text, the body or the reply.
+        """
+        bucket = self._unlisted[kind]
+        candidate = (value if kind == "command" and value in DOCUMENTED_COMMAND_CANDIDATES
+                     else DOCUMENTED_TARGET_CANDIDATES.get(value) if kind == "request_ai_target" else None)
+        if candidate is not None:
+            bucket["candidates"][candidate] = min(bucket["candidates"].get(candidate, 0) + 1, 1_000_000)
+            return
+        pattern = _FINGERPRINT_NAME if kind == "command" else _FINGERPRINT_TARGET
+        if not isinstance(value, str) or not pattern.fullmatch(value):
+            bucket["malformed"] = min(bucket["malformed"] + 1, 1_000_000)
+            return
+        until = self.config.get("device", {}).get("diagnostic_command_fingerprints_until")
+        if type(until) is not int or time.time() >= until:
+            bucket["not_recorded"] = min(bucket["not_recorded"] + 1, 1_000_000)
+            return
+        key = command_fingerprint(value)
+        if key in bucket["fingerprints"] or len(bucket["fingerprints"]) < _FINGERPRINT_LIMIT:
+            bucket["fingerprints"][key] = min(bucket["fingerprints"].get(key, 0) + 1, 1_000_000)
+        else:
+            bucket["overflow"] = min(bucket["overflow"] + 1, 1_000_000)
 
     def _continuous_controller_verified(self) -> bool:
         """The controller itself reported a version with native caption evidence."""
@@ -872,6 +929,8 @@ class DeviceService:
         future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = (digest, future)
         diagnostic = self._control_diagnostics.get(action, self._control_diagnostics["unknown"])
+        if action not in self._control_diagnostics:
+            self._record_unlisted("command", action)
         _increment(diagnostic, "count")
         matches = self._record_recognize_shape(body) if action == "recognizeKeyFrames" else ()
         try:
@@ -1078,6 +1137,7 @@ class DeviceService:
                 # Exact worker message only: an unimplemented target is an
                 # unsupported feature (ENOTSUP), not a generic processing failure.
                 if str(exc) == "Unsupported RequestAI targetUri":
+                    self._record_unlisted("request_ai_target", target)
                     raise CommandFailure(95, "Unsupported RequestAI targetUri") from None
                 raise
             finally:

@@ -96,6 +96,18 @@ Each action below is **one approval**. Each lists exactly what it reads, writes,
 - **Check:** adopted, connected, search connected; index rows ≥ before; native class-search counts ≥ baseline.
 - **Undo:** automatic re-pin of the old container if not ready; otherwise the same tool back to the previous image.
 
+## Action 2b (optional): name the unhandled controller commands (#1)
+
+The Action 2 image also carries a bounded diagnostic (`device.status.unlisted`, tested code). Without this step it counts only:
+- documented candidates by fixed name (for example `setDbCredential`, or the `vlm_inference` target);
+- everything else as `not_recorded`, `malformed` or `overflow`.
+
+- **Approve:** add one field to `config.json`, `device.diagnostic_command_fingerprints_until` = a Unix time **at most 7 days ahead** (config accepts up to 14), then one same-image restart.
+- **Records:** while the window is open, the first 8 distinct unhandled command names and 8 unsupported RequestAI targets as 16-digit SHA-256 fingerprints with counts. It never keeps the name, target text, body, credentials, paths, media or reply.
+- **Readback** (read-only, from `/healthz`): `device.unlisted.command` and `device.unlisted.request_ai_target`. Compare a fingerprint only against a documented candidate name, offline: `python -c "from aikey.device import command_fingerprint; print(command_fingerprint('<name>'))"`. An unmatched fingerprint identifies nothing and stays needs_evidence.
+- **Acceptance:** after 24 h, the sum of candidates, fingerprints, `not_recorded`, `malformed` and `overflow` equals the growth of `control_commands.unknown.count` (and of the RequestAI 95 count).
+- **Undo:** remove the field (byte restore of the Action 2 `config.json`) and restart once. The window also closes on its own.
+
 ## Action 3: backups and baseline (writes backups only)
 
 - **Approve:** a 0600 archive of `config.json`, `device-state.json`, `worker-jobs/`, `worker-test-scopes/` and `worker-archive/` with digests, plus a verified search backup (`search_backup` with scratch restore), plus recorded class-search counts.
@@ -187,6 +199,7 @@ Also accept:
 
 1. **Archive the 54 reviewed index callbacks.** Tool: tested code. Digest `92bc7c3b…a223`, Key stopped, backup first, rollback available.
 2. **Deploy the admission code to the AI Key.** Tested code. No config change; idle-gated swap with automatic re-pin.
+2b. *(Optional)* **Open a ≤7-day command-fingerprint window.** One config field plus a restart. Tested code; the first native readback of unhandled command names.
 3. **Backups and baseline.** Backup files only.
 4a. **Live trial of continuous captions on the G6 Instant only** (onboard events). `config.json` plus one restart, up to 12 captions per rolling hour (288 per day) on the pinned key. Undo: byte restore of the Action 3 config.
 4b. **First live trial of a caption on an AI Port-sourced event** (G5 Flex added). Only `camera_models` and `camera_ids` change, and the budget is shared. Undo: byte restore of the 4a config. A missing save within 15 min is an expected possible outcome, recorded as evidence, not retried.
