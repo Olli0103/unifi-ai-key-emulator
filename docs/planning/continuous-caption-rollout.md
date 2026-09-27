@@ -45,12 +45,19 @@ Each action below is **one approval**. Each lists exactly what it reads, writes,
 - **G5 Flex (Büro):** AI Port-paired since 23–24 Sep. While paired, Protect lists the AI Port's set for it (4 smart, 0 audio types), and its smart events come from the AI Port. Every paired camera saved none during the 26–27 Sep provider outage, and the Mac port's entered-event count equals Protect's saved count on its cameras.
 - **The G5 Flex caption evidence (22 Sep) predates the pairing.** A caption on an **AI Port-sourced** event has not been read back natively for any family; this rollout's G5 Flex half would be the first test of that path.
 - **Dispatch is proven:** since the restore, Protect sent key-frame tasks for Büro's AI Port events, and 2 index rows were created from 2 events.
+- **Exact-event check (read-only, 27 Sep; counts and event-ID hash prefixes only).** 21 Sep to now, 1,932 Büro events, no capped slice:
+  - **exactly one persisted caption ever**, `05b4e75d` (22 Sep 16:56 UTC), before the pairing;
+  - after Büro joined the AI Port pool (24 Sep 07:03 UTC): 128 smart events, all with a RAM task (`ramState` done 16, failed 112), and **0 persisted captions**. No caption scope covered Büro then.
+
+  So Protect dispatches RAM tasks for AI Port-sourced G5 events, but a caption saved from one is **unproven**.
+- **G6 control:** exactly one persisted caption, `e7fb569b` (26 Sep 05:05 UTC), the same onboard path this rollout uses.
 
 ## Budget, ceiling and abort checks (reconciled)
 
 - **Budget:** 12 reservations per rolling hour across the pinned cameras, so at most **288 per 24 h** (`DAILY_CEILING`). The budget journal keeps 24 h and holds up to 300 records.
 - **Fairness:** with two cameras, one can take at most 11 while the other is unserved; its 12th attempt is `deferred_fair_share`. After both are served, the 13th in the hour is `exhausted`, before media or inference.
 - **Replay of the last 24 h** of real smart events (192) through this rule: **109 admitted** (G6 91, G5 18), 34 exhausted, 49 deferred. This is an upper bound: one caption task per smart event is unverified.
+- **Stage 4a (G6 only):** with a single eligible camera the fair hold is zero, so G6 may use all 12. The same 24 h replay for G6 alone (186 events): 112 admitted, 74 exhausted, at most 12 per rolling hour.
 - **Each admission** is one request to the pinned OpenAI `gpt-6-luna`, at most 4,096 output tokens.
 - **Abort checks come from the budget journal and health, not process counters.** Health's `captions.admitted` counts since process start and is not per hour. The preflight's `abort` section (read-only) reports:
   - `budget_last_hour` / 12, raising `hourly_budget_exceeded`;
@@ -95,9 +102,21 @@ Each action below is **one approval**. Each lists exactly what it reads, writes,
 - **Writes:** backup files only.
 - **Undo:** not needed (additive).
 
-## Action 4: activate two pinned cameras
+## What is tested code and what is a live trial
 
-- **Approve:** replace `config.json` with the reviewed version below, containing the two real camera IDs, then one same-image restart.
+- **Tested code (synthetic, CI green; nothing live):** all of the following.
+  - camera-ID pin, controller-version gate, budget and fair hold;
+  - no double charge for failed or uncertain captions;
+  - the uncertain-resolution tool;
+  - the preflight phases and abort checks;
+  - the upgrade tool.
+- **Live trials (first time on this installation):**
+  - **4a:** continuous captions on the unpaired G6 Instant. The *path* has one-use evidence (26 Sep); *continuous* operation does not.
+  - **4b:** the **first caption on an AI Port-sourced event** (G5 Flex, paired). No native evidence exists that Protect saves such a caption.
+
+## Action 4a: activate the G6 control only
+
+- **Approve:** write `config.json` with continuous mode for **one** camera, then one same-image restart.
 
 ```json
 {
@@ -110,39 +129,72 @@ Each action below is **one approval**. Each lists exactly what it reads, writes,
       "web_trust_file": "/state/protect-web-trust.json",
       "web_cert_file": "/state/candidate-controller-443.pem",
       "refresh_seconds": 60,
-      "camera_models": ["UVC G6 Instant", "UVC G5 Flex"],
-      "camera_ids": ["<G6 Instant camera id>", "<G5 Flex camera id>"]
+      "camera_models": ["UVC G6 Instant"],
+      "camera_ids": ["<G6 Instant camera id>"]
     }
   }
 }
 ```
 
-- **Dry run on an in-memory copy of the live config** (sha256 prefix `82390fffd714`, unchanged):
-  - changed paths: exactly `controller.protect_version`, `worker.test_scopes` (removed) and `worker.continuous.*`;
-  - `validate_config` accepts it with the Action 2 code (the current image rejects it);
-  - preflight afterwards: only `native_readback_missing` (acceptance) remains, and `ready_to_activate` is true.
-- **Writes:** `config.json` only. The budget journal `caption-budget.json` and the archive grow from normal operation.
-- **Check within 15 min:** health `camera_registry.eligible_cameras` = 2 and fresh; preflight `abort.codes` empty.
-- **Undo:** restore the Action 3 `config.json` byte for byte plus a same-image restart. The budget journal and archive stay for audit and admit nothing with continuous off.
+- **Dry run** (in memory; live config sha256 prefix `82390fffd714` unchanged):
+  - valid with the Action 2 code;
+  - preflight then leaves only `native_readback_missing` (acceptance) once Action 1 is done;
+  - `camera_ids_pinned` = 1.
+- **Writes:** `config.json` only. The budget journal and archive grow from normal operation.
+- **Accept 4a**, needed before 4b:
+  1. `camera_registry.eligible_cameras` = 1 and fresh;
+  2. the first G6 caption: exact-event GET shows `metadata.ramState` done and a non-empty `metadata.ramDescription` within **15 min** of its callback being accepted, and again in the native panel after a full reload;
+  3. preflight `abort.codes` empty; search and all four AI Ports healthy.
+- **Abort 4a** (restore the Action 3 `config.json` byte for byte, then one same-image restart):
+  - any abort code;
+  - no persisted G6 caption within 15 min of an accepted callback;
+  - a caption `callback_uncertain`;
+  - any of the health regressions in Action 5.
+
+## Action 4b: add G5 Flex, the first AI Port-sourced caption trial
+
+- **Approve:** after 4a is accepted, change **only** `worker.continuous.camera_models` to `["UVC G6 Instant", "UVC G5 Flex"]` and `camera_ids` to `["<G6 id>", "<G5 id>"]`, then one same-image restart. The dry run confirms these are the only changed paths and that the config is valid.
+- **Budget:** unchanged, 12 per rolling hour shared, with the fair hold (G6 at most 11 while G5 is unserved). No per-camera cap is added.
+- **The first natural G5 task is the trial.** Expected, in order:
+  1. health `captions.admitted` rises;
+  2. one budget reservation for G5;
+  3. one provider request;
+  4. the callback is accepted;
+  5. within **15 min**, the exact Protect event shows `ramState` done and a non-empty `ramDescription`, confirmed after a full reload.
+
+  Report the event-ID hash prefix and counts only.
+- **If G5 dispatches but its caption is not saved within 15 min** (`ramState` failed, empty description, or no change), or the callback ends `callback_uncertain`:
+  - roll back to the **4a** `config.json` byte for byte, keep G6, and restart once;
+  - the task is not retried: the worker refuses replays of failed and uncertain captions, and a completed one answers `already_completed`, so there is no second charge (`tests/test_caption_no_double_charge.py`);
+  - record "AI Port-sourced caption persistence: not saved" as needs_evidence.
+- **If no G5 task arrives within 24 h** (no natural activity): leave 4b as is or roll back to 4a; neither is a failure.
+- **Accept 4b:** one persisted G5 caption as above; the G6 control still persisting; a busy hour showing 12 reservations, a refused 13th and a fair deferral while G5 is unserved; preflight `abort.codes` empty.
 
 ## Action 5: observe 24 h and accept (read-only)
 
-Run the preflight at least hourly. Abort (Action 4 undo) on any `abort.codes`, or on:
+Run the preflight at least hourly. Roll back one stage (4b→4a, or 4a→Action 3 config) on any `abort.codes`, or on:
 - a new `callback_uncertain` from a caption;
 - the journal above 80% after rollover;
 - the Key not adopted or connected, or search not connected;
 - class-search counts below baseline or index rows decreasing;
 - an AI Port losing adoption or replies, or new quota/rate 429s on the shared key.
 
-Native acceptance (event-ID hash prefixes and counts only):
-- [ ] A fresh exact-event persisted caption on **both** families: `metadata.ramState` done and a non-empty `metadata.ramDescription`, confirmed in the native panel after a full reload.
-- [ ] A busy hour shows 12 reservations, a refused 13th (`exhausted`) and a `deferred_fair_share` while G5 is unserved. No reservation without a journal record.
-- [ ] A Key restart inside the window keeps the rolling hour; no permit is re-spent.
-- [ ] Completed and failed caption records roll into tombstones after 24 h; uncertain ones stay.
-- [ ] Search class counts ≥ baseline; all four AI Ports keep adoption and rising replies.
+Also accept:
+- [ ] a Key restart inside the window keeps the rolling hour, and no permit is re-spent;
+- [ ] completed and failed caption records roll into tombstones after 24 h, and uncertain ones stay.
+
+## Approvals for Olli (one at a time; tested code vs live trial as stated)
+
+1. **Archive the 54 reviewed index callbacks.** Tool: tested code. Digest `92bc7c3b…a223`, Key stopped, backup first, rollback available.
+2. **Deploy the admission code to the AI Key.** Tested code. No config change; idle-gated swap with automatic re-pin.
+3. **Backups and baseline.** Backup files only.
+4a. **Live trial of continuous captions on the G6 Instant only** (onboard events). `config.json` plus one restart, up to 12 captions per rolling hour (288 per day) on the pinned key. Undo: byte restore of the Action 3 config.
+4b. **First live trial of a caption on an AI Port-sourced event** (G5 Flex added). Only `camera_models` and `camera_ids` change, and the budget is shared. Undo: byte restore of the 4a config. A missing save within 15 min is an expected possible outcome, recorded as evidence, not retried.
+5. **Observe 24 h** (read-only).
 
 ## Remaining needs_evidence
 
+- Whether Protect saves a caption produced from an **AI Port-sourced** event (0 of 128 post-pairing Büro events carry one; none was in scope). Action 4b is the first trial.
 - Whether Protect dispatches one caption task per smart event on these families under continuous admission.
 - Native persistence under continuous operation, a restart and multi-day endurance.
 - The effect on events that already carry native tags.

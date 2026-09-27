@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.13). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.14). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-27.13` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-27.14` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -149,6 +149,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `control.continuous_caption_admission`: Native Protect dispatch and persistence under continuous admission
 - `control.continuous_caption_admission`: Preservation of existing native recognition tags on additional model families
 - `control.continuous_caption_admission`: Fair scheduling and a multi-day live endurance run
+- `control.continuous_caption_admission`: Caption persistence on an AI Port-sourced event: 0 of 128 post-pairing G5 Flex events carry a caption (none was in scope); the only G5 caption predates pairing
 - `worker.private_journal_rollover`: Multi-day live endurance and disk-full recovery
 - `worker.private_journal_rollover`: Operator retention and backup policy for private tombstones
 - `control.recognize_key_frames.other_variants`: Dispatched live on 7.3.68 for audio events (216 in one morning), but the thumbnail has no tracker ID, so no object match for an embedding is established
@@ -164,6 +165,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `callback.ram_full_event_tagging`: Persistence after a controller restart
 - `callback.ram_full_event_tagging`: Repeated or simultaneous jobs under continuous operation
 - `callback.ram_full_event_tagging`: Effect on events that already carry native tags
+- `callback.ram_full_event_tagging`: Persistence for events whose smart detection is supplied by a paired AI Port
 - `callback.task_description`: A live controller task ledger entry; unknown task IDs are dropped after HTTP 200
 - `callback.journal_and_uncertain_delivery`: Exactly-once delivery is not claimed
 - `callback.journal_and_uncertain_delivery`: Controller-side retry behavior for AI Key tasks

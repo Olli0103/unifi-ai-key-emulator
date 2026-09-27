@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-27.13",
+ "manifest_version": "ai-key/2026-09-27.14",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -1054,7 +1054,8 @@
    "missing_evidence": [
     "Native Protect dispatch and persistence under continuous admission",
     "Preservation of existing native recognition tags on additional model families",
-    "Fair scheduling and a multi-day live endurance run"
+    "Fair scheduling and a multi-day live endurance run",
+    "Caption persistence on an AI Port-sourced event: 0 of 128 post-pairing G5 Flex events carry a caption (none was in scope); the only G5 caption predates pairing"
    ],
    "notes": "Not deployed. Only connected smart-event cameras in the explicit model-family allowlist, and in the optional camera_ids pin, can be admitted while the inventory is fresh and the controller itself reported a version with native caption evidence (7.3.60 or 7.3.68). Twelve new paid attempts per rolling hour are reserved before media or inference; uncertain attempts are not refunded. Protect-side camera policies are separate. Rollout plan: docs/planning/continuous-caption-rollout.md."
   },
@@ -1439,7 +1440,8 @@
    "missing_evidence": [
     "Persistence after a controller restart",
     "Repeated or simultaneous jobs under continuous operation",
-    "Effect on events that already carry native tags"
+    "Effect on events that already carry native tags",
+    "Persistence for events whose smart detection is supplied by a paired AI Port"
    ],
    "notes": "G5 Flex persistence verified by exact-event GET (ramState done, ramDescription) and native panel after full page reload. G4 Instant native panel showed the exact worker caption after full page reload. On 27 Sep, after the controller moved to 7.3.68, exact-event GETs returned metadata.ramState done and a non-empty metadata.ramDescription for the G5 Flex (22 Sep), G4 Instant (23 Sep) and G6 Instant (26 Sep) caption events, with list and exact lengths equal; a 21-day per-camera scan found no other persisted caption. Persistence was verified in the UI, not by HTTP 200 alone."
   },
