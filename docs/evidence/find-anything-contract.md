@@ -220,6 +220,8 @@ Olli asked for retroactive processing on the current deployment, resuming the st
 
 **Index backup (b9eac9a).** `python -m aikey.search_backup backup --out <dir> --profile <search-profile.json>` writes a `pg_dump -Fc` (mode 0600) with a manifest of row counts, embedding counts, vector dimensions, the dump digest and the pinned profile. If the index changed during the dump, the dump is discarded. `verify <manifest>` checks the digest, restores into a scratch database in the same container, compares counts, and drops the scratch database. The live database is only read.
 
+**Backup expiry (#5).** A dump holds captions, embeddings and search rows, so backups expire. `python -m aikey.search_backup prune --out <dir> [--keep 3] [--max-age-days 30] [--apply]` is a dry run unless `--apply` is given. It removes only matched `search-<stamp>.dump`/`.json` pairs that are beyond the newest `keep` and older than `max-age-days`, and it always keeps the newest verified backup. A symlink, an unmatched or stray `search-*` file, or an unreadable manifest stops it with nothing deleted. The defaults are a proposal; the operator decides the retention period for their location. Live dry run on 27 Sep: 3 pairs, newest verified, nothing to expire. It has not been run with `--apply`.
+
 **Live, Mac search host.**
 - **Backup:** 53 rows, 53 embeddings, all 768 values, 152 KB; restored into a scratch database with identical counts, and the scratch database was dropped. The list of databases afterwards: `postgres`, `unifi-protect` and the two templates.
 - **Deploy:** CLIP sidecar `local-clip-revision` (revision `77d5c9711edb…`), then AI Key `local-aikey-mac-findanything12`, swapped when the worker was idle. The previous containers are kept stopped for rollback.

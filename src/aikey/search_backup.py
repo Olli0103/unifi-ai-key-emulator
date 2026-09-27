@@ -7,6 +7,10 @@ PostgreSQL container, compares it with the manifest and drops the scratch
 database. Neither step writes to the live database. Only counts, dimensions
 and digests are printed; no row content leaves the database.
 
+``prune`` expires old backups (#5). A dump holds captions, embeddings and
+search rows, so it must not be kept forever. It is a dry run unless
+``apply`` is set, and it always keeps the newest verified backup.
+
 Restoring over the live index is a manual rollback step (see
 docs/evidence/find-anything-contract.md), taken only with Protect's search
 host disconnected.
@@ -120,6 +124,59 @@ def verify(run: Runner, container: str, manifest_path: Path) -> dict:
     return {"verified": True, "counts": restored, "sha256": manifest["sha256"]}
 
 
+_STAMP = re.compile(r"search-(\d{8}T\d{6})\Z")
+
+
+def prune(out_dir: Path, *, keep: int = 3, max_age_days: float = 30, apply: bool = False,
+          now: float | None = None) -> dict:
+    """Expire backups beyond ``keep`` newest that are older than ``max_age_days``.
+
+    Only matched ``search-<stamp>.dump`` / ``.json`` pairs are considered; the
+    newest verified backup is always kept, so a rollback path survives. Any
+    symlink, unmatched file or unreadable manifest stops the run untouched.
+    """
+    if type(keep) is not int or keep < 1:
+        raise BackupError("keep must be at least 1")
+    if not isinstance(max_age_days, (int, float)) or max_age_days < 1:
+        raise BackupError("max_age_days must be at least 1")
+    out_dir = Path(out_dir)
+    if out_dir.is_symlink() or not out_dir.is_dir():
+        raise BackupError("Backup directory must be a real directory")
+    now = time.time() if now is None else now
+    stems: dict[str, set[str]] = {}
+    for path in out_dir.iterdir():
+        if not path.name.startswith("search-"):
+            continue
+        if path.is_symlink() or not path.is_file():
+            raise BackupError("Backup directory holds a symlink or non-file; review it first")
+        if path.suffix not in {".dump", ".json"} or not _STAMP.fullmatch(path.stem):
+            raise BackupError("Backup directory holds an unexpected search-* file; review it first")
+        stems.setdefault(path.stem, set()).add(path.suffix)
+    if any(suffixes != {".dump", ".json"} for suffixes in stems.values()):
+        raise BackupError("A backup is missing its dump or manifest; review it first")
+    backups = []
+    for stem in sorted(stems, reverse=True):
+        try:
+            manifest = json.loads((out_dir / f"{stem}.json").read_text())
+        except ValueError as exc:
+            raise BackupError("A backup manifest is unreadable; review it first") from exc
+        if not isinstance(manifest, dict) or manifest.get("dump") != f"{stem}.dump":
+            raise BackupError("A backup manifest does not name its own dump")
+        created = time.mktime(time.strptime(_STAMP.fullmatch(stem).group(1), "%Y%m%dT%H%M%S"))
+        verified = (isinstance(manifest.get("verified"), dict)
+                    and manifest["verified"].get("restore_counts_match") is True)
+        backups.append({"stem": stem, "age_days": (now - created) / 86400, "verified": verified})
+    newest_verified = next((b["stem"] for b in backups if b["verified"]), None)
+    expire = [b["stem"] for index, b in enumerate(backups)
+              if index >= keep and b["age_days"] > max_age_days and b["stem"] != newest_verified]
+    if apply:
+        for stem in expire:
+            for suffix in (".dump", ".json"):
+                (out_dir / f"{stem}{suffix}").unlink()
+    return {"applied": apply, "kept": len(backups) - len(expire), "expired": expire,
+            "newest_verified": newest_verified}
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -137,6 +194,11 @@ def main(argv: list[str] | None = None, run: Runner = subprocess.run) -> int:
     make.add_argument("--profile", type=Path, help="search-profile.json to record with the dump")
     check = sub.add_parser("verify")
     check.add_argument("manifest", type=Path)
+    expire = sub.add_parser("prune", help="expire old backups (dry run unless --apply)")
+    expire.add_argument("--out", required=True, type=Path)
+    expire.add_argument("--keep", type=int, default=3)
+    expire.add_argument("--max-age-days", type=float, default=30)
+    expire.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
     if not _NAME.match(args.container):
         parser.error("invalid container name")
@@ -145,6 +207,8 @@ def main(argv: list[str] | None = None, run: Runner = subprocess.run) -> int:
             manifest = backup(run, args.container, args.out, args.profile)
             report = {"manifest": manifest["dump"].replace(".dump", ".json"), "bytes": manifest["bytes"],
                       "sha256": manifest["sha256"][:12], "counts": manifest["counts"]}
+        elif args.command == "prune":
+            report = prune(args.out, keep=args.keep, max_age_days=args.max_age_days, apply=args.apply)
         else:
             result = verify(run, args.container, args.manifest)
             report = {"verified": True, "sha256": result["sha256"][:12], "counts": result["counts"]}

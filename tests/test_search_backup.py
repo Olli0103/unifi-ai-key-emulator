@@ -2,11 +2,12 @@
 
 import json
 import subprocess
+import time as _time
 
 import pytest
 
 from aikey import search_backup
-from aikey.search_backup import BackupError, backup, main, verify
+from aikey.search_backup import BackupError, backup, main, prune, verify
 
 COUNTS = {"tables": {"ramDetections": 2, "migrations": 8}, "embeddings": 2, "dimensions": [768]}
 
@@ -115,3 +116,82 @@ def test_invalid_container_names_are_refused():
     with pytest.raises(SystemExit):
         main(["--container", "pg; rm -rf", "verify", "x"], run=None)
     assert search_backup._NAME.match("local-postgres-search")
+
+
+# --- #5 backup expiry ------------------------------------------------------
+
+
+def _stamp_time(stamp):
+    return _time.mktime(_time.strptime(stamp, "%Y%m%dT%H%M%S"))
+
+
+def _backup(directory, stamp, *, verified=False):
+    (directory / f"search-{stamp}.dump").write_bytes(b"PGDMP-fixture")
+    value = {"dump": f"search-{stamp}.dump", "sha256": "0" * 64, "counts": COUNTS}
+    if verified:
+        value["verified"] = {"at": stamp, "restore_counts_match": True}
+    (directory / f"search-{stamp}.json").write_text(json.dumps(value))
+
+
+STAMPS = ["20260801T010000", "20260805T010000", "20260810T010000",
+          "20260901T010000", "20260920T010000", "20260926T010000"]
+NOW = _stamp_time("20260927T010000")
+
+
+def test_prune_is_a_dry_run_and_keeps_recent_and_newest_verified(tmp_path):
+    for stamp in STAMPS:
+        _backup(tmp_path, stamp, verified=stamp == "20260801T010000")
+    before = sorted(p.name for p in tmp_path.iterdir())
+    plan = prune(tmp_path, keep=2, max_age_days=30, now=NOW)
+    # Older than 30 days and beyond the newest two: 05 Aug and 10 Aug. 01 Aug is
+    # the only verified backup, and 01 Sep is under 30 days old, so both stay.
+    assert plan == {"applied": False, "kept": 4, "newest_verified": "search-20260801T010000",
+                    "expired": ["search-20260810T010000", "search-20260805T010000"]}
+    assert sorted(p.name for p in tmp_path.iterdir()) == before       # nothing deleted
+    applied = prune(tmp_path, keep=2, max_age_days=30, now=NOW, apply=True)
+    assert applied["expired"] == plan["expired"]
+    left = sorted(p.name for p in tmp_path.iterdir())
+    assert "search-20260805T010000.dump" not in left and "search-20260810T010000.json" not in left
+    assert "search-20260801T010000.dump" in left and len(left) == 8     # four pairs remain
+    assert prune(tmp_path, keep=2, max_age_days=30, now=NOW)["expired"] == []   # converged
+
+
+def test_prune_never_goes_below_keep_even_when_everything_is_old(tmp_path):
+    for stamp in STAMPS[:3]:
+        _backup(tmp_path, stamp)
+    plan = prune(tmp_path, keep=3, max_age_days=1, now=NOW, apply=True)
+    assert plan["expired"] == [] and len(list(tmp_path.iterdir())) == 6
+
+
+@pytest.mark.parametrize("damage", ["orphan_dump", "symlink", "stray", "bad_manifest", "wrong_dump"])
+def test_prune_refuses_an_ambiguous_directory_untouched(tmp_path, damage):
+    for stamp in STAMPS:
+        _backup(tmp_path, stamp)
+    if damage == "orphan_dump":
+        (tmp_path / "search-20260701T010000.dump").write_bytes(b"PGDMP")
+    elif damage == "symlink":
+        (tmp_path / "search-20260702T010000.json").symlink_to(tmp_path / "search-20260801T010000.json")
+    elif damage == "stray":
+        (tmp_path / "search-notes.txt").write_text("x")
+    elif damage == "bad_manifest":
+        (tmp_path / "search-20260801T010000.json").write_text("{not json")
+    else:
+        (tmp_path / "search-20260801T010000.json").write_text(json.dumps({"dump": "search-other.dump"}))
+    before = sorted(p.name for p in tmp_path.iterdir())
+    with pytest.raises(BackupError, match="review it first|does not name"):
+        prune(tmp_path, keep=1, max_age_days=1, now=NOW, apply=True)
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+
+
+@pytest.mark.parametrize("keep,age", [(0, 30), (2, 0), (True, 30)])
+def test_prune_rejects_unsafe_bounds(tmp_path, keep, age):
+    with pytest.raises(BackupError):
+        prune(tmp_path, keep=keep, max_age_days=age)
+
+
+def test_prune_cli_is_dry_by_default(tmp_path, capsys):
+    for stamp in STAMPS:
+        _backup(tmp_path, stamp)
+    assert main(["prune", "--out", str(tmp_path), "--keep", "1", "--max-age-days", "1"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["applied"] is False and report["expired"] and len(list(tmp_path.iterdir())) == 12
