@@ -128,3 +128,13 @@ def test_invalid_exclude_zone_fails_closed(data):
 def test_invalid_or_unsupported_zones_fail_closed(data):
     with pytest.raises(ZoneError):
         parse_person_zones(data)
+
+
+@pytest.mark.parametrize("inset,snapped", [(50, True), (51, False), (60, False)])
+def test_the_frame_edge_snap_stops_at_five_percent(inset, snapped):
+    # #74: Protect's default rectangle sits 2.5-4% in (snapped, see above). An
+    # owner's deliberate inset just beyond 5% must keep rejecting edge objects.
+    zone = _animal_zone(x1=inset, y1=inset, x2=1000 - inset, y2=1000 - inset)
+    edge_box = (0.0, 0.40, 0.08, 0.55)          # hugging the left border
+    assert zone.contains_box(edge_box) is snapped
+    assert zone.contains_box((0.30, 0.30, 0.60, 0.60))   # the interior always admits

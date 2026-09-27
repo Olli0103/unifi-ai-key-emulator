@@ -78,3 +78,24 @@ Read-only, from the signed-in console. No video was exported or transmitted. The
 **Still open:**
 - gaps shorter than 30 s cannot be excluded;
 - an export byte-length check was not done, because camera media must not be exported.
+
+## Smart zones on the live cameras (#74, 27 Sep 2026)
+
+Read-only. Protect camera settings are summarized as zone count, classes and covered area only. The AI Port counters are sanitized.
+
+**Protect zones (7.3.68).**
+- **Smart zones:** every AI Port camera has one smart zone covering **100%** of the frame, except **Flur at 88%**. Flur's is an axis-aligned rectangle inset **2.4–4.0%** on each side: Protect's default rectangle.
+- **None anywhere:** no `excludeZones`, lines or loiter zones.
+- **Privacy masks:** Einfahrt (13.5% and 7.8%), Giebel Vorn (22.2%), Haustür (1.6%) and Giebel hinten (1.6%) have privacy masks. The camera applies these in its stream; they are not part of the smart-detection policy.
+- **Second-lens zones:** Haustür and Garage carry full-area second-lens zones, accepted by the policy parser.
+
+**Effective admission.** Zone vertices within 5% of the frame edge snap to it before the 90% overlap test (the Flur edge correction). So Flur's zone, like all the others, admits the **whole frame**.
+
+**AI Port counters since each slot's last restart.**
+- All 9 cameras have enabled 4-class policies with no policy rejection.
+- Zone rejections are **0** on every camera (`outside_zone`, `excluded`, `below_overlap`, `no_class_zone`), while 143 native events were entered and left.
+- API item rejections: `box` 1 at Haustür and 1 at Garage; `kind` 115 and `shape` 1 at Garage; `label:vehicle` 2 at Haustür. Out-of-range boxes are too rare to justify clamping. Garage's unsupported kinds belong to detection vocabulary (#79).
+
+**Tests.** The edge snap is pinned at its boundary (`test_the_frame_edge_snap_stops_at_five_percent`): an inset of exactly 5% snaps, while 5.1% and 6% keep rejecting edge objects.
+
+**needs_evidence.** The live outside-zone control needs a deliberate inset over 5%, or an exclusion zone, on one camera; so does zone change and disable revocation. Both are owner changes to camera settings. No natural outside-zone candidate can occur with the current zones. The 90% Person overlap rule stays provisional.
