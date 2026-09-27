@@ -7,6 +7,8 @@ from pathlib import Path
 import time
 from typing import Callable
 
+from .camera_inventory import InventoryError, fetch_inventory
+
 # Why a camera cannot receive automatic captions (#9). Health reports only
 # counts per reason; per-camera answers stay on the authenticated admin side.
 REASONS = {
@@ -16,8 +18,6 @@ REASONS = {
     "not_in_inventory": "Camera is not in the current Protect inventory.",
     "inventory_stale": "The Protect inventory is stale or unavailable; admission fails closed.",
 }
-
-from .camera_inventory import InventoryError, fetch_inventory
 
 
 class CameraRegistry:
