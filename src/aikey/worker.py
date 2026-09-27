@@ -239,6 +239,28 @@ def _class_tags(kind, confidence=None):
              else 1.0)
     return [{"confScore": round(score, 4), "tag": name}]
 
+
+def _clean_enhanced_jpeg(data, source_size):
+    """A freshly encoded JPEG of the enhancer's output, or b"" to decline.
+
+    The declared size is checked from the header before any pixel is decoded,
+    and the image is re-encoded so metadata or bytes appended after its end
+    marker never reach Protect's stored derivative (#3).
+    """
+    from PIL import Image
+    try:
+        with Image.open(BytesIO(data)) as result:
+            width, height = result.size
+            if (result.format != "JPEG" or width < source_size[0] or height < source_size[1]
+                    or max(width, height) > _ENHANCE_MAX_SIDE):
+                return b""
+            result.load()
+            out = BytesIO()
+            result.convert("RGB").save(out, format="JPEG", quality=92)
+            return out.getvalue()
+    except (OSError, ValueError, Image.DecompressionBombError):
+        return b""
+
 def _padded(coord, fraction):
     x, y, w, h = (v / 1000 for v in coord)
     pad_x, pad_y = w * fraction, h * fraction
@@ -1041,6 +1063,12 @@ class JobProcessor:
         media = self._url(body["reqUrl"], "media")
         if urlsplit(media).path != f"/internal/aiprocessors/image/{body['imageId']}":
             raise WorkerError("enhanceImage must read the named face crop")
+        # Protect builds the crop query from the same type, camera and object as
+        # the task. A mismatch would store one object's derivative under
+        # another, so it is refused (#3).
+        query = parse_qs(urlsplit(media).query, keep_blank_values=True, strict_parsing=False)
+        if query != {key: [body[key]] for key in ("type", "camera", "smartDetectObject")}:
+            raise WorkerError("enhanceImage crop URL does not match the task")
         callback = self._url(body["resUrl"], "callback")
         if urlsplit(callback).path != _ENHANCED_CALLBACK:
             raise WorkerError("enhanceImage requires the enhanced-image callback")
@@ -1065,20 +1093,18 @@ class JobProcessor:
             form = aiohttp.FormData()
             form.add_field("image", original, filename="face.jpg",
                            content_type=self._image_type(original) or "image/jpeg")
-            async with self._session.post(self.enhance["url"], data=form, allow_redirects=False) as response:
+            # The model-server session: never the controller session with the
+            # device TLS identity and controller pin (#3).
+            async with self._inference_session.post(self.enhance["url"], data=form,
+                                                    allow_redirects=False) as response:
                 if response.status == 200:
                     enhanced = await self._read_response(response, self.max_bytes)
                 elif response.status != 204:
                     raise WorkerError(f"Face enhancer returned HTTP {response.status}")
             if enhanced:
-                with Image.open(BytesIO(enhanced)) as result:
-                    result.load()
-                    width, height = result.size
-                    ok = (result.format == "JPEG" and width >= source_size[0] and height >= source_size[1]
-                          and max(width, height) <= _ENHANCE_MAX_SIDE)
-                if not ok:
+                enhanced = _clean_enhanced_jpeg(enhanced, source_size)
+                if not enhanced:
                     counts["rejected_output"] += 1
-                    enhanced = b""
         except (OSError, ValueError) as exc:
             if not enhanced:
                 raise WorkerError("Face crop or enhancer output is unreadable") from exc

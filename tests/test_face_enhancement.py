@@ -180,3 +180,120 @@ async def test_the_capability_and_command_follow_the_opt_in(tmp_path):
     assert device.get_info()["featureFlags"]["supportFaceEnhancement"]["enabled"] is True
     assert await device._command("enhanceImage", task()["payload"]) == {}
     assert admitted[0]["command"] == "enhanceImage"
+
+
+# --- #3 boundaries of the enhancement route (synthetic media only) ---------
+
+def jpeg_with_extras():
+    """A valid JPEG carrying EXIF text and bytes appended after its end marker."""
+    out = BytesIO()
+    image = Image.new("RGB", (128, 128), (120, 120, 120))
+    exif = Image.Exif()
+    exif[0x010E] = "hidden-note-in-exif"             # ImageDescription
+    image.save(out, "JPEG", exif=exif)
+    return out.getvalue() + b"<html>appended polyglot payload</html>"
+
+
+def huge_declared_jpeg():
+    """A tiny JPEG whose header declares 20000x20000 pixels (a decompression bomb shape)."""
+    out = BytesIO()
+    Image.new("RGB", (8, 8)).save(out, "JPEG")
+    data = bytearray(out.getvalue())
+    marker = data.index(b"\xff\xc0")                 # SOF0: ... height(2) width(2)
+    data[marker + 5:marker + 9] = (20000).to_bytes(2, "big") * 2
+    return bytes(data)
+
+
+async def test_the_enhancer_is_called_without_the_controller_session(controller, tmp_path):
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        await worker.start()
+        used = []
+        real_post = worker._session.post
+
+        def spy(url, *args, **kwargs):
+            used.append(url)
+            return real_post(url, *args, **kwargs)
+        worker._session.post = spy
+        await worker.handle(task())
+    finally:
+        await worker.stop()
+    # The controller session (device TLS identity and pin) only posts the callback.
+    assert used == [controller.origin + "/internal/aiprocessors/image/enhanced"]
+    assert controller.enhance_requests == 1
+
+
+async def test_metadata_and_appended_bytes_never_reach_protect(controller, tmp_path):
+    controller.enhancer_reply = (200, jpeg_with_extras())
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        await worker.handle(task())
+    finally:
+        await worker.stop()
+    [upload] = controller.uploads
+    stored = upload["file"]
+    assert b"hidden-note-in-exif" not in stored and b"polyglot" not in stored
+    assert stored.endswith(b"\xff\xd9")
+    with Image.open(BytesIO(stored)) as picture:
+        assert picture.format == "JPEG" and picture.size == (128, 128)
+        assert not picture.getexif()
+
+
+async def test_a_huge_declared_size_is_refused_before_decoding(controller, tmp_path, monkeypatch):
+    controller.enhancer_reply = (200, huge_declared_jpeg())
+    decoded = []
+    real_load = Image.Image.load
+
+    def counting_load(self):
+        if self.size[0] > 4096:
+            decoded.append(self.size)
+        return real_load(self)
+    monkeypatch.setattr(Image.Image, "load", counting_load)
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        await worker.handle(task())
+        counts = worker.status()["enhance"]
+    finally:
+        await worker.stop()
+    assert decoded == []                               # never decoded
+    assert controller.uploads[0]["file"] == b"" and counts["rejected_output"] == 1
+
+
+@pytest.mark.parametrize("query", [
+    f"type=face&camera=other-camera&smartDetectObject={OBJECT}",
+    f"type=face&camera={CAMERA}&smartDetectObject=other-object",
+    f"type=person&camera={CAMERA}&smartDetectObject={OBJECT}",
+    f"type=face&camera={CAMERA}",
+    f"type=face&camera={CAMERA}&smartDetectObject={OBJECT}&extra=1",
+])
+async def test_a_crop_url_for_another_object_is_refused(controller, tmp_path, query):
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError, match="does not match the task"):
+            await worker.handle(task(reqUrl=f"/internal/aiprocessors/image/{IMAGE}?{query}"))
+    finally:
+        await worker.stop()
+    assert controller.enhance_requests == 0 and controller.uploads == []
+
+
+@pytest.mark.parametrize("url", ["http://192.0.2.9/internal/aiprocessors/image/crop-fixture-1",
+                                 "//evil.example/internal/aiprocessors/image/crop-fixture-1"])
+async def test_a_crop_on_another_host_is_refused(controller, tmp_path, url):
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError):
+            await worker.handle(task(reqUrl=url))
+    finally:
+        await worker.stop()
+    assert controller.enhance_requests == 0
+
+
+async def test_redirects_are_never_followed(controller, tmp_path):
+    controller.enhancer_reply = (302, b"")
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError, match="HTTP 302"):
+            await worker.handle(task())
+    finally:
+        await worker.stop()
+    assert controller.uploads == []
