@@ -247,3 +247,47 @@ async def test_a_busy_camera_cannot_take_the_permits_held_for_a_quiet_one(servic
         release.set()
         await worker.wait_for_idle()
         await worker.stop()
+
+
+async def test_registry_explains_why_each_camera_cannot_caption(monkeypatch, tmp_path):
+    now = [1000.0]
+    rows = [{"id": "cam-a", "model": "Fixture G5", "state": "CONNECTED",
+             "processing_class": "smart_event_candidate"},
+            {"id": "cam-b", "model": "Fixture G4", "state": "CONNECTED",
+             "processing_class": "legacy_ingress_needed"},
+            {"id": "cam-c", "model": "Fixture G5", "state": "DISCONNECTED",
+             "processing_class": "offline"},
+            {"id": "cam-d", "model": "Fixture G6", "state": "CONNECTED",
+             "processing_class": "smart_event_candidate"}]
+
+    async def fetch(*args, **kwargs):
+        if rows is None:
+            raise InventoryError("synthetic failure")
+        return {"cameras": deepcopy(rows)}
+
+    monkeypatch.setattr(camera_registry, "fetch_inventory", fetch)
+    registry = CameraRegistry("127.0.0.1", policy(tmp_path), clock=lambda: now[0])
+    await registry.refresh_once()
+    assert registry.eligibility("cam-a") == {"caption": {"eligible": True, "reason": None}}
+    reasons = {camera: registry.eligibility(camera)["caption"]["reason"]
+               for camera in ("cam-b", "cam-c", "cam-d", "cam-e")}
+    assert reasons == {"cam-b": "legacy_ingress_needed", "cam-c": "offline",
+                       "cam-d": "model_not_allowed", "cam-e": "not_in_inventory"}
+    assert all(registry.eligibility(c)["caption"]["eligible"] is False for c in reasons)
+    status = registry.status()
+    assert status["eligible_cameras"] == 1 and status["caption_ineligible"] == {
+        "legacy_ingress_needed": 1, "model_not_allowed": 1, "offline": 1}
+    assert not any(camera in json.dumps(status) for camera in ("cam-a", "cam-b", "cam-c"))
+    # A camera coming online is re-classified on the next read without any ID edit.
+    rows[2]["state"], rows[2]["processing_class"] = "CONNECTED", "smart_event_candidate"
+    await registry.refresh_once()
+    assert registry.eligibility("cam-c")["caption"]["eligible"] is True
+    # Stale or failed inventory: every camera is ineligible, and no old reasons are reported.
+    now[0] += 120
+    assert registry.eligibility("cam-a")["caption"]["reason"] == "inventory_stale"
+    assert registry.status()["caption_ineligible"] == {}
+    rows = None
+    await registry.refresh_once()
+    assert registry.eligibility("cam-c")["caption"]["reason"] == "inventory_stale"
+    assert registry.status() == {"fresh": False, "eligible_cameras": 0, "caption_ineligible": {},
+                                 "last_error": "InventoryError"}
