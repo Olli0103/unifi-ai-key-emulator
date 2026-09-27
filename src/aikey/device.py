@@ -291,7 +291,7 @@ class DeviceService:
                                            "result_code_counts": _result_counts()} for name in (
             "getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone",
             "changeUserPassword", "RequestAI", "recognizeKeyFrames", "speechToText",
-            "changeAiInferAgentSettings",
+            "enhanceImage", "changeAiInferAgentSettings",
             "changeDescribePrompts", "networkStatus", "sshService", "unknown")}
         self._recognize_diagnostics = {
             "camera_shape_counts": dict.fromkeys(_JSON_SHAPES, 0),
@@ -364,7 +364,8 @@ class DeviceService:
                 "compatibility": self._compatibility_status(),
                 "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "changeUserPassword", "RequestAI"]
                     + (["recognizeKeyFrames"] if basic_enabled else [])
-                    + (["speechToText"] if self._speech_cameras() else [])}
+                    + (["speechToText"] if self._speech_cameras() else [])
+                    + (["enhanceImage"] if self._face_enhancement_configured() else [])}
 
     def _served_capabilities(self) -> dict:
         """Which Protect AI features this configuration actually answers."""
@@ -386,7 +387,13 @@ class DeviceService:
                                       and isinstance(faces.get("server"), str),
             # No AI Key plate reader: plates come from paired AI Ports (#19).
             "supportLicensePlateRecognition": False,
+            # Opt-in local enhancer; Protect stores its output separately (#23).
+            "supportFaceEnhancement": self._face_enhancement_configured(),
         }
+
+    def _face_enhancement_configured(self) -> bool:
+        value = self.config.get("face_enhancement")
+        return isinstance(value, dict) and isinstance(value.get("server"), str)
 
     def _speech_cameras(self) -> frozenset:
         speech = self.config.get("speech_to_text")
@@ -1053,6 +1060,19 @@ class DeviceService:
             finally:
                 self._active_admissions -= 1
             return body
+        if action == "enhanceImage":
+            # Face enhancement is opt-in; without a local enhancer it is refused.
+            if not self._face_enhancement_configured():
+                raise CommandFailure(95, "enhanceImage is not configured")
+            self._active_admissions += 1
+            try:
+                async with asyncio.timeout(30):
+                    admitted = await self.job_handler({"command": action, "payload": deepcopy(body)})
+            finally:
+                self._active_admissions -= 1
+            if not isinstance(admitted, dict):
+                raise ContractError("Job admission must return an object")
+            return {}
         if action == "speechToText":
             # Protect 7.3.60 dispatches this for an alrmSpeak audio event; the
             # worker posts the transcript to /internal/aiprocessors/speech-to-text.

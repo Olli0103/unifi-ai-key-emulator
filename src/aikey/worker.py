@@ -114,6 +114,9 @@ _CALLBACK_UPLOAD = re.compile(r"^/internal/camera-upload/[A-Za-z0-9_-]+$")
 _LEGACY_CALLBACK = "/internal/aiprocessors/recognize-anything"
 _SPEECH_CALLBACK = "/internal/aiprocessors/speech-to-text"
 _REVERIFICATION_CALLBACK = "/internal/aiprocessors/reverification"
+_ENHANCED_CALLBACK = "/internal/aiprocessors/image/enhanced"
+_ENHANCE_FIELDS = frozenset({"reqUrl", "resUrl", "imageId", "type", "camera", "smartDetectObject"})
+_ENHANCE_MAX_SIDE = 2048
 _REVERIFICATION_TARGET = ":7788/v1/models/second_verifier_mlabel/inference"
 # Zero-shot prompts for second-stage verification with the local CLIP encoder.
 _VERIFY_PROMPTS = {
@@ -355,6 +358,7 @@ class JobProcessor:
         # A local CPU Whisper needs about real time; keep speech off the caption timeout.
         self.speech_timeout_s = min(self._positive("speech_timeout_s", 300), 900)
         self.faces = self._face_config(self.config.get("face_recognition"), Path(state_dir))
+        self.enhance = self._enhance_config(self.config.get("face_enhancement"))
         self.find_anything, self.index_cameras, self._clip = None, frozenset(), None
         search = self.config.get("search", {})
         if (self.config.get("find_anything") is not None and search.get("enabled") is True
@@ -404,6 +408,25 @@ class JobProcessor:
                 "max_faces": limit, "store": FaceStore(state_root),
                 "native": _native_face_cameras(state_root) if policy == "skip" else frozenset(),
                 "counts": {"skipped_native_face_camera": 0, "processed": 0}}
+
+    def _enhance_config(self, value):
+        """Opt-in local face enhancement (#23); the result is a separate derivative."""
+        if value is None:
+            return None
+        if not isinstance(value, dict) or set(value) != {"server"}:
+            raise WorkerError("face_enhancement needs only server")
+        server = value["server"]
+        parsed = urlsplit(server) if isinstance(server, str) else None
+        try:
+            address = ipaddress.ip_address(parsed.hostname or "") if parsed else None
+        except ValueError:
+            address = None
+        if (parsed is None or parsed.scheme != "http" or address is None
+                or not (address.is_loopback or address.is_private) or parsed.path not in {"", "/"}):
+            # Face crops never leave this host or its container network.
+            raise WorkerError("face_enhancement.server must be a local HTTP server")
+        return {"url": server.rstrip("/") + "/v1/enhance",
+                "counts": {"requests": 0, "uploaded": 0, "declined": 0, "rejected_output": 0}}
 
     def _positive(self, name, default):
         value = self.options.get(name, default)
@@ -614,7 +637,8 @@ class JobProcessor:
         if purpose == "callback":
             if parsed.query or not (_CALLBACK_TASK.fullmatch(parsed.path)
                                     or _CALLBACK_UPLOAD.fullmatch(parsed.path)
-                                    or parsed.path in {_LEGACY_CALLBACK, _SPEECH_CALLBACK, _REVERIFICATION_CALLBACK}):
+                                    or parsed.path in {_LEGACY_CALLBACK, _SPEECH_CALLBACK, _REVERIFICATION_CALLBACK,
+                                                       _ENHANCED_CALLBACK}):
                 raise WorkerError("Unsupported callback path")
         elif not (_IMAGE_PATH.fullmatch(parsed.path) or parsed.path in _SNAPSHOT_PATHS
                   or parsed.path in _VIDEO_PATHS):
@@ -626,6 +650,8 @@ class JobProcessor:
             raise WorkerError("Invalid or oversized RequestAI command")
         if command.get("command") == "speechToText":
             return self._normalize_speech_to_text(command)
+        if command.get("command") == "enhanceImage":
+            return self._normalize_enhance(command)
         if (command.get("command") == "recognizeKeyFrames" and self.faces is not None
                 and isinstance(command.get("payload"), dict)
                 and command["payload"].get("camera") in self.faces["cameras"]
@@ -993,6 +1019,81 @@ class JobProcessor:
         return (job_id, fingerprint, "indexKeyFrames", body, callback, "legacy_tagging",
                 media, min(self.timeout_s, 90))
 
+    def _normalize_enhance(self, command):
+        """Protect's face enhancement task, answered only by a local enhancer.
+
+        7.3.60 ``dispatchEnhanceImageTaskForObject`` sends ``enhanceImage``
+        with the face crop's image route and ``resUrl``
+        ``/internal/aiprocessors/image/enhanced``. Protect stores the upload in
+        its own ``enhancedImages`` table; the original thumbnail is untouched.
+        """
+        if set(command) != {"command", "payload"} or self.enhance is None:
+            raise WorkerError("enhanceImage requires a configured local enhancer")
+        body = command["payload"]
+        if not isinstance(body, dict) or set(body) != _ENHANCE_FIELDS:
+            raise WorkerError("Unsupported enhanceImage payload fields")
+        body = json.loads(_json(body))
+        ids = ("imageId", "camera", "smartDetectObject")
+        if (body["type"] != "face"
+                or any(not isinstance(body[k], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body[k])
+                       for k in ids)):
+            raise WorkerError("enhanceImage is limited to one face crop")
+        media = self._url(body["reqUrl"], "media")
+        if urlsplit(media).path != f"/internal/aiprocessors/image/{body['imageId']}":
+            raise WorkerError("enhanceImage must read the named face crop")
+        callback = self._url(body["resUrl"], "callback")
+        if urlsplit(callback).path != _ENHANCED_CALLBACK:
+            raise WorkerError("enhanceImage requires the enhanced-image callback")
+        normalized = {"operation": "enhanceImage", "payload": body, "callback": callback,
+                      "callbackKind": "enhanced", "media": [("image", media)]}
+        fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
+        job_id = hashlib.sha256(f"enhanceImage:{body['smartDetectObject']}".encode()).hexdigest()
+        return (job_id, fingerprint, "enhanceImage", body, callback, "enhanced",
+                [("image", media)], min(self.timeout_s, 60))
+
+    async def _execute_enhance(self, job):
+        """Enhance one face crop locally; decline (empty upload) rather than degrade."""
+        from PIL import Image
+        counts = self.enhance["counts"]
+        counts["requests"] += 1
+        (_, url), = job.media
+        original, _ = await self._fetch(url, "image")
+        enhanced = b""
+        try:
+            with Image.open(BytesIO(original)) as picture:
+                source_size = picture.size
+            form = aiohttp.FormData()
+            form.add_field("image", original, filename="face.jpg",
+                           content_type=self._image_type(original) or "image/jpeg")
+            async with self._session.post(self.enhance["url"], data=form, allow_redirects=False) as response:
+                if response.status == 200:
+                    enhanced = await self._read_response(response, self.max_bytes)
+                elif response.status != 204:
+                    raise WorkerError(f"Face enhancer returned HTTP {response.status}")
+            if enhanced:
+                with Image.open(BytesIO(enhanced)) as result:
+                    result.load()
+                    width, height = result.size
+                    ok = (result.format == "JPEG" and width >= source_size[0] and height >= source_size[1]
+                          and max(width, height) <= _ENHANCE_MAX_SIDE)
+                if not ok:
+                    counts["rejected_output"] += 1
+                    enhanced = b""
+        except (OSError, ValueError) as exc:
+            if not enhanced:
+                raise WorkerError("Face crop or enhancer output is unreadable") from exc
+            counts["rejected_output"] += 1
+            enhanced = b""
+        counts["uploaded" if enhanced else "declined"] += 1
+        fields = {"camera": job.payload["camera"], "type": "face",
+                  "smartDetectObject": job.payload["smartDetectObject"]}
+        if self.callback_mode == "disabled":
+            return {"status": "processed", "jobId": job.job_id, "callback": "disabled",
+                    "result": {"enhanced": bool(enhanced)}}
+        result = await self._post_callback(job, fields, images=(("file", enhanced),))
+        result["result"] = {"enhanced": bool(enhanced), "bytes": len(enhanced)}
+        return result
+
     def _normalize_speech_to_text(self, command):
         """Protect's native speech task, only for explicitly allowed cameras.
 
@@ -1308,7 +1409,8 @@ class JobProcessor:
                 "pending": len(self._pending), "capacity": self._queue.maxsize,
                 "ledger": len(self._history), "retroactive": dict(self.retroactive),
                 **({"faces": dict(self.faces["counts"], native_face_cameras=len(self.faces["native"]))}
-                   if self.faces else {})}
+                   if self.faces else {}),
+                **({"enhance": dict(self.enhance["counts"])} if self.enhance else {})}
 
     async def _consume(self):
         while True:
@@ -1782,6 +1884,8 @@ class JobProcessor:
             return await self._execute_index(job)
         if job.operation == "indexImages":
             return await self._execute_index_images(job)
+        if job.operation == "enhanceImage":
+            return await self._execute_enhance(job)
         if job.operation == "reverify":
             return await self._execute_reverification(job)
         if job.operation == "recognizeFaces":
@@ -1869,6 +1973,15 @@ class JobProcessor:
                 # Search snapshot crops, one part per tracker ID (saveEventTagging).
                 for name, image in images:
                     form.add_field(name, image, filename=f"{name}.jpg", content_type="image/jpeg")
+                kwargs = {"data": form}
+            elif job.callback_kind == "enhanced":
+                # The enhanced-image route parses camera, type, smartDetectObject
+                # and file; an empty file means "no modification" (7.3.60).
+                form = aiohttp.FormData()
+                for name in ("camera", "type", "smartDetectObject"):
+                    form.add_field(name, payload[name])
+                (_, image), = images
+                form.add_field("file", image, filename="enhanced.jpg", content_type="image/jpeg")
                 kwargs = {"data": form}
             else:
                 kwargs = {"json": payload}
