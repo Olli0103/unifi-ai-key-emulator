@@ -1059,9 +1059,28 @@ class JobProcessor:
         normalized = {"operation": "indexKeyFrames", "payload": body, "callback": callback,
                       "callbackKind": "legacy_tagging", "media": media}
         fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
-        job_id = hashlib.sha256(f"recognizeKeyFrames:{body['camera']}:{body['event']}".encode()).hexdigest()
+        job_id = self._operation_job_id("indexKeyFrames", body, fingerprint)
         return (job_id, fingerprint, "indexKeyFrames", body, callback, "legacy_tagging",
                 media, min(self.timeout_s, 90))
+
+    def _operation_job_id(self, operation, body, fingerprint):
+        """Job identity per local operation for one event (#1).
+
+        Face, index and caption tasks for the same event used to share
+        ``recognizeKeyFrames:<camera>:<event>``, so a second, different task
+        for an event was refused as "identity reused with different input".
+        Each local operation now has its own identity. A resend identical to a
+        job recorded under the former shared identity is still that job, so
+        duplicate protection covers work done before this change. Captions
+        keep the shared identity: permits and budget reservations use it.
+        """
+        legacy = hashlib.sha256(f"recognizeKeyFrames:{body['camera']}:{body['event']}".encode()).hexdigest()
+        pending = self._pending.get(legacy)
+        previous = self._history.get(legacy) or self._archived_record(legacy)
+        if ((pending is not None and pending.fingerprint == fingerprint)
+                or (previous and previous["fingerprint"] == fingerprint)):
+            return legacy
+        return hashlib.sha256(f"{operation}:{body['camera']}:{body['event']}".encode()).hexdigest()
 
     def _normalize_enhance(self, command):
         """Protect's face enhancement task, answered only by a local enhancer.
@@ -1268,7 +1287,7 @@ class JobProcessor:
         normalized = {"operation": "recognizeFaces", "payload": body, "callback": callback,
                       "callbackKind": "face", "media": media}
         fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
-        job_id = hashlib.sha256(f"recognizeKeyFrames:{body['camera']}:{body['event']}".encode()).hexdigest()
+        job_id = self._operation_job_id("recognizeFaces", body, fingerprint)
         return (job_id, fingerprint, "recognizeFaces", body, callback, "face",
                 media, min(self.timeout_s, 60))
 

@@ -90,7 +90,7 @@ Each action below is **one approval**. Each lists exactly what it reads, writes,
 
 ## Action 2: deploy the admission code to the AI Key (no config change)
 
-- **Approve:** an overlay image of the live lineage plus the 36db45b and this pass's modules (`camera_registry`, `config`, `device`, `protocol`, `caption_preflight`, `uncertain_resolution`, and `worker` for the index-routing fix from #1), swapped with `local-apple-upgrade swap --kind aikey`. The `worker` change restores Find Anything indexing for the two one-use scope cameras (G6 Instant, Giebel Vorn), which have no live index rows today. It also keeps the G6's index tasks local once continuous captions start.
+- **Approve:** an overlay image of the live lineage plus the 36db45b and this pass's modules (`camera_registry`, `config`, `device`, `protocol`, `caption_preflight`, `uncertain_resolution`, and `worker` for the index-routing and per-operation job-identity fixes from #1), swapped with `local-apple-upgrade swap --kind aikey`. The `worker` change restores Find Anything indexing for the two one-use scope cameras (G6 Instant, Giebel Vorn), which have no live index rows today. It also keeps the G6's index tasks local once continuous captions start.
 - **Writes:** a new container and image only. The supervisor pin moves to the new container, and the old one is kept stopped. `config.json` is unchanged.
 - **Behavior change with the current config:** none. Continuous mode is off, and the one-use scopes are consumed.
 - **Check:** adopted, connected, search connected; index rows ≥ before; native class-search counts ≥ baseline.
