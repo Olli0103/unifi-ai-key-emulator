@@ -2451,7 +2451,7 @@
     "control.recognize_key_frames.multiple_images",
     "index.thumbnail_tags"
    ],
-   "procedure": "Completion path established (empty batch query at about 19:45 UTC on 26 Sep; the final batch, ending at the cursor, completed 19:44:35-19:45:05 per the Key archive). 27 Sep read-only comparison: the 2110 older and 2310 covered tracker-crop events do not differ in duration (p50 28 s vs 27 s, max 314 s both), camera mix (the same 8 cameras), thumbnail fields (croppedId, trackerId, objectId, confidence) or smartDetectTrack availability; only ramState differs. No task listing is exposed (aiprocessors carries aggregate taskStatistics only). Remaining (needs_evidence): Protect's aiprocessorTasks rows for the older events and the 7.3.68 retroactive batch query. Continuing them requires a new processor record (re-adoption), which is out of scope."
+   "procedure": "Completion path established (empty batch query at about 19:45 UTC on 26 Sep; the final batch, ending at the cursor, completed between 19:44 and 19:45 UTC per the Key archive). 27 Sep read-only comparison: the 2110 older and 2310 covered tracker-crop events do not differ in duration (p50 28 s vs 27 s, max 314 s both), camera mix (the same 8 cameras), thumbnail fields (croppedId, trackerId, objectId, confidence) or smartDetectTrack availability; only ramState differs. No task listing is exposed (aiprocessors carries aggregate taskStatistics only). Remaining (needs_evidence): Protect's aiprocessorTasks rows for the older events and the 7.3.68 retroactive batch query. Continuing them requires a new processor record (re-adoption), which is out of scope."
   },
   {
    "id": "N11",
