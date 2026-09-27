@@ -247,6 +247,29 @@ _OBJECT_PHRASES = {"licensePlate": ("license plate", "licence plate", "number pl
 _WORD = re.compile(r"[a-zäöüß]+")
 
 
+_KEY_TAG_KINDS = ("person", "vehicle", "animal", "package")
+
+
+def key_tags(text: object) -> list[dict[str, Any]]:
+    """RAM keyTags for the object words of a sentence (English/German), max 8.
+
+    Each matched word maps to its class's RAM tag name, the same name the Key
+    tags indexed objects with. Protect's AI Trigger alarms require at least
+    one shared RAM tag before comparing embeddings (7.3.60 matchRules). Basic
+    search applies keyTags as a filter only in exact mode, which this Key
+    never reports, so Find Anything results are unchanged (#26).
+    """
+    if not isinstance(text, str):
+        return []
+    tags, seen = [], set()
+    for word in _WORD.findall(text.lower()):
+        kind = next((k for k in _KEY_TAG_KINDS if word in _OBJECT_WORDS[k]), None)
+        if kind is not None and word not in seen:
+            seen.add(word)
+            tags.append({"matchedWord": word, "tags": [kind]})
+    return tags[:8]
+
+
 def parse_query_filters(text: str, now_ms: int, zone: str = "UTC") -> dict[str, Any]:
     """Object types and a time window stated in a search sentence (English/German).
 
@@ -581,8 +604,9 @@ class SearchService:
                     raise EmbeddingError(str(exc)) from exc
                 filters = parse_query_filters(body.get("querySentence"), int(time.time() * 1000),
                                               self._timezone())
-                result = {"keyTags": [], "txtEmbed": vector, "model": clip.MODEL,
-                          "dim": clip.DIMENSIONS, "exact_match": False, **filters}
+                result = {"keyTags": key_tags(body.get("querySentence")), "txtEmbed": vector,
+                          "model": clip.MODEL, "dim": clip.DIMENSIONS, "exact_match": False,
+                          **filters}
                 self.status["queries"] += 1
                 self.status["object_filters"] += bool(filters["objectTypes"])
                 self.status["time_filters"] += "startTime" in filters

@@ -217,6 +217,25 @@ def _meta_regions(meta):
     return regions
 
 
+
+# RAM tag names the Key can state for an object: its class, which Protect's own
+# detection already established. Protect's AI Trigger alarm matches a
+# detection only when its tags share at least one RAM tag with the rule
+# sentence's keyTags (7.3.60 matchRules), so these must be Protect tag names;
+# all four are enabled in Protect's RAM tag vocabulary (#26).
+_CLASS_TAG_NAMES = {"person": "person", "vehicle": "vehicle", "animal": "animal",
+                    "package": "package"}
+
+
+def _class_tags(kind, confidence=None):
+    """The object's class as one RAM tag ``{tag, confScore}``, or no tags."""
+    name = _CLASS_TAG_NAMES.get(kind) if isinstance(kind, str) else None
+    if name is None:
+        return []
+    score = (float(confidence) if type(confidence) in (int, float) and 0 < confidence <= 1
+             else 1.0)
+    return [{"confScore": round(score, 4), "tag": name}]
+
 def _padded(coord, fraction):
     x, y, w, h = (v / 1000 for v in coord)
     pad_x, pad_y = w * fraction, h * fraction
@@ -805,13 +824,14 @@ class JobProcessor:
         """
         start, end, limit = body["start"], body["end"], self.find_anything["max_objects"]
         existing = {}
-        for tracker, ts, coord, _, confidence in _meta_regions(body.get("thumbnailMeta")):
+        for tracker, ts, coord, kind, confidence in _meta_regions(body.get("thumbnailMeta")):
             if start <= ts <= end and ((tracker, ts) not in existing
                                        or confidence > existing[(tracker, ts)][0]):
-                existing[(tracker, ts)] = (confidence, _padded(coord, 0.1))
+                existing[(tracker, ts)] = (confidence, _padded(coord, 0.1), kind)
         if existing:
             ranked = sorted(existing.items(), key=lambda item: (-item[1][0], item[0]))
-            return [[tracker, ts, region, None] for (tracker, ts), (_, region) in ranked[:limit]]
+            return [[tracker, ts, region, kind, "existing", confidence]
+                    for (tracker, ts), (confidence, region, kind) in ranked[:limit]]
         snapshots = {}
         for source in ("roiMeta", "personMeta", "vehicleMeta"):
             for tracker, ts, coord, kind, confidence in _meta_regions(body.get(source)):
@@ -819,7 +839,8 @@ class JobProcessor:
                         and (tracker not in snapshots or confidence > snapshots[tracker][0])):
                     snapshots[tracker] = (confidence, ts, _padded(coord, 0.1), kind)
         ranked = sorted(snapshots.items(), key=lambda item: (-item[1][0], item[0]))
-        return [[tracker, ts, region, kind] for tracker, (_, ts, region, kind) in ranked[:limit]]
+        return [[tracker, ts, region, kind, "snapshot", confidence]
+                for tracker, (confidence, ts, region, kind) in ranked[:limit]]
 
     def _normalize_reverification(self, command):
         """Protect's Second Stage Verification task, answered by local CLIP.
@@ -902,7 +923,7 @@ class JobProcessor:
         images = body["images"]
         if not isinstance(images, list) or not 1 <= len(images) <= 256:
             raise WorkerError("multipleImages must list 1 to 256 images")
-        chosen = {}
+        chosen, kinds = {}, {}
         for item in images:
             if not isinstance(item, dict):
                 raise WorkerError("multipleImages entries need an image, tracker and key moment")
@@ -917,10 +938,12 @@ class JobProcessor:
             key = (tracker, moment)
             if key not in chosen or confidence > chosen[key][0]:
                 chosen[key] = (confidence, image_id)
+                kinds[tracker] = item.get("objectType")
         ranked = sorted(chosen.items(), key=lambda item: (-item[1][0], item[0]))[:16]
         media = [("image", self._url(f"/internal/aiprocessors/image/{image_id}", "media"))
                  for _, (_, image_id) in ranked]
         body["_crops"] = [[tracker, moment] for (tracker, moment), _ in ranked]
+        body["_kinds"] = [[tracker, kinds.get(tracker)] for (tracker, _), _ in ranked]
         callback = self._url(body["resUrl"], "callback")
         if urlsplit(callback).path != _LEGACY_CALLBACK:
             raise WorkerError("recognizeKeyFrames requires the observed RAM callback")
@@ -1585,20 +1608,21 @@ class JobProcessor:
             return [], [], []
         self._clip_client()
         by_time = {}
-        for tracker, ts, region, kind in targets:
-            by_time.setdefault(ts, []).append((tracker, region, kind))
+        for tracker, ts, region, kind, mode, confidence in targets:
+            by_time.setdefault(ts, []).append((tracker, region, kind, mode, confidence))
         tags, moments, images = [], [], []
         for ts, objects in sorted(by_time.items()):
             frame = await self._video_frame(data, headers, url, job, timestamp=ts)
             try:
-                vectors = await self._clip.embed_regions(frame, [region for _, region, _ in objects])
+                vectors = await self._clip.embed_regions(frame, [item[1] for item in objects])
             except clip.ClipError as exc:
                 raise WorkerError(str(exc)) from exc
             picture = None
-            for (tracker, region, kind), vector in zip(objects, vectors):
+            for (tracker, region, kind, mode, confidence), vector in zip(objects, vectors):
                 embedding = [round(value, 6) for value in vector]
-                if kind is None:
-                    tags.append({"keyMomentMs": ts, "tags": [], "trackerID": tracker, "imgEmbed": embedding})
+                if mode == "existing":
+                    tags.append({"keyMomentMs": ts, "tags": _class_tags(kind, confidence),
+                                 "trackerID": tracker, "imgEmbed": embedding})
                     continue
                 if picture is None:
                     picture = Image.open(BytesIO(frame)).convert("RGB")
@@ -1610,7 +1634,8 @@ class JobProcessor:
                 out = BytesIO()
                 crop.save(out, format="JPEG", quality=85)
                 name = f"{tracker}.jpg"
-                moments.append({"keyMomentMs": ts, "tags": [], "imgEmbed": embedding,
+                moments.append({"keyMomentMs": ts, "tags": _class_tags(kind, confidence),
+                                "imgEmbed": embedding,
                                 "searchSnapshots": [{
                                     "clockBestMonotonic": ts, "clockBestWall": ts,
                                     "smartDetectHeatmap": "", "smartDetectSnapshot": name,
@@ -1699,6 +1724,7 @@ class JobProcessor:
         started = time.monotonic()
         self._clip_client()
         tags = []
+        kind_of = {tracker: kind for tracker, kind in job.payload.get("_kinds", [])}
         for (tracker, moment), (_, url) in zip(job.payload["_crops"], job.media):
             data, _ = await self._fetch(url, "image")
             kind = self._image_type(data)
@@ -1712,7 +1738,8 @@ class JobProcessor:
                 [vector] = await self._clip.embed_regions(data, [[0.0, 0.0, 1.0, 1.0]])
             except clip.ClipError as exc:
                 raise WorkerError(str(exc)) from exc
-            tags.append({"keyMomentMs": moment, "tags": [], "trackerID": tracker,
+            tags.append({"keyMomentMs": moment, "tags": _class_tags(kind_of.get(tracker)),
+                         "trackerID": tracker,
                          "imgEmbed": [round(value, 6) for value in vector]})
             self.retroactive["crops_indexed"] += 1
         elapsed = round((time.monotonic() - started) * 1000)

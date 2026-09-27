@@ -170,8 +170,10 @@ async def test_objects_are_embedded_locally_and_posted_as_thumbnail_tags(control
     assert ram["description"] == "" and ram["keyMomentsTags"] == []
     tags = ram["thumbnailTags"]
     # saveEventTagging matches (trackerID, keyMomentMs) to trackerId and exact detectedAt.
-    assert [(t["trackerID"], t["keyMomentMs"], t["tags"]) for t in tags] == [
-        (3, START + 1500, []), (4, START + 1500, [])]
+    assert [(t["trackerID"], t["keyMomentMs"]) for t in tags] == [(3, START + 1500), (4, START + 1500)]
+    # Each object carries its class as a RAM tag, which AI Trigger alarms require (#26).
+    assert [[tag["tag"] for tag in t["tags"]] for t in tags] == [["person"], ["vehicle"]]
+    assert all(0 < t["tags"][0]["confScore"] <= 1 for t in tags)
     assert all(len(t["imgEmbed"]) == 768 for t in tags)
     assert tags[0]["imgEmbed"][0] == 1.0 and tags[1]["imgEmbed"][1] == 1.0   # normalized
     assert result["result"] == {"indexed": 2, "snapshots": 0}
@@ -278,7 +280,8 @@ async def test_nl_parse_is_answered_with_a_local_clip_text_vector(controller, tm
         assert response.header["errorCode"] == 0 and response.header["id"] == "q1"
         body = response.body
         assert body["model"] == clip.MODEL and body["dim"] == 768 and body["exact_match"] is False
-        assert body["keyTags"] == [] and body["objectTypes"] == ["vehicle"]      # "red car"
+        assert body["keyTags"] == [{"matchedWord": "car", "tags": ["vehicle"]}]   # "red car"
+        assert body["objectTypes"] == ["vehicle"]
         assert "startTime" not in body and "timeTag" not in body
         assert body["txtEmbed"][5] == 1.0 and len(body["txtEmbed"]) == 768
         # Protect's default model is clip-ViT-L-14 when a request omits it.
@@ -466,7 +469,10 @@ async def test_key_moment_regions_become_search_snapshots_with_crops(controller,
                              "smartDetectSnapshot", "smartDetectSnapshotName",
                              "smartDetectSnapshotType", "trackerID"}
     assert snapshot["clockBestWall"] == START + 1000 and snapshot["smartDetectSnapshot"] == "5.jpg"
-    assert all(len(m["imgEmbed"]) == 768 and m["tags"] == [] for m in moments)
+    assert all(len(m["imgEmbed"]) == 768 for m in moments)
+    assert all([tag["tag"] for tag in m["tags"]] == [m["searchSnapshots"][0]["smartDetectSnapshotType"]]
+               for m in moments if m["searchSnapshots"][0]["smartDetectSnapshotType"] in
+               ("person", "vehicle", "animal", "package"))
     assert parts["5"] == ("image/jpeg", b"\xff\xd8\xff") and parts["7"] == ("image/jpeg", b"\xff\xd8\xff")
     assert result["result"] == {"indexed": 0, "snapshots": 2}
 
@@ -991,3 +997,35 @@ async def test_live_jobs_run_before_queued_backfill_jobs(controller, tmp_path):
     await asyncio.wait_for(asyncio.gather(*(job.future for job in jobs)), 5)
     consumer.cancel()
     assert order == ["speechToText", "indexImages", "indexImages"]
+
+
+
+def test_key_tags_name_the_class_of_object_words_only():
+    from aikey.search import key_tags
+    assert key_tags("a man walking his Hund past the Auto") == [
+        {"matchedWord": "man", "tags": ["person"]}, {"matchedWord": "hund", "tags": ["animal"]},
+        {"matchedWord": "auto", "tags": ["vehicle"]}]
+    assert key_tags("a sailing boat on the lake") == []          # no class word, no tags
+    assert key_tags("face at the window") == []                  # face is not a class tag here
+    assert key_tags(None) == [] and len(key_tags(" ".join(["car"] * 20))) == 1
+
+
+def test_class_tags_cover_supported_classes_and_nothing_else():
+    from aikey.worker import _class_tags
+    assert _class_tags("person", 0.87) == [{"confScore": 0.87, "tag": "person"}]
+    assert _class_tags("package") == [{"confScore": 1.0, "tag": "package"}]
+    assert _class_tags("vehicle", 7) == [{"confScore": 1.0, "tag": "vehicle"}]   # bad score
+    for unknown in (None, "", "face", "licensePlate", "boat", 3):
+        assert _class_tags(unknown) == []
+
+
+async def test_retroactive_crops_carry_their_class_tag(controller, tmp_path):
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        await worker.handle(multiple_images([
+            crop_entry("crop1", 11, START + 500), crop_entry("png1", 12, START + 900, 60, "vehicle"),
+            crop_entry("crop3", 13, START + 700, 50, "face")]))
+    finally:
+        await worker.stop()
+    tags = {t["trackerID"]: [x["tag"] for x in t["tags"]] for t in controller.callbacks[0]["ram"]["thumbnailTags"]}
+    assert tags == {11: ["person"], 12: ["vehicle"], 13: []}
