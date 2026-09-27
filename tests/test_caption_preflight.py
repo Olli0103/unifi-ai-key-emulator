@@ -74,7 +74,8 @@ def test_the_live_shape_lists_every_blocker(tmp_path):
     before = digest(root)
     report = preflight(root, LIVE_LIKE, health=HEALTH, now=NOW)
     assert report["scope"] == {"continuous_configured": False, "one_use_scopes": 2,
-                               "scope_kinds": ["recognizeKeyFrames"], "camera_models_policy": 0}
+                               "scope_kinds": ["recognizeKeyFrames"], "camera_models_policy": 0,
+                               "camera_ids_pinned": 0}
     assert report["permits"] == {"total": 5, "consumed": 5, "unconsumed": 0, "unreadable": 0}
     assert report["budget"]["journal"] is False and report["budget"]["remaining"] == 12
     ledger = report["ledger"]

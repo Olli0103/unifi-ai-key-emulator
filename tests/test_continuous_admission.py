@@ -110,6 +110,9 @@ async def test_device_gate_tracks_fresh_camera_registry(tmp_path):
 
     device = DeviceService(config, tmp_path, submit, camera_registry=registry)
     assert "recognizeKeyFrames" in device.status["supported_commands"]
+    console = decode_message(await device.handle_message(
+        wire("setConsoleInfo", {"controller": {"protectVersion": "7.3.60"}}, "console")))
+    assert console.header["errorCode"] == 0
     first = decode_message(await device.handle_message(
         wire("recognizeKeyFrames", command("one")["payload"], "request-one")))
     assert first.header["errorCode"] == 0

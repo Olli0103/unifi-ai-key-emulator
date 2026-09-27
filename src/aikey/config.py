@@ -10,6 +10,8 @@ import secrets
 import time
 from urllib.parse import urlsplit
 
+from .protocol import CONTINUOUS_CAPTION_VERSIONS
+
 
 class ConfigError(ValueError):
     pass
@@ -150,7 +152,7 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
         required = {"enabled", "api_key_file", "web_trust_file", "web_cert_file",
                     "camera_models"}
         if (not isinstance(policy, dict) or not required <= set(policy)
-                or set(policy) - required - {"refresh_seconds"}
+                or set(policy) - required - {"refresh_seconds", "camera_ids"}
                 or policy["enabled"] is not True):
             raise ConfigError("worker.continuous requires model families and three private files")
         if "test_scope" in config["worker"] or "test_scopes" in config["worker"]:
@@ -165,14 +167,22 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
                        or not model.isprintable() for model in models)
                 or len(models) != len(set(models))):
             raise ConfigError("worker.continuous.camera_models requires distinct model names")
+        if "camera_ids" in policy:
+            ids = policy["camera_ids"]
+            if (not isinstance(ids, list) or not 1 <= len(ids) <= 16 or len(ids) != len(set(ids))
+                    or any(not isinstance(value, str) or not 1 <= len(value) <= 64
+                           or not value.isprintable() or any(ch.isspace() for ch in value)
+                           for value in ids)):
+                raise ConfigError("worker.continuous.camera_ids requires distinct camera IDs")
         interval = policy.get("refresh_seconds", 60)
         if type(interval) is not int or not 30 <= interval <= 300:
             raise ConfigError("worker.continuous.refresh_seconds must be 30 to 300")
         policy["refresh_seconds"] = interval
-        if (config["controller"].get("protect_version") != "7.3.60"
+        if (config["controller"].get("protect_version") not in CONTINUOUS_CAPTION_VERSIONS
                 or config["worker"].get("callback_mode") != "enabled"
                 or config["worker"].get("request_mp4_exports") is not True):
-            raise ConfigError("worker.continuous requires Protect 7.3.60, callbacks and MP4 exports")
+            raise ConfigError("worker.continuous requires a Protect version with caption evidence, "
+                              "callbacks and MP4 exports")
     if runtime.get("mode") not in ("device", "lab"):
         raise ConfigError("runtime.mode must be device or lab")
     if "deployment" in runtime:

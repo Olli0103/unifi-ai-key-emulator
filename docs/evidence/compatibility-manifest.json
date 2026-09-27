@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-27.12",
+ "manifest_version": "ai-key/2026-09-27.13",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -1038,7 +1038,10 @@
     "tests/test_continuous_admission.py::test_global_budget_charges_twelve_before_media_across_cameras_and_restart",
     "tests/test_continuous_admission.py::test_continuous_real_loopback_callback_and_duplicate_no_extra_charge",
     "tests/test_continuous_admission.py::test_orphaned_reservation_cannot_repeat_a_paid_call",
-    "tests/test_continuous_admission.py::test_inventory_change_during_start_never_reserves_or_fetches"
+    "tests/test_continuous_admission.py::test_inventory_change_during_start_never_reserves_or_fetches",
+    "tests/test_continuous_scope_gates.py::test_a_listed_camera_is_admitted_and_a_same_model_sibling_is_not",
+    "tests/test_continuous_scope_gates.py::test_a_reconnecting_same_model_camera_does_not_widen_the_scope",
+    "tests/test_continuous_scope_gates.py::test_an_unreported_or_unevidenced_controller_version_blocks_admission"
    ],
    "implementation": [
     "src/aikey/camera_registry.py",
@@ -1053,7 +1056,7 @@
     "Preservation of existing native recognition tags on additional model families",
     "Fair scheduling and a multi-day live endurance run"
    ],
-   "notes": "Not deployed. Only connected smart-event cameras in the explicit model-family allowlist can be admitted while the pinned 7.3.60 inventory is fresh. Twelve new paid attempts per rolling hour are reserved before media or inference; uncertain attempts are not refunded. Protect-side camera policies are separate."
+   "notes": "Not deployed. Only connected smart-event cameras in the explicit model-family allowlist, and in the optional camera_ids pin, can be admitted while the inventory is fresh and the controller itself reported a version with native caption evidence (7.3.60 or 7.3.68). Twelve new paid attempts per rolling hour are reserved before media or inference; uncertain attempts are not refunded. Protect-side camera policies are separate. Rollout plan: docs/planning/continuous-caption-rollout.md."
   },
   {
    "id": "worker.private_journal_rollover",

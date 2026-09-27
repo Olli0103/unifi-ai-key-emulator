@@ -34,7 +34,8 @@ def _scope(config: dict) -> dict:
     return {"continuous_configured": "continuous" in worker,
             "one_use_scopes": len(scopes),
             "scope_kinds": sorted(collections.Counter(s.get("kind", "unknown") for s in scopes)),
-            "camera_models_policy": len((worker.get("continuous") or {}).get("camera_models", []))}
+            "camera_models_policy": len((worker.get("continuous") or {}).get("camera_models", [])),
+            "camera_ids_pinned": len((worker.get("continuous") or {}).get("camera_ids", []))}
 
 
 def _permits(state: Path) -> dict:

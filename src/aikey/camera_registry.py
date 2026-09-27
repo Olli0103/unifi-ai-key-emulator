@@ -15,6 +15,7 @@ REASONS = {
     "offline": "Camera is not connected to Protect.",
     "legacy_ingress_needed": "No onboard smart detections; an AI Port or verified ingress path is needed.",
     "model_not_allowed": "Camera model is not in the continuous camera_models policy.",
+    "camera_not_listed": "Camera is not in the continuous camera_ids allowlist.",
     "not_in_inventory": "Camera is not in the current Protect inventory.",
     "inventory_stale": "The Protect inventory is stale or unavailable; admission fails closed.",
 }
@@ -29,6 +30,9 @@ class CameraRegistry:
         self.trust_file = Path(options["web_trust_file"])
         self.cert_file = Path(options["web_cert_file"])
         self.camera_models = frozenset(options["camera_models"])
+        # Optional per-camera pin: a same-model camera added or reconnected later
+        # must not widen a reviewed rollout (#12).
+        self.camera_ids = (frozenset(options["camera_ids"]) if "camera_ids" in options else None)
         self.refresh_seconds = options["refresh_seconds"]
         self.clock = clock
         self._allowed: frozenset[str] = frozenset()
@@ -77,6 +81,8 @@ class CameraRegistry:
             return "legacy_ingress_needed"
         if camera["model"] not in self.camera_models:
             return "model_not_allowed"
+        if self.camera_ids is not None and camera["id"] not in self.camera_ids:
+            return "camera_not_listed"
         return None
 
     async def refresh_once(self) -> None:

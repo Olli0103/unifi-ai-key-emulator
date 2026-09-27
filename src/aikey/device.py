@@ -28,7 +28,8 @@ from urllib.parse import urlsplit
 import aiohttp
 from aiohttp import web
 
-from .protocol import (COMPATIBILITY_MANIFEST_VERSION, ContractError, classify_controller_version,
+from .protocol import (COMPATIBILITY_MANIFEST_VERSION, CONTINUOUS_CAPTION_VERSIONS, ContractError,
+                       classify_controller_version,
                        decode_message, encode_message)
 from .config import validate_factory_enrollment_deadline
 
@@ -328,7 +329,8 @@ class DeviceService:
                 "zero_length", "reversed", "over_limit_up_to_5min", "over_5min"), 0),
             "matching_camera_result_code_counts": _result_counts(),
             "matching_cameraId_result_code_counts": _result_counts(),
-            "phase_counts": dict.fromkeys(("scope_disabled", "camera_mismatch", "worker_admission",
+            "phase_counts": dict.fromkeys(("scope_disabled", "camera_mismatch",
+                "controller_version_unverified", "worker_admission",
                 "admitted", "worker_rejected", "admission_timeout", "admission_cancelled",
                 "admission_exception", "invalid_admission_result"), 0),
             "worker_rejection_counts": dict.fromkeys(
@@ -399,6 +401,12 @@ class DeviceService:
         speech = self.config.get("speech_to_text")
         cameras = speech.get("camera_ids") if isinstance(speech, dict) else None
         return frozenset(c for c in cameras if isinstance(c, str)) if isinstance(cameras, list) else frozenset()
+
+    def _continuous_controller_verified(self) -> bool:
+        """The controller itself reported a version with native caption evidence."""
+        console = self._state.get("console_info")
+        version = console.get("protectVersion") if isinstance(console, dict) else None
+        return isinstance(version, str) and version in CONTINUOUS_CAPTION_VERSIONS
 
     def _compatibility_status(self) -> dict:
         """Fixed categories only; never echoes controller-supplied text."""
@@ -1104,7 +1112,11 @@ class DeviceService:
             scopes = configured_test_scopes(self.config.get("worker", {}))
             active = {scope["camera_id"] for scope in scopes if scope.get("kind") == "recognizeKeyFrames"}
             if self.camera_registry is not None and "continuous" in self.config.get("worker", {}):
-                active.update(self.camera_registry.allowed_ids)
+                if self._continuous_controller_verified():
+                    active.update(self.camera_registry.allowed_ids)
+                elif body.get("camera") in self.camera_registry.allowed_ids:
+                    # A config label is not proof of the running controller (#12).
+                    _increment(phases, "controller_version_unverified")
             faces = self.config.get("face_recognition")
             if isinstance(faces, dict) and isinstance(faces.get("camera_ids"), list):
                 # Local face recognition answers recognition tasks for these cameras.
