@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.10). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.11). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-27.10` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-27.11` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -134,7 +134,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `lifecycle.emulator_upgrade` (needs_evidence): The migration layer is fixture-tested with a synthetic schema 0; the current release is schema 1 with no migrations, so no real migration has run
 - `control.get_info`: The getInfo exchange and the capability state Protect stored were not recorded on either live version
 - `control.get_task_queue_info`: Whether Protect schedules differently from these counts
-- `control.set_console_info`: The live body shape; a 7.3.x controller sending an extra field would currently receive errorCode 22
+- `control.set_console_info`: The 7.3.56 and 7.3.60 body shapes were not recorded; a controller sending an extra field would receive errorCode 22
 - `control.set_info`: Live body shape
 - `control.update_timezone`: Live body shape
 - `control.request_ai.on_demand_inference`: Unscoped or repeated on-demand operation
@@ -253,7 +253,7 @@ Every live trial must record each experimental activation below that was in effe
 
 ## Remaining native tests for the integration owner
 
-- **N1** (`lifecycle.unknown_controller_version`, `control.set_console_info`, `database.supports_db_credential_handoff`): On the adopted test processor, read device health after connection and record compatibility.controller_version_evidence plus the setConsoleInfo result code from control_commands. Confirm whether 7.3.60 sends only the four allowlisted controller fields.
+- **N1** (`lifecycle.unknown_controller_version`, `control.set_console_info`, `database.supports_db_credential_handoff`): Done on 7.3.68 (27 Sep): controller_version_evidence live_partial, setConsoleInfo 1 call with result code 0, and exactly the four allowlisted controller fields. Remaining: the same readback on a 7.3.60 controller (none available; needs_evidence), and the access-rule behavior behind supportsDbCredential.
 - **N2** (`control.get_info`, `capability.explicit_disabled_flags`, `capability.support_ai_summary`, `capability.deep_mode_vlm`): Record the capability state Protect shows for the processor, and the exact device.feature_flags in effect, before any caption trial.
 - **N3** (`lifecycle.controller_upgrade`): Record adoption state before and after an in-place Protect upgrade; confirm reconnect without re-adoption.
 - **N4** (`adoption.management_adopt`, `adoption.time_sync_confirmation`, `lifecycle.credential_rotation`): Fresh adoption of a separately identified test processor on 7.3.60, including rotation and planned restart.

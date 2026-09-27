@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-27.10",
+ "manifest_version": "ai-key/2026-09-27.11",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -695,7 +695,7 @@
    "missing_evidence": [
     "The exact protectVersion value, if any, sent by 7.3.56 or 7.3.60 in setConsoleInfo was not recorded"
    ],
-   "notes": "Report, not refuse: a supported baseline must keep working on a newer controller. No feature is gated on version yet. On 7.3.68, before it was listed, health reported evidence unknown while the processor stayed adopted, reconnected and persisted a caption."
+   "notes": "Report, not refuse: a supported baseline must keep working on a newer controller. No feature is gated on version yet. On 7.3.68, before it was listed, health reported evidence unknown while the processor stayed adopted, reconnected and persisted a caption. 27 Sep readback: controller_version 7.3.68, evidence live_partial, adopted and connected (1 connection, no close code)."
   },
   {
    "id": "lifecycle.controller_upgrade",
@@ -817,9 +817,10 @@
    ],
    "activation": "default",
    "missing_evidence": [
-    "The live body shape; a 7.3.x controller sending an extra field would currently receive errorCode 22"
+    "The 7.3.56 and 7.3.60 body shapes were not recorded; a controller sending an extra field would receive errorCode 22"
    ],
-   "rejection": "Any other controller field returns errorCode 22 and leaves stored metadata unchanged."
+   "rejection": "Any other controller field returns errorCode 22 and leaves stored metadata unchanged.",
+   "notes": "27 Sep 7.3.68 readback (N1): one setConsoleInfo, result code 0; the stored controller object has exactly consoleName, id, protectVersion and supportsDbCredential, so the allowlist matches 7.3.68."
   },
   {
    "id": "control.set_info",
@@ -1882,7 +1883,7 @@
    "missing_evidence": [
     "setConsoleInfo stored supportsDbCredential true on 7.3.68, but the access-rule behavior 7.3.x expects from it is not established"
    ],
-   "notes": "setConsoleInfo stores the flag; no access rules are edited."
+   "notes": "setConsoleInfo stores the flag (27 Sep: true, boolean); no access rules are edited."
   },
   {
    "id": "database.controller_migrations",
@@ -2366,7 +2367,7 @@
     "control.set_console_info",
     "database.supports_db_credential_handoff"
    ],
-   "procedure": "On the adopted test processor, read device health after connection and record compatibility.controller_version_evidence plus the setConsoleInfo result code from control_commands. Confirm whether 7.3.60 sends only the four allowlisted controller fields."
+   "procedure": "Done on 7.3.68 (27 Sep): controller_version_evidence live_partial, setConsoleInfo 1 call with result code 0, and exactly the four allowlisted controller fields. Remaining: the same readback on a 7.3.60 controller (none available; needs_evidence), and the access-rule behavior behind supportsDbCredential."
   },
   {
    "id": "N2",
