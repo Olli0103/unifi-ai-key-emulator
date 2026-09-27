@@ -149,6 +149,125 @@ class AiPortConfigurationStore:
             persisted, checked = self._read()
             if persisted != encoded:
                 raise AiPortConfigurationError("aiport_config_write_uncertain")
+            # After the new bytes are verified, so a crash never offers an undo
+            # for the wrong revision (#17).
+            self._write_provider_journal(before, self._revision(persisted))
+            return self._public(persisted, checked)
+
+    # --- one-step provider rollback of this local config (#17) --------------
+
+    @property
+    def _provider_journal(self) -> Path:
+        # Named per config file: two configs may share a directory.
+        return self.history_dir / f"provider-change-{self.path.name}.json"
+
+    def _write_provider_journal(self, previous: str, current: str) -> None:
+        record = json.dumps({"schema": 1, "from": previous, "to": current},
+                            separators=(",", ":")).encode() + b"\n"
+        try:
+            atomic_private(self._provider_journal, record)
+        except OSError:
+            pass            # the save stands; without a fresh record no undo is offered
+
+    def _read_provider_journal(self) -> dict | None:
+        path = self._provider_journal
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return None
+        try:
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 4096:
+                raise ValueError
+            value = json.loads(path.read_bytes())
+        except (OSError, ValueError) as exc:
+            raise AiPortConfigurationError("aiport_undo_record_invalid") from exc
+        if (not isinstance(value, dict) or set(value) != {"schema", "from", "to"}
+                or value["schema"] != 1
+                or not all(isinstance(value[k], str) and _REVISION.fullmatch(value[k])
+                           for k in ("from", "to"))):
+            raise AiPortConfigurationError("aiport_undo_record_invalid")
+        return value
+
+    def _archived(self, revision: str) -> bytes:
+        path = self.history_dir / f"{revision}.json"
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_mode & 0o077 or info.st_size > 4096):
+            raise AiPortConfigurationError("aiport_history_unsafe")
+        content = path.read_bytes()
+        if self._revision(content) != revision:
+            raise AiPortConfigurationError("aiport_history_inconsistent")
+        return content
+
+    def _prior_key_present(self, target: dict) -> bool:
+        reference = (target.get("live_pool_detector", {}).get("provider_config", {})
+                     .get("api_key_file"))
+        if reference is None:
+            return True
+        if not isinstance(reference, str) or not reference:
+            return False
+        for candidate in (Path(reference), self.path.parent / Path(reference).name):
+            try:
+                info = candidate.lstat()
+            except OSError:
+                continue
+            if stat.S_ISREG(info.st_mode) and info.st_size > 0:
+                return True
+        return False
+
+    @staticmethod
+    def _outside_provider(value: dict) -> dict:
+        return {key: item for key, item in value.items() if key != "live_pool_detector"}
+
+    def provider_rollback_status(self) -> dict[str, Any]:
+        """Whether this config's last provider save can be undone; no paths or values."""
+        try:
+            journal = self._read_provider_journal()
+            if journal is None:
+                return {"available": False, "reason": "no_recorded_provider_change"}
+            content, current = self._read()
+            if self._revision(content) != journal["to"]:
+                return {"available": False, "reason": "configuration_changed_since"}
+            target = json.loads(self._archived(journal["from"]))
+            if self._outside_provider(target) != self._outside_provider(json.loads(content)):
+                return {"available": False, "reason": "identity_or_streams_differ"}
+            if not self._prior_key_present(target):
+                return {"available": False, "reason": "prior_key_missing"}
+        except (AiPortConfigurationError, OSError, ValueError):
+            return {"available": False, "reason": "undo_record_unreadable"}
+        return {"available": True, "reason": None, "revision": journal["to"]}
+
+    def rollback_provider(self, expected_revision: str) -> AiPortSettings:
+        """Restore the exact local config from before its last provider save."""
+        with self._locked():
+            journal = self._read_provider_journal()
+            if journal is None:
+                raise AiPortConfigurationError("aiport_no_provider_change")
+            content, _ = self._read()
+            before = self._revision(content)
+            if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                    or not hmac.compare_digest(before, expected_revision)
+                    or before != journal["to"]):
+                raise AiPortRevisionConflict("aiport_config_changed")
+            try:
+                target_content = self._archived(journal["from"])
+                target = json.loads(target_content)
+            except (OSError, ValueError) as exc:
+                raise AiPortConfigurationError("aiport_history_unreadable") from exc
+            if self._outside_provider(target) != self._outside_provider(json.loads(content)):
+                raise AiPortConfigurationError("aiport_rollback_would_change_identity_or_streams")
+            if not self._prior_key_present(target):
+                raise AiPortConfigurationError("aiport_prior_key_missing")
+            self._validate(target)
+            self._archive(content)
+            try:
+                atomic_private(self.path, target_content)
+            except OSError as exc:
+                raise AiPortConfigurationError("aiport_config_write_uncertain") from exc
+            persisted, checked = self._read()
+            if persisted != target_content:
+                raise AiPortConfigurationError("aiport_config_write_uncertain")
+            self._provider_journal.unlink(missing_ok=True)
             return self._public(persisted, checked)
 
     def _candidate(self, current: dict, settings: dict[str, Any]) -> dict:

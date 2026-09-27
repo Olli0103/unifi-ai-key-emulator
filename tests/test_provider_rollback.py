@@ -163,7 +163,7 @@ async def test_the_control_site_offers_a_revision_checked_rollback_without_secre
         assert done.status == 303 and done.headers["Location"] == "/?rolledback=1"
         assert key_config.read_bytes() == original
         after = await (await client.get("/?rolledback=1")).text()
-        assert "previous AI Key provider settings were restored" in after
+        assert "previous provider settings were restored locally" in after
         assert "/provider/rollback" not in after and NEW_KEY not in after
     finally:
         await client.close()

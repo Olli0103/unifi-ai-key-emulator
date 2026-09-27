@@ -453,14 +453,10 @@ class ControlSite:
         key_configured = bool(inference.get("api_key_file", {}).get("configured"))
         notice = ("<p class='notice'>Settings saved. Restart the affected service to apply them.</p>"
                   if request.query.get("saved") == "1" else
-                  "<p class='notice'>The previous AI Key provider settings were restored. Restart "
-                  "the AI Key to apply them.</p>" if request.query.get("rolledback") == "1" else "")
-        undo = self.aikey.provider_rollback_status()
-        undo_form = ("<form method='post' action='/provider/rollback'>"
-                     f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
-                     f"<input type='hidden' name='revision' value='{_safe(undo['revision'])}'>"
-                     "<button>Roll back the last AI Key provider change</button></form>"
-                     if undo["available"] else "")
+                  "<p class='notice'>The previous provider settings were restored locally. Restart "
+                  "the affected service to apply them; deployed NAS copies are not changed.</p>"
+                  if request.query.get("rolledback") == "1" else "")
+        undo_form = self._undo_form("aikey", "AI Key", self.aikey.provider_rollback_status(), csrf)
         body = ("<div class='row'><div><h1>Local AI processor</h1>"
                 "<p class='muted'>Provider and model settings for both Protect profiles.</p>"
                 "</div><form method='post' action='/logout'>"
@@ -495,6 +491,8 @@ class ControlSite:
                                             port.key_configured, csrf,
                                             camera_count=port.camera_count,
                                             backend=port.backend)
+                body += self._undo_form(profile, title, self.aiports[profile].provider_rollback_status(),
+                                        csrf)
             else:
                 body += (f"<section><h2>{_safe(title)}</h2><p>No camera pool is configured. "
                          "Provider settings become available after configuring at least two streams."
@@ -630,14 +628,30 @@ class ControlSite:
                          "<p><a href='/'>Back to settings</a></p>")
         raise web.HTTPSeeOther("/?saved=1")
 
+    @staticmethod
+    def _undo_form(profile: str, title: str, status: dict, csrf: str) -> str:
+        """One revision-checked undo button; carries no path, key or setting."""
+        if not status.get("available"):
+            return ""
+        return ("<form method='post' action='/provider/rollback'>"
+                f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
+                f"<input type='hidden' name='profile' value='{_safe(profile)}'>"
+                f"<input type='hidden' name='revision' value='{_safe(status['revision'])}'>"
+                f"<button>Roll back the last {_safe(title)} provider change</button></form>")
+
     async def rollback_provider(self, request: web.Request) -> web.Response:
-        """Restore the AI Key's settings from before its last provider change (#17)."""
+        """Restore one profile's local settings from before its last provider save (#17)."""
         fields = await request.post()
         if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
             raise web.HTTPForbidden()
+        profile = fields.get("profile", "aikey")
+        store = self.aikey if profile == "aikey" else self.aiports.get(profile)
+        if store is None:
+            raise web.HTTPBadRequest(text="Unknown profile")
         try:
-            await asyncio.to_thread(self.aikey.rollback_provider, fields.get("revision"))
-        except (ConfigurationStoreError, RevisionConflict):
+            await asyncio.to_thread(store.rollback_provider, fields.get("revision"))
+        except (ConfigurationStoreError, RevisionConflict, AiPortConfigurationError,
+                AiPortRevisionConflict, OSError):
             return _page("Rollback not applied", "<h1>Rollback not applied</h1>"
                          "<p class='error'>The settings changed in another session, or the "
                          "previous provider key is no longer stored. Nothing was changed.</p>"
