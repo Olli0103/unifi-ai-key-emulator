@@ -15,9 +15,11 @@ import re
 import secrets
 import signal
 import stat
+import time
 
 from aiohttp import web
 
+from .admin_audit import AuditLog
 from .admin_security import AdminSecurity
 from .aiport_config_store import (
     AiPortConfigurationError, AiPortConfigurationStore, AiPortRevisionConflict,
@@ -105,7 +107,8 @@ class ControlSite:
                  search_state_dir: Path | None = None,
                  search_backups_dir: Path | None = None,
                  search_live_rows: Callable[[], Awaitable[int]] | None = None,
-                 aikey_state_dir: Path | None = None):
+                 aikey_state_dir: Path | None = None,
+                 audit_log: Path | None = None):
         if type(port) is not int or not 1024 <= port <= 65535:
             raise ValueError("Invalid control-site port")
         self.origin = f"http://127.0.0.1:{port}"
@@ -132,6 +135,7 @@ class ControlSite:
         self.search_backups_dir = search_backups_dir
         self.search_live_rows = search_live_rows
         self.aikey_state_dir = aikey_state_dir
+        self.audit = AuditLog(audit_log) if audit_log is not None else None
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=8192)
@@ -142,6 +146,7 @@ class ControlSite:
         # Read-only: no POST route exists, so nothing can be applied from here (#18).
         app.router.add_get("/index-migration", self.index_migration)
         app.router.add_get("/data-retention", self.data_retention)
+        app.router.add_get("/audit", self.audit_page)
         app.router.add_get("/login", self.login_page)
         app.router.add_post("/login", self.login)
         app.router.add_post("/provider", self.save_provider)
@@ -188,6 +193,30 @@ class ControlSite:
                 "<th>Current expiry</th><th>Retention owner</th><th>Live count</th>"
                 "<th>Operator decision</th></tr>" + rows + "</table>")
         return _page("Data flow and retention", body)
+
+    def _audit(self, action: str, result: str, profile: str | None = None) -> None:
+        if self.audit is not None:
+            self.audit.record(action, result, profile=profile)
+
+    async def audit_page(self, request: web.Request) -> web.Response:
+        """Read-only view of recent administrative actions (#13)."""
+        if self._session(request) is None:
+            raise web.HTTPSeeOther("/login")
+        if self.audit is None:
+            return _page("Audit log", "<h1>Audit log</h1><p><a href='/'>Settings</a></p>"
+                         "<p class='muted'>No audit log is configured for this control site.</p>")
+        rows = "".join(
+            "<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in (
+                time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(entry["at"])),
+                entry["action"].replace("_", " "), entry.get("profile", "—"), entry["result"]))
+            + "</tr>" for entry in self.audit.recent(50)) or "<tr><td colspan='4'>No entries</td></tr>"
+        failures = (f"<p class='error'>{self.audit.failures} audit entries could not be written "
+                    "since this site started.</p>" if self.audit.failures else "")
+        return _page("Audit log", "<h1>Audit log</h1><p><a href='/'>Settings</a></p>"
+                     "<p class='muted'>Newest first. Records the action, profile and result only; "
+                     "never passwords, keys, paths, settings or network addresses.</p>" + failures
+                     + "<table><tr><th>Time</th><th>Action</th><th>Profile</th><th>Result</th></tr>"
+                     + rows + "</table>")
 
     async def index_migration(self, request: web.Request) -> web.Response:
         cookie = self._session(request)
@@ -304,6 +333,7 @@ class ControlSite:
     async def rollout_apply(self, request: web.Request) -> web.Response:
         fields = await request.post()
         if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
+            self._audit("rollout_apply", "forbidden")
             raise web.HTTPForbidden()
         if self.inventory_loader is None or self.rollout_path is None:
             raise web.HTTPNotFound()
@@ -314,12 +344,15 @@ class ControlSite:
             await asyncio.to_thread(apply_if_current, self.rollout_path, report,
                                     fields.get("revision"))
         except PlanChanged:
+            self._audit("rollout_apply", "plan_changed")
             return _page("Plan changed", "<h1>The plan changed</h1><p>Review the "
                          "refreshed plan before applying.</p>"
                          "<p><a href='/aiport-rollout'>Review</a></p>")
         except (InventoryError, RolloutError, OSError, ValueError):
+            self._audit("rollout_apply", "refused")
             return _page("Rollout not applied", "<h1>Rollout not applied</h1>"
                          "<p class='error'>No pairing was changed. Check the slot files.</p>")
+        self._audit("rollout_apply", "applied")
         raise web.HTTPSeeOther("/aiport-rollout")
 
     async def cameras(self, request: web.Request) -> web.Response:
@@ -427,9 +460,11 @@ class ControlSite:
                                        self.password_record,
                                        request.headers.get("Origin", ""))
         if not decision.allowed or decision.credentials is None:
+            self._audit("login", decision.reason if decision.reason else "refused")
             return _page("Sign in failed", "<h1>Sign in failed</h1>"
                          "<p class='error'>Check the password and try again.</p>"
                          "<p><a href='/login'>Back to sign in</a></p>")
+        self._audit("login", "signed_in")
         response = web.HTTPSeeOther("/")
         response.set_cookie(_COOKIE, decision.credentials.cookie, httponly=True,
                             secure=False, samesite="Strict", path="/",
@@ -468,7 +503,8 @@ class ControlSite:
                    if self.inventory_loader is not None else "")
                 + ("<p><a href='/index-migration'>Search index migration (read-only)</a></p>"
                    if self.search_state_dir is not None else "")
-                + "<p><a href='/data-retention'>Data flow and retention (read-only)</a></p>"
+                + "<p><a href='/data-retention'>Data flow and retention (read-only)</a> · "
+                  "<a href='/audit'>Audit log</a></p>"
                 + undo_form
                 + "<div class='grid'>")
         body += self._provider_form("AI Key", "aikey", key.revision, inference,
@@ -559,9 +595,11 @@ class ControlSite:
         fields = await request.post()
         cookie = self._session(request, mutate=True, csrf=fields.get("csrf"))
         if cookie is None:
+            self._audit("provider_save", "forbidden")
             raise web.HTTPForbidden()
         profile = fields.get("profile")
         if profile != "aikey" and profile not in self.aiports:
+            self._audit("provider_save", "unknown_profile")
             raise web.HTTPBadRequest(text="Unknown profile")
         is_port = profile != "aikey"
         store = self.aiports[profile] if is_port else self.aikey
@@ -622,10 +660,12 @@ class ControlSite:
                 AiPortConfigurationError, RevisionConflict, AiPortRevisionConflict):
             if created_key is not None and not committed:
                 created_key.unlink(missing_ok=True)
+            self._audit("provider_save", "rejected", profile)
             return _page("Settings not saved", "<h1>Settings not saved</h1>"
                          "<p class='error'>Check the provider, model, key and request limits. "
                          "The configuration may also have changed in another session.</p>"
                          "<p><a href='/'>Back to settings</a></p>")
+        self._audit("provider_save", "saved", profile)
         raise web.HTTPSeeOther("/?saved=1")
 
     @staticmethod
@@ -643,25 +683,31 @@ class ControlSite:
         """Restore one profile's local settings from before its last provider save (#17)."""
         fields = await request.post()
         if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
+            self._audit("provider_rollback", "forbidden")
             raise web.HTTPForbidden()
         profile = fields.get("profile", "aikey")
         store = self.aikey if profile == "aikey" else self.aiports.get(profile)
         if store is None:
+            self._audit("provider_rollback", "unknown_profile")
             raise web.HTTPBadRequest(text="Unknown profile")
         try:
             await asyncio.to_thread(store.rollback_provider, fields.get("revision"))
         except (ConfigurationStoreError, RevisionConflict, AiPortConfigurationError,
                 AiPortRevisionConflict, OSError):
+            self._audit("provider_rollback", "refused", profile)
             return _page("Rollback not applied", "<h1>Rollback not applied</h1>"
                          "<p class='error'>The settings changed in another session, or the "
                          "previous provider key is no longer stored. Nothing was changed.</p>"
                          "<p><a href='/'>Back to settings</a></p>")
+        self._audit("provider_rollback", "rolled_back", profile)
         raise web.HTTPSeeOther("/?rolledback=1")
 
     async def logout(self, request: web.Request) -> web.Response:
         fields = await request.post()
         if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
+            self._audit("logout", "forbidden")
             raise web.HTTPForbidden()
+        self._audit("logout", "signed_out")
         response = web.HTTPSeeOther("/login")
         response.del_cookie(_COOKIE, path="/")
         raise response
@@ -780,6 +826,7 @@ def main(argv: list[str] | None = None) -> int:
                            search_state_dir=args.search_state_dir,
                            search_backups_dir=args.search_backups,
                            aikey_state_dir=args.aikey_state_dir,
+                           audit_log=state / "admin-audit.jsonl",
                            search_live_rows=_live_rows(args.search_container)
                            if args.search_container else None)
         site.aikey.snapshot()
