@@ -1,43 +1,96 @@
-# Two-family continuous-caption rollout (#12): dry-run proposal
+# Two-family continuous-caption rollout (#12): reviewable plan
 
-Status: **proposal, not activated.** No setting, scope, service or provider call was changed to write this. Everything below is counts, fixed reason codes and placeholder IDs. Captions and transcripts stay private.
+Status: **proposal, not activated.** Writing this changed no setting, scope, service, archive or provider state. Figures are counts, fixed codes, digests and placeholder IDs. Captions and transcripts stay private.
 
-## Current state (27 Sep 2026, read-only)
+Each action below is **one approval**. Each lists exactly what it reads, writes, how to check it and how to undo it. Nothing else is written. Steps run in order, and each starts only after the previous one's check passed.
 
-- **AI Key:** adopted and connected to Protect 7.3.68, which `setConsoleInfo` reports; the evidence class is `live_partial`. The worker is idle (queued, active and pending all 0).
-- **Caption preflight** (`python -m aikey.caption_preflight`):
-  - continuous mode not configured; 2 one-use scopes configured;
-  - all 5 permits consumed;
-  - no budget journal yet (12 of 12 available);
-  - job journal 597/1024 (58%): completed 434, failed 109, `callback_uncertain` 54; 0 due for rollover.
-  - Blockers: `continuous_not_configured`, `one_use_scopes_configured`, `uncertain_callbacks_pending`, `native_readback_missing`.
-- **The 54 uncertain callbacks** are Find Anything `indexImages` jobs. All 54 were classified terminal: 619 rows with 768-dim embeddings are stored (#12, 27 Sep). They still sit in the active journal as `callback_uncertain` until an operator archives them. That review is the owner's step, and it clears `uncertain_callbacks_pending`.
-- **Pinned caption provider:** `inference` = OpenAI `gpt-6-luna`, `max_output_tokens` 4096. The shared account had run out of credit until 27 Sep 15:38 UTC; it has worked since.
+## What the gates are (traced 27 Sep)
 
-## Families chosen
+- **The caption preflight is advisory.** No runtime path reads its `ready` flag; only the CLI and the control-site page display it. It cannot deadlock activation. Each blocker carries a phase (`blocker_phases`), and `ready_to_activate` is true when no *precondition* blocker remains:
 
-| Family | Cameras eligible now | Source of smart events | Earlier native caption evidence | Smart events, last 24 h | Peak hour |
-|---|---|---|---|---|---|
-| UVC G6 Instant | 1 | onboard | yes (26 Sep, re-read on 7.3.68) | 171 | 28 |
-| UVC G5 Flex | 1 | AI Port-paired | yes (22 Sep, re-read on 7.3.68) | 22 | 12 |
+  | Blocker | Phase | Cleared by |
+  |---|---|---|
+  | `uncertain_callbacks_pending`, `ledger_above_80_percent`, `budget_journal_needs_review`, `key_health_missing` | precondition | before activation |
+  | `continuous_not_configured`, `one_use_scopes_configured` | activation | the reviewed config change itself (Action 4) |
+  | `native_readback_missing` | acceptance | native Protect readback after activation |
 
-- **Different families:** one onboard and one AI Port-supplied camera, so both dispatch paths are exercised.
-- **Budget coverage:** G6's busy hours (7 of the last 24 above 12 events) exercise the 12th and 13th request; G5 exercises the permit held for fairness.
-- **Scope pinned:** both models currently have exactly one connected eligible camera. `camera_ids` (below) keeps it at exactly two even if a same-model camera is added or reconnects.
+- **Hard runtime gates** (code, enforced on every task):
+  - config validation;
+  - a fresh camera inventory with the model family and the camera-ID pin;
+  - the controller-reported version in {7.3.60, 7.3.68} (36db45b);
+  - the global budget: 12 per rolling hour, fair hold, reservation before media or inference;
+  - the job and archive replay guards.
 
-## Admission gaps fixed with this proposal (code, synthetic tests only)
+  No new first-trial path is needed: nothing deadlocks.
+- **No double charge:**
+  - a failed caption is refused on replay in continuous mode, including after rollover to a `failed` tombstone;
+  - a `callback_uncertain` caption is refused and never archived;
+  - a reservation without a journal record is refused.
 
-1. **Model-only scope could widen silently.** `camera_models` admits every connected smart camera of a model. Example: the second G4 Instant is offline today and would join on reconnect. New optional `worker.continuous.camera_ids`: a camera must match both a model and a listed ID. An unlisted camera reports `camera_not_listed`.
-2. **The controller version was trusted from a config label.** Continuous mode was gated only on `controller.protect_version == "7.3.60"`, a hand-written label. The live label still reads 7.3.60 while the controller reports 7.3.68. Changes:
-   - admission now also requires the version the controller itself reported (`setConsoleInfo.protectVersion`) to be in `CONTINUOUS_CAPTION_VERSIONS` = {7.3.60, 7.3.68}, the versions with native caption readback;
-   - otherwise `recognizeKeyFrames` is answered 95 before the worker, budget or media, and `controller_version_unverified` is counted;
-   - the config gate accepts the true `"7.3.68"` label.
+  Proven by `tests/test_caption_no_double_charge.py` (4 tests: no new provider request, callback or reservation) and the existing orphaned-reservation test. Uncertain attempts are not refunded.
 
-Tests: `tests/test_continuous_scope_gates.py` (19 cases; 16 fail without the fix) and the updated device-gate test.
+## Current state (read-only, 27 Sep)
 
-## Exact minimal config change (dry run)
+- **AI Key:** adopted and connected to Protect 7.3.68, which `setConsoleInfo` reports. The live image is the 9de93fd lineage, without 36db45b.
+- **Preflight:** 2 one-use scopes configured, all 5 permits consumed; no budget journal (12/12 available); journal 597/1024.
+  - Blockers: `continuous_not_configured` (activation), `one_use_scopes_configured` (activation), `uncertain_callbacks_pending` (precondition), `native_readback_missing` (acceptance).
+- **The 54 `callback_uncertain` records:** all `indexImages` (local CLIP, no provider cost), updated 21–22 h ago.
+  - A fixed read-only SELECT on the search database finds embedded rows for all 54 job hashes, which means Protect stored their results.
+  - `aikey-uncertain-resolution plan` answers: 54 `archive_as_completed`, digest **`92bc7c3b948ca7596ccfd961b31d191acc5dfb3a78e846956ffa39454a90a223`**.
+  - The digest covers only the uncertain records. The Key's normal journal activity doesn't change it; a new or changed uncertain record does.
 
-Applied in memory to the live `config.json` (sha256 prefix `82390fffd714`, unchanged):
+## Budget, ceiling and abort checks (reconciled)
+
+- **Budget:** 12 reservations per rolling hour across the pinned cameras, so at most **288 per 24 h** (`DAILY_CEILING`). The budget journal keeps 24 h and holds up to 300 records.
+- **Fairness:** with two cameras, one can take at most 11 while the other is unserved; its 12th attempt is `deferred_fair_share`. After both are served, the 13th in the hour is `exhausted`, before media or inference.
+- **Replay of the last 24 h** of real smart events (192) through this rule: **109 admitted** (G6 91, G5 18), 34 exhausted, 49 deferred. This is an upper bound: one caption task per smart event is unverified.
+- **Each admission** is one request to the pinned OpenAI `gpt-6-luna`, at most 4,096 output tokens.
+- **Abort checks come from the budget journal and health, not process counters.** Health's `captions.admitted` counts since process start and is not per hour. The preflight's `abort` section (read-only) reports:
+  - `budget_last_hour` / 12, raising `hourly_budget_exceeded`;
+  - `budget_24h` / 288, raising `daily_ceiling_exceeded`;
+  - `caption_jobs_without_reservation`, raising `caption_without_reservation`;
+  - `eligible_cameras` versus `pinned_cameras`, raising `scope_wider_than_pin`.
+
+  Any abort code means roll back (Action 5 rollback).
+
+## Action 1: archive the 54 reviewed index callbacks
+
+- **Approve:** `aikey-uncertain-resolution apply` with digest `92bc7c3b…a223` while the AI Key container is stopped.
+- **Reads:** `worker-jobs/*.json`, `worker-archive/`, and one SELECT (job hashes with embedded rows) on `local-postgres-search`.
+- **Writes, only these:**
+  1. a new private backup directory with 54 byte copies (0600) plus `manifest.json` (digest, job hash, file SHA-256), written and fsynced before any change;
+  2. 54 tombstones `worker-archive/<xx>/<job>.json` (`state: completed`, same shape the worker writes; 49 buckets);
+  3. removal of the same 54 active records.
+
+  Nothing in Protect, the search index, the budget or the config changes.
+- **Refuses:**
+  - `key_running` if the Key is up;
+  - `plan_changed` if any of the 54 changed after approval;
+  - `backup_not_empty`;
+  - `tombstone_conflict`;
+  - paid (caption) jobs, which are never eligible (`not_local_index`).
+- **Retry:** rerunning with the same backup resumes. Finished records count as `already_archived`, and a partly done one is completed.
+- **Check:** after restarting the same Key image, the preflight shows `uncertain_callbacks_pending` gone and journal entries down by 54; Key adopted, connected and search connected.
+- **Undo:** `aikey-uncertain-resolution rollback --backup … --key-stopped` restores the 54 records byte for byte and removes only matching tombstones. It is idempotent.
+- **Needs two service stops**, stop and start, of the Key container on the same image, using `local-apple-upgrade`-style idle gating (worker queued, active and pending = 0).
+
+## Action 2: deploy the admission code to the AI Key (no config change)
+
+- **Approve:** an overlay image of the live lineage plus the 36db45b and this pass's modules (`camera_registry`, `config`, `device`, `protocol`, `caption_preflight`, `uncertain_resolution`), swapped with `local-apple-upgrade swap --kind aikey`.
+- **Writes:** a new container and image only. The supervisor pin moves to the new container, and the old one is kept stopped. `config.json` is unchanged.
+- **Behavior change with the current config:** none. Continuous mode is off, and the one-use scopes are consumed.
+- **Check:** adopted, connected, search connected; index rows ≥ before; native class-search counts ≥ baseline.
+- **Undo:** automatic re-pin of the old container if not ready; otherwise the same tool back to the previous image.
+
+## Action 3: backups and baseline (writes backups only)
+
+- **Approve:** a 0600 archive of `config.json`, `device-state.json`, `worker-jobs/`, `worker-test-scopes/` and `worker-archive/` with digests, plus a verified search backup (`search_backup` with scratch restore), plus recorded class-search counts.
+- **Writes:** backup files only.
+- **Undo:** not needed (additive).
+
+## Action 4: activate two pinned cameras
+
+- **Approve:** replace `config.json` with the reviewed version below, containing the two real camera IDs, then one same-image restart.
 
 ```json
 {
@@ -57,66 +110,32 @@ Applied in memory to the live `config.json` (sha256 prefix `82390fffd714`, uncha
 }
 ```
 
-- **Changed paths:** `controller.protect_version`, `worker.test_scopes` (removed), and `worker.continuous.*` (added). Nothing else: search, Find Anything, speech, faces, provider, key and AI Ports are untouched.
-- **Validation:** `validate_config` accepts it with this code. The **currently deployed Key image rejects it**, because it predates `camera_ids` and the version set. The gate code has to be deployed first.
-- **Preflight on the proposed config:** only `uncertain_callbacks_pending` and `native_readback_missing` remain.
+- **Dry run on an in-memory copy of the live config** (sha256 prefix `82390fffd714`, unchanged):
+  - changed paths: exactly `controller.protect_version`, `worker.test_scopes` (removed) and `worker.continuous.*`;
+  - `validate_config` accepts it with the Action 2 code (the current image rejects it);
+  - preflight afterwards: only `native_readback_missing` (acceptance) remains, and `ready_to_activate` is true.
+- **Writes:** `config.json` only. The budget journal `caption-budget.json` and the archive grow from normal operation.
+- **Check within 15 min:** health `camera_registry.eligible_cameras` = 2 and fresh; preflight `abort.codes` empty.
+- **Undo:** restore the Action 3 `config.json` byte for byte plus a same-image restart. The budget journal and archive stay for audit and admit nothing with continuous off.
 
-## Expected request envelope
+## Action 5: observe 24 h and accept (read-only)
 
-- **Hard ceiling:** 12 new caption attempts per rolling hour across both cameras, at most 288 per 24 h. Budget journal retention is 24 h and its cap of 300 records covers that.
-- **Fairness:** while one camera has had no caption in the hour, the other can take at most 11; its 12th attempt is deferred (`deferred_fair_share`). After both are served, the 13th attempt in the hour is refused (`exhausted`) before media or inference.
-- **Replay of the last 24 h of real smart events** (192) through the same rule:
-  - 109 admitted (G6 91, G5 18);
-  - 34 exhausted;
-  - 49 deferred.
+Run the preflight at least hourly. Abort (Action 4 undo) on any `abort.codes`, or on:
+- a new `callback_uncertain` from a caption;
+- the journal above 80% after rollover;
+- the Key not adopted or connected, or search not connected;
+- class-search counts below baseline or index rows decreasing;
+- an AI Port losing adoption or replies, or new quota/rate 429s on the shared key.
 
-  This is an upper bound: it assumes Protect sends one caption task per smart event, which is unverified.
-- **Each admitted attempt** is one provider request with the event's key frames, at most 4096 output tokens. Uncertain attempts are not refunded.
+Native acceptance (event-ID hash prefixes and counts only):
+- [ ] A fresh exact-event persisted caption on **both** families: `metadata.ramState` done and a non-empty `metadata.ramDescription`, confirmed in the native panel after a full reload.
+- [ ] A busy hour shows 12 reservations, a refused 13th (`exhausted`) and a `deferred_fair_share` while G5 is unserved. No reservation without a journal record.
+- [ ] A Key restart inside the window keeps the rolling hour; no permit is re-spent.
+- [ ] Completed and failed caption records roll into tombstones after 24 h; uncertain ones stay.
+- [ ] Search class counts ≥ baseline; all four AI Ports keep adoption and rising replies.
 
-## Procedure (each step needs Olli's approval)
+## Remaining needs_evidence
 
-1. **Owner review:** archive the 54 terminal `indexImages` uncertain records. Preflight then drops `uncertain_callbacks_pending`.
-2. **Deploy the gate code to the Key.**
-   - The live Key is 9de93fd plus two hunks. The new code touches `camera_registry.py`, `config.py`, `device.py`, `protocol.py` and `caption_preflight.py`. Rebase them onto the live lineage in a worktree and run the full suite.
-   - Build an overlay image and swap with `local-apple-upgrade swap --kind aikey` (idle-gated, automatic rollback). No config change in this step.
-   - Check: adopted, connected, search connected, and the same 4,550+ index rows.
-3. **Backup:**
-   - copy `config.json`, `device-state.json`, `worker-jobs/`, `worker-test-scopes/` and `worker-archive/` into a 0600 archive, with digests;
-   - take a verified search backup (`search_backup` with scratch-restore verification);
-   - record the native search baseline counts (class queries).
-4. **Activate:** write the config above with the two real camera IDs, then restart the Key once through `local-apple-upgrade swap` on the same image. No other change.
-5. **Observe** for 24 h, read-only: Key health `worker.captions` (admitted, exhausted, deferred_fair_share), `registry.status()` and the preflight.
-
-## Abort criteria (roll back at once)
-
-- Any caption admitted for a camera other than the two pinned IDs, or `camera_registry.eligible_cameras` > 2.
-- `captions.admitted` above 12 in any rolling hour, or any provider call without a budget reservation.
-- A new `callback_uncertain` from a caption job, or the journal above 80% after rollover.
-- Key not adopted or connected, search not connected, native class-search counts falling below baseline, or index rows decreasing.
-- Any AI Port losing adoption or detections, or new provider 429/quota failures on the shared key.
-- Provider cost above the agreed daily ceiling (default: the 288 upper bound).
-
-## Rollback
-
-1. Restore the backed-up `config.json` byte for byte. This removes `continuous` and restores the 2 consumed one-use scopes and the 7.3.60 label.
-2. Restart the Key on the same image through `local-apple-upgrade swap`.
-3. The budget journal and job archive stay in place for audit. With continuous off they don't admit anything.
-4. If the gate deploy itself misbehaves, the tool re-pins the previous Key container.
-
-## Native Protect acceptance (after activation)
-
-- [ ] A fresh exact-event persisted caption on **both** families: exact-event GET shows `metadata.ramState` done and a non-empty `metadata.ramDescription`, confirmed in the native panel after a full page reload. Report event-ID hash prefixes and counts only.
-- [ ] Budget: within one busy hour, `captions.admitted` reaches 12, the 13th attempt is refused `exhausted`, and a deferral occurs while G5 is unserved. No duplicate charge for a repeated task.
-- [ ] Reconnect: after a Key restart during the window, both cameras still admit, the budget journal carries the rolling hour over, and no permit is re-spent.
-- [ ] Journal rollover: completed caption records leave after 24 h (continuous), failed after 24 h, and uncertain records stay.
-- [ ] Live search: class-search counts are at least the baseline, and index rows grow naturally.
-- [ ] AI Ports: all four stay adopted with replies rising and no new 429s.
-
-## Decision needed from Olli
-
-Approve, in order:
-1. archiving the 54 reviewed uncertain index callbacks;
-2. deploying the gate code to the AI Key, with no config change;
-3. activating continuous captions for exactly the G6 Instant and G5 Flex camera IDs above, capped at 12 per rolling hour (at most 288 per day) on the pinned OpenAI `gpt-6-luna` key, with the abort criteria and rollback above.
-
-Until then, continuous captions stay **needs_evidence**.
+- Whether Protect dispatches one caption task per smart event on these families under continuous admission.
+- Native persistence under continuous operation, a restart and multi-day endurance.
+- The effect on events that already carry native tags.

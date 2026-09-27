@@ -145,3 +145,63 @@ def test_cli_exit_codes(tmp_path, capsys):
                  "--native", str(tmp_path / "native.json")]) == 0
     capsys.readouterr()
     assert main(["--state", str(tmp_path / "missing")]) == 1
+
+
+def test_blockers_are_labelled_by_when_they_can_clear(tmp_path):
+    """native_readback_missing is acceptance-only: it never blocks the activation review."""
+    from aikey.caption_preflight import PHASES
+    root = tmp_path / "state"
+    (root / "worker-jobs").mkdir(parents=True)
+    config = {"worker": {"continuous": {"camera_models": ["G6"], "camera_ids": ["a" * 24]}}}
+    healthy = {"device": {"adopted": True, "connected": True}, "worker": {}}
+    report = preflight(root, config, health=healthy, now=NOW)
+    assert report["blocker_codes"] == ["native_readback_missing"]
+    assert report["blocker_phases"] == {"native_readback_missing": "acceptance"}
+    assert report["ready"] is False and report["ready_to_activate"] is True
+    assert report["scope"]["camera_ids_pinned"] == 1
+    # A precondition keeps activation blocked.
+    blocked = preflight(root, config, health=None, now=NOW)
+    assert blocked["blocker_phases"]["key_health_missing"] == "precondition"
+    assert blocked["ready_to_activate"] is False
+    assert set(PHASES.values()) == {"precondition", "activation", "acceptance"}
+
+
+def _reservation(job, at_ns):
+    return {"job_id": job, "fingerprint": "f" * 64, "camera_id": "a" * 24, "at_ns": at_ns}
+
+
+def test_abort_checks_use_the_budget_journal_not_process_counters(tmp_path):
+    root = tmp_path / "state"
+    (root / "worker-jobs").mkdir(parents=True)
+    now_ns = int(NOW * 1e9)
+    budget = {"high_water_ns": now_ns, "reservations": [
+        _reservation(f"{i:064x}", now_ns - i * 60_000_000_000) for i in range(12)]}
+    (root / "caption-budget.json").write_text(json.dumps(budget))
+    config = {"worker": {"continuous": {"camera_models": ["G6", "G5"], "camera_ids": ["a" * 24, "b" * 24]}}}
+    health = {"device": {"adopted": True, "connected": True}, "worker": {},
+              "camera_registry": {"fresh": True, "eligible_cameras": 2}}
+    report = preflight(root, config, health=health, now=NOW)
+    assert report["abort"]["checks"]["budget_last_hour"] == 12 and report["abort"]["codes"] == []
+    assert report["abort"]["checks"]["daily_ceiling"] == 288
+    # A caption record with no reservation, a third eligible camera: both abort.
+    (root / "worker-jobs" / f"{'e' * 64}.json").write_text(json.dumps(
+        {"jobId": "e" * 64, "fingerprint": "f" * 64, "state": "completed", "updatedAt": NOW - 60,
+         "operation": "recognizeKeyFrames"}))
+    (root / "worker-jobs" / f"{'d' * 64}.json").write_text(json.dumps(
+        {"jobId": "d" * 64, "fingerprint": "f" * 64, "state": "completed", "updatedAt": NOW - 60,
+         "operation": "indexImages"}))                                   # local index: never budgeted
+    health["camera_registry"]["eligible_cameras"] = 3
+    report = preflight(root, config, health=health, now=NOW)
+    assert report["abort"]["codes"] == ["caption_without_reservation", "scope_wider_than_pin"]
+    assert report["abort"]["checks"]["caption_jobs_without_reservation"] == 1
+
+
+def test_an_over_limit_journal_raises_the_hourly_and_daily_abort(tmp_path):
+    root = tmp_path / "state"
+    (root / "worker-jobs").mkdir(parents=True)
+    now_ns = int(NOW * 1e9)
+    items = [_reservation(f"{i:064x}", now_ns - i * 1_000_000_000) for i in range(13)]
+    items += [_reservation(f"{i + 100:064x}", now_ns - 7200 * 10**9 - i * 10**9) for i in range(280)]
+    (root / "caption-budget.json").write_text(json.dumps({"high_water_ns": now_ns, "reservations": items}))
+    report = preflight(root, {"worker": {"continuous": {"camera_models": ["G6"]}}}, health=None, now=NOW)
+    assert report["abort"]["codes"] == ["hourly_budget_exceeded", "daily_ceiling_exceeded"]

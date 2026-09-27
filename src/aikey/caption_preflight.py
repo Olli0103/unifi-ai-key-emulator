@@ -20,6 +20,17 @@ from .caption_budget import HOUR_NS, LIMIT, RETENTION_NS
 from .worker import rollover_due
 
 _DEFAULT_LEDGER_CAP = 1024
+DAILY_CEILING = 24 * LIMIT          # 288: the most a full day of rolling hours can admit
+_NON_CAPTION = frozenset({"speechToText", "recognizeFaces", "indexKeyFrames", "indexImages", "reverify"})
+# The report is advisory: no runtime path reads ``ready``. Each blocker is
+# labelled with when it can be cleared, so an activation review is not
+# mistaken for a deadlock. "precondition" must clear before activation;
+# "activation" is cleared by the reviewed config change itself; "acceptance"
+# can only be shown after activation, from native Protect readback.
+PHASES = {"uncertain_callbacks_pending": "precondition", "ledger_above_80_percent": "precondition",
+          "budget_journal_needs_review": "precondition", "key_health_missing": "precondition",
+          "continuous_not_configured": "activation", "one_use_scopes_configured": "activation",
+          "native_readback_missing": "acceptance"}
 
 
 def _json(path: Path):
@@ -69,6 +80,48 @@ def _budget(state: Path, now_ns: int) -> dict:
             "clock_behind_journal": now_ns < high_water}
 
 
+def _reserved_jobs(state: Path) -> set[str]:
+    try:
+        value = _json(state / "caption-budget.json")
+        return {item["job_id"] for item in value["reservations"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        return set()
+
+
+def _abort(state: Path, config: dict, health: dict | None, budget: dict, now: float) -> dict:
+    """Live abort checks for an active rollout; read-only, counts and fixed codes only."""
+    continuous = (config.get("worker") or {}).get("continuous") or {}
+    pinned = len(continuous.get("camera_ids", [])) or None
+    unreserved = 0
+    if continuous:
+        reserved = _reserved_jobs(state)
+        directory = state / "worker-jobs"
+        for path in directory.glob("*.json") if directory.is_dir() and not directory.is_symlink() else []:
+            try:
+                record = _json(path)
+                if (record.get("operation") not in _NON_CAPTION and now - record["updatedAt"] < 86400
+                        and path.stem not in reserved):
+                    unreserved += 1
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+    registry = (health or {}).get("camera_registry") or {}
+    eligible = registry.get("eligible_cameras")
+    checks = {"budget_last_hour": budget.get("last_hour"), "hourly_limit": LIMIT,
+              "budget_24h": budget.get("retained_24h"), "daily_ceiling": DAILY_CEILING,
+              "caption_jobs_without_reservation": unreserved,
+              "eligible_cameras": eligible, "pinned_cameras": pinned}
+    codes = []
+    if (budget.get("last_hour") or 0) > LIMIT:
+        codes.append("hourly_budget_exceeded")
+    if (budget.get("retained_24h") or 0) > DAILY_CEILING:
+        codes.append("daily_ceiling_exceeded")
+    if unreserved:
+        codes.append("caption_without_reservation")
+    if pinned is not None and isinstance(eligible, int) and eligible > pinned:
+        codes.append("scope_wider_than_pin")
+    return {"checks": checks, "codes": codes}
+
+
 def _ledger(state: Path, cap: int, continuous: bool, now: float) -> dict:
     states, rollover, per_day = collections.Counter(), 0, collections.Counter()
     directory = state / "worker-jobs"
@@ -106,6 +159,7 @@ def preflight(state_root: Path, config: dict, *, health: dict | None = None,
     report = {"schema": "aikey-caption-preflight/1", "scope": scope, "permits": _permits(state),
               "budget": _budget(state, int(now * 1e9)),
               "ledger": _ledger(state, cap, scope["continuous_configured"], now)}
+    report["abort"] = _abort(state, config, health, report["budget"], now)
     if health is not None:
         device, worker = health.get("device", {}), health.get("worker", {})
         commands = device.get("control_commands", {})
@@ -146,6 +200,8 @@ def preflight(state_root: Path, config: dict, *, health: dict | None = None,
         report["key"] = {"checked": False}
     report["ready"] = not blockers
     report["blocker_codes"] = [code for code, _ in blockers]
+    report["blocker_phases"] = {code: PHASES[code] for code, _ in blockers}
+    report["ready_to_activate"] = not any(PHASES[code] == "precondition" for code, _ in blockers)
     report["blockers"] = [text for _, text in blockers]
     return report
 
