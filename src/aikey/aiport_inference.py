@@ -271,9 +271,9 @@ class FairInference:
                 pass
         self._model = None
 
-    def snapshot(self) -> dict[str, int | bool | None]:
+    def snapshot(self) -> dict[str, object]:
         """Aggregate, content-free counters safe for a private health page."""
-        result: dict[str, int | bool | None] = {
+        result: dict[str, object] = {
             "camera_count": len(self._cameras),
             "attempts": sum(self._attempts.values()),
             "successes": sum(self._successes.values()),
@@ -293,6 +293,9 @@ class FairInference:
                 "api_provider_failures": self._model.provider_failures,
                 "api_backoff_skips": self._model.backoff_skips,
             })
+            provider_status = getattr(self._model, "provider_status", None)
+            if callable(provider_status):
+                result.update(provider_status())
         return result
 
     def camera_snapshot(self) -> tuple[dict[str, object], ...]:

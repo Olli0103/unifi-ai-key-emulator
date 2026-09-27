@@ -45,6 +45,14 @@ _FRESH_RESERVE_DIVISOR = 3
 # provider and key: 5 s after the first failure, doubling to five minutes.
 _BACKOFF_FIRST_SECONDS = 5.0
 _BACKOFF_MAX_SECONDS = 300.0
+# An HTTP 429 body is read only to compare its machine-readable error code and
+# type with these fixed values; message text is never kept or reported.
+_MAX_ERROR_BYTES = 4096
+_QUOTA_CODES = frozenset({"insufficient_quota", "billing_hard_limit_reached",
+                          "billing_not_active"})
+_RATE_CODES = frozenset({"rate_limit_exceeded", "rate_limit_error",
+                         "requests", "tokens"})
+HTTP_429_CATEGORIES = ("quota", "rate", "unknown")
 _LABELS = {
     "person": {"person"},
     "vehicle": {"bicycle", "car", "motorcycle", "bus", "truck"},
@@ -398,6 +406,24 @@ def _read_private_key(path: str) -> str:
         raise ApiDetectionError("invalid_api_key_file") from exc
 
 
+def _http_429_category(body: bytes) -> str:
+    """"quota" or "rate" only when the provider's own codes agree; else "unknown"."""
+    try:
+        error = json.loads(body).get("error")
+    except (AttributeError, UnicodeError, ValueError):
+        return "unknown"
+    if not isinstance(error, dict):
+        return "unknown"
+    found = set()
+    for field in ("code", "type"):
+        value = error.get(field)
+        if isinstance(value, str) and value in _QUOTA_CODES:
+            found.add("quota")
+        elif isinstance(value, str) and value in _RATE_CODES:
+            found.add("rate")
+    return found.pop() if len(found) == 1 else "unknown"
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, request, response, code, message, headers, new_url):
         return None
@@ -426,7 +452,15 @@ def _post(url: str, headers: dict, payload: dict) -> dict:
                 "api_detection_http_4xx" if 400 <= exc.code < 500 else
                 "api_detection_http_5xx" if 500 <= exc.code < 600 else
                 "api_detection_http_failure")
-        raise ApiDetectionError(code) from exc
+        error = ApiDetectionError(code)
+        if exc.code == 429:
+            try:
+                body = exc.read(_MAX_ERROR_BYTES)
+            except Exception:
+                body = b""
+            error.category = _http_429_category(body if isinstance(body, bytes) else b"")
+        # Not chained: the HTTP error carries the provider's message and headers.
+        raise error from None
     except URLError as exc:
         code = ("api_detection_dns_unavailable"
                 if isinstance(exc.reason, socket.gaierror)
@@ -449,7 +483,8 @@ class ApiObjectDetector:
                  threshold: float, max_requests_per_hour: int | None = None,
                  transport: Callable[[str, dict, dict], dict] = _post,
                  package_lens_owned: Callable[[str], bool] | None = None,
-                 plate_cameras: frozenset[str] = frozenset()):
+                 plate_cameras: frozenset[str] = frozenset(),
+                 clock: Callable[[], float] = time.time):
         if (type(threshold) not in (float, int) or not 0 < threshold <= 1
                 or max_requests_per_hour is not None
                 and (type(max_requests_per_hour) is not int
@@ -489,6 +524,12 @@ class ApiObjectDetector:
         self.backoff_skips = 0
         self._consecutive_failures = 0
         self._provider_retry_at = 0.0
+        # In memory only: a restart starts with no success time and no outage.
+        self.clock = clock
+        self.last_provider_success_at: int | None = None
+        self.provider_outage_since: int | None = None
+        self.http_429_categories = dict.fromkeys(HTTP_429_CATEGORIES, 0)
+        self.current_429_category: str | None = None
         self.transport = transport
         self.motion = _MotionGate()
         self._camera_counts: dict[str, dict[str, int]] = {}
@@ -581,9 +622,9 @@ class ApiObjectDetector:
                     self._count_failure(camera_mac, _envelope_failure(reply))
                 if not (isinstance(exc, ApiDetectionError)
                         and exc.args == ("api_detection_dns_unavailable",)):
-                    self._provider_failed()
+                    self._provider_failed(exc)
                 raise
-            self._consecutive_failures = 0
+            self._provider_succeeded()
             # Keep only counts. This distinguishes a real empty provider
             # response from an object rejected by the configured score gate.
             rejected: dict[str, int] = {}
@@ -717,7 +758,34 @@ class ApiObjectDetector:
         result["rejected"] += 1
         return None
 
-    def _provider_failed(self) -> None:
+    def _provider_succeeded(self) -> None:
+        """A parsed provider reply ends the current outage."""
+        self._consecutive_failures = 0
+        self.provider_outage_since = None
+        self.current_429_category = None
+        self.last_provider_success_at = int(self.clock())
+
+    def provider_status(self) -> dict[str, object]:
+        """Times and fixed codes only; never a provider message or payload."""
+        return {
+            "api_last_provider_success_at": self.last_provider_success_at,
+            "api_provider_outage_since": self.provider_outage_since,
+            "api_consecutive_provider_failures": self._consecutive_failures,
+            "api_http_429_categories": dict(self.http_429_categories),
+            "api_current_429_category": self.current_429_category,
+        }
+
+    def _provider_failed(self, exc: Exception | None = None) -> None:
+        if self.provider_outage_since is None:
+            self.provider_outage_since = int(self.clock())
+        if isinstance(exc, ApiDetectionError) and exc.args == ("api_detection_http_429",):
+            category = getattr(exc, "category", "unknown")
+            if category not in self.http_429_categories:
+                category = "unknown"
+            self.http_429_categories[category] += 1
+            self.current_429_category = category
+        else:
+            self.current_429_category = None
         self.provider_failures += 1
         self._consecutive_failures += 1
         delay = min(_BACKOFF_MAX_SECONDS,
