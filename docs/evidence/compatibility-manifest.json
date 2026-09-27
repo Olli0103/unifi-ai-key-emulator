@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-27.11",
+ "manifest_version": "ai-key/2026-09-27.12",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -764,8 +764,9 @@
    ],
    "activation": "default",
    "missing_evidence": [
-    "The getInfo exchange and the capability state Protect stored were not recorded on either live version"
-   ]
+    "The getInfo exchange body was not recorded on any live version; the stored capability state is recorded for 7.3.68 only"
+   ],
+   "notes": "27 Sep 7.3.68 readback (N2): Protect's stored aiprocessors featureFlags equal the flags derived from the live Key configuration: supportImageSearch, supportRecognizeAnything, supportRetroactiveProcessing, supportTts, supportFaceRecognition and supportAiSummary enabled; supportFaceEnhancement, supportLicensePlateRecognition, supportVlm and supportDeepMode explicitly false; aiMode basic, describeConfigHash empty."
   },
   {
    "id": "control.get_task_queue_info",
@@ -1549,8 +1550,9 @@
    ],
    "activation": "default",
    "missing_evidence": [
-    "The capability state Protect displayed or stored on either live version"
-   ]
+    "The capability state Protect stored on 7.3.56 and 7.3.60 was not recorded"
+   ],
+   "notes": "27 Sep 7.3.68 readback (N2): Protect's stored aiprocessors featureFlags equal the flags derived from the live Key configuration: supportImageSearch, supportRecognizeAnything, supportRetroactiveProcessing, supportTts, supportFaceRecognition and supportAiSummary enabled; supportFaceEnhancement, supportLicensePlateRecognition, supportVlm and supportDeepMode explicitly false; aiMode basic, describeConfigHash empty. A stored flag is not proof that the feature works, so this stays fixture-tested."
   },
   {
    "id": "capability.ai_mode_basic",
@@ -1580,7 +1582,7 @@
    "live": {
     "live-protect-7.3.56": "not_observed",
     "live-protect-7.3.60": "not_observed",
-    "live-protect-7.3.68": "not_observed"
+    "live-protect-7.3.68": "indirect"
    },
    "static": [
     "static-protect-7.2.105"
@@ -1594,7 +1596,8 @@
    "activation": "experimental_opt_in",
    "missing_evidence": [
     "Whether supportAiSummary was advertised as enabled during the 7.3.60 caption trial is not in the public records"
-   ]
+   ],
+   "notes": "27 Sep 7.3.68: with the explicit opt-in and a configured caption path, Protect stored supportAiSummary enabled (N2). A stored flag is not proof that the feature works, so this stays fixture-tested."
   },
   {
    "id": "capability.deep_mode_vlm",
@@ -1615,7 +1618,8 @@
    "missing_evidence": [
     "Whether 7.3.x still couples the two flags"
    ],
-   "rejection": "Both false. Protect 7.2.105 couples them (supportDeepMode ?? supportVlm), so they cannot be advertised independently."
+   "rejection": "Both false. Protect 7.2.105 couples them (supportDeepMode ?? supportVlm), so they cannot be advertised independently.",
+   "notes": "27 Sep 7.3.68: Protect stored supportVlm false, supportDeepMode false and aiMode basic (N2)."
   },
   {
    "id": "capability.face_recognition",
@@ -2377,7 +2381,7 @@
     "capability.support_ai_summary",
     "capability.deep_mode_vlm"
    ],
-   "procedure": "Record the capability state Protect shows for the processor, and the exact device.feature_flags in effect, before any caption trial."
+   "procedure": "Done on 7.3.68 (27 Sep): Protect's stored featureFlags match the Key's derived flags, with unserved features explicitly false. Remaining: the getInfo body itself, and the same readback before a caption trial on 7.3.60 (no such controller available; needs_evidence)."
   },
   {
    "id": "N3",

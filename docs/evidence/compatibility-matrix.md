@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.11). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.12). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-27.11` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-27.12` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -77,7 +77,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | **capabilities** | |  |  |  | | |
 | `capability.explicit_disabled_flags`: Capability flags derived from served features; unserved ones sent explicitly disabled | fixture-tested | — | — | indirect | Protect 7.2.105 | default |
 | `capability.ai_mode_basic`: aiMode reported as basic | fixture-tested | — | — | — | Protect 7.2.105 | default |
-| `capability.support_ai_summary`: supportAiSummary advertised only with explicit opt-in and a configured caption path | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105 | experimental_opt_in |
+| `capability.support_ai_summary`: supportAiSummary advertised only with explicit opt-in and a configured caption path | fixture-tested | not_observed | not_observed | indirect | Protect 7.2.105 | experimental_opt_in |
 | `capability.deep_mode_vlm`: supportDeepMode / supportVlm | unsupported | — | — | — | Protect 7.2.105 | default |
 | `capability.face_recognition`: supportFaceRecognition advertised with local face recognition | fixture-tested | — | — | indirect | Protect 7.2.105 | explicit_opt_in |
 | `capability.license_plate_recognition`: License-plate recognition | unsupported | — | — | indirect | Protect 7.2.105 | default |
@@ -132,7 +132,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `lifecycle.controller_upgrade` (needs_evidence): A deliberate upgrade test with before/after adoption state
 - `lifecycle.emulator_upgrade` (needs_evidence): A planned live upgrade drill: Protect readback of adoption and AI Key identity before and after replacing the release, and after a rollback
 - `lifecycle.emulator_upgrade` (needs_evidence): The migration layer is fixture-tested with a synthetic schema 0; the current release is schema 1 with no migrations, so no real migration has run
-- `control.get_info`: The getInfo exchange and the capability state Protect stored were not recorded on either live version
+- `control.get_info`: The getInfo exchange body was not recorded on any live version; the stored capability state is recorded for 7.3.68 only
 - `control.get_task_queue_info`: Whether Protect schedules differently from these counts
 - `control.set_console_info`: The 7.3.56 and 7.3.60 body shapes were not recorded; a controller sending an extra field would receive errorCode 22
 - `control.set_info`: Live body shape
@@ -167,7 +167,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `callback.task_description`: A live controller task ledger entry; unknown task IDs are dropped after HTTP 200
 - `callback.journal_and_uncertain_delivery`: Exactly-once delivery is not claimed
 - `callback.journal_and_uncertain_delivery`: Controller-side retry behavior for AI Key tasks
-- `capability.explicit_disabled_flags`: The capability state Protect displayed or stored on either live version
+- `capability.explicit_disabled_flags`: The capability state Protect stored on 7.3.56 and 7.3.60 was not recorded
 - `capability.ai_mode_basic`: How 7.3.x interprets aiMode
 - `capability.support_ai_summary`: Whether supportAiSummary was advertised as enabled during the 7.3.60 caption trial is not in the public records
 - `capability.deep_mode_vlm`: Whether 7.3.x still couples the two flags
@@ -254,7 +254,7 @@ Every live trial must record each experimental activation below that was in effe
 ## Remaining native tests for the integration owner
 
 - **N1** (`lifecycle.unknown_controller_version`, `control.set_console_info`, `database.supports_db_credential_handoff`): Done on 7.3.68 (27 Sep): controller_version_evidence live_partial, setConsoleInfo 1 call with result code 0, and exactly the four allowlisted controller fields. Remaining: the same readback on a 7.3.60 controller (none available; needs_evidence), and the access-rule behavior behind supportsDbCredential.
-- **N2** (`control.get_info`, `capability.explicit_disabled_flags`, `capability.support_ai_summary`, `capability.deep_mode_vlm`): Record the capability state Protect shows for the processor, and the exact device.feature_flags in effect, before any caption trial.
+- **N2** (`control.get_info`, `capability.explicit_disabled_flags`, `capability.support_ai_summary`, `capability.deep_mode_vlm`): Done on 7.3.68 (27 Sep): Protect's stored featureFlags match the Key's derived flags, with unserved features explicitly false. Remaining: the getInfo body itself, and the same readback before a caption trial on 7.3.60 (no such controller available; needs_evidence).
 - **N3** (`lifecycle.controller_upgrade`): Record adoption state before and after an in-place Protect upgrade; confirm reconnect without re-adoption.
 - **N4** (`adoption.management_adopt`, `adoption.time_sync_confirmation`, `lifecycle.credential_rotation`): Fresh adoption of a separately identified test processor on 7.3.60, including rotation and planned restart.
 - **N5** (`lifecycle.protocol_violation_close`, `control.request_ai.unknown_target`): Only if a malformed or unsupported command occurs naturally: record the close or error code and whether Protect retries. Do not inject traffic into the production controller.
