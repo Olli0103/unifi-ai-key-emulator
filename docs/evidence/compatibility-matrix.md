@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.5). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.6). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-27.5` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-27.6` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -194,8 +194,10 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `database.bm25_rerank`: Whether 7.3.x requires hybrid search
 - `search.e5_nl_parse`: On 7.3.68 basic Find Anything uses CLIP (verified); E5 is used only by deep session search (encodeSessionSearchQuery), not observed live
 - `search.e5_nl_parse`: Encoder compatibility with vendor vectors
+- `search.e5_nl_parse`: Deep Understanding is internal-only in Protect 7.3.x (enforceDeepUnderstandingInternalOnly); on this console it is off, /detection-sessions/search returns 0 sessions and smartDetectSessionsSearch is empty (27 Sep)
 - `search.description_embedding`: Document preprocessing used by the vendor
 - `search.description_embedding`: Native retrieval with positive and negative examples
+- `search.description_embedding`: Deep Understanding is internal-only in Protect 7.3.x (enforceDeepUnderstandingInternalOnly); on this console it is off, /detection-sessions/search returns 0 sessions and smartDetectSessionsSearch is empty (27 Sep)
 - `search.legacy_clip_image`: Vectors come from the project's own local CLIP ViT-L/14 export; equivalence with the vendor encoder is not established, so only indexes built by this Key are compatible
 - `search.legacy_clip_image`: Protect 7.3.56 and 7.3.60 not observed
 - `search.legacy_clip_image`: Tag extraction and time filters remain unsupported

@@ -379,3 +379,23 @@ So a `completed` run is terminal for this processor record. The only reset is a 
   - Before cutover, only a local ranking comparison is possible, and that is not native evidence.
 - **Operator steps around cutover:** run a second CLIP server for the target revision, stop the AI Key, then switch `find_anything.clip_server` to the target server. The AI Key refuses to start search while its config and the profile disagree, which is the intended safety net.
 - **Admin UI:** separating visual-model changes from index migrations remains open.
+
+## Deep session descriptions and semantic retrieval (#22, 27 Sep 2026)
+
+**Contract (7.3.60 static).**
+- **Dispatch:** Deep Understanding sends `generateDescription` (`RequestAI`, videos or crops) and `generateEmbeddings` (`targetUri :7445/generate-embeddings`, crops, callback `/internal/aiprocessors/embeddings/<task>`) to a connected, non-built-in processor in deep mode.
+- **Retrieval:** `GET /detection-sessions/search?query=` (`searchSessionsNls`) asks the AI Key for an E5 query vector (`NL_PARSE`, `multilingual-e5-small`, 384 values), then ranks `smartDetectSessionsSearch`.
+- **Coverage:** `/detection-sessions/stats`.
+- **Gate:** `enforceDeepUnderstandingInternalOnly` switches the Deep Understanding policy off unless the console owner is an internal account (`isInternalUser`). The only other switch is a server-side `featureFlags.dedupSkipEmbed` in Protect's own config, not a setting.
+
+**Native readback (7.3.68, read-only).**
+- **Settings:** `deepUnderstandingSettings.enabled` false, AI Key `aiMode: basic`, `supportDeepMode` false.
+- **Search:** `GET /detection-sessions/search` ("a person walking") returns 200 with 0 sessions.
+- **Stats:** 0 total, described, pending and detections.
+- **Search host:** `smartDetectSessionsSearch` holds 0 rows.
+- **The Key:** the search dispatched one E5 `NL_PARSE`, which the Key refused (`query_failures` 0 → 1), as designed under its pinned CLIP profile. Protect treats that as "no query vector".
+
+**Result.**
+- **`needs_evidence`, controller-gated:** without Deep Understanding, Protect dispatches no description or embedding tasks and has no sessions to rank.
+- **No bounded emulator fix exists:** answering E5 queries would still return 0 sessions, and changing AI settings is out of scope.
+- **Emulator coverage stays fixture-tested:** `search.e5_nl_parse`, `search.description_embedding`.

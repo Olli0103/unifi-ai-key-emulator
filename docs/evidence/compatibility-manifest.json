@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-27.5",
+ "manifest_version": "ai-key/2026-09-27.6",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -1944,7 +1944,8 @@
    "activation": "explicit_opt_in",
    "missing_evidence": [
     "On 7.3.68 basic Find Anything uses CLIP (verified); E5 is used only by deep session search (encodeSessionSearchQuery), not observed live",
-    "Encoder compatibility with vendor vectors"
+    "Encoder compatibility with vendor vectors",
+    "Deep Understanding is internal-only in Protect 7.3.x (enforceDeepUnderstandingInternalOnly); on this console it is off, /detection-sessions/search returns 0 sessions and smartDetectSessionsSearch is empty (27 Sep)"
    ]
   },
   {
@@ -1966,7 +1967,8 @@
    "activation": "explicit_opt_in",
    "missing_evidence": [
     "Document preprocessing used by the vendor",
-    "Native retrieval with positive and negative examples"
+    "Native retrieval with positive and negative examples",
+    "Deep Understanding is internal-only in Protect 7.3.x (enforceDeepUnderstandingInternalOnly); on this console it is off, /detection-sessions/search returns 0 sessions and smartDetectSessionsSearch is empty (27 Sep)"
    ]
   },
   {
