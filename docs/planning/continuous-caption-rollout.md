@@ -69,24 +69,50 @@ Each action below is **one approval**. Each lists exactly what it reads, writes,
 
 ## Action 1: archive the 54 reviewed index callbacks
 
-- **Approve:** `aikey-uncertain-resolution apply` with digest `92bc7c3b…a223` while the AI Key container is stopped.
-- **Reads:** `worker-jobs/*.json`, `worker-archive/`, and one SELECT (job hashes with embedded rows) on `local-postgres-search`.
-- **Writes, only these:**
-  1. a new private backup directory with 54 byte copies (0600) plus `manifest.json` (digest, job hash, file SHA-256), written and fsynced before any change;
-  2. 54 tombstones `worker-archive/<xx>/<job>.json` (`state: completed`, same shape the worker writes; 49 buckets);
-  3. removal of the same 54 active records.
+**Current preflight (read-only, 27 Sep ~21:26 UTC); the digest is still valid.**
+- `aikey-uncertain-resolution plan` recomputed against the live journal, archive and search DB:
+  - 54 records, all `indexImages` (local CLIP, no provider cost), all `archive_as_completed`;
+  - digest **`92bc7c3b948ca7596ccfd961b31d191acc5dfb3a78e846956ffa39454a90a223`**, identical to the reviewed one, so the set has not changed;
+  - evidence: 2,412 job hashes with embedded rows (it grows naturally), which include all 54;
+  - 0 of the 54 already have a tombstone; their 49 archive buckets exist and are private.
+- **Key:** adopted, connected, search connected; worker queued, active and pending 0; journal 567 entries (completed 401, failed 112, `callback_uncertain` 54).
+- **Filesystem:** `worker-jobs/` and `worker-archive/` are 0700, owned by the user, not symlinks; 256 buckets, 0 unsafe, 2,638 tombstones; 420 GiB free.
+- **Supervisor:** `aikey-mac` running, no hold.
+- **If any of this differs at approval time, do not apply.** Re-run `plan`: a new digest makes this plan stale and needs a new review.
 
-  Nothing in Protect, the search index, the budget or the config changes.
-- **Refuses:**
-  - `key_running` if the Key is up;
-  - `plan_changed` if any of the 54 changed after approval;
-  - `backup_not_empty`;
-  - `tombstone_conflict`;
-  - paid (caption) jobs, which are never eligible (`not_local_index`).
-- **Retry:** rerunning with the same backup resumes. Finished records count as `already_archived`, and a partly done one is completed.
-- **Check:** after restarting the same Key image, the preflight shows `uncertain_callbacks_pending` gone and journal entries down by 54; Key adopted, connected and search connected.
-- **Undo:** `aikey-uncertain-resolution rollback --backup … --key-stopped` restores the 54 records byte for byte and removes only matching tombstones. It is idempotent.
-- **Needs two service stops**, stop and start, of the Key container on the same image, using `local-apple-upgrade`-style idle gating (worker queued, active and pending = 0).
+**Approve:** exactly this sequence. Each step must pass before the next; any failure stops with nothing written by the tool.
+
+| # | Step | Pass condition | On failure |
+|---|---|---|---|
+| 1 | `aikey-uncertain-resolution plan --state state/apple --evidence-container local-postgres-search` | digest = `92bc7c3b…a223`, 54 × `archive_as_completed` | stop; plan is stale |
+| 2 | Key health | adopted, connected, worker 0/0/0 | wait; do not stop a busy Key |
+| 3 | `local-apple-supervise hold aikey-mac --minutes 20`, then `container stop local-aikey-mac-findanything18` | hold recorded; stop exit 0; `container ls -a` shows it **stopped** (`--key-stopped` is an attestation the tool does not verify) | release the hold; stop |
+| 4 | `aikey-uncertain-resolution apply --state state/apple --evidence-container local-postgres-search --backup state/apple-uncertain-backup-<stamp> --approve 92bc7c3b…a223 --key-stopped` | output `{"archived": 54, "already_archived": 0, "records": 54}` | restart the Key (step 5) with the journal unchanged, or resume or roll back as below |
+| 5 | `container start local-aikey-mac-findanything18`, then `local-apple-supervise release aikey-mac` | ready: adopted, connected, search connected | roll back (below), then start |
+| 6 | Preflight and health | `uncertain_callbacks_pending` gone; journal 567 → 513; 54 new tombstones; worker idle | roll back |
+
+**What is written, and only this:**
+1. **Backed up first:** a new directory `state/apple-uncertain-backup-<stamp>/` (0700) with 54 byte copies of the journal records (0600) plus `manifest.json` (digest, job hash, SHA-256 per file), all fsynced before any journal change.
+2. **Created:** 54 tombstones `worker-archive/<xx>/<job>.json`: `state: completed`, the same shape the worker writes and reads.
+3. **Removed:** the same 54 files from `worker-jobs/`, each only after its tombstone is linked and fsynced.
+
+Nothing in Protect, the search index, the budget, the config, the AI Ports or any other journal record changes.
+
+**Aborts before any write** (fixed codes):
+- `key_running` (the flag is missing);
+- `plan_changed` (digest or any file checksum differs from approval);
+- `backup_not_empty`;
+- `journal_missing`, `unsafe_file`, `unsafe_directory`;
+- `evidence_query_failed`;
+- caption or other paid jobs are never selected (`not_local_index`).
+
+**Stops mid-run with a partial result:** `tombstone_conflict`, `record_changed`, `record_missing_without_tombstone`, `backup_corrupt`. Resume or roll back as below.
+
+**Retry:** rerun step 4 with the same backup directory. Finished records count as `already_archived`, and a record interrupted between tombstone and unlink is completed. A different digest against that backup is refused (`backup_belongs_to_another_plan`).
+
+**Restore (undo):** with the Key stopped and held, run `aikey-uncertain-resolution rollback --state state/apple --backup state/apple-uncertain-backup-<stamp> --key-stopped`, then start and release.
+- It restores the 54 records byte for byte (checksums verified), removes only tombstones equal to the ones it wrote, and is idempotent.
+- It stops on `backup_corrupt` or a foreign `tombstone_conflict`.
 
 ## Action 2: deploy the admission and #1 fixes to the AI Key (no config change)
 
