@@ -7,6 +7,12 @@ PostgreSQL container, compares it with the manifest and drops the scratch
 database. Neither step writes to the live database. Only counts, dimensions
 and digests are printed; no row content leaves the database.
 
+``schema_check`` reads, and only reads, the storage Protect uses for basic
+search: the pgvector version, the declared type of ``ramDetections.embedding``,
+the widths actually stored, and any other vector columns. It fails when they
+disagree with the pinned encoder profile, so vectors of two widths are never
+mixed (#10).
+
 ``prune`` expires old backups (#5). A dump holds captions, embeddings and
 search rows, so it must not be kept forever. It is a dry run unless
 ``apply`` is set, and it always keeps the newest verified backup.
@@ -41,6 +47,30 @@ select json_build_object(
   'dimensions', (select coalesce(json_agg(distinct vector_dims(embedding)), '[]'::json)
                  from "ramDetections" where embedding is not null))
 """
+
+_SCHEMA_SQL = r"""
+select json_build_object(
+  'extension', (select extversion from pg_extension where extname = 'vector'),
+  'embedding_type', (select format_type(a.atttypid, a.atttypmod)
+      from pg_attribute a join pg_class c on c.oid = a.attrelid
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public' and c.relname = 'ramDetections'
+        and a.attname = 'embedding' and not a.attisdropped),
+  'vector_columns', (select coalesce(json_agg(json_build_object(
+          'table', c.relname, 'column', a.attname, 'type', format_type(a.atttypid, a.atttypmod),
+          'kind', case c.relkind when 'i' then 'index' else 'table' end)
+          order by c.relname, a.attname), '[]'::json)
+      from pg_attribute a join pg_class c on c.oid = a.attrelid
+      join pg_namespace n on n.oid = c.relnamespace join pg_type t on t.oid = a.atttypid
+      where n.nspname = 'public' and t.typname = 'vector' and a.attnum > 0 and not a.attisdropped))
+"""
+_STORED_SQL = r"""
+select json_build_object(
+  'rows_with_embedding', (select count(*) from "ramDetections" where embedding is not null),
+  'stored_dimensions', (select coalesce(json_agg(distinct vector_dims(embedding)), '[]'::json)
+                        from "ramDetections" where embedding is not null))
+"""
+_VECTOR_TYPE = re.compile(r"vector(?:\((\d{1,5})\))?\Z")
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -124,6 +154,41 @@ def verify(run: Runner, container: str, manifest_path: Path) -> dict:
     return {"verified": True, "counts": restored, "sha256": manifest["sha256"]}
 
 
+def schema_check(run: Runner, container: str, profile: dict) -> dict:
+    """Compare Protect's search storage with the pinned encoder; read-only."""
+    expected = profile.get("dimensions") if isinstance(profile, dict) else None
+    if type(expected) is not int or not 1 <= expected <= 16000:
+        raise BackupError("The encoder profile has no valid dimensions")
+    query = ["psql", "-X", "-U", USER, "-d", DATABASE, "-Atq", "-c"]
+    schema = json.loads(_exec(run, container, [*query, _SCHEMA_SQL]).stdout)
+    if not isinstance(schema, dict) or not isinstance(schema.get("vector_columns"), list):
+        raise BackupError("Unexpected schema reply")
+    problems, stored = [], {"rows_with_embedding": None, "stored_dimensions": None}
+    if not schema.get("extension"):
+        problems.append("pgvector extension is not installed")
+    declared = schema.get("embedding_type")
+    match = _VECTOR_TYPE.fullmatch(declared) if isinstance(declared, str) else None
+    if declared is None:
+        problems.append("ramDetections.embedding does not exist")
+    elif match is None:
+        problems.append("ramDetections.embedding is not a vector column")
+    elif match.group(1) is not None and int(match.group(1)) != expected:
+        problems.append(f"ramDetections.embedding is declared {declared}, the profile needs {expected}")
+    if declared is not None:
+        stored = json.loads(_exec(run, container, [*query, _STORED_SQL]).stdout)
+        widths = stored.get("stored_dimensions") if isinstance(stored, dict) else None
+        if not isinstance(widths, list) or any(type(w) is not int for w in widths):
+            raise BackupError("Unexpected stored-dimension reply")
+        if any(width != expected for width in widths):
+            problems.append(f"stored vectors have widths {sorted(widths)}, the profile needs {expected}")
+    others = [column for column in schema["vector_columns"]
+              if column.get("kind", "table") == "table"
+              and (column.get("table"), column.get("column")) != ("ramDetections", "embedding")]
+    return {"compatible": not problems, "problems": problems, "profile_dimensions": expected,
+            "profile_model": profile.get("model"), "extension": schema.get("extension"),
+            "embedding_type": declared, **stored, "other_vector_columns": others}
+
+
 _STAMP = re.compile(r"search-(\d{8}T\d{6})\Z")
 
 
@@ -194,6 +259,8 @@ def main(argv: list[str] | None = None, run: Runner = subprocess.run) -> int:
     make.add_argument("--profile", type=Path, help="search-profile.json to record with the dump")
     check = sub.add_parser("verify")
     check.add_argument("manifest", type=Path)
+    shape = sub.add_parser("schema-check", help="compare search storage with the pinned profile")
+    shape.add_argument("--profile", required=True, type=Path)
     expire = sub.add_parser("prune", help="expire old backups (dry run unless --apply)")
     expire.add_argument("--out", required=True, type=Path)
     expire.add_argument("--keep", type=int, default=3)
@@ -207,6 +274,10 @@ def main(argv: list[str] | None = None, run: Runner = subprocess.run) -> int:
             manifest = backup(run, args.container, args.out, args.profile)
             report = {"manifest": manifest["dump"].replace(".dump", ".json"), "bytes": manifest["bytes"],
                       "sha256": manifest["sha256"][:12], "counts": manifest["counts"]}
+        elif args.command == "schema-check":
+            report = schema_check(run, args.container, json.loads(args.profile.read_text()))
+            print(json.dumps(report, sort_keys=True))
+            return 0 if report["compatible"] else 2
         elif args.command == "prune":
             report = prune(args.out, keep=args.keep, max_age_days=args.max_age_days, apply=args.apply)
         else:

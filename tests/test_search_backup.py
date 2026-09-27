@@ -195,3 +195,81 @@ def test_prune_cli_is_dry_by_default(tmp_path, capsys):
     assert main(["prune", "--out", str(tmp_path), "--keep", "1", "--max-age-days", "1"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["applied"] is False and report["expired"] and len(list(tmp_path.iterdir())) == 12
+
+
+# --- #10 read-only schema check against the pinned profile -------------------
+
+from aikey.search_backup import schema_check  # noqa: E402
+
+PROFILE = {"profile": "clip-basic-v1", "model": "clip-ViT-L-14", "dimensions": 768}
+
+
+class SchemaDouble:
+    """Answers the two catalog queries; records every command it is asked to run."""
+
+    def __init__(self, *, extension="0.8.6", embedding_type="vector(768)", widths=(768,),
+                 rows=5, others=()):
+        self.schema = {"extension": extension, "embedding_type": embedding_type,
+                       "vector_columns": ([{"table": "ramDetections", "column": "embedding",
+                                            "type": embedding_type}] if embedding_type else [])
+                       + list(others)}
+        self.stored = {"rows_with_embedding": rows, "stored_dimensions": list(widths)}
+        self.sql = []
+
+    def __call__(self, command, *, stdin=None, stdout=None, stderr=None, timeout=None, check=False):
+        sql = command[-1]
+        self.sql.append(sql)
+        reply = self.schema if "pg_extension" in sql else self.stored
+        return subprocess.CompletedProcess(command, 0, json.dumps(reply).encode(), b"")
+
+
+def test_a_matching_store_is_compatible_and_only_read():
+    double = SchemaDouble(others=[
+        {"table": "sessionEmbeddings", "column": "vector", "type": "vector(384)", "kind": "table"},
+        {"table": "sessionEmbeddings_hnsw", "column": "vector", "type": "vector(384)", "kind": "index"}])
+    report = schema_check(double, "fixture", PROFILE)
+    assert report["compatible"] is True and report["problems"] == []
+    assert (report["embedding_type"], report["stored_dimensions"], report["rows_with_embedding"]) == (
+        "vector(768)", [768], 5)
+    # Another profile's vectors are reported, not treated as a failure.
+    assert report["other_vector_columns"] == [                    # indexes are not columns
+        {"table": "sessionEmbeddings", "column": "vector", "type": "vector(384)", "kind": "table"}]
+    assert all(sql.lstrip().lower().startswith("select") for sql in double.sql)
+    import re as _re
+    assert not any(_re.search(r"\b(insert|update|delete|alter|drop|create|truncate|grant)\b", sql, _re.I)
+                   for sql in double.sql)
+
+
+@pytest.mark.parametrize("double,problem", [
+    (SchemaDouble(embedding_type="vector(384)", widths=(384,)), "declared vector(384)"),
+    (SchemaDouble(widths=(768, 384)), "widths [384, 768]"),
+    (SchemaDouble(embedding_type="vector", widths=(512,)), "widths [512]"),
+    (SchemaDouble(extension=None), "pgvector extension"),
+    (SchemaDouble(embedding_type=None), "does not exist"),
+    (SchemaDouble(embedding_type="text"), "not a vector column"),
+])
+def test_a_mismatched_store_is_refused(double, problem):
+    report = schema_check(double, "fixture", PROFILE)
+    assert report["compatible"] is False and any(problem in p for p in report["problems"])
+
+
+def test_an_untyped_vector_column_is_judged_by_what_it_stores():
+    assert schema_check(SchemaDouble(embedding_type="vector", widths=(768,)), "f", PROFILE)["compatible"]
+    empty = schema_check(SchemaDouble(widths=(), rows=0), "f", PROFILE)
+    assert empty["compatible"] is True and empty["stored_dimensions"] == []
+
+
+@pytest.mark.parametrize("profile", [{}, {"dimensions": "768"}, {"dimensions": 0}, None])
+def test_a_profile_without_valid_dimensions_is_refused(profile):
+    with pytest.raises(BackupError, match="valid dimensions"):
+        schema_check(SchemaDouble(), "fixture", profile)
+
+
+def test_the_schema_check_cli_exits_nonzero_on_a_mismatch(tmp_path, capsys):
+    profile = tmp_path / "search-profile.json"
+    profile.write_text(json.dumps(PROFILE))
+    assert main(["schema-check", "--profile", str(profile)], run=SchemaDouble()) == 0
+    assert json.loads(capsys.readouterr().out)["compatible"] is True
+    assert main(["schema-check", "--profile", str(profile)],
+                run=SchemaDouble(embedding_type="vector(384)", widths=(384,))) == 2
+    assert json.loads(capsys.readouterr().out)["compatible"] is False
