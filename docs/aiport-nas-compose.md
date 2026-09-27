@@ -172,3 +172,11 @@ A NAS slot's canonical config (`state/aiport-slots/slot-N/config.json`) is what 
   - Slot 2's pinned health agrees on 2 streams, `live_pool` on the vision API, no request cap, and an event budget.
 - **Decision:** Olli chose to leave `deployed_config` unset, so new NAS slots from this template stay manual (`template_deployed_config_unset`).
 - **To verify:** sign in to the NAS, read `slot-2/config.json` read-only, compare its hash with the canonical copy, and only then set `deployed_config`.
+
+### r26 build context (staged 27 Sep 2026, not deployed)
+- **Contents:** `state/aiport-nas-build-r26/` holds a Dockerfile `FROM local-aiport:nas-amd64-ai-port-plates-r25-20260926` plus `aiport_api_detection.py` (d26c3e4). The r25 image already carries HEAD's copy of every other AI Port module.
+- **The only change:** fixed-category counts of rejected model kinds and labels (#79).
+- **To deploy (owner):**
+  1. Upload both files to the NAS build context.
+  2. Change only the image tags in Compose to r26, and redeploy without pulling.
+  3. Point `compose.live_image` and each slot's `deployed_config` at the r26 copies, then run the rollout dry run to confirm a no-op.
