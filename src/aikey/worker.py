@@ -643,7 +643,11 @@ class JobProcessor:
                                                expected_fingerprint=self.expected_fingerprint)
             self._session = aiohttp.ClientSession(timeout=timeout, trust_env=False, connector=connector)
             # Separate connector prevents forwarding the device client certificate to a model server.
-            self._inference_session = aiohttp.ClientSession(timeout=timeout, trust_env=False)
+            # The vision, speech, face and enhancement roles share this session, so it keeps no
+            # cookies: a gateway cookie from one role must not reach another role's server on
+            # the same host (#8). Credentials are sent per request, never as session defaults.
+            self._inference_session = aiohttp.ClientSession(
+                timeout=timeout, trust_env=False, cookie_jar=aiohttp.DummyCookieJar())
             self._tasks = [asyncio.create_task(self._consume()) for _ in range(self.concurrency)]
 
     def _url(self, value, purpose):
