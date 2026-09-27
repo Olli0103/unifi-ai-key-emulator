@@ -123,3 +123,26 @@ Read-only from Protect 7.3.68. Counts only; no plate text or images.
 - **needs_evidence.**
   - **Transport:** a fresh native plate event on Einfahrt or Garage, on the original camera timeline (a daytime vehicle with a legible plate).
   - **Plate accuracy:** needs Olli's ground truth.
+
+## Transcript search on Protect 7.3.68 (#15, 27 Sep 2026)
+
+Read-only, in a signed-in console session. Only counts, event-ID match status and HTTP behavior were read; no transcript text was read out, and no audio was fetched.
+
+**Contract.**
+- **Server (7.3.60 code):** when a transcript is saved, Protect sets `metadata.sttSearchable` if it has real text, and adds the event label `smartDetectType:transcript`. No query reads `transcriptions.text` (no ILIKE, full-text or vector search).
+- **Web UI (7.3.68 code, loaded on the Find Anything page):** it has a per-event transcript viewer (`getTranscriptions` → `GET events/{id}/transcriptions?camera=`, `TranscriptText`) and `hasTranscript` (the event labels include `transcript`). No route searches transcript text.
+
+**Native test.**
+- **Target:** a stored Wohnzimmer `smartAudioDetect` (`alrmSpeak`) event with `sttSearchable: true`. A common 6-letter word from its stored transcript was picked in the page from a fixed stopword list and never printed. The control was a nonsense token.
+- **`detection-nls`:** 200 with 50 image objects for both term and control. The target event was **not** returned. It searches `ramDetections` object vectors only.
+- **`GET events` (Wohnzimmer, target window ±1 min):** 3 events for every variant, identical to the window alone:
+  - `searchText` with the term, and with the control;
+  - `keyword` with the control;
+  - `labels` set to `transcript`, and to a bogus label;
+  - `smartDetectTypes=vehicle`.
+  - These parameters are ignored. The term "matches" only through the time window.
+
+**Result.**
+- **Not supported:** basic mode on 7.3.68 offers no transcript text search, only a "has transcript" label and the transcript viewer.
+- **No safe emulator-side fix:** the only lever would put transcript-derived vectors into the image-object index. That mixes modalities, embeds speech content, and would rely on deep-understanding session search, which is disabled and is not changed here.
+- **Status:** `needs_evidence`, controller-limited.

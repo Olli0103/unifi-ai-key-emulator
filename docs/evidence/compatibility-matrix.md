@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.4). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.5). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-27.4` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-27.5` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -182,7 +182,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `capability.audio_speech`: The capability flag itself is never native-verified by the matrix rules; the transcripts it enables are (callback.speech_to_text_transcriptions)
 - `callback.speech_to_text_transcriptions`: Persistence after a controller restart
 - `callback.speech_to_text_transcriptions`: Non-German speech, noise and overlapping speakers on live events
-- `callback.speech_to_text_transcriptions`: Search by transcript text in the Protect UI
+- `callback.speech_to_text_transcriptions`: Transcript text search: Protect 7.3.68 basic mode has none (events filters ignore searchText, keyword and labels; detection-nls searches object vectors only); only the transcript label and per-event viewer exist
 - `callback.face_recognition_part`: Named matches (owner must name a face group)
 - `callback.face_recognition_part`: Persistence after a controller restart
 - `capability.ai_alarms`: Native contract (issue #26)

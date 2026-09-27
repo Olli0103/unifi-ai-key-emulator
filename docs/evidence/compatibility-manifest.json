@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-27.4",
+ "manifest_version": "ai-key/2026-09-27.5",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -1779,7 +1779,7 @@
    "missing_evidence": [
     "Persistence after a controller restart",
     "Non-German speech, noise and overlapping speakers on live events",
-    "Search by transcript text in the Protect UI"
+    "Transcript text search: Protect 7.3.68 basic mode has none (events filters ignore searchText, keyword and labels; detection-nls searches object vectors only); only the transcript label and per-event viewer exist"
    ],
    "notes": "Verified by transcription rows read back per event (counts and time bounds only, no text inspected), not by HTTP 200. Backend: local whisper.cpp; audio never left the Mac."
   },
