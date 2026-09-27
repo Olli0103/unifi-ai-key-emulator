@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-27.7",
+ "manifest_version": "ai-key/2026-09-27.8",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -724,15 +724,21 @@
    "live": {},
    "static": [],
    "tests": [
-    "tests/test_config_tls.py::test_incomplete_identity_is_not_regenerated"
+    "tests/test_config_tls.py::test_incomplete_identity_is_not_regenerated",
+    "tests/test_state_schema.py::test_a_migration_preserves_identity_and_keeps_one_backup",
+    "tests/test_state_schema.py::test_a_newer_schema_is_refused_and_never_rewritten",
+    "tests/test_state_schema.py::test_an_interrupted_write_keeps_the_original_and_the_retry_converges",
+    "tests/test_state_schema.py::test_rollback_restores_the_pre_upgrade_state_from_a_copy"
    ],
    "implementation": [
     "src/aikey/device.py",
-    "src/aikey/tls.py"
+    "src/aikey/tls.py",
+    "src/aikey/state_schema.py"
    ],
    "activation": "default",
    "missing_evidence": [
-    "No release-to-release upgrade exists yet; state schema 1 has no migration path (issue #24)"
+    "A planned live upgrade drill: Protect readback of adoption and AI Key identity before and after replacing the release, and after a rollback",
+    "The migration layer is fixture-tested with a synthetic schema 0; the current release is schema 1 with no migrations, so no real migration has run"
    ]
   },
   {

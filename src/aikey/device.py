@@ -410,13 +410,18 @@ class DeviceService:
 
     def _load_state(self) -> dict:
         if not self.state_path.exists():
-            return {"schema": 1, "mac": self.mac, "adopted": False}
+            from .state_schema import CURRENT_SCHEMA
+            return {"schema": CURRENT_SCHEMA, "mac": self.mac, "adopted": False}
         if self.state_path.is_symlink() or not self.state_path.is_file():
             raise ValueError("State must be a regular file")
         if self.state_path.stat().st_size > _MAX_STATE_BYTES:
             raise ValueError("Device state is too large")
+        from .state_schema import CURRENT_SCHEMA, check_schema, upgrade_state_file
         state = _object_json(self.state_path.read_bytes())
-        if state.get("schema") != 1 or state.get("mac") != self.mac or type(state.get("adopted")) is not bool:
+        # A newer release's state is refused with its own message, never read (#24).
+        if check_schema(state) < CURRENT_SCHEMA:
+            state = upgrade_state_file(self.state_path)["state"]
+        if state.get("mac") != self.mac or type(state.get("adopted")) is not bool:
             raise ValueError("Invalid or different device identity in state")
         return state
 
@@ -438,6 +443,12 @@ class DeviceService:
         finally:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(name)
+        # The rename is durable only once the directory entry is on disk.
+        directory = os.open(self.state_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
     def _password_matches(self, username: str, password: str) -> bool:
         if not isinstance(username, str) or not isinstance(password, str):

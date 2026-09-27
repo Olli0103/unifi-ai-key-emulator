@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.7). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.8). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-27.7` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-27.8` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -130,7 +130,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `lifecycle.unknown_controller_version`: The exact protectVersion value, if any, sent by 7.3.56 or 7.3.60 in setConsoleInfo was not recorded
 - `lifecycle.controller_upgrade` (needs_evidence): The public records do not state whether the 7.3.60 trial used an adoption carried over from 7.3.56 or a fresh adoption
 - `lifecycle.controller_upgrade` (needs_evidence): A deliberate upgrade test with before/after adoption state
-- `lifecycle.emulator_upgrade` (needs_evidence): No release-to-release upgrade exists yet; state schema 1 has no migration path (issue #24)
+- `lifecycle.emulator_upgrade` (needs_evidence): A planned live upgrade drill: Protect readback of adoption and AI Key identity before and after replacing the release, and after a rollback
+- `lifecycle.emulator_upgrade` (needs_evidence): The migration layer is fixture-tested with a synthetic schema 0; the current release is schema 1 with no migrations, so no real migration has run
 - `control.get_info`: The getInfo exchange and the capability state Protect stored were not recorded on either live version
 - `control.get_task_queue_info`: Whether Protect schedules differently from these counts
 - `control.set_console_info`: The live body shape; a 7.3.x controller sending an extra field would currently receive errorCode 22
