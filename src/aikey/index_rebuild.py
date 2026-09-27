@@ -27,7 +27,10 @@ cutover needs full coverage. The journal and the staged profile live in
 ``<state>/index-rebuild/<rev12>/``, apart from the live profile.
 
 The image source is injected. The AI Key receives object crops only inside
-Protect tasks, so no source for a live rebuild exists yet; see #18.
+Protect tasks, so no source for a live rebuild exists yet; see #18. Until
+``APPROVED_IMAGE_SOURCE`` (and, for a cutover, ``APPROVED_NATIVE_READBACK``)
+is set by a reviewed code change, ``stage`` and ``cutover`` refuse before
+writing anything. ``rollback`` stays available so a restore is never blocked.
 """
 
 from __future__ import annotations
@@ -164,6 +167,7 @@ class Rebuild:
     async def stage(self, embedder: Embedder, source: Source, *, batch: int = 32,
                     max_batches: int | None = None) -> dict:
         """Embed uncovered live objects; resumable and idempotent. Returns counts."""
+        _require_approval(readback=False)
         if self.state != "staging":
             if self.state in ("staged", "verified", "cut_over"):
                 return dict(self.journal["counts"], state=self.state)      # idempotent retry
@@ -216,6 +220,7 @@ class Rebuild:
     def cutover(self, *, backup: dict, key_quiesced: Callable[[], bool],
                 write_profile: Callable[[Path, dict], None] = _atomic_json) -> dict:
         """Swap vectors and profile atomically enough to roll back; idempotent."""
+        _require_approval(readback=True)
         if self.state == "cut_over":
             return {"state": "cut_over", "already": True}
         if self.state != "verified":
@@ -507,6 +512,14 @@ _FIXED_BLOCKERS = (
     "No approved stored-object image source: the AI Key receives crops only inside Protect tasks",
     "No approved native Protect post-cutover readback: Protect searches only the live table, "
     "so a staged index can be read back natively only after cutover")
+
+
+def _require_approval(*, readback: bool) -> None:
+    """The library refuses what the plan refuses, before any write (#18)."""
+    if not APPROVED_IMAGE_SOURCE:
+        raise RebuildError(_FIXED_BLOCKERS[0])
+    if readback and not APPROVED_NATIVE_READBACK:
+        raise RebuildError(_FIXED_BLOCKERS[1])
 
 
 def _latest_backup(backups_dir: Path | None, live_rows: int | None, now: float) -> dict:

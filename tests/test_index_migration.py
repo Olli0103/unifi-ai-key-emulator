@@ -12,6 +12,7 @@ from aikey.admin_security import AdminSecurity
 from aikey.control_site import ControlSite, _COOKIE
 from aikey.index_rebuild import _FIXED_BLOCKERS, migration_plan
 from test_control_site import fixture
+from test_index_rebuild import approved  # noqa: F401
 from test_index_rebuild import BACKUP, NEW, OLD, Embedder, quiet, rebuild, setup, source
 
 

@@ -6,6 +6,7 @@ import os
 
 import pytest
 
+from test_index_rebuild import approved  # noqa: F401
 from test_index_rebuild import BACKUP, NEW, OBJECTS, Embedder, quiet, setup, source, vector
 
 psycopg = pytest.importorskip("psycopg")

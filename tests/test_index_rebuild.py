@@ -55,6 +55,13 @@ def quiet():
     return True
 
 
+@pytest.fixture(autouse=True)
+def approved(monkeypatch):
+    """Engine tests run as if both #18 gates were approved; the gate has its own tests."""
+    monkeypatch.setattr("aikey.index_rebuild.APPROVED_IMAGE_SOURCE", "synthetic-test-source")
+    monkeypatch.setattr("aikey.index_rebuild.APPROVED_NATIVE_READBACK", "synthetic-test-readback")
+
+
 async def test_an_interrupted_stage_resumes_without_re_embedding(tmp_path):
     store = setup(tmp_path)
     embedder = Embedder(NEW)
