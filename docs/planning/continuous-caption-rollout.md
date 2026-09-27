@@ -88,13 +88,51 @@ Each action below is **one approval**. Each lists exactly what it reads, writes,
 - **Undo:** `aikey-uncertain-resolution rollback --backup … --key-stopped` restores the 54 records byte for byte and removes only matching tombstones. It is idempotent.
 - **Needs two service stops**, stop and start, of the Key container on the same image, using `local-apple-upgrade`-style idle gating (worker queued, active and pending = 0).
 
-## Action 2: deploy the admission code to the AI Key (no config change)
+## Action 2: deploy the admission and #1 fixes to the AI Key (no config change)
 
-- **Approve:** an overlay image of the live lineage plus the 36db45b and this pass's modules (`camera_registry`, `config`, `device`, `protocol`, `caption_preflight`, `uncertain_resolution`, and `worker` for the index-routing and per-operation job-identity fixes from #1), swapped with `local-apple-upgrade swap --kind aikey`. The `worker` change restores Find Anything indexing for the two one-use scope cameras (G6 Instant, Giebel Vorn), which have no live index rows today. It also keeps the G6's index tasks local once continuous captions start.
-- **Writes:** a new container and image only. The supervisor pin moves to the new container, and the old one is kept stopped. `config.json` is unchanged.
-- **Behavior change with the current config:** none. Continuous mode is off, and the one-use scopes are consumed.
-- **Check:** adopted, connected, search connected; index rows ≥ before; native class-search counts ≥ baseline.
-- **Undo:** automatic re-pin of the old container if not ready; otherwise the same tool back to the previous image.
+**Live image today:** `local-aikey:findanything18-rollover-20260927`, container `local-aikey-mac-findanything18`, pinned by the supervisor. Its `aikey` modules hash-match **9de93fd**, except `worker.py` (plus the cookie and rollover hunks) and some AI Port, control-site and Whisper modules the Key process does not import.
+
+**Deploy delta** (the Key runtime's import closure from `aikey.cli`/`aikey.runtime`, including lazy imports, that differs from the live image). Exactly these modules at the approved commit:
+`aiport_ingest`, `camera_inventory`, `camera_registry`, `caption_budget`, `config`, `device`, `protocol`, `state_schema` (new), `worker`, `worker_archive` (new).
+
+`caption_preflight` and `uncertain_resolution` are host-side operator tools; they are not part of the image. `tests/test_key_deploy_delta.py` pins this list against the runtime closure.
+
+**Behavior changes with the current config** (continuous off, 2 consumed one-use scopes, faces on the G6, 10 index cameras, speech on 1 camera):
+
+| # | Change | Effect today | Expected readback |
+|---|---|---|---|
+| B1 | Index-only key-moment tasks (`postVLM` not true) of an index camera go to local CLIP even when the camera has a caption scope (8a6cbaf) | **Restores Find Anything indexing for the G6 Instant and Giebel Vorn.** Both have 0 live index rows today because their tasks were refused as `video_contract`. Local CLIP and search DB only; no provider call, permit or budget. | New `ramDetections` rows for both cameras after natural events; `recognize_key_frames.worker_rejection_counts.video_contract` stops rising; those events end RAM `done` |
+| B2 | Face and index jobs get per-operation IDs; an identical resend of a job under the old shared ID still dedupes (627c1a9) | A second, different task for an event with a face job is no longer refused. Today: 18 `job_identity_conflict`, 19 G6 events RAM `failed` despite a completed face job. | `job_identity_conflict` stays flat; new G6 face-job events do not end RAM `failed` from a second task; identical resends count as duplicates |
+| B3 | Health labels the deliberate refusals `image_variant_refused` and `unindexed_camera` (8a6cbaf) | Label only; result code stays 5 | `unclassified_worker_error` stops rising for these; `image_variant_refused` rises at the old rate |
+| B4 | `device.status.unlisted` (61369b5) | Health field only; without the Action 2b window it counts documented candidates and `not_recorded` | Sum equals the growth of the `unknown` command count |
+| B5 | Worker tombstone validation moved to `worker_archive.valid_tombstone` (39961d7) | Same accepted shape; reads the existing 2,482+ tombstones | Duplicate replays still `already_completed`; no "Invalid archived worker result" |
+| B6 | Device state loads through `state_schema` (3a6376d) | Live state is schema 1, so it loads byte for byte with no migration and no backup file. Saves now also fsync the directory. | `device-state.json` unchanged at start; no `.schema-*.bak` created |
+| — | Inert with this config: continuous gates (36db45b, 5215e61), face enhancement (0e2b682, 1253079; not configured), reverification batching (059ceeb; off), camera-registry reasons (71b3ff3; no registry without continuous), `camera_inventory` text, the `aiport_ingest` geometry helper | none | — |
+
+**Before the swap, record read-only baselines:**
+- Key health: `adopted`, `connected`, `search.connected`; `control_commands` counts; `recognize_key_frames.worker_rejection_counts` (today `video_contract` 67, `job_identity_conflict` 18, unclassified 263, `permit_consumed` 4); worker queued, active and pending (must be 0).
+- `ramDetections` total and per hashed camera (today 0 live rows for `135fe784` and `0b9cb6bf`).
+- Native class-search counts (`detection-nls`; last read person 100, vehicle 72, animal 72, package 3).
+- `config.json` sha256 prefix (`82390fffd714`) and `device-state.json` sha256.
+- The four AI Ports' adoption and replies (must be untouched).
+
+**Build and swap** (the approval covers these writes only):
+1. Build an overlay image `FROM local-aikey:findanything18-rollover-20260927` that copies exactly the 10 modules from the approved commit.
+2. Check the image: only those 10 modules differ from the live image, and `aikey.cli` imports cleanly.
+3. Swap with `local-apple-upgrade swap --kind aikey --health-url …`: idle-gated, supervisor hold, readiness (adopted, connected, search connected), automatic re-pin of the old container on failure.
+4. Delete the build helper and any throwaway container afterwards.
+
+**Abort and roll back** (the tool's re-pin, or `local-apple-upgrade swap` back to `local-aikey:findanything18-rollover-20260927`):
+- not ready within the tool's timeout;
+- `config.json` or `device-state.json` changed, or a `.schema-*.bak` appeared;
+- index rows decrease, or class-search counts fall below baseline;
+- any provider call, caption permit or budget reservation from B1 index tasks;
+- new `callback_uncertain` records, or the journal above 80%;
+- an AI Port loses adoption or replies.
+
+**Native acceptance within 24 h** (read-only; natural activity only): B1–B6 readbacks as in the table.
+
+**Still needs_evidence (not changed by this deploy):** the six failed index jobs, five with Protect export HTTP 404 (four on Garage) and one Flur Wi-Fi frame gap. Whether the 404s come from Protect or from our verified `ubv`→`mp4` format switch is unresolved; after the deploy, count further 404s per camera and per export format.
 
 ## Action 2b (optional): name the unhandled controller commands (#1)
 
@@ -198,7 +236,7 @@ Also accept:
 ## Approvals for Olli (one at a time; tested code vs live trial as stated)
 
 1. **Archive the 54 reviewed index callbacks.** Tool: tested code. Digest `92bc7c3b…a223`, Key stopped, backup first, rollback available.
-2. **Deploy the admission code to the AI Key.** Tested code. No config change; idle-gated swap with automatic re-pin.
+2. **Deploy the 10-module delta to the AI Key** (tested code; no config change). This *does* change live behavior: it restores G6 and Giebel Vorn indexing (B1) and stops the face/index identity collisions (B2). Idle-gated swap with automatic re-pin.
 2b. *(Optional)* **Open a ≤7-day command-fingerprint window.** One config field plus a restart. Tested code; the first native readback of unhandled command names.
 3. **Backups and baseline.** Backup files only.
 4a. **Live trial of continuous captions on the G6 Instant only** (onboard events). `config.json` plus one restart, up to 12 captions per rolling hour (288 per day) on the pinned key. Undo: byte restore of the Action 3 config.
