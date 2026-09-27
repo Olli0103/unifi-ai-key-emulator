@@ -96,7 +96,8 @@ def _ledger(state: Path, cap: int, continuous: bool, now: float) -> dict:
 
 
 def preflight(state_root: Path, config: dict, *, health: dict | None = None,
-              native: dict | None = None, now: float | None = None) -> dict:
+              native: dict | None = None, now: float | None = None,
+              check_health: bool = True) -> dict:
     now = time.time() if now is None else now
     state = Path(state_root)
     scope = _scope(config)
@@ -115,27 +116,36 @@ def preflight(state_root: Path, config: dict, *, health: dict | None = None,
     if native is not None:
         report["native"] = {key: native.get(key) for key in
                             ("saved_captions", "camera_families_with_captions", "read_after_reload")}
-    blockers = []
+    blockers: list[tuple[str, str]] = []           # (stable code, fixed text with counts)
     if not scope["continuous_configured"]:
-        blockers.append("Continuous mode is not configured (an owner activation step)")
+        blockers.append(("continuous_not_configured",
+                         "Continuous mode is not configured (an owner activation step)"))
     if scope["one_use_scopes"]:
-        blockers.append("One-use test scopes are configured; they are mutually exclusive with "
-                        "continuous mode and must be removed at activation")
+        blockers.append(("one_use_scopes_configured",
+                         "One-use test scopes are configured; they are mutually exclusive with "
+                         "continuous mode and must be removed at activation"))
     if report["ledger"]["uncertain_callbacks"]:
-        blockers.append(f"{report['ledger']['uncertain_callbacks']} uncertain callbacks await "
-                        "operator review in the job journal")
+        blockers.append(("uncertain_callbacks_pending",
+                         f"{report['ledger']['uncertain_callbacks']} uncertain callbacks await "
+                         "operator review in the job journal"))
     if report["ledger"]["entries_after_rollover"] >= 0.8 * cap:
-        blockers.append("The job journal would stay above 80% of its cap after rollover")
+        blockers.append(("ledger_above_80_percent",
+                         "The job journal would stay above 80% of its cap after rollover"))
     if report["budget"].get("unreadable") or report["budget"].get("clock_behind_journal"):
-        blockers.append("The caption budget journal needs review (unreadable or clock behind it)")
-    if health is None or not (report["key"]["adopted"] and report["key"]["connected"]):
-        blockers.append("No adopted, connected Key health was supplied")
+        blockers.append(("budget_journal_needs_review",
+                         "The caption budget journal needs review (unreadable or clock behind it)"))
+    if check_health and (health is None or not (report["key"]["adopted"] and report["key"]["connected"])):
+        blockers.append(("key_health_missing", "No adopted, connected Key health was supplied"))
     families = (native or {}).get("camera_families_with_captions") or 0
     if families < 2 or not (native or {}).get("read_after_reload"):
-        blockers.append("Native Protect readback of continuous captions on two camera families "
-                        "after a reload is missing")
+        blockers.append(("native_readback_missing",
+                         "Native Protect readback of continuous captions on two camera families "
+                         "after a reload is missing"))
+    if not check_health:
+        report["key"] = {"checked": False}
     report["ready"] = not blockers
-    report["blockers"] = blockers
+    report["blocker_codes"] = [code for code, _ in blockers]
+    report["blockers"] = [text for _, text in blockers]
     return report
 
 

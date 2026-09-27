@@ -20,6 +20,7 @@ import time
 from aiohttp import web
 
 from .admin_audit import AuditLog
+from .caption_preflight import preflight as caption_preflight
 from .admin_security import AdminSecurity
 from .aiport_config_store import (
     AiPortConfigurationError, AiPortConfigurationStore, AiPortRevisionConflict,
@@ -134,7 +135,8 @@ class ControlSite:
         self.search_state_dir = search_state_dir
         self.search_backups_dir = search_backups_dir
         self.search_live_rows = search_live_rows
-        self.aikey_state_dir = aikey_state_dir
+        # The Key's host state sits next to its config unless given (#12).
+        self.aikey_state_dir = aikey_state_dir or self.aikey.path.parent
         self.audit = AuditLog(audit_log) if audit_log is not None else None
 
     def app(self) -> web.Application:
@@ -147,6 +149,7 @@ class ControlSite:
         app.router.add_get("/index-migration", self.index_migration)
         app.router.add_get("/data-retention", self.data_retention)
         app.router.add_get("/audit", self.audit_page)
+        app.router.add_get("/caption-preflight", self.caption_preflight_page)
         app.router.add_get("/login", self.login_page)
         app.router.add_post("/login", self.login)
         app.router.add_post("/provider", self.save_provider)
@@ -217,6 +220,57 @@ class ControlSite:
                      "never passwords, keys, paths, settings or network addresses.</p>" + failures
                      + "<table><tr><th>Time</th><th>Action</th><th>Profile</th><th>Result</th></tr>"
                      + rows + "</table>")
+
+    async def caption_preflight_page(self, request: web.Request) -> web.Response:
+        """Read-only continuous-caption preflight (#12): reason codes and counts only."""
+        if self._session(request) is None:
+            raise web.HTTPSeeOther("/login")
+
+        def run():
+            path = self.aikey.path
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 256 * 1024:
+                raise ValueError("config")
+            return caption_preflight(self.aikey_state_dir, json.loads(path.read_text()),
+                                     check_health=False)
+        try:
+            report = await asyncio.to_thread(run)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return _page("Caption preflight", "<h1>Caption preflight</h1><p><a href='/'>Settings</a></p>"
+                         "<p class='error'>The preflight could not read the AI Key state "
+                         "(reason: state_unreadable). Nothing was changed.</p>")
+        scope, permits = report["scope"], report["permits"]
+        budget, ledger = report["budget"], report["ledger"]
+
+        def rows(pairs):
+            return "".join(f"<tr><th>{_safe(k)}</th><td>{_safe(v)}</td></tr>" for k, v in pairs)
+        blockers = "".join(f"<tr><td><code>{_safe(code)}</code></td><td>{_safe(text)}</td></tr>"
+                           for code, text in zip(report["blocker_codes"], report["blockers"]))
+        body = ("<h1>Continuous caption preflight</h1><p><a href='/'>Settings</a> · "
+                "<a href='/caption-preflight'>Refresh</a></p>"
+                "<p class='muted'>Read-only. Reason codes and counts only; no camera, event or job "
+                "identifiers, media, captions or credentials. Nothing is enabled or changed here.</p>"
+                f"<p><strong>Ready: {'yes' if report['ready'] else 'no'}</strong></p>"
+                "<h2>Blockers</h2><table><tr><th>Code</th><th>Detail</th></tr>"
+                + (blockers or "<tr><td colspan='2'>None</td></tr>") + "</table>"
+                "<h2>Scope</h2><table>" + rows([
+                    ("Continuous mode configured", "yes" if scope["continuous_configured"] else "no"),
+                    ("One-use scopes", scope["one_use_scopes"]),
+                    ("Camera model policies", scope["camera_models_policy"]),
+                    ("One-use permits (consumed / total)", f"{permits['consumed']} / {permits['total']}")])
+                + "</table><h2>Global caption budget</h2><table>" + rows([
+                    ("Budget journal present", "yes" if budget.get("journal") else "no"),
+                    ("Captions in the last hour", budget.get("last_hour", "unavailable")),
+                    ("Remaining this hour", budget.get("remaining", "unavailable"))])
+                + "</table><h2>Job journal</h2><table>" + rows([
+                    ("Entries / cap", f"{ledger['entries']} / {ledger['cap']} ({ledger['percent']}%)"),
+                    ("Due for rollover", ledger["due_for_rollover"]),
+                    ("Uncertain callbacks awaiting review", ledger["uncertain_callbacks"]),
+                    ("Days to full at the uncertain rate",
+                     ledger["days_to_full_at_uncertain_rate"] if ledger["days_to_full_at_uncertain_rate"]
+                     is not None else "not growing")])
+                + "</table><p class='muted'>Key health is not read by the control site; run "
+                  "<code>python -m aikey.caption_preflight --health</code> for it.</p>")
+        return _page("Caption preflight", body)
 
     async def index_migration(self, request: web.Request) -> web.Response:
         cookie = self._session(request)
@@ -504,7 +558,8 @@ class ControlSite:
                 + ("<p><a href='/index-migration'>Search index migration (read-only)</a></p>"
                    if self.search_state_dir is not None else "")
                 + "<p><a href='/data-retention'>Data flow and retention (read-only)</a> · "
-                  "<a href='/audit'>Audit log</a></p>"
+                  "<a href='/audit'>Audit log</a> · "
+                  "<a href='/caption-preflight'>Caption preflight</a></p>"
                 + undo_form
                 + "<div class='grid'>")
         body += self._provider_form("AI Key", "aikey", key.revision, inference,
