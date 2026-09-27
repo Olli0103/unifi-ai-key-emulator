@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-27.8",
+ "manifest_version": "ai-key/2026-09-27.9",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -1436,7 +1436,7 @@
     "Repeated or simultaneous jobs under continuous operation",
     "Effect on events that already carry native tags"
    ],
-   "notes": "G5 Flex persistence verified by exact-event GET (ramState done, ramDescription) and native panel after full page reload. G4 Instant native panel showed the exact worker caption after full page reload; no exact-event GET was run for it. Persistence was verified in the UI, not by HTTP 200 alone."
+   "notes": "G5 Flex persistence verified by exact-event GET (ramState done, ramDescription) and native panel after full page reload. G4 Instant native panel showed the exact worker caption after full page reload. On 27 Sep, after the controller moved to 7.3.68, exact-event GETs returned metadata.ramState done and a non-empty metadata.ramDescription for the G5 Flex (22 Sep), G4 Instant (23 Sep) and G6 Instant (26 Sep) caption events, with list and exact lengths equal; a 21-day per-camera scan found no other persisted caption. Persistence was verified in the UI, not by HTTP 200 alone."
   },
   {
    "id": "callback.ram_description_only",
