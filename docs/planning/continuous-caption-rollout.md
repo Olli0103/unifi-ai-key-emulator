@@ -39,6 +39,13 @@ Each action below is **one approval**. Each lists exactly what it reads, writes,
   - `aikey-uncertain-resolution plan` answers: 54 `archive_as_completed`, digest **`92bc7c3b948ca7596ccfd961b31d191acc5dfb3a78e846956ffa39454a90a223`**.
   - The digest covers only the uncertain records. The Key's normal journal activity doesn't change it; a new or changed uncertain record does.
 
+## Event provenance of the two families (#9, 27 Sep)
+
+- **G6 Instant (Wohnzimmer):** unpaired. Protect lists its own hardware set (5 smart and 9 audio types), and its smart events are onboard. Its earlier native caption (26 Sep) used the same path this rollout would use.
+- **G5 Flex (Büro):** AI Port-paired since 23–24 Sep. While paired, Protect lists the AI Port's set for it (4 smart, 0 audio types), and its smart events come from the AI Port. Every paired camera saved none during the 26–27 Sep provider outage, and the Mac port's entered-event count equals Protect's saved count on its cameras.
+- **The G5 Flex caption evidence (22 Sep) predates the pairing.** A caption on an **AI Port-sourced** event has not been read back natively for any family; this rollout's G5 Flex half would be the first test of that path.
+- **Dispatch is proven:** since the restore, Protect sent key-frame tasks for Büro's AI Port events, and 2 index rows were created from 2 events.
+
 ## Budget, ceiling and abort checks (reconciled)
 
 - **Budget:** 12 reservations per rolling hour across the pinned cameras, so at most **288 per 24 h** (`DAILY_CEILING`). The budget journal keeps 24 h and holds up to 300 records.
