@@ -25,11 +25,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import contextmanager
 from copy import deepcopy
+import fcntl
 from fractions import Fraction
 import hashlib
 import ipaddress
 import json
+import os
 from pathlib import Path
 import re
 import socket
@@ -59,6 +62,10 @@ MAX_INVENTORY_AGE_S = 900      # --apply refuses an older inventory report
 
 class RolloutError(ValueError):
     """Fixed error text without camera or network identities."""
+
+
+class PlanChanged(RolloutError):
+    """The reviewed revision is no longer the current plan; nothing was applied."""
 
 
 def _mac(value: object) -> str:
@@ -624,6 +631,37 @@ def apply_and_register(rollout_path: Path, rollout: dict, plan: dict) -> list[st
     return changed
 
 
+@contextmanager
+def _rollout_lock(rollout_path: Path):
+    """Serialize applies across requests and processes (#13)."""
+    lock = Path(rollout_path).with_name("." + Path(rollout_path).name + ".lock")
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError as exc:
+        raise RolloutError("Cannot open the rollout lock") from exc
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def apply_if_current(rollout_path: Path, report: dict, expected_revision: object, *,
+                     allow_estimated_capacity: bool = False) -> tuple[list[str], dict]:
+    """Re-plan under the lock and apply only the revision the operator reviewed.
+
+    Checking the revision outside the lock let two concurrent applies of one
+    reviewed plan both pass, then interleave slot and Compose writes, undo
+    each other's files on failure, and lose a new-slot registration.
+    """
+    with _rollout_lock(rollout_path):
+        rollout = load_rollout_config(rollout_path)
+        plan, _ = compute(rollout, report, allow_estimated_capacity=allow_estimated_capacity)
+        if not isinstance(expected_revision, str) or expected_revision != plan["revision"]:
+            raise PlanChanged("The plan changed; review the refreshed plan before applying")
+        return apply_and_register(rollout_path, rollout, plan), rollout
+
+
 def verify_new_slots(rollout_path: Path, rollout: dict, *,
                      health=read_slot_health, now: float | None = None) -> dict[str, str]:
     """Settle pending slots: healthy, still waiting, or rolled back.
@@ -808,9 +846,10 @@ def main(argv: list[str] | None = None) -> int:
                              allow_estimated_capacity=args.allow_estimated_capacity)
         if args.apply:
             check_inventory_fresh(report)
-            if args.revision is None or args.revision != plan["revision"]:
+            if args.revision is None:
                 raise RolloutError("The plan changed; review the dry run and pass its revision")
-            apply_and_register(args.rollout, rollout, plan)
+            _, rollout = apply_if_current(args.rollout, report, args.revision,
+                                          allow_estimated_capacity=args.allow_estimated_capacity)
             plan, dirs = compute(rollout, report)
     except (OSError, json.JSONDecodeError, RolloutError, InventoryError) as exc:
         parser.error(str(exc))

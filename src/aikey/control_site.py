@@ -24,7 +24,7 @@ from .aiport_config_store import (
 )
 from .aiport_deployment import AiPortPlanError, plan_ai_ports
 from .aiport_rollout import (
-    RolloutError, apply_and_register, load_rollout_config,
+    PlanChanged, RolloutError, apply_if_current, load_rollout_config,
     compute as compute_rollout, public as public_rollout,
 )
 from .camera_inventory import InventoryError, fetch_inventory
@@ -273,12 +273,15 @@ class ControlSite:
         if self.inventory_loader is None or self.rollout_path is None:
             raise web.HTTPNotFound()
         try:
-            rollout, plan = await self._rollout_plan()
-            if fields.get("revision") != plan["revision"]:
-                return _page("Plan changed", "<h1>The plan changed</h1><p>Review the "
-                             "refreshed plan before applying.</p>"
-                             "<p><a href='/aiport-rollout'>Review</a></p>")
-            await asyncio.to_thread(apply_and_register, self.rollout_path, rollout, plan)
+            report = await self.inventory_loader()
+            # The revision is compared under the rollout lock, after re-reading
+            # the slot files, so two tabs cannot both apply one plan (#13).
+            await asyncio.to_thread(apply_if_current, self.rollout_path, report,
+                                    fields.get("revision"))
+        except PlanChanged:
+            return _page("Plan changed", "<h1>The plan changed</h1><p>Review the "
+                         "refreshed plan before applying.</p>"
+                         "<p><a href='/aiport-rollout'>Review</a></p>")
         except (InventoryError, RolloutError, OSError, ValueError):
             return _page("Rollout not applied", "<h1>Rollout not applied</h1>"
                          "<p class='error'>No pairing was changed. Check the slot files.</p>")

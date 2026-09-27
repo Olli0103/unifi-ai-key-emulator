@@ -804,3 +804,77 @@ def test_compute_marks_a_stale_nas_template_from_its_deployed_copy(tmp_path, mon
     plan, dirs = compute(rollout, inventory)
     assert not any(a["kind"] == "template_config_unverified" for a in plan["actions"])
     assert next(a for a in plan["actions"] if a["kind"] == "create_slot")["automated"] is True
+
+
+# --- #13 concurrent applies of one reviewed plan ---------------------------
+
+def _locked_setup(tmp_path, monkeypatch):
+    from aikey.aiport_rollout import compute
+    root, compose_path, rollout_path, rollout, slots, inventory = _one_new_nas_slot(tmp_path)
+    local = json.loads((Path(rollout["slots"][0]["state_dir"]) / "config.json").read_text())
+    paired = {CAM["Flur"], CAM["Schlafzimmer"]}
+    monkeypatch.setattr("aikey.aiport_rollout.read_slot_health", lambda d, p: {
+        "pool_cameras": [{"policy_enabled": s["camera_mac"] in paired}
+                         for s in local["paired_streams"]]})
+    rollout_path.write_text(json.dumps(rollout))
+    rollout_path.chmod(0o600)
+    plan, _ = compute(json.loads(rollout_path.read_text()), inventory)
+    assert next(a for a in plan["actions"] if a["kind"] == "create_slot")["automated"] is True
+    return root, compose_path, rollout_path, inventory, plan["revision"]
+
+
+def test_two_concurrent_applies_of_one_revision_apply_once(tmp_path, monkeypatch):
+    import threading
+    from aikey import aiport_rollout
+    from aikey.aiport_rollout import PlanChanged, apply_if_current
+    root, compose_path, rollout_path, inventory, revision = _locked_setup(tmp_path, monkeypatch)
+    real_apply, entered, release, calls = aiport_rollout.apply_rollout, threading.Event(), threading.Event(), []
+
+    def slow_apply(*args, **kwargs):
+        calls.append(1)
+        entered.set()
+        assert release.wait(5)
+        return real_apply(*args, **kwargs)
+    monkeypatch.setattr(aiport_rollout, "apply_rollout", slow_apply)
+    results = {}
+
+    def run(name):
+        try:
+            results[name] = apply_if_current(rollout_path, inventory, revision)[0]
+        except PlanChanged:
+            results[name] = "plan_changed"
+    first = threading.Thread(target=run, args=("first",))
+    first.start()
+    assert entered.wait(5)                     # the first apply is mid-write, holding the lock
+    second = threading.Thread(target=run, args=("second",))
+    second.start()
+    second.join(0.3)
+    assert second.is_alive()                   # it waits instead of racing the first
+    release.set()
+    first.join(5)
+    second.join(5)
+    assert sorted(map(str, results.values())) == ["['nas-slot-1', 'aiport_slot_1']", "plan_changed"]
+    assert len(calls) == 1                     # the files were written by one apply only
+    registered = json.loads(rollout_path.read_text())["slots"]
+    assert [s["label"] for s in registered] == ["mac", "nas-slot-1"]
+    assert compose_path.read_text().count("aiport_slot_1:") == 1
+
+
+@pytest.mark.parametrize("revision", ["0" * 64, None, 7])
+def test_a_stale_or_missing_revision_applies_nothing(tmp_path, monkeypatch, revision):
+    from aikey.aiport_rollout import PlanChanged, apply_if_current
+    root, compose_path, rollout_path, inventory, _ = _locked_setup(tmp_path, monkeypatch)
+    before = {p: p.read_bytes() for p in (rollout_path, compose_path)}
+    with pytest.raises(PlanChanged):
+        apply_if_current(rollout_path, inventory, revision)
+    assert {p: p.read_bytes() for p in before} == before and not (root / "nas-slot-1").exists()
+
+
+def test_the_reviewed_revision_applies_and_a_repeat_is_refused(tmp_path, monkeypatch):
+    from aikey.aiport_rollout import PlanChanged, apply_if_current
+    root, compose_path, rollout_path, inventory, revision = _locked_setup(tmp_path, monkeypatch)
+    changed, rollout = apply_if_current(rollout_path, inventory, revision)
+    assert changed == ["nas-slot-1", "aiport_slot_1"] and [s["label"] for s in rollout["slots"]] == ["mac", "nas-slot-1"]
+    with pytest.raises(PlanChanged):           # the same reviewed plan is now stale
+        apply_if_current(rollout_path, inventory, revision)
+    assert compose_path.read_text().count("aiport_slot_1:") == 1
