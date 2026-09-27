@@ -162,6 +162,7 @@ def test_response_counts_distinguish_empty_from_score_rejection(tmp_path):
         "below_threshold_by_kind": {"person": 0, "vehicle": 0, "animal": 0, "package": 0},
         "near_threshold_by_kind": {"person": 0, "vehicle": 0, "animal": 0, "package": 0},
         "rejected_items": {"shape": 0, "kind": 0, "label:person": 0, "label:vehicle": 0, "label:animal": 0, "label:package": 0, "score": 0, "box": 0, "plate": 0},
+        "rejected_categories": {},
         "request_profile": {"color_empty": 0, "color_low": 0, "color_objects": 0,
                             "ir_empty": 0, "ir_low": 0, "ir_objects": 0},
         "last_frame_width": None,
@@ -817,3 +818,35 @@ def test_only_plate_cameras_ask_for_plates_and_count_them_without_values(tmp_pat
     assert counts["plates"] == {"vehicles": 1, "plates_read": 1, "plates_partial": 1}
     assert "SYN" not in json.dumps(counts)
     assert "plates" not in detector.diagnostic_counts(SECOND)
+
+
+def test_unsupported_kinds_and_labels_are_counted_by_fixed_category_only():
+    from aikey.aiport_api_detection import parse_detections, rejected_category
+    reply = json.dumps({"detections": [
+        {"kind": "license_plate", "label": "plate", "score": 0.9, "box": [0.4, 0.6, 0.5, 0.65]},
+        {"kind": "licensePlate", "label": "licensePlate", "score": 0.9, "box": [0.1, 0.6, 0.2, 0.65]},
+        {"kind": "furniture", "label": "chair", "score": 0.9, "box": [0.1, 0.1, 0.3, 0.3]},
+        {"kind": "vehicle", "label": "van", "score": 0.9, "box": [0.2, 0.2, 0.6, 0.6]},
+        {"kind": "vehicle", "label": "car", "score": 0.9, "box": [0.2, 0.2, 0.7, 0.7]}]})
+    rejected, categories = {}, {}
+    accepted = parse_detections(reply, threshold=0.5, rejected=rejected, categories=categories)
+    # Unknown kinds and labels stay rejected; only the supported car is accepted.
+    assert [(o.kind, o.label) for o in accepted] == [("vehicle", "car")]
+    assert rejected == {"kind": 3, "label:vehicle": 1}
+    assert categories == {"kind:plate": 2, "kind:other": 1, "label:vehicle_like": 1}
+    assert rejected_category(7) == "not_text" and rejected_category("Head") == "face"
+    assert rejected_category("cartoon") == "other"          # word boundaries, not substrings
+
+
+def test_rejected_categories_reach_health_without_raw_values(tmp_path):
+    reply = json.dumps({"detections": [
+        {"kind": "license_plate", "label": "ABC123", "score": 0.9, "box": [0.4, 0.6, 0.5, 0.65]}]})
+    detector = ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.7,
+                                 max_requests_per_hour=2,
+                                 transport=lambda *_args: _response(reply))
+    assert detector.detect_for_camera(FIRST, STILL) == ()
+    counts = detector.diagnostic_counts(FIRST)
+    assert counts["rejected_items"]["kind"] == 1
+    assert counts["rejected_categories"] == {"kind:plate": 1}
+    text = json.dumps(counts)
+    assert "license_plate" not in text and "ABC123" not in text

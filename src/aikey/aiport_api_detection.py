@@ -7,6 +7,7 @@ until measured against camera footage; configuration alone is not parity proof.
 from __future__ import annotations
 
 import json
+import re
 from io import BytesIO
 import os
 from pathlib import Path
@@ -242,6 +243,16 @@ _VERIFY_PROMPT = (
     "delivered box, parcel, envelope or bag. If it is none of these, return "
     "{\"kind\":\"none\",\"label\":\"none\"}."
 )
+_REJECTED_BUCKETS = tuple((name, re.compile(pattern)) for name, pattern in (
+    ("plate", r"plate|licen[cs]e|lpr|registration"),
+    ("face", r"face|head"),
+    ("person_like", r"human|people|pedestrian|man\b|woman|child|body"),
+    ("vehicle_like", r"vehicle|car\b|van\b|suv|truck|bus\b|bike|cycle|scooter|trailer|tractor"),
+    ("animal_like", r"animal|pet\b|cat\b|dog\b|bird|horse|mouse|rat\b|fox|squirrel"),
+    ("package_like", r"package|parcel|box\b|bag\b|envelope|delivery"),
+))
+REJECTED_CATEGORY_KEYS = tuple(f"{field}:{name}" for field in ("kind", "label")
+                               for name in (*(n for n, _ in _REJECTED_BUCKETS), "other", "not_text"))
 _ITEM_REJECTIONS = ("shape", "kind", "label:person", "label:vehicle", "label:animal",
                     "label:package", "score", "box", "plate")
 
@@ -291,9 +302,25 @@ def _parse_failure(text: str) -> str:
     return "shape"
 
 
+def rejected_category(value: object) -> str:
+    """Fixed bucket for an unsupported kind or label; the value is never kept.
+
+    Lets health show what the model named outside the supported vocabulary
+    (#79: 115 unsupported kinds on a plate camera) without retaining text.
+    """
+    if not isinstance(value, str):
+        return "not_text"
+    text = value.lower()
+    for bucket, pattern in _REJECTED_BUCKETS:
+        if pattern.search(text):
+            return bucket
+    return "other"
+
+
 def parse_detections(text: str, *, threshold: float,
                      rejected: dict[str, int] | None = None,
-                     plates: bool = False) -> tuple[ObjectObservation, ...]:
+                     plates: bool = False,
+                     categories: dict[str, int] | None = None) -> tuple[ObjectObservation, ...]:
     """Parse one provider reply; malformed items are dropped, never accepted.
 
     A malformed reply envelope fails closed. A single malformed item used to
@@ -325,8 +352,14 @@ def parse_detections(text: str, *, threshold: float,
                                        ("kind", "label", "score", "box"))
             if not isinstance(kind, str) or kind not in _LABELS:
                 reason = "kind"
+                if categories is not None:
+                    key = "kind:" + rejected_category(kind)
+                    categories[key] = categories.get(key, 0) + 1
             elif not isinstance(label, str) or label not in _LABELS[kind]:
                 reason = "label:" + kind
+                if categories is not None:
+                    key = "label:" + rejected_category(label)
+                    categories[key] = categories.get(key, 0) + 1
             elif type(score) not in (float, int):
                 reason = "score"
             elif (not isinstance(box, list) or len(box) != 4
@@ -554,9 +587,10 @@ class ApiObjectDetector:
             # Keep only counts. This distinguishes a real empty provider
             # response from an object rejected by the configured score gate.
             rejected: dict[str, int] = {}
+            categories: dict[str, int] = {}
             try:
                 reported = parse_detections(text, threshold=0, rejected=rejected,
-                                            plates=plates)
+                                            plates=plates, categories=categories)
             except ApiDetectionError:
                 self._count_failure(camera_mac, _parse_failure(text))
                 raise
@@ -590,6 +624,10 @@ class ApiObjectDetector:
                     kinds["near_threshold"][item.kind] += item.score >= 0.5
             for reason, count in rejected.items():
                 kinds["rejected_items"][reason] += count
+            buckets = kinds.setdefault("rejected_categories",
+                                       dict.fromkeys(REJECTED_CATEGORY_KEYS, 0))
+            for key, count in categories.items():
+                buckets[key] += count
             if (any(item.kind == "package" for item in accepted)
                     and self._package_lens_owned(camera_mac)):
                 checks = self._package_checks.setdefault(
@@ -709,6 +747,8 @@ class ApiObjectDetector:
         # Of those, how many scored at least 0.5 (between 0.5 and the threshold).
         result["near_threshold_by_kind"] = dict(kinds["near_threshold"])
         result["rejected_items"] = dict(kinds["rejected_items"])
+        result["rejected_categories"] = {k: v for k, v in kinds.get(
+            "rejected_categories", {}).items() if v}
         result["request_profile"] = dict(self._profiles.get(
             camera_mac, dict.fromkeys(_PROFILE_KEYS, 0)))
         result["last_frame_width"] = self._frame_width.get(camera_mac)
