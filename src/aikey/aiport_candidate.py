@@ -100,6 +100,9 @@ _OBSERVABLE_FUNCTIONS = frozenset({
 })
 
 
+SPEECH_EVENTS_PER_HOUR = 10      # per camera; each event is one local transcription
+
+
 class CandidateError(ValueError):
     """Unsafe or incomplete isolated AI Port candidate configuration."""
 
@@ -602,6 +605,8 @@ class CandidateService:
         self._speech_settings_seen: set[str] = set()
         self._speech_announced_at: dict[str, float] = {}
         self._speech_reannounces: dict[str, int] = {}
+        self._speech_enter_times: dict[str, list[float]] = {}
+        self.speech_rate_limited = 0
         self.speech_reannounces = 0
         self._speech_announced: set[str] = set()
         self.speech_settings_acks = 0
@@ -870,6 +875,16 @@ class CandidateService:
             if edge.edge == "enter" and not self._speech_enabled.get(camera_mac):
                 self.speech_edges_suppressed += 1
                 continue
+            if edge.edge == "enter":
+                # Each event costs a local transcription; a noisy outdoor
+                # camera must not starve the shared Whisper backend.
+                recent = [t for t in self._speech_enter_times.get(camera_mac, ())
+                          if now - t < 3600]
+                if len(recent) >= SPEECH_EVENTS_PER_HOUR:
+                    self._speech_enter_times[camera_mac] = recent
+                    self.speech_rate_limited += 1
+                    continue
+                self._speech_enter_times[camera_mac] = recent + [now]
             if edge.edge == "leave" and camera_mac not in self._speech_open:
                 continue
             await self._send_speech_edge(ws, camera_mac, edge.edge, edge.level_db)
@@ -1702,7 +1717,8 @@ class CandidateService:
                            "events_left": self.speech_events_left,
                            "open": len(self._speech_open),
                            "edges_suppressed": self.speech_edges_suppressed,
-                           "reannounces": self.speech_reannounces}}
+                           "reannounces": self.speech_reannounces,
+                           "rate_limited": self.speech_rate_limited}}
                if self._speech else {}),
             "smart_settings_requests_rejected": self.smart_settings_requests_rejected,
             "smart_settings_subset_matches": self.smart_settings_subset_matches,

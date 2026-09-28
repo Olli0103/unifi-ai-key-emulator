@@ -364,3 +364,22 @@ async def test_a_disabled_camera_is_pulsed_every_ten_minutes_until_enabled(tmp_p
         assert len(sink.events("EventAIPortStatus")) == 3                   # enabled: quiet
     finally:
         await service.stop()
+
+
+async def test_speech_events_are_capped_per_camera_and_hour(tmp_path, monkeypatch):
+    import aikey.aiport_candidate as candidate
+    monkeypatch.setattr(candidate, "SPEECH_EVENTS_PER_HOUR", 2)
+    service, sink = await service_for(tmp_path)
+    clock = Clock()
+    monkeypatch.setattr(candidate.time, "monotonic", clock)
+    try:
+        await audio_settings(service, sink, 70)
+        for seed in range(4):
+            await feed(service, CAMERA, noise(1) + voice(2, seed=seed) + noise(4), clock)
+        assert [e["alrmSpeak"] for e in sink.events("EventSmartAudio")] == ["enter", "leave"] * 2
+        assert (await health(service))["speech"]["rate_limited"] == 2
+        clock.now += 3600                          # a new hour
+        await feed(service, CAMERA, noise(1) + voice(2, seed=9) + noise(4), clock)
+        assert len(sink.events("EventSmartAudio")) == 6
+    finally:
+        await service.stop()
