@@ -130,6 +130,22 @@ Nothing in Protect, the search index, the budget, the config, the AI Ports or an
 
 ## Action 2: deploy the admission and #1 fixes to the AI Key (no config change)
 
+**Status: DONE, 28 Sep 2026 04:47 UTC, approved by Olli.**
+- **Recheck:** the live image and the recomputed 10-module delta matched this plan exactly.
+- **Image:** `local-aikey:parity-a2-20260928`, `FROM local-aikey:findanything18-rollover-20260927`. Exactly those 10 modules differ, each equals HEAD, and the entry points import.
+- **Swap:** `local-apple-upgrade swap --kind aikey` → `swapped`, after waiting about 1 min for idle. It derived the documented run arguments. The pin is `local-aikey-mac-parity-a2`; `local-aikey-mac-findanything18` is kept stopped for rollback. No abort condition occurred.
+- **After the swap:**
+  - Key adopted, connected, search connected; manifest `.15`;
+  - `config.json` and `search-profile.json` unchanged; `device-state.json` changed only through Protect's routine reconnect `changeUserPassword`, with no schema backup;
+  - index rows 4,671 → 4,673 (natural); class search 100/86/78/7 → 100/86/79/7;
+  - 0 `callback_uncertain`; no caption budget journal; permits unchanged (5), so no caption or provider charge;
+  - 4 AI Ports connected (3/2/2/2), 9 streams decoding.
+- **B2 native evidence:** G6 event `dd25a62f` (05:24:44) was answered by a face job under its own `recognizeFaces` ID and ended RAM `done`. `job_identity_conflict` and `video_contract` stayed at 0 over 40 minutes.
+- **B1 still needs_evidence:**
+  - Giebel Vorn had no natural smart event yet.
+  - **The G6 cannot gain index rows with this code:** as the only face-recognition camera, its tasks carrying face or person regions go to the face path, which answers faces but builds no Find Anything tags. That is a separate code gap (#1 follow-up), not a deploy failure.
+
+
 **Live image today:** `local-aikey:findanything18-rollover-20260927`, container `local-aikey-mac-findanything18`, pinned by the supervisor. Its `aikey` modules hash-match **9de93fd**, except `worker.py` (plus the cookie and rollover hunks) and some AI Port, control-site and Whisper modules the Key process does not import.
 
 **Deploy delta** (the Key runtime's import closure from `aikey.cli`/`aikey.runtime`, including lazy imports, that differs from the live image). Exactly these modules at the approved commit:
