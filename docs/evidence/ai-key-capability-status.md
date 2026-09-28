@@ -146,3 +146,29 @@ Read-only, in a signed-in console session. Only counts, event-ID match status an
 - **Not supported:** basic mode on 7.3.68 offers no transcript text search, only a "has transcript" label and the transcript viewer.
 - **No safe emulator-side fix:** the only lever would put transcript-derived vectors into the image-object index. That mixes modalities, embeds speech content, and would rely on deep-understanding session search, which is disabled and is not changed here.
 - **Status:** `needs_evidence`, controller-limited.
+
+## Faces on AI Port-paired cameras (28 Sep 2026, #20 and #28)
+
+**Route (static, Protect 7.3.60 detection service, plus the stored G6 face records):**
+- **Grouping input:** the detection service groups a face by the `faceEmbed` float array of a face tracker in `trackerIDAttrMap`. It passes the array to the console's face search (`search_group`).
+- **Stored shape on the G6:** face objects carry `faceLandmarks` (10 values), `qualityScore`, `blurness`, `facePose`, `faceMask`, `matchedName` and a group. The person carries `associatedFaceTrackerID`.
+- **Capability:** an AI Port advertises face through the same `smartDetect` flags that feed `smartDetectTypes`.
+- **Settings:** Protect then sends `face` in `ChangeSmartDetectSettings`. Before this change that request would have rejected the whole object policy (`unsupported_smart_feature:types`).
+
+**Implementation (fae8798, opt-in `live_face`):**
+- **Models:** YuNet from OpenCV Zoo (MIT) and ArcFace ResNet100 from the ONNX Model Zoo (Apache-2.0), pinned by SHA-256. They run on the AI Port host CPU.
+- **Speed and cost:** about 40 ms for detection and 100 ms for the embedding on the NAS, with no provider call.
+- **Per person:** up to three tries, keeping the best-quality face.
+- **Event content:** the face is added as its own tracker with a 512-value L2-normalised embedding and a face snapshot, linked from the person.
+- **Gate:** it is sent only while Protect has Face enabled for that camera; `face` is stripped from the object policy.
+
+**Live:**
+- The three NAS AI Ports run `local-aiport:nas-amd64-face-r31-20260928`, with the models mounted read-only.
+- The Mac AI Port runs `local-aiport:face-arm64-20260928`.
+- Face is enabled in Protect for all nine paired cameras, and the object policies are unchanged.
+
+**`needs_evidence`:**
+- that Protect 7.3.68 saves these faces and groups repeat visits of one person into one group (the ArcFace space differs from Protect's own camera model, so they will not merge with G6 faces);
+- that a named group is later recognised.
+
+**Acceptance:** count-only readback of face thumbnails with group IDs on paired cameras, and group reuse across two visits.
