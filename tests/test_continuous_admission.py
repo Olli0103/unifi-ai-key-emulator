@@ -331,3 +331,43 @@ async def test_a_paired_g3_never_enters_caption_scope_without_an_explicit_model_
     assert not narrow.allows(native["id"])
     assert narrow.eligibility(native["id"])["caption"]["reason"] == "model_not_allowed"
     assert narrow.allows(paired_g3["id"]) is bool(paired_g3_smart)
+
+
+def test_unmetered_captions_need_a_local_ollama_model(tmp_path):
+    config = defaults(tmp_path / "state", "020000000001")
+    config["controller"]["protect_version"] = "7.3.68"
+    config["worker"].update(callback_mode="enabled", request_mp4_exports=True,
+                            continuous=dict(policy(tmp_path), unmetered=True))
+    config["inference"].update(provider="ollama", base_url="http://127.0.0.1:11434",
+                               model="qwen3-vl:8b-instruct")
+    assert validate_config(deepcopy(config))["worker"]["continuous"]["unmetered"] is True
+    for mutation in (lambda value: value["inference"].update(provider="openai-compatible"),
+                     lambda value: value["worker"]["continuous"].update(unmetered=False),
+                     lambda value: value["worker"]["continuous"].update(unmetered="yes")):
+        bad = deepcopy(config)
+        mutation(bad)
+        with pytest.raises(ConfigError):
+            validate_config(bad)
+
+
+async def test_unmetered_captions_are_not_limited_to_twelve_an_hour(services, tmp_path, monkeypatch):
+    config = continuous_options(services, tmp_path)
+    config["worker"]["continuous"]["unmetered"] = True
+    registry = MutableRegistry("camera-fixture", "camera-fixture-two")
+    worker = JobProcessor(config, tmp_path, camera_registry=registry)
+    release = asyncio.Event()
+
+    async def execute(job):
+        await release.wait()
+        return {"status": "processed"}
+
+    monkeypatch.setattr(worker, "_execute", execute)
+    try:
+        for index in range(15):
+            assert (await worker.submit(command(f"local-{index}")))["accepted"] is True
+        assert worker.caption_budget is None
+        assert not (tmp_path / "caption-budget.json").exists()
+    finally:
+        release.set()
+        await worker.wait_for_idle()
+        await worker.stop()

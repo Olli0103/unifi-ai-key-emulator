@@ -93,7 +93,7 @@ def _abort(state: Path, config: dict, health: dict | None, budget: dict, now: fl
     continuous = (config.get("worker") or {}).get("continuous") or {}
     pinned = len(continuous.get("camera_ids", [])) or None
     unreserved = 0
-    if continuous:
+    if continuous and not continuous.get("unmetered"):
         reserved = _reserved_jobs(state)
         directory = state / "worker-jobs"
         for path in directory.glob("*.json") if directory.is_dir() and not directory.is_symlink() else []:

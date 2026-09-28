@@ -158,7 +158,7 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
         required = {"enabled", "api_key_file", "web_trust_file", "web_cert_file",
                     "camera_models"}
         if (not isinstance(policy, dict) or not required <= set(policy)
-                or set(policy) - required - {"refresh_seconds", "camera_ids"}
+                or set(policy) - required - {"refresh_seconds", "camera_ids", "unmetered"}
                 or policy["enabled"] is not True):
             raise ConfigError("worker.continuous requires model families and three private files")
         if "test_scope" in config["worker"] or "test_scopes" in config["worker"]:
@@ -180,6 +180,11 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
                            or not value.isprintable() or any(ch.isspace() for ch in value)
                            for value in ids)):
                 raise ConfigError("worker.continuous.camera_ids requires distinct camera IDs")
+        # The 12-per-hour budget caps provider cost. A local Ollama model has
+        # none, so the owner may run it unmetered; a paid provider cannot.
+        if "unmetered" in policy and (policy["unmetered"] is not True
+                                      or config.get("inference", {}).get("provider") != "ollama"):
+            raise ConfigError("worker.continuous.unmetered requires a local ollama caption model")
         interval = policy.get("refresh_seconds", 60)
         if type(interval) is not int or not 30 <= interval <= 300:
             raise ConfigError("worker.continuous.refresh_seconds must be 30 to 300")

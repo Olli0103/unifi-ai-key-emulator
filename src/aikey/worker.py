@@ -348,7 +348,9 @@ class JobProcessor:
         if self.continuous and camera_registry is None:
             raise WorkerError("Continuous mode requires a camera registry")
         self.camera_registry = camera_registry
-        self.caption_budget = CaptionBudget(state_dir) if self.continuous else None
+        unmetered = (self.options.get("continuous") or {}).get("unmetered") is True
+        self.caption_budget = (CaptionBudget(state_dir)
+                               if self.continuous and not unmetered else None)
         # Sanitized admission counts only (#12); no camera or event identifiers.
         self.captions = {"admitted": 0, "exhausted": 0, "deferred_fair_share": 0}
         self.archive_dir = Path(state_dir) / "worker-archive"
