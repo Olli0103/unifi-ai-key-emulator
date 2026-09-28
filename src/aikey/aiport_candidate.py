@@ -338,8 +338,13 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
         except ValueError:
             cameras = None
         if (not isinstance(face, dict) or "live_pool_detector" not in value or not cameras
-                or set(face) != {"cameras", "detector_path", "detector_sha256",
-                                 "embedder_path", "embedder_sha256"}
+                or not {"cameras", "detector_path", "detector_sha256", "embedder_path",
+                        "embedder_sha256"} <= set(face) <= {
+                            "cameras", "detector_path", "detector_sha256", "embedder_path",
+                            "embedder_sha256", "payload"}
+                # Staged payloads isolate what Protect accepts (diagnostic).
+                or face.get("payload", "full") not in {"full", "no_embed", "no_attributes",
+                                                       "descriptor_only"}
                 or len(set(cameras)) != len(cameras) or not set(cameras) <= pool
                 or any(not isinstance(face[k], str) or not Path(face[k]).is_absolute()
                        for k in ("detector_path", "embedder_path"))
@@ -1092,9 +1097,11 @@ class CandidateService:
                 continue
             self._add_faces(payload, session, edge, tracks)
             if edge == "leave":
+                face_snapshots = ((self.config.get("live_face") or {}).get("payload", "full")
+                                  != "descriptor_only")
                 snapshots = session["snapshots"] + [face[2] for face in
                                                     session.get("faces", {}).values()
-                                                    if face[2] is not None]
+                                                    if face[2] is not None and face_snapshots]
                 self._pool_sessions.pop(camera, None)
                 if snapshots:
                     snapshots[0].add_to_event(payload)
@@ -1149,8 +1156,10 @@ class CandidateService:
         if previous is not None and previous[1].quality >= result.quality:
             return
         if previous is None:
-            self._face_track_number += 1
-            face_id = 1_000_000_000 + self._face_track_number
+            # Camera tracker IDs are small integers; keep face IDs in a range
+            # the object tracker does not reach within one process.
+            self._face_track_number = self._face_track_number % 99_999 + 1
+            face_id = 900_000 + self._face_track_number
         else:
             face_id = previous[0]
         wall = int(time.time() * 1000)
@@ -1168,6 +1177,7 @@ class CandidateService:
         faces = session.get("faces") or {}
         if not faces:
             return
+        stage = (self.config.get("live_face") or {}).get("payload", "full")
         zones = {change.track_id: zone_ids for change, zone_ids in tracks}
         added = False
         for person_id, (face_id, result, _snapshot) in faces.items():
@@ -1177,9 +1187,13 @@ class CandidateService:
             added = True
             if edge == "leave":
                 attrs = payload["trackerIDAttrMap"]
-                attrs[str(face_id)] = result.attributes(face_id, zones[person_id])
-                if str(person_id) in attrs:
-                    attrs[str(person_id)]["associatedFaceTrackerID"] = face_id
+                if stage in {"full", "no_embed"}:
+                    face_attrs = result.attributes(face_id, zones[person_id])
+                    if stage == "no_embed":
+                        face_attrs.pop("faceEmbed")
+                    attrs[str(face_id)] = face_attrs
+                    if str(person_id) in attrs:
+                        attrs[str(person_id)]["associatedFaceTrackerID"] = face_id
                 self.faces_sent += 1
         if added and "face" not in payload["objectTypes"]:
             payload["objectTypes"].append("face")

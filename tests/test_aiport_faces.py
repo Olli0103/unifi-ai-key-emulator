@@ -137,8 +137,14 @@ def result():
 def test_face_records_match_protects_own_face_attribute_names():
     attrs = result().attributes(1_000_000_001, (1,))
     assert {"objectType", "trackerId", "zone", "faceEmbed", "faceLandmarks", "qualityScore",
-            "blurness", "facePose", "faceMask"} == set(attrs)
+            "blurness", "facePose", "faceMask", "faceVerifyStatus", "namesTopK",
+            "topKCandidate", "matchedName"} == set(attrs)
+    assert [v["verifyType"] for v in attrs["faceVerifyStatus"]] == [
+        "is_invalid_cropped", "occluded", "blur_motion", "blur_focus", "bad_pose", "non_face"]
     assert attrs["objectType"] == "face" and len(attrs["faceEmbed"]) == 512
+    assert attrs["faceMask"]["val"] in {"face", "face_mask"}                # Protect's vocabulary
+    assert 0 <= attrs["qualityScore"] <= 100 and attrs["qualityScore"] == 80.0
+    assert result().descriptor(900_001, (1,))["attributes"]["faceMask"]["val"] == "face"
     assert len(attrs["faceLandmarks"]) == 10 and all(0 <= v <= 1000 for v in attrs["faceLandmarks"])
     descriptor = result().descriptor(1_000_000_001, (1,))
     assert descriptor["objectType"] == "face" and descriptor["coord"] == [450, 120, 100, 180]
@@ -228,7 +234,7 @@ async def test_a_found_face_joins_the_event_as_its_own_linked_tracker(tmp_path):
         assert attrs["5"]["associatedFaceTrackerID"] == face_id
         assert len(attrs[str(face_id)]["faceEmbed"]) == 512
         assert any(s["smartDetectSnapshotType"] == "face" for s in leave["smartDetectSnapshots"])
-        assert service.faces_sent == 1
+        assert service.faces_sent == 1 and 900_000 < face_id < 1_000_000
     finally:
         await service.stop()
 

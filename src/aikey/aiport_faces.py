@@ -55,11 +55,25 @@ class FaceResult:
     def attributes(self, track_id: int, zone_ids: tuple[int, ...]) -> dict:
         """The face tracker's attributes, shaped like Protect's own face records."""
         points = [round(value * 1000) for point in self.landmarks for value in point]
+        # Protect's own face records (G6, 7.3.68): faceMask.val is "face" or
+        # "face_mask" and qualityScore is 0..100. A value outside that
+        # vocabulary made Protect drop the whole event message (28 Sep).
         return {"objectType": "face", "trackerId": track_id, "zone": list(zone_ids),
                 "faceEmbed": [round(value, 6) for value in self.embedding],
-                "faceLandmarks": points, "qualityScore": round(self.quality, 3),
-                "blurness": round(self.blurness, 3), "facePose": dict(self.pose),
-                "faceMask": {"val": "none", "confidence": 0}}
+                "faceLandmarks": points, "qualityScore": round(self.quality * 100, 1),
+                "blurness": round(self.blurness * 100, 1), "facePose": dict(self.pose),
+                "faceMask": {"val": "face", "confidence": round(self.score, 3)},
+                # The same six checks Protect stores for an onboard face; lower
+                # is better, as in its records.
+                "faceVerifyStatus": [
+                    {"verifyType": "is_invalid_cropped", "confidence": 0.05},
+                    {"verifyType": "occluded", "confidence": 0.05},
+                    {"verifyType": "blur_motion", "confidence": 0.0},
+                    {"verifyType": "blur_focus", "confidence": round(self.blurness * 0.01, 6)},
+                    {"verifyType": "bad_pose", "confidence": round(
+                        min(1.0, abs(self.pose.get("yaw", 0.0)) / 90), 6)},
+                    {"verifyType": "non_face", "confidence": round(1 - self.score, 6)}],
+                "namesTopK": [], "topKCandidate": [], "matchedName": ""}
 
     def descriptor(self, track_id: int, zone_ids: tuple[int, ...]) -> dict:
         x1, y1, x2, y2 = self.box
@@ -69,7 +83,7 @@ class FaceResult:
                           round((x2 - x1) * 1000), round((y2 - y1) * 1000)],
                 "objectType": "face", "zones": list(zone_ids), "lines": [],
                 "stationary": False, "coord3d": [],
-                "attributes": {"faceMask": {"val": "none", "confidence": 0}}}
+                "attributes": {"faceMask": {"val": "face", "confidence": round(self.score, 3)}}}
 
 
 def verify_model(path: str, sha256: str) -> str:
