@@ -31,6 +31,7 @@ from .aiport_ingest import (
 )
 from .aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
 from .aiport_api_detection import ApiObjectDetector, _frame_mode
+from .aiport_faces import FaceEngine, FaceError, make_face_snapshot, verify_model
 from .aiport_audio import (AudioSettingsError, SpeechActivity, parse_audio_settings,
                            speech_event_payload)
 from .aiport_motion import (MotionDetector, MotionSettingsError, MotionTimeline,
@@ -155,7 +156,7 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
     allowed = required | {"paired_stream", "paired_streams", "diagnostic_hello_until",
                           "diagnostic_stream", "live_detector", "live_pool_detector",
-                          "live_speech_cameras",
+                          "live_speech_cameras", "live_face",
                           "diagnostic_streams",
                           "diagnostic_detector",
                           "diagnostic_pool_detector", "diagnostic_pool_event_until",
@@ -326,6 +327,26 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
                 or len(set(normalized)) != len(normalized) or not set(normalized) <= pool):
             raise CandidateError("Invalid live speech camera policy")
         value["live_speech_cameras"] = normalized
+    if "live_face" in value:
+        # Opt-in local face embeddings (#20, #28): pinned models, listed cameras.
+        face = value["live_face"]
+        pool = {stream.get("camera_mac") for stream in value.get("paired_streams") or []
+                if isinstance(stream, dict)}
+        try:
+            cameras = ([normalize_mac(mac) for mac in face["cameras"]]
+                       if isinstance(face, dict) and isinstance(face.get("cameras"), list) else None)
+        except ValueError:
+            cameras = None
+        if (not isinstance(face, dict) or "live_pool_detector" not in value or not cameras
+                or set(face) != {"cameras", "detector_path", "detector_sha256",
+                                 "embedder_path", "embedder_sha256"}
+                or len(set(cameras)) != len(cameras) or not set(cameras) <= pool
+                or any(not isinstance(face[k], str) or not Path(face[k]).is_absolute()
+                       for k in ("detector_path", "embedder_path"))
+                or any(not isinstance(face[k], str) or not _PIN.fullmatch(face[k])
+                       for k in ("detector_sha256", "embedder_sha256"))):
+            raise CandidateError("Invalid live face policy")
+        face["cameras"] = cameras
     if "diagnostic_hello_until" in value:
         until = value["diagnostic_hello_until"]
         if type(until) is not int or until < 0 or until > time.time() + 600:
@@ -609,6 +630,18 @@ class CandidateService:
         self.speech_rate_limited = 0
         self.speech_reannounces = 0
         self._speech_announced: set[str] = set()
+        # Local face embeddings per opted-in camera, only while Protect has
+        # Face enabled for it (ChangeSmartDetectSettings).
+        self._face_cameras: frozenset[str] = frozenset(
+            (config.get("live_face") or {}).get("cameras", ()))
+        self._face_engine: FaceEngine | None = None
+        self._face_enabled: dict[str, bool] = {}
+        self._face_tasks: dict[str, asyncio.Task] = {}
+        self._face_track_number = 0
+        self.face_analyses = 0
+        self.faces_found = 0
+        self.faces_sent = 0
+        self.face_errors: dict[str, int] = {}
         self.speech_settings_acks = 0
         self.speech_settings_rejected = 0
         self.speech_events_entered = 0
@@ -1019,6 +1052,7 @@ class CandidateService:
                 opening = not session["active"]
                 if opening:
                     session["seen"], session["snapshots"] = {}, []
+                    session["faces"], session["face_tries"] = {}, {}
                 session["active"][change.track_id] = track
                 session["seen"][change.track_id] = track
                 if frame is not None and len(session["snapshots"]) < 4:
@@ -1048,13 +1082,19 @@ class CandidateService:
                     edge, tracks = "moving", tuple(session["active"].values())
                 else:
                     edge, tracks = "leave", tuple(session["seen"].values())
+            if (frame is not None and change.kind == "person" and change.edge != "leave"
+                    and self._face_enabled.get(camera) and self._face_engine is not None):
+                self._schedule_face(camera, session, change, frame)
             try:
                 payload = camera_event_payload(
                     camera, edge, tracks, clock_wall_ms=int(time.time() * 1000))
             except SmartEventError:
                 continue
+            self._add_faces(payload, session, edge, tracks)
             if edge == "leave":
-                snapshots = session["snapshots"]
+                snapshots = session["snapshots"] + [face[2] for face in
+                                                    session.get("faces", {}).values()
+                                                    if face[2] is not None]
                 self._pool_sessions.pop(camera, None)
                 if snapshots:
                     snapshots[0].add_to_event(payload)
@@ -1070,6 +1110,79 @@ class CandidateService:
                 self.smart_events_moved += 1
             else:
                 self.smart_events_left += 1
+
+    def _count_face_error(self, code: str) -> None:
+        key = code if len(code) <= 48 else "other"
+        if key in self.face_errors or len(self.face_errors) < 12:
+            self.face_errors[key] = self.face_errors.get(key, 0) + 1
+
+    def _schedule_face(self, camera: str, session: dict, change, frame: bytes) -> None:
+        """Analyse a person's face in the background: one at a time per camera,
+        up to three tries per person, keeping the best-quality face."""
+        running = self._face_tasks.get(camera)
+        if running is not None and not running.done():
+            return
+        faces = session.setdefault("faces", {})
+        tries = session.setdefault("face_tries", {})
+        if tries.get(change.track_id, 0) >= 3:
+            return
+        tries[change.track_id] = tries.get(change.track_id, 0) + 1
+        self._face_tasks[camera] = asyncio.create_task(
+            self._analyse_face(camera, faces, change, frame), name="aiport-face")
+
+    async def _analyse_face(self, camera: str, faces: dict, change, frame: bytes) -> None:
+        engine = self._face_engine
+        if engine is None:
+            return
+        self.face_analyses += 1
+        try:
+            result = await asyncio.to_thread(engine.analyse, frame, change.box)
+        except FaceError as exc:
+            self._count_face_error(str(exc))
+            return
+        except Exception:
+            self._count_face_error("face_runtime_error")
+            return
+        if result is None:
+            return
+        previous = faces.get(change.track_id)
+        if previous is not None and previous[1].quality >= result.quality:
+            return
+        if previous is None:
+            self._face_track_number += 1
+            face_id = 1_000_000_000 + self._face_track_number
+        else:
+            face_id = previous[0]
+        wall = int(time.time() * 1000)
+        try:
+            self._pool_snapshot_number += 1
+            snapshot = await asyncio.to_thread(make_face_snapshot, frame, result, face_id, wall,
+                                               filename_id=self._pool_snapshot_number)
+        except SnapshotError:
+            snapshot = None
+        self.faces_found += 1
+        faces[change.track_id] = (face_id, result, snapshot)
+
+    def _add_faces(self, payload: dict, session: dict, edge: str, tracks: tuple) -> None:
+        """Add each found face as its own tracker, linked from its person."""
+        faces = session.get("faces") or {}
+        if not faces:
+            return
+        zones = {change.track_id: zone_ids for change, zone_ids in tracks}
+        added = False
+        for person_id, (face_id, result, _snapshot) in faces.items():
+            if person_id not in zones:
+                continue
+            payload["descriptors"].append(result.descriptor(face_id, zones[person_id]))
+            added = True
+            if edge == "leave":
+                attrs = payload["trackerIDAttrMap"]
+                attrs[str(face_id)] = result.attributes(face_id, zones[person_id])
+                if str(person_id) in attrs:
+                    attrs[str(person_id)]["associatedFaceTrackerID"] = face_id
+                self.faces_sent += 1
+        if added and "face" not in payload["objectTypes"]:
+            payload["objectTypes"].append("face")
 
     def _remember_pool_snapshot(self, camera: str, snapshot) -> None:
         now = time.monotonic()
@@ -1134,6 +1247,11 @@ class CandidateService:
                                       {"description": "smart_detection_unavailable"})
             self._count_policy_rejection("not_allowlisted")
             return
+        if camera in self._face_cameras and isinstance(payload.get("enableSmartDetect"), list):
+            # Face is served locally (live_face); the object policy covers the rest.
+            requested = payload["enableSmartDetect"]
+            self._face_enabled[camera] = "face" in requested
+            payload = dict(payload, enableSmartDetect=[kind for kind in requested if kind != "face"])
         if set(payload) == {"deviceID", "isLprCamera"}:
             # Protect 7.3.68 sends every paired camera this separate message
             # on connect. Answering 501 made Protect log "Failed to handle
@@ -1709,6 +1827,12 @@ class CandidateService:
             "timezone_replies": self.timezone_replies,
             "timezone_rejections": self.timezone_rejections,
             "face_db_requests_rejected": self.face_db_requests_rejected,
+            **({"faces": {"cameras": len(self._face_cameras),
+                          "engine": self._face_engine is not None,
+                          "enabled": sum(self._face_enabled.get(c, False) for c in self._face_cameras),
+                          "analyses": self.face_analyses, "found": self.faces_found,
+                          "sent": self.faces_sent, "errors": dict(self.face_errors)}}
+               if self._face_cameras else {}),
             **({"speech": {"cameras": len(self._speech),
                            "enabled": sum(self._speech_enabled.get(c, False) for c in self._speech),
                            "settings_acks": self.speech_settings_acks,
@@ -2034,6 +2158,8 @@ class CandidateService:
                 "deviceID": camera_mac,
                 "smartDetect": (self._pool_feature_types()
                                 + (["alrmSpeak"] if camera_mac in self._speech else [])
+                                + (["face"] if camera_mac in self._face_cameras
+                                   and self._face_engine is not None else [])
                                 if isinstance(self.ingress, AiPortIngressPool)
                                 else [self.config["live_detector"]["smart_type"]]
                                 if "live_detector" in self.config else
@@ -2606,6 +2732,14 @@ class CandidateService:
     async def start(self, *, bind: str = "0.0.0.0", port: int = 8443):
         if self.runner is not None:
             return
+        if self._face_cameras and self._face_engine is None:
+            face = self.config["live_face"]
+            try:
+                self._face_engine = await asyncio.to_thread(
+                    lambda: FaceEngine(verify_model(face["detector_path"], face["detector_sha256"]),
+                                       verify_model(face["embedder_path"], face["embedder_sha256"])))
+            except (FaceError, OSError, ImportError, RuntimeError) as exc:
+                self._count_face_error(str(exc) if isinstance(exc, FaceError) else "face_engine_unavailable")
         self.runner = web.AppRunner(self.app(), access_log=None)
         await self.runner.setup()
         try:
