@@ -261,7 +261,7 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
                         or is_api and (api_fields - {"max_requests_per_hour"}
                                        <= set(detector)
                                        <= api_fields | {"held_package_followup",
-                                                        "plate_cameras"}))
+                                                        "plate_cameras", "fallback"}))
                 or detector.get("held_package_followup", "shadow") not in {"shadow", "announce"}
                 or backend is not None and not (is_api or is_onnx)
                 or not is_api and (
@@ -281,6 +281,19 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
                 or type(detector["max_events_per_hour"]) is not int
                 or not 1 <= detector["max_events_per_hour"] <= 3600):
             raise CandidateError("Invalid live pool detector policy")
+        if "fallback" in detector:
+            # Local detection used only while the primary provider fails.
+            fallback = detector["fallback"]
+            provider = fallback.get("provider_config") if isinstance(fallback, dict) else None
+            if (not is_api or not isinstance(provider, dict)
+                    or not set(fallback) <= {"provider_config", "timeout_s", "max_per_hour"}
+                    or provider.get("provider") != "ollama" or "api_key" in provider
+                    or "api_key_file" in provider):
+                raise CandidateError("Invalid live pool detector fallback")
+            try:
+                validate_inference_config(dict(provider), require_api_key=False)
+            except ProviderError as exc:
+                raise CandidateError("Invalid live pool detector fallback") from exc
         if "plate_cameras" in detector:
             # Opt-in plate reading (#19): only listed paired cameras, API backend.
             plates = detector["plate_cameras"]
@@ -778,7 +791,8 @@ class CandidateService:
                         threshold=detector["threshold"],
                         max_requests_per_hour=detector.get("max_requests_per_hour"),
                         package_lens_owned=self._package_lens_owned,
-                        plate_cameras=frozenset(detector.get("plate_cameras", ()))))
+                        plate_cameras=frozenset(detector.get("plate_cameras", ())),
+                        fallback=detector.get("fallback")))
                     if live_pool and detector.get("inference_backend") == "vision_api" else
                     (lambda: OnnxRFDetrNanoDetector.from_model(
                         detector["model_path"], detector["model_sha256"],
