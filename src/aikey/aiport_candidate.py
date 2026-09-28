@@ -1009,6 +1009,14 @@ class CandidateService:
                 and not engine.needs_confirmation(camera_mac)):
             self._inference.skip_confirmation(camera_mac)
         await self._publish_pool_candidates(candidates, frame=frame)
+        # A person who stays still sends no further track changes; retry the
+        # face on later frames of the open event (bounded in _schedule_face).
+        session = self._pool_sessions.get(camera_mac)
+        if (frame is not None and session and session.get("active")
+                and self._face_enabled.get(camera_mac) and self._face_engine is not None):
+            for change, _zones in tuple(session["active"].values()):
+                if change.kind == "person":
+                    self._schedule_face(camera_mac, session, change, frame)
 
     async def _follow_held_packages(self, camera_mac: str, frame: bytes) -> None:
         engine = self._camera_engine
@@ -1057,7 +1065,7 @@ class CandidateService:
                 opening = not session["active"]
                 if opening:
                     session["seen"], session["snapshots"] = {}, []
-                    session["faces"], session["face_tries"] = {}, {}
+                    session["faces"], session["face_tries"], session["face_last"] = {}, {}, {}
                 session["active"][change.track_id] = track
                 session["seen"][change.track_id] = track
                 if frame is not None and len(session["snapshots"]) < 4:
@@ -1131,9 +1139,12 @@ class CandidateService:
             return
         faces = session.setdefault("faces", {})
         tries = session.setdefault("face_tries", {})
-        if tries.get(change.track_id, 0) >= 3:
+        last = session.setdefault("face_last", {})
+        now = time.monotonic()
+        if tries.get(change.track_id, 0) >= 3 or now - last.get(change.track_id, -1e9) < 2:
             return
         tries[change.track_id] = tries.get(change.track_id, 0) + 1
+        last[change.track_id] = now
         self._face_tasks[camera] = asyncio.create_task(
             self._analyse_face(camera, faces, change, frame), name="aiport-face")
 
