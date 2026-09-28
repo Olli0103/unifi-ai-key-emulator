@@ -598,6 +598,11 @@ class CandidateService:
             camera: SpeechActivity() for camera in config.get("live_speech_cameras", [])}
         self._speech_enabled: dict[str, bool] = {}
         self._speech_open: set[str] = set()
+        self._speech_events: dict[str, int] = {}
+        self._speech_settings_seen: set[str] = set()
+        self._speech_announced_at: dict[str, float] = {}
+        self._speech_reannounces: dict[str, int] = {}
+        self.speech_reannounces = 0
         self._speech_announced: set[str] = set()
         self.speech_settings_acks = 0
         self.speech_settings_rejected = 0
@@ -837,10 +842,24 @@ class CandidateService:
         ws = self._current_ws
         if detector is None or ws is None or not self._params_agreed:
             return
+        now = time.monotonic()
         if camera_mac not in self._speech_announced:
             # Audio is flowing: tell Protect so it pushes this camera's
             # audio-event settings (ChangeAudioEventsSettings).
             self._speech_announced.add(camera_mac)
+            self._speech_announced_at[camera_mac] = now
+            await self._send_stream_status(ws, streaming=True, camera_mac=camera_mac)
+        elif (camera_mac not in self._speech_settings_seen
+              and now - self._speech_announced_at.get(camera_mac, now) >= 60
+              and self._speech_reannounces.get(camera_mac, 0) < 3):
+            # Protect pushes settings only on a not-ready -> ready change; if
+            # an earlier status overtook the announcement it never pushed.
+            # Pulse readiness, at most three times per camera.
+            self._speech_reannounces[camera_mac] = self._speech_reannounces.get(camera_mac, 0) + 1
+            self._speech_announced_at[camera_mac] = now
+            self.speech_reannounces += 1
+            await self._send_stream_status(ws, streaming=True, camera_mac=camera_mac,
+                                           audio_ready=False)
             await self._send_stream_status(ws, streaming=True, camera_mac=camera_mac)
         for edge in detector.feed(pcm):
             if edge.edge == "enter" and not self._speech_enabled.get(camera_mac):
@@ -850,6 +869,13 @@ class CandidateService:
                 continue
             await self._send_speech_edge(ws, camera_mac, edge.edge, edge.level_db)
 
+    def _speech_camera_health(self, camera_mac: str) -> dict:
+        if camera_mac not in self._speech:
+            return {}
+        return {"speech": {"enabled": self._speech_enabled.get(camera_mac, False),
+                           "events": self._speech_events.get(camera_mac, 0),
+                           "open": camera_mac in self._speech_open}}
+
     async def _send_speech_edge(self, ws: aiohttp.ClientWebSocketResponse,
                                 camera_mac: str, edge: str, level_db: float) -> None:
         await self._send_control_event(ws, "EventSmartAudio", speech_event_payload(
@@ -857,6 +883,7 @@ class CandidateService:
         if edge == "enter":
             self._speech_open.add(camera_mac)
             self.speech_events_entered += 1
+            self._speech_events[camera_mac] = self._speech_events.get(camera_mac, 0) + 1
         else:
             self._speech_open.discard(camera_mac)
             self.speech_events_left += 1
@@ -873,6 +900,7 @@ class CandidateService:
             self.speech_settings_rejected += 1
             return
         self._speech_enabled[camera] = enabled
+        self._speech_settings_seen.add(camera)
         if not enabled and camera in self._speech_open:
             await self._send_speech_edge(ws, camera, "leave", -120.0)
             self._speech[camera].reset()
@@ -1668,7 +1696,8 @@ class CandidateService:
                            "events_entered": self.speech_events_entered,
                            "events_left": self.speech_events_left,
                            "open": len(self._speech_open),
-                           "edges_suppressed": self.speech_edges_suppressed}}
+                           "edges_suppressed": self.speech_edges_suppressed,
+                           "reannounces": self.speech_reannounces}}
                if self._speech else {}),
             "smart_settings_requests_rejected": self.smart_settings_requests_rejected,
             "smart_settings_subset_matches": self.smart_settings_subset_matches,
@@ -1767,7 +1796,9 @@ class CandidateService:
                                     motion_history=(self._pool_motion_timeline[
                                         self._pool_camera_order[index]].snapshot()
                                         if self._pool_camera_order[index]
-                                        in self._pool_motion_timeline else []))
+                                        in self._pool_motion_timeline else []),
+                                    **self._speech_camera_health(
+                                        self._pool_camera_order[index]))
                               for index, (inference, policy, stream) in enumerate(zip(
                                   self._inference.camera_snapshot(),
                                   self._camera_engine.camera_snapshot(now=time.monotonic()),
@@ -1958,7 +1989,8 @@ class CandidateService:
 
     async def _send_stream_status(self, ws: aiohttp.ClientWebSocketResponse,
                                   *, streaming: bool,
-                                  camera_mac: str | None = None) -> None:
+                                  camera_mac: str | None = None,
+                                  audio_ready: bool | None = None) -> None:
         assert self.ingress is not None
         if camera_mac is None:
             camera_mac = getattr(self.ingress, "camera_mac", None)
@@ -2000,7 +2032,8 @@ class CandidateService:
              "isAudioEventReady": bool(
                  streaming and camera_mac in self._speech
                  and isinstance(self.ingress, AiPortIngressPool)
-                 and self.ingress.audio_ready(camera_mac))})
+                 and self.ingress.audio_ready(camera_mac)
+                 and audio_ready is not False)})
         if not streaming:
             self._speech_announced.discard(camera_mac)
             if camera_mac in self._speech_open:

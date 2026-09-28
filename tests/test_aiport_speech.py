@@ -308,3 +308,36 @@ async def test_the_audio_decoder_feeds_pcm_and_backs_off_when_there_is_no_audio(
         assert not silent.audio_ready
     finally:
         await silent._close_locked()
+
+
+async def test_a_camera_without_settings_gets_a_bounded_readiness_pulse(tmp_path, monkeypatch):
+    import aikey.aiport_candidate as candidate
+    service, sink = await service_for(tmp_path)
+    now = [500.0]
+    monkeypatch.setattr(candidate.time, "monotonic", lambda: now[0])
+    quiet = pcm(noise(0.3))
+    try:
+        await service._observe_pool_audio(CAMERA, quiet)          # announce
+        assert [s["isAudioEventReady"] for s in sink.events("EventAIPortStatus")] == [True]
+        now[0] += 30
+        await service._observe_pool_audio(CAMERA, quiet)          # too early
+        for _ in range(5):
+            now[0] += 61
+            await service._observe_pool_audio(CAMERA, quiet)
+        ready = [s["isAudioEventReady"] for s in sink.events("EventAIPortStatus")]
+        assert ready == [True, False, True, False, True, False, True]   # three pulses only
+        assert (await health(service))["speech"]["reannounces"] == 3
+
+        await audio_settings(service, sink, 50, deviceID=OTHER)            # refused camera
+        await service._observe_pool_audio(OTHER, quiet)                    # not a speech camera
+        await audio_settings(service, sink, 51)                            # settings arrive
+        now[0] += 120
+        before = len(sink.events("EventAIPortStatus"))
+        service._speech_reannounces.clear()
+        await service._observe_pool_audio(CAMERA, quiet)
+        assert len(sink.events("EventAIPortStatus")) == before             # no pulse once seen
+        camera_health = service._speech_camera_health(CAMERA)["speech"]
+        assert camera_health == {"enabled": True, "events": 0, "open": False}
+        assert service._speech_camera_health(OTHER) == {}
+    finally:
+        await service.stop()
