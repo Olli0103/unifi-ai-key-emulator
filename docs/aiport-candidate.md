@@ -301,3 +301,26 @@ Each `pool_cameras[i]` in `/healthz` carries two per-minute histories covering t
 
 A standing subject fades into the motion background within a few samples, so compare the arrival minute, not only later minutes.
 
+
+## Local detection fallback (28 Sep 2026)
+
+`live_pool_detector.fallback` adds a local Ollama vision model behind the primary API detector (5b16c12).
+
+**When it is used:** only when the primary fails with HTTP 429, a 5xx, a request failure or a DNS error, or while the primary is in its failure backoff. A 4xx rejection is not retried locally.
+
+**Bounds:**
+- the fallback must be a private-LAN Ollama server;
+- it has its own timeout (5–180 s) and a per-camera hourly cap;
+- its reply is constrained by a JSON schema;
+- its 0..1000 boxes are converted to fractions before the shared parser;
+- it never draws on the paid request budget.
+
+**Health:** `pool_inference.api_fallback` holds counts and fixed reasons only.
+
+**Measured on the NAS (Core Ultra 7 255H iGPU, Qwen3-VL-8B-Instruct):**
+- one frame took about 31 s when OpenAI was forced to fail;
+- on a synthetic test frame both objects came back with correct boxes.
+
+It is a degraded-mode path, not a primary one: it is too slow for live two-sighting tracking under load.
+
+**Live:** all four AI Ports run with `fallback` pointing at the NAS Ollama (`qwen3-vl:8b-instruct`, 90 s timeout, 120 per camera and hour). OpenAI remains the primary.
