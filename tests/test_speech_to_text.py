@@ -34,9 +34,15 @@ class Controller:
             {"start": 0.5, "end": 1.75, "text": " Hello there. ", "no_speech_prob": 0.01}]}
         self.reply_status = 200
         self.delay = 0.0
+        self.export_failures = []           # statuses to answer before the export
 
     async def export(self, request):
         self.media_requests.append(request.query_string)
+        if self.export_failures:
+            code = self.export_failures[0]
+            if len(self.export_failures) > 1 or code != "always":
+                self.export_failures.pop(0)
+            return web.Response(status=int(code) if code != "always" else 503)
         return web.Response(body=self.audio, content_type="video/mp4", headers=self.export_headers)
 
     async def transcribe(self, request):
@@ -306,3 +312,30 @@ async def test_protect_sees_speech_to_text_only_when_a_camera_is_configured(tmp_
     empty = device_config()
     empty["speech_to_text"] = dict(speech, camera_ids=[])
     assert DeviceService(empty, tmp_path / "empty", admit).get_info()["featureFlags"]["supportTts"]["enabled"] is False
+
+
+async def test_a_not_yet_exportable_event_is_retried_then_transcribed(controller, tmp_path, monkeypatch):
+    controller.export_failures = [503, 503]
+    monkeypatch.setattr(JobProcessor, "MEDIA_RETRY_DELAYS", (0.01, 0.01, 0.01))
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        result = await worker.handle(task())
+    finally:
+        await worker.stop()
+    assert result["result"] == {"segments": 1} and len(controller.media_requests) == 3
+    assert worker.media_retries == 2
+
+
+async def test_persistent_503_and_other_errors_still_fail_without_endless_retries(controller, tmp_path, monkeypatch):
+    monkeypatch.setattr(JobProcessor, "MEDIA_RETRY_DELAYS", (0.01, 0.01, 0.01))
+    for failures, expected_calls, code in ((["always"], 4, 503), ([404], 1, 404)):
+        controller.media_requests.clear()
+        controller.export_failures = failures
+        worker = JobProcessor(config(controller), tmp_path / str(code))
+        try:
+            with pytest.raises(WorkerError, match=f"HTTP {code}"):
+                await worker.handle(task())
+        finally:
+            await worker.stop()
+        assert len(controller.media_requests) == expected_calls
+    assert controller.callbacks == []

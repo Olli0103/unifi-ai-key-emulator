@@ -1538,12 +1538,24 @@ class JobProcessor:
                 raise WorkerError("HTTP response exceeds configured byte limit")
         return bytes(data)
 
+    # Protect answers 503 while a just-ended event's recording is not yet
+    # exportable; it failed 5 of 27 AI Port speech tasks on 28 Sep. Retry
+    # only that status, a bounded number of times, inside the job timeout.
+    MEDIA_RETRY_DELAYS = (2.0, 4.0, 8.0)
+
     async def _fetch(self, url, kind):
-        async with self._session.get(url, headers=self._headers, allow_redirects=False) as response:
-            if response.status != 200:
-                raise WorkerError(f"Controller media request returned HTTP {response.status}")
-            data = await self._read_response(response, self.max_video_bytes if kind == "video" else self.max_bytes)
-            return data, dict(response.headers)
+        for delay in (*self.MEDIA_RETRY_DELAYS, None):
+            async with self._session.get(url, headers=self._headers, allow_redirects=False) as response:
+                if response.status == 503 and delay is not None:
+                    self.media_retries = getattr(self, "media_retries", 0) + 1
+                else:
+                    if response.status != 200:
+                        raise WorkerError(f"Controller media request returned HTTP {response.status}")
+                    data = await self._read_response(
+                        response, self.max_video_bytes if kind == "video" else self.max_bytes)
+                    return data, dict(response.headers)
+            await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
 
     @staticmethod
     def _image_type(data):
