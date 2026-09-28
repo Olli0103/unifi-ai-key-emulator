@@ -31,6 +31,8 @@ from .aiport_ingest import (
 )
 from .aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
 from .aiport_api_detection import ApiObjectDetector, _frame_mode
+from .aiport_audio import (AudioSettingsError, SpeechActivity, parse_audio_settings,
+                           speech_event_payload)
 from .aiport_motion import (MotionDetector, MotionSettingsError, MotionTimeline,
                             motion_event_payload, parse_motion_settings)
 from .aiport_onnx_detection import OnnxRFDetrNanoDetector
@@ -150,6 +152,7 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
     allowed = required | {"paired_stream", "paired_streams", "diagnostic_hello_until",
                           "diagnostic_stream", "live_detector", "live_pool_detector",
+                          "live_speech_cameras",
                           "diagnostic_streams",
                           "diagnostic_detector",
                           "diagnostic_pool_detector", "diagnostic_pool_event_until",
@@ -306,6 +309,20 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
                 validate_inference_config(provider, require_api_key=False)
             except ProviderError as exc:
                 raise CandidateError("Invalid live API detector provider") from exc
+    if "live_speech_cameras" in value:
+        # Opt-in speech presence (#15, #28): listed paired cameras of a live pool.
+        cameras = value["live_speech_cameras"]
+        try:
+            normalized = ([normalize_mac(mac) for mac in cameras]
+                          if isinstance(cameras, list) else None)
+        except ValueError:
+            normalized = None
+        pool = {stream.get("camera_mac") for stream in value.get("paired_streams") or []
+                if isinstance(stream, dict)}
+        if ("live_pool_detector" not in value or not normalized
+                or len(set(normalized)) != len(normalized) or not set(normalized) <= pool):
+            raise CandidateError("Invalid live speech camera policy")
+        value["live_speech_cameras"] = normalized
     if "diagnostic_hello_until" in value:
         until = value["diagnostic_hello_until"]
         if type(until) is not int or until < 0 or until > time.time() + 600:
@@ -576,6 +593,17 @@ class CandidateService:
         self.timezone_replies = 0
         self.timezone_rejections = 0
         self.face_db_requests_rejected = 0
+        # Speech presence per opted-in camera; Protect switches it per camera.
+        self._speech: dict[str, SpeechActivity] = {
+            camera: SpeechActivity() for camera in config.get("live_speech_cameras", [])}
+        self._speech_enabled: dict[str, bool] = {}
+        self._speech_open: set[str] = set()
+        self._speech_announced: set[str] = set()
+        self.speech_settings_acks = 0
+        self.speech_settings_rejected = 0
+        self.speech_events_entered = 0
+        self.speech_events_left = 0
+        self.speech_edges_suppressed = 0
         self.smart_settings_requests_rejected = 0
         self.smart_settings_subset_matches = 0
         self.smart_settings_probe_requests = 0
@@ -739,7 +767,10 @@ class CandidateService:
             self.ingress = AiPortIngressPool(
                 config["paired_streams"],
                 frame_observer_factory=lambda camera: (
-                    lambda frame: self._observe_pool_frame(camera, frame)))
+                    lambda frame: self._observe_pool_frame(camera, frame)),
+                audio_observer_factory=lambda camera: (
+                    (lambda pcm: self._observe_pool_audio(camera, pcm))
+                    if camera in self._speech else None))
         elif config.get("diagnostic_hello_until", 0) > time.time():
             if "diagnostic_stream" in config:
                 self.ingress = AiPortIngress(
@@ -799,6 +830,54 @@ class CandidateService:
                 self.smart_motion_events_started += 1
             else:
                 self.smart_motion_events_stopped += 1
+
+    async def _observe_pool_audio(self, camera_mac: str, pcm: bytes) -> None:
+        """Speech presence for one opted-in camera; audio is never kept."""
+        detector = self._speech.get(camera_mac)
+        ws = self._current_ws
+        if detector is None or ws is None or not self._params_agreed:
+            return
+        if camera_mac not in self._speech_announced:
+            # Audio is flowing: tell Protect so it pushes this camera's
+            # audio-event settings (ChangeAudioEventsSettings).
+            self._speech_announced.add(camera_mac)
+            await self._send_stream_status(ws, streaming=True, camera_mac=camera_mac)
+        for edge in detector.feed(pcm):
+            if edge.edge == "enter" and not self._speech_enabled.get(camera_mac):
+                self.speech_edges_suppressed += 1
+                continue
+            if edge.edge == "leave" and camera_mac not in self._speech_open:
+                continue
+            await self._send_speech_edge(ws, camera_mac, edge.edge, edge.level_db)
+
+    async def _send_speech_edge(self, ws: aiohttp.ClientWebSocketResponse,
+                                camera_mac: str, edge: str, level_db: float) -> None:
+        await self._send_control_event(ws, "EventSmartAudio", speech_event_payload(
+            camera_mac, edge, clock_wall_ms=int(time.time() * 1000), level_db=level_db))
+        if edge == "enter":
+            self._speech_open.add(camera_mac)
+            self.speech_events_entered += 1
+        else:
+            self._speech_open.discard(camera_mac)
+            self.speech_events_left += 1
+
+    async def _handle_audio_settings(self, ws: aiohttp.ClientWebSocketResponse,
+                                     request_id: int, payload: object) -> None:
+        try:
+            camera, enabled = parse_audio_settings(payload)
+        except AudioSettingsError:
+            camera, enabled = None, False
+        if camera is None or camera not in self._speech:
+            await self._reply_control(ws, "ChangeAudioEventsSettings", request_id, 501,
+                                      {"description": "audio_events_unavailable"})
+            self.speech_settings_rejected += 1
+            return
+        self._speech_enabled[camera] = enabled
+        if not enabled and camera in self._speech_open:
+            await self._send_speech_edge(ws, camera, "leave", -120.0)
+            self._speech[camera].reset()
+        await self._reply_control(ws, "ChangeAudioEventsSettings", request_id, 0, {})
+        self.speech_settings_acks += 1
 
     async def _pool_camera_unavailable(self, camera_mac: str) -> None:
         # A failed or exhausted model cannot keep an event open. Revoke only
@@ -1582,6 +1661,15 @@ class CandidateService:
             "timezone_replies": self.timezone_replies,
             "timezone_rejections": self.timezone_rejections,
             "face_db_requests_rejected": self.face_db_requests_rejected,
+            **({"speech": {"cameras": len(self._speech),
+                           "enabled": sum(self._speech_enabled.get(c, False) for c in self._speech),
+                           "settings_acks": self.speech_settings_acks,
+                           "settings_rejected": self.speech_settings_rejected,
+                           "events_entered": self.speech_events_entered,
+                           "events_left": self.speech_events_left,
+                           "open": len(self._speech_open),
+                           "edges_suppressed": self.speech_edges_suppressed}}
+               if self._speech else {}),
             "smart_settings_requests_rejected": self.smart_settings_requests_rejected,
             "smart_settings_subset_matches": self.smart_settings_subset_matches,
             "smart_settings_probe_requests": self.smart_settings_probe_requests,
@@ -1892,6 +1980,7 @@ class CandidateService:
             flags: dict[str, object] = {
                 "deviceID": camera_mac,
                 "smartDetect": (self._pool_feature_types()
+                                + (["alrmSpeak"] if camera_mac in self._speech else [])
                                 if isinstance(self.ingress, AiPortIngressPool)
                                 else [self.config["live_detector"]["smart_type"]]
                                 if "live_detector" in self.config else
@@ -1907,7 +1996,16 @@ class CandidateService:
         await self._send_control_event(
             ws, "EventAIPortStatus",
             {"deviceID": camera_mac, "isStreaming": streaming,
-             "isSmartDetectReady": smart_ready, "isAudioEventReady": False})
+             "isSmartDetectReady": smart_ready,
+             "isAudioEventReady": bool(
+                 streaming and camera_mac in self._speech
+                 and isinstance(self.ingress, AiPortIngressPool)
+                 and self.ingress.audio_ready(camera_mac))})
+        if not streaming:
+            self._speech_announced.discard(camera_mac)
+            if camera_mac in self._speech_open:
+                await self._send_speech_edge(ws, camera_mac, "leave", -120.0)
+                self._speech[camera_mac].reset()
         self.stream_status_events_sent += 1
 
     async def _handle_diagnostic_frame(self, ws: aiohttp.ClientWebSocketResponse,
@@ -2092,6 +2190,13 @@ class CandidateService:
                 return
             await self._reply_control(ws, function, request_id, 0, {})
             self.timezone_replies += 1
+            return
+        if function == "ChangeAudioEventsSettings":
+            self.last_control_command = function
+            request_id = message.get("messageId")
+            if not self._params_agreed or type(request_id) is not int or request_id < 0:
+                return
+            await self._handle_audio_settings(ws, request_id, message.get("payload"))
             return
         if function == "UpdateFaceDBRequest":
             self.last_control_command = function

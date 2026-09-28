@@ -94,13 +94,31 @@ This was a read-only pass in a signed-in console session. It read settings, capa
 - Wohnzimmer: 664 `alrmSpeak` events, of which 529 have speech state `done` and 132 `failed`; 3 had no state yet.
 - No other camera had any `smartAudioDetect` event.
 
-**Route for the nine: `needs_evidence`.**
-- Protect has only one speech trigger, an `alrmSpeak` audio event on the camera. While a camera is paired, only the AI Port could raise that event.
-- The AI Port object carries the hooks for it: `isAudioIncluded`, per-camera `smartDetectAudioTypes`, `ChangeAudioEventsSettings` and `isAudioEventReady` in `EventAIPortStatus`.
-- The rest is unknown: the key that advertises audio types in `EventFeatureFlagsUpdated`, the audio event message and its payload, and how Protect attributes that event to the original camera.
-- This emulator decodes no audio and always reports `isAudioEventReady: false`.
-- Closing this needs static evidence from the 7.3.68 controller package, which is an approval-gated download, or a vendor AI Port capture. Only then can a synthetic-tested AI Port speech detector be written.
-- Until then, advertising audio types or widening `camera_ids` would change nothing, or would claim a capability the device cannot deliver.
+**Route for the nine: found in the 7.3.60 controller code (28 Sep 2026).** The earlier `needs_evidence` is resolved statically. A static read of the local 7.3.60 `service.js` (not redistributed) shows the whole path:
+
+1. **Capability.** `EventFeatureFlagsUpdated` from an AI Port is stored in `featureFlagsMap[<camera MAC>]`. `smartDetectAudioTypes` is derived from the **same** `smartDetect` list as the object types, filtered by the audio-type enum. It is one of the `overridableUiCameraFeatureFlags` copied onto the paired camera. So `smartDetect: [..., "alrmSpeak"]` makes Speech selectable on that camera.
+2. **Settings.** Once `EventAIPortStatus` reports `isAudioEventReady: true` for a streaming camera, Protect sends `ChangeAudioEventsSettings` to the AI Port. The request carries `deviceID` and `enableAlrmSpeak` (and the other `enableAlrm*` flags) taken from the camera's `smartDetectSettings.audioTypes`. The camera's own `hasMic` must be true; all nine report it.
+3. **Event.** Protect's message handler accepts `EventSmartAudio` from an AI Port and attributes it to the paired camera whose MAC equals `payload.deviceID`. The same handler drops a paired camera's **own** `EventSmartAudio`, which is why native speech stopped at pairing.
+   - The payload must match `audioMessageSchema`: numbers for the clocks, `eventId`, `leveldB` and `levels`; strings for `loudNoise` and `soundLoss`; and each audio type as `enter`, `moving`, `leave` or `none`.
+   - The event starts on the first active message. It ends only once **every** audio type reads `leave` or `none`.
+4. **Transcription.** At the event end Protect saves a snapshot thumbnail as `detectedThumbnails[{type: "alrmSpeak"}]`. `pushAudioTask` then queues `SPEECH_TO_TEXT` for the AI Key, exactly as for a native camera.
+
+**Implementation (this commit, opt-in).**
+- **Config:** a pool config may list `live_speech_cameras`, which must be paired pool members.
+- **Audio decoder:** for each listed camera the AI Port runs a second, isolated decoder on the relay stream's audio track (16 kHz mono PCM in memory). A missing or failing audio track backs off (5 s doubling to 5 min) and never touches video.
+- **Detector:** an energy and zero-crossing speech-presence detector with hysteresis. It needs 0.6 s of voice within 1.5 s to enter, leaves after 2.5 s of quiet, and caps an event at 120 s.
+- **Capability:** the AI Port advertises `alrmSpeak` for that camera. It reports `isAudioEventReady` once audio flows.
+- **Settings:** it acknowledges `ChangeAudioEventsSettings` and sends `EventSmartAudio` enter and leave **only while Protect has Speech enabled for that camera**. Turning Speech off closes an open event. Other cameras' settings are refused (501).
+- **Privacy:** no audio is stored, logged or sent anywhere by the AI Port, and it produces no text. The transcript still comes from the AI Key, which reads Protect's own export only for cameras in its speech allowlist and transcribes with the local Whisper container.
+- **Health:** the `speech` block holds counts only.
+- **Tests:** synthetic positive and negative tests in `tests/test_aiport_speech.py`.
+
+**Still `needs_evidence` (live):**
+- that Protect 7.3.68 behaves as 7.3.60 here;
+- that the relay alias carries an audio track;
+- the detector's real-world recall and false triggers.
+
+**Acceptance per camera:** a new `smartAudioDetect` event on the original camera with `alrmSpeak`; `sttState` done; and an exact-event transcription row count equal to the Key's posted segment count. Count only, no text.
 
 **What does not need that evidence** (owner decisions, not taken here):
 - Unpairing a camera would bring back its own `alrmSpeak`, at the cost of its AI Port object detection.

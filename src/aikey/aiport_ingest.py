@@ -318,12 +318,101 @@ class _Session:
         self._stderr.clear()
 
 
+_AUDIO_CHUNK = 9600          # 300 ms of 16 kHz mono s16le
+_AUDIO_STALE_S = 5.0
+
+
+class _AudioSession:
+    """A separate decoder for the relay stream's audio track (#15, #28).
+
+    It runs beside the video decoder so an audio failure, or a stream without
+    audio, can never stop video. PCM is handed to the observer in memory and
+    never kept; stderr is drained and discarded.
+    """
+
+    def __init__(self, spec: StreamSpec, ffmpeg_path: str,
+                 observer: Callable[[bytes], Awaitable[None]]):
+        self.spec = spec
+        self.ffmpeg_path = ffmpeg_path
+        self.observer = observer
+        self.process: asyncio.subprocess.Process | None = None
+        self.reader: asyncio.Task | None = None
+        self.stderr_reader: asyncio.Task | None = None
+        self.chunks = 0
+        self.last_chunk_at = 0.0
+        self.observer_failed = False
+
+    @property
+    def alive(self) -> bool:
+        return self.process is not None and self.process.returncode is None \
+            and not self.observer_failed
+
+    @property
+    def ready(self) -> bool:
+        return self.alive and self.chunks > 0 \
+            and time.monotonic() - self.last_chunk_at < _AUDIO_STALE_S
+
+    async def start(self) -> None:
+        self.process = await asyncio.create_subprocess_exec(
+            self.ffmpeg_path, "-hide_banner", "-nostdin", "-loglevel", "error",
+            "-rtsp_transport", "tcp", "-timeout", "5000000", "-i", self.spec.url,
+            "-map", "0:a:0", "-vn", "-sn", "-dn", "-ac", "1", "-ar", "16000",
+            "-threads", "1", "-f", "s16le", "pipe:1",
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, limit=_AUDIO_CHUNK * 4,
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+        )
+        self.reader = asyncio.create_task(self._read(), name="aiport-rtsp-audio")
+        self.stderr_reader = asyncio.create_task(self._drain(), name="aiport-rtsp-audio-stderr")
+
+    async def _drain(self) -> None:
+        assert self.process is not None and self.process.stderr is not None
+        while await self.process.stderr.read(4096):
+            pass
+
+    async def _read(self) -> None:
+        assert self.process is not None and self.process.stdout is not None
+        try:
+            while True:
+                chunk = await self.process.stdout.readexactly(_AUDIO_CHUNK)
+                self.chunks += 1
+                self.last_chunk_at = time.monotonic()
+                try:
+                    await self.observer(chunk)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self.observer_failed = True     # no private output is logged
+                    return
+        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+            return
+
+    async def close(self) -> None:
+        process = self.process
+        if process is not None and process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=2)
+            except TimeoutError:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+                await process.wait()
+        for task in (self.reader, self.stderr_reader):
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        self.reader = self.stderr_reader = None
+        self.process = None
+
+
 class AiPortIngress:
     """Start only an allowed RTSP stream and confirm a decoded frame first."""
 
     def __init__(self, *, camera_mac: str, source_ip: str, ffmpeg_path: str,
                  start_timeout: float = 7,
-                 frame_observer: Callable[[bytes], Awaitable[None]] | None = None):
+                 frame_observer: Callable[[bytes], Awaitable[None]] | None = None,
+                 audio_observer: Callable[[bytes], Awaitable[None]] | None = None):
         self.camera_mac = normalize_mac(camera_mac)
         self.source_ip = private_source_ip(source_ip)
         self.ffmpeg_path = executable_path(ffmpeg_path)
@@ -349,6 +438,12 @@ class AiPortIngress:
                                         "reader_stopped": 0,
                                         "no_recent_frame": 0}
         self.restart_failures: dict[str, int] = {}
+        self.audio_observer = audio_observer
+        self._audio: _AudioSession | None = None
+        self._audio_retry_at = 0.0
+        self._audio_delay = 5.0
+        self.audio_starts = 0
+        self.audio_failures = 0
 
     async def control(self, payload: object) -> dict:
         if not isinstance(payload, dict) or "streaming" not in payload:
@@ -397,6 +492,7 @@ class AiPortIngress:
             self.last_decoder_error_terms = ()
             self._session = session
             self._desired_spec = spec
+            await self._restart_audio_locked(spec)
             self._restart_task = asyncio.create_task(self._watch_decoder())
             return {"status": "started", "usedPoints": spec.points}
 
@@ -411,6 +507,10 @@ class AiPortIngress:
                     return
                 if self._session is not None and self._session.healthy:
                     delay = 1
+                    if (self.audio_observer is not None
+                            and (self._audio is None or not self._audio.alive)
+                            and time.monotonic() >= self._audio_retry_at):
+                        await self._restart_audio_locked(spec)
                     continue
                 previous = self._session
                 if previous is not None:
@@ -453,7 +553,35 @@ class AiPortIngress:
                 self.last_decoder_error_terms = ()
                 self._session = session
                 self.restart_successes += 1
+                await self._restart_audio_locked(spec)
                 delay = 1
+
+    async def _restart_audio_locked(self, spec: StreamSpec) -> None:
+        """(Re)start the audio decoder with backoff; never raises."""
+        if self.audio_observer is None:
+            return
+        if self._audio is not None:
+            if self._audio.chunks == 0:
+                self.audio_failures += 1
+                self._audio_delay = min(self._audio_delay * 2, 300.0)
+            else:
+                self._audio_delay = 5.0
+            await self._audio.close()
+            self._audio = None
+        self._audio_retry_at = time.monotonic() + self._audio_delay
+        audio = _AudioSession(spec, self.ffmpeg_path, self.audio_observer)
+        try:
+            await audio.start()
+        except OSError:
+            self.audio_failures += 1
+            await audio.close()
+            return
+        self._audio = audio
+        self.audio_starts += 1
+
+    @property
+    def audio_ready(self) -> bool:
+        return self._audio is not None and self._audio.ready
 
     def list_streams(self) -> list[dict]:
         session = self._session
@@ -507,6 +635,9 @@ class AiPortIngress:
         return self.observer_failures > 0 or bool(self._session and self._session.observer_failed)
 
     async def _close_locked(self) -> None:
+        if self._audio is not None:
+            await self._audio.close()
+            self._audio = None
         if self._session is not None:
             await self._session.close()
             self.total_frames_decoded += self._session.frame_count
@@ -537,6 +668,8 @@ class AiPortIngressPool:
 
     def __init__(self, policies: list[dict[str, str]], *,
                  frame_observer_factory: Callable[
+                     [str], Callable[[bytes], Awaitable[None]] | None] | None = None,
+                 audio_observer_factory: Callable[
                      [str], Callable[[bytes], Awaitable[None]] | None] | None = None):
         if not isinstance(policies, list) or not 1 <= len(policies) <= 5:
             raise IngressError("invalid_camera_pool")
@@ -550,9 +683,12 @@ class AiPortIngressPool:
                 raise IngressError("duplicate_camera")
             observer = (frame_observer_factory(camera_mac)
                         if frame_observer_factory is not None else None)
+            audio = (audio_observer_factory(camera_mac)
+                     if audio_observer_factory is not None else None)
             self._ingresses[camera_mac] = AiPortIngress(
                 camera_mac=camera_mac, source_ip=policy["source_ip"],
-                ffmpeg_path=policy["ffmpeg_path"], frame_observer=observer)
+                ffmpeg_path=policy["ffmpeg_path"], frame_observer=observer,
+                **({"audio_observer": audio} if audio is not None else {}))
         self._lock = asyncio.Lock()
 
     async def control(self, payload: object) -> dict:
@@ -589,7 +725,7 @@ class AiPortIngressPool:
         result = []
         for camera in camera_order:
             ingress = self._ingresses[camera]
-            result.append({
+            row = {
                 "stream_active": bool(ingress.list_streams()),
                 # Capacity points reserved for the stream Protect requested.
                 "stream_points": ingress.reserved_points,
@@ -599,8 +735,16 @@ class AiPortIngressPool:
                 "stream_restart_observed_states": dict(
                     ingress.restart_observed_states),
                 "stream_restart_failures": dict(ingress.restart_failures),
-            })
+            }
+            if getattr(ingress, "audio_observer", None) is not None:
+                row["audio"] = {"ready": ingress.audio_ready, "starts": ingress.audio_starts,
+                                "failures": ingress.audio_failures}
+            result.append(row)
         return tuple(result)
+
+    def audio_ready(self, camera_mac: str) -> bool:
+        ingress = self._ingresses.get(camera_mac)
+        return bool(getattr(ingress, "audio_ready", False))
 
     @property
     def reserved_points(self) -> int:
