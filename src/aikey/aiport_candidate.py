@@ -2148,7 +2148,7 @@ class CandidateService:
                      "responseExpected": False, "functionName": function,
                      "messageId": self._next_message_id, "inResponseTo": 0,
                      "payload": payload}
-            if function in {"EventSmartDetect", "EventSmartMotion"}:
+            if function in {"EventSmartDetect", "EventSmartMotion", "EventSmartAudio"}:
                 # Protect reads this envelope field when routing a smart
                 # detection; keep it aligned with the payload's clockWall.
                 event["timeStamp"] = datetime.fromtimestamp(

@@ -60,9 +60,11 @@ class FaceResult:
         # vocabulary made Protect drop the whole event message (28 Sep).
         return {"objectType": "face", "trackerId": track_id, "zone": list(zone_ids),
                 "faceEmbed": [round(value, 6) for value in self.embedding],
-                "faceLandmarks": points, "qualityScore": round(self.quality * 100, 1),
+                "faceLandmarks": points, "qualityScore": round(self.quality * 100),
                 "blurness": round(self.blurness * 100, 1), "facePose": dict(self.pose),
-                "faceMask": {"val": "face", "confidence": round(self.score, 3)},
+                # Protect's detection service parses both as u8 (0..100); a
+                # float here dropped the whole event message (ds.log, 28 Sep).
+                "faceMask": {"val": "face", "confidence": round(self.score * 100)},
                 # The same six checks Protect stores for an onboard face; lower
                 # is better, as in its records.
                 "faceVerifyStatus": [
@@ -83,7 +85,7 @@ class FaceResult:
                           round((x2 - x1) * 1000), round((y2 - y1) * 1000)],
                 "objectType": "face", "zones": list(zone_ids), "lines": [],
                 "stationary": False, "coord3d": [],
-                "attributes": {"faceMask": {"val": "face", "confidence": round(self.score, 3)}}}
+                "attributes": {"faceMask": {"val": "face", "confidence": round(self.score * 100)}}}
 
 
 def verify_model(path: str, sha256: str) -> str:
