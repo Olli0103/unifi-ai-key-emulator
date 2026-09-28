@@ -305,3 +305,20 @@ Also accept:
 - Whether Protect dispatches one caption task per smart event on these families under continuous admission.
 - Native persistence under continuous operation, a restart and multi-day endurance.
 - The effect on events that already carry native tags.
+
+## Status 28 Sep 2026: activated for all cameras (owner decision)
+
+Olli chose captions "for all cameras" instead of the staged 4a/4b.
+
+**Change (08:55 UTC):**
+- Backup: `state/apple-captions-all-backup-20260928T085300Z`, with the live `config.json` sha256 prefix `82390fffd714`.
+- `config.json`: `controller.protect_version` set to 7.3.68; the consumed one-use `test_scopes` removed; `worker.continuous` added with all 8 camera models and all 11 camera IDs.
+- One same-container restart.
+
+**Readback, read-only, within the first 30 minutes:**
+- **Registry:** 10 eligible cameras; Wohnzimmer alt is offline.
+- **Budget:** 8 reservations in the last hour and in 24 h, against 12 and 288.
+- **First captions from AI Port-sourced events:** Protect saved them (`ramState` done with a non-empty `ramDescription`) on Einfahrt (3), Flur (1) and Haustür (1). This is the 4b question, answered: Protect does keep captions of AI Port events.
+- **Preflight abort code:** `caption_without_reservation` = 1. It is the baseline recognizeKeyFrames job that failed at 05:4x UTC, before activation, on a media 404 (no provider call). It drops out of the 24 h window on 29 Sep. Treat any **growth** of that count as a real abort.
+
+**Undo:** restore the backup `config.json` byte for byte and restart the Key once.

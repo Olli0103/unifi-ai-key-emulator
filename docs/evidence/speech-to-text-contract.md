@@ -113,10 +113,20 @@ This was a read-only pass in a signed-in console session. It read settings, capa
 - **Health:** the `speech` block holds counts only.
 - **Tests:** synthetic positive and negative tests in `tests/test_aiport_speech.py`.
 
-**Still `needs_evidence` (live):**
-- that Protect 7.3.68 behaves as 7.3.60 here;
-- that the relay alias carries an audio track;
-- the detector's real-world recall and false triggers.
+**Live on Protect 7.3.68 (Mac AI Port, 28 Sep 2026):**
+- **Audio:** the relay aliases of Flur, Büro and Schlafzimmer carry audio; all three decoders were ready within seconds.
+- **Capability:** Protect copied the advertised `alrmSpeak` onto the three paired cameras (`smartDetectAudioTypes`).
+- **Settings:** after Speech was enabled per camera (`smartDetectSettings.audioTypes`), Protect pushed `ChangeAudioEventsSettings`.
+  - On the first deploy one camera never got a push, which the readiness pulse (d85141a) now covers.
+  - After the redeploy all three were enabled.
+- **AI Key:** Speech to Text covers Wohnzimmer, Flur, Büro and Schlafzimmer on both sides: Protect's setting and the Key's `camera_ids`.
+- **First native speech on AI Port-paired cameras:**
+  - **Büro 09:24 UTC:** a `smartAudioDetect` event with `alrmSpeak`, `sttState` done and **1** transcription row. The Key job for it posted **1** segment. The exact-event count matches.
+  - **Flur:** 1 event done, 1 row.
+  - **Failures:** early Büro failures came from the two Key restarts and from Protect's HTTP 503 on just-ended exports, which is now retried (bff4627).
+- **Still `needs_evidence`:**
+  - the detector's precision and recall over a day;
+  - the six NAS cameras, which need the NAS redeploy (Compose blocker, #6).
 
 **Acceptance per camera:** a new `smartAudioDetect` event on the original camera with `alrmSpeak`; `sttState` done; and an exact-event transcription row count equal to the Key's posted segment count. Count only, no text.
 
