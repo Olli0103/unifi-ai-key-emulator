@@ -71,3 +71,37 @@ Result: between 10:41 and 10:48, four real speech events each dispatched `speech
 - **Protect readback:** `GET /proxy/protect/api/events/<event>/transcriptions?camera=<camera>` returned exactly 10, 13, 6 and 6 rows. Every row has text, and its start and end fall inside its event.
 - **Event metadata:** `sttState: done`, `sttDetected: true`, `sttSearchable: true`.
 - **Privacy:** only counts and time bounds were read; no transcript text was inspected.
+
+## All-camera speech eligibility on Protect 7.3.68 (28 Sep 2026, #15 and #28)
+
+This was a read-only pass in a signed-in console session. It read settings, capability flags and event counts only. No audio was fetched, no transcript text was read, and no setting was changed.
+
+**Settings on both sides agree on one camera.** The AI Key's `speechToTextSettings` is enabled, `allCameras` is false, and it lists exactly one camera, Wohnzimmer. That is the per-row Speech to Text microphone under Intelligence › Basic Understanding. The deployed Key's `speech_to_text.camera_ids` holds the same single camera (hash-matched), with the local Whisper backend.
+
+| Camera | Paired | Protect-advertised audio types | Speech to Text row | State |
+|---|---|---|---|---|
+| Wohnzimmer (G6 Instant) | no | 9 supported, `alrmSpeak` on | on | **eligible and active** |
+| Wohnzimmer alt (G4 Instant) | no | 5 supported, `alrmSpeak` on | off | **supported but offline** (disconnected since March 2025) |
+| Einfahrt, Flur, Garage, Büro, Esszimmer, Schlafzimmer, Giebel Vorn, Haustür, Giebel hinten | yes | none | off | **unsupported while paired** |
+
+**Why the nine show no audio types.**
+- **Pairing masks native detection.** For a paired camera, Protect takes the capability flags from the AI Port's per-camera flag map. On all four AI Ports, every map entry reports an empty `smartDetectAudioTypes` and `hasMic: false`, even though every camera reports a microphone of its own.
+- **Garage shows it is pairing, not hardware.** Garage (G4 Dome) raised 109 native `alrmSpeak` events between 23 Sep 14:14 and 24 Sep 16:43 UTC, and none since. The NAS AI Port project was created about 40 minutes after the last one. Those events carried no speech task, because Garage was not in the speech settings.
+- **Model hint for Esszimmer.** Esszimmer is the same model as Wohnzimmer alt, which advertises `alrmSpeak` unpaired.
+- **So "no smart-audio types" is a pairing effect.** The earlier record said the nine paired cameras had none. Where hardware support exists, it is hidden by pairing.
+
+**Recent native speech (7 days to 28 Sep 07:30 UTC):**
+- Wohnzimmer: 664 `alrmSpeak` events, of which 529 have speech state `done` and 132 `failed`; 3 had no state yet.
+- No other camera had any `smartAudioDetect` event.
+
+**Route for the nine: `needs_evidence`.**
+- Protect has only one speech trigger, an `alrmSpeak` audio event on the camera. While a camera is paired, only the AI Port could raise that event.
+- The AI Port object carries the hooks for it: `isAudioIncluded`, per-camera `smartDetectAudioTypes`, `ChangeAudioEventsSettings` and `isAudioEventReady` in `EventAIPortStatus`.
+- The rest is unknown: the key that advertises audio types in `EventFeatureFlagsUpdated`, the audio event message and its payload, and how Protect attributes that event to the original camera.
+- This emulator decodes no audio and always reports `isAudioEventReady: false`.
+- Closing this needs static evidence from the 7.3.68 controller package, which is an approval-gated download, or a vendor AI Port capture. Only then can a synthetic-tested AI Port speech detector be written.
+- Until then, advertising audio types or widening `camera_ids` would change nothing, or would claim a capability the device cannot deliver.
+
+**What does not need that evidence** (owner decisions, not taken here):
+- Unpairing a camera would bring back its own `alrmSpeak`, at the cost of its AI Port object detection.
+- Wohnzimmer alt would become eligible if it came back online and its Speech to Text row were turned on.
