@@ -371,3 +371,52 @@ async def test_unmetered_captions_are_not_limited_to_twelve_an_hour(services, tm
         release.set()
         await worker.wait_for_idle()
         await worker.stop()
+
+
+def on_demand(camera="camera-fixture", **query_changes):
+    from urllib.parse import urlencode
+    query = {"camera": camera, "channel": "0", "type": "rotating", "mute": "true",
+             "format": "ubv", "createEvent": "false", "event": "event-fixture",
+             "start": "1000", "end": "11000"}
+    query.update(query_changes)
+    return {"targetUri": ":7968/on_demand_inference", "timeoutMs": 30000,
+            "resUrl": "/internal/camera-upload/summary-token",
+            "payload": {"cameraId": camera, "eventId": "event-fixture", "timestamp": 6000,
+                        "videoUrl": "/internal/aiprocessors/video/export?" + urlencode(query)}}
+
+
+async def test_the_player_summary_button_works_in_continuous_mode(services, tmp_path, monkeypatch):
+    config = continuous_options(services, tmp_path)
+    config["worker"]["continuous"]["unmetered"] = True
+    worker = JobProcessor(config, tmp_path, camera_registry=MutableRegistry("camera-fixture"))
+    try:
+        normalized = worker._normalize(on_demand())
+        assert normalized[2] == "on_demand" and normalized[5] == "on_demand"
+        for bad in (on_demand(camera="other-camera"),            # not in caption scope
+                    on_demand(end="99000"),                      # longer than 10 s
+                    on_demand(createEvent="true"),
+                    dict(on_demand(), targetUri=":7968/describe")):
+            with pytest.raises(WorkerError):
+                worker._normalize(bad)
+    finally:
+        await worker.stop()
+
+
+async def test_a_metered_summary_reserves_the_paid_budget(services, tmp_path, monkeypatch):
+    config = continuous_options(services, tmp_path)
+    worker = JobProcessor(config, tmp_path, camera_registry=MutableRegistry("camera-fixture"))
+    release = asyncio.Event()
+
+    async def execute(job):
+        await release.wait()
+        return {"status": "processed"}
+
+    monkeypatch.setattr(worker, "_execute", execute)
+    try:
+        assert (await worker.submit(on_demand()))["accepted"] is True
+        reservations = json.loads((tmp_path / "caption-budget.json").read_text())["reservations"]
+        assert len(reservations) == 1
+    finally:
+        release.set()
+        await worker.wait_for_idle()
+        await worker.stop()

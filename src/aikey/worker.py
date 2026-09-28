@@ -728,9 +728,11 @@ class JobProcessor:
             if not (self.find_anything and self.find_anything.get("reverification") is True):
                 raise WorkerError("Unsupported RequestAI targetUri")
             return self._normalize_reverification(command)
-        if self.continuous:
-            raise WorkerError("Continuous mode accepts only automatic video captions")
         target = command.get("targetUri")
+        if self.continuous and target != ":7968/on_demand_inference":
+            # The player's "AI summary" button is the one on-demand route
+            # continuous mode also serves; other RequestAI forms stay off.
+            raise WorkerError("Continuous mode accepts only automatic video captions")
         if target not in {":7968/describe", ":7968/on_demand_inference"}:
             raise WorkerError("Unsupported RequestAI targetUri")
         body = command.get("payload")
@@ -775,6 +777,11 @@ class JobProcessor:
             else:
                 raise WorkerError("Description callbacks require a task or legacy RAM route")
         self._validate_test_scope(operation, body, media)
+        if self.continuous:
+            if (self.camera_registry is None
+                    or not self.camera_registry.allows(body["cameraId"])):
+                raise WorkerError("On-demand summary camera is not in the caption scope")
+            self._validate_on_demand_export(body, media)
         timeout_ms = command.get("timeoutMs", self.timeout_s * 1000)
         if type(timeout_ms) is not int or timeout_ms <= 0:
             raise WorkerError("timeoutMs must be positive")
@@ -799,6 +806,10 @@ class JobProcessor:
         if (scope is None or scope.get("kind", "on_demand") != "on_demand"
                 or operation != "on_demand"):
             raise WorkerError("Test scope permits only on-demand work for its configured camera")
+        self._validate_on_demand_export(body, media)
+
+    def _validate_on_demand_export(self, body, media):
+        """One video export of the AI processor route around the requested moment."""
         if len(media) != 1 or media[0][0] != "video":
             raise WorkerError("Test scope requires one video export")
         parsed = urlsplit(media[0][1])
@@ -1398,7 +1409,7 @@ class JobProcessor:
         job_id, fingerprint, operation, body, callback, kind, media, budget = normalized
         if (self.continuous and operation not in {"speechToText", "recognizeFaces", "indexKeyFrames",
                                                   "indexImages", "reverify"}
-                and not self.camera_registry.allows(body["camera"])):
+                and not self.camera_registry.allows(body.get("camera", body.get("cameraId")))):
             raise WorkerError("Camera inventory changed before admission")
         if job_id in self._pending:
             job = self._pending[job_id]
@@ -1438,7 +1449,7 @@ class JobProcessor:
                                                                      "indexKeyFrames", "indexImages",
                                                                      "reverify"}:
                 try:
-                    receipt = self.caption_budget.reserve(job_id, fingerprint, body["camera"],
+                    receipt = self.caption_budget.reserve(job_id, fingerprint, body.get("camera", body.get("cameraId")),
                                                           self.camera_registry.allowed_ids)
                 except CaptionBudgetExhausted as exc:
                     self.captions["exhausted"] += 1
