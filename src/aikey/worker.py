@@ -409,6 +409,10 @@ class JobProcessor:
         self.max_audio_ms = self._positive("max_audio_ms", 120000)
         # A local CPU Whisper needs about real time; keep speech off the caption timeout.
         self.speech_timeout_s = min(self._positive("speech_timeout_s", 300), 900)
+        # Key-moment captions got 30 s, enough for a cloud model. A local
+        # model reading several frames needs longer (28 Sep: about 25 s per
+        # frame on the NAS iGPU), so the owner can raise it.
+        self.caption_timeout_s = min(self._positive("caption_timeout_s", 30), 600)
         self.faces = self._face_config(self.config.get("face_recognition"), Path(state_dir))
         self.enhance = self._enhance_config(self.config.get("face_enhancement"))
         self.find_anything, self.index_cameras, self._clip = None, frozenset(), None
@@ -885,7 +889,7 @@ class JobProcessor:
         fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
         job_id = hashlib.sha256(f"recognizeKeyFrames:{body['camera']}:{body['event']}".encode()).hexdigest()
         return (job_id, fingerprint, "recognizeKeyFrames", body, callback, callback_kind,
-                media, min(self.timeout_s, 30))
+                media, min(self.timeout_s, self.caption_timeout_s))
 
     def _index_targets(self, body):
         """Objects of a key-moment task to embed for Find Anything.

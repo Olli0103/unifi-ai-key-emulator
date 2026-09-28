@@ -420,3 +420,17 @@ async def test_a_metered_summary_reserves_the_paid_budget(services, tmp_path, mo
         release.set()
         await worker.wait_for_idle()
         await worker.stop()
+
+
+async def test_caption_timeout_is_configurable_for_slow_local_models(services, tmp_path):
+    config = continuous_options(services, tmp_path)
+    worker = JobProcessor(config, tmp_path, camera_registry=MutableRegistry("camera-fixture"))
+    assert worker.caption_timeout_s == 30
+    await worker.stop()
+    config["worker"].update(caption_timeout_s=180, timeout_s=300)
+    worker = JobProcessor(config, tmp_path, camera_registry=MutableRegistry("camera-fixture"))
+    assert worker.caption_timeout_s == 180
+    await worker.stop()
+    config["worker"]["caption_timeout_s"] = 0
+    with pytest.raises(WorkerError):
+        JobProcessor(config, tmp_path, camera_registry=MutableRegistry("camera-fixture"))
