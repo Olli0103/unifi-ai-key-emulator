@@ -69,6 +69,20 @@ Each action below is **one approval**. Each lists exactly what it reads, writes,
 
 ## Action 1: archive the 54 reviewed index callbacks
 
+**Status: DONE, 28 Sep 2026 04:01 UTC, approved by Olli.**
+- `apply` returned `{"archived": 54, "already_archived": 0, "records": 54}` against digest `92bc7c3b…a223`, with the Key held, stopped (independently verified) and restarted on the same container and image.
+- Backup: `state/apple-uncertain-backup-20260928T040127Z/` (0700; 54 files at 0600 plus a checksummed manifest; git-ignored).
+- **Verified afterwards:**
+  - 54 valid `completed` tombstones and 0 of the records left active; journal 531 → 475 (plus natural rollover), tombstones 2,693 → 2,749;
+  - preflight `uncertain_callbacks_pending` gone, leaving only activation and acceptance blockers;
+  - Key adopted, connected, search connected and idle;
+  - `config.json` and `search-profile.json` unchanged; index rows 4,645 unchanged; native class search 100/78/78/7 unchanged;
+  - supervisor pin unchanged and hold released; four AI Ports connected (3/2/2/2), nine streams decoding.
+- `device-state.json` changed only through Protect's routine reconnect credential rotation (`changeUserPassword`, result 0, as on every connection): no schema backup, and the same identity keys.
+- Rollback remains available with that backup (`rollback --key-stopped`).
+
+The checklist below is kept as the record of what was run.
+
 **Current preflight (read-only, 27 Sep ~21:26 UTC); the digest is still valid.**
 - `aikey-uncertain-resolution plan` recomputed against the live journal, archive and search DB:
   - 54 records, all `indexImages` (local CLIP, no provider cost), all `archive_as_completed`;
