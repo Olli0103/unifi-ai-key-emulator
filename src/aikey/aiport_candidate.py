@@ -849,12 +849,17 @@ class CandidateService:
             self._speech_announced.add(camera_mac)
             self._speech_announced_at[camera_mac] = now
             await self._send_stream_status(ws, streaming=True, camera_mac=camera_mac)
-        elif (camera_mac not in self._speech_settings_seen
-              and now - self._speech_announced_at.get(camera_mac, now) >= 60
-              and self._speech_reannounces.get(camera_mac, 0) < 3):
-            # Protect pushes settings only on a not-ready -> ready change; if
-            # an earlier status overtook the announcement it never pushed.
-            # Pulse readiness, at most three times per camera.
+        elif ((camera_mac not in self._speech_settings_seen
+               and now - self._speech_announced_at.get(camera_mac, now) >= 60
+               and self._speech_reannounces.get(camera_mac, 0) < 3)
+              or (camera_mac in self._speech_settings_seen
+                  and not self._speech_enabled.get(camera_mac)
+                  and now - self._speech_announced_at.get(camera_mac, now) >= 600)):
+            # Protect pushes settings only on a not-ready -> ready change, and
+            # on 7.3.68 it skipped the push after a Speech toggle for four of
+            # six NAS cameras. Pulse readiness: up to three times, a minute
+            # apart, while no settings arrived; then every ten minutes while
+            # Speech stays off, so a later owner toggle is picked up.
             self._speech_reannounces[camera_mac] = self._speech_reannounces.get(camera_mac, 0) + 1
             self._speech_announced_at[camera_mac] = now
             self.speech_reannounces += 1

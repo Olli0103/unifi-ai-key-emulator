@@ -341,3 +341,26 @@ async def test_a_camera_without_settings_gets_a_bounded_readiness_pulse(tmp_path
         assert service._speech_camera_health(OTHER) == {}
     finally:
         await service.stop()
+
+
+async def test_a_disabled_camera_is_pulsed_every_ten_minutes_until_enabled(tmp_path, monkeypatch):
+    import aikey.aiport_candidate as candidate
+    service, sink = await service_for(tmp_path)
+    now = [800.0]
+    monkeypatch.setattr(candidate.time, "monotonic", lambda: now[0])
+    quiet = pcm(noise(0.3))
+    try:
+        await service._observe_pool_audio(CAMERA, quiet)                   # announce
+        await audio_settings(service, sink, 60, enableAlrmSpeak=0)         # Protect: off
+        now[0] += 300
+        await service._observe_pool_audio(CAMERA, quiet)
+        assert len(sink.events("EventAIPortStatus")) == 1                   # not yet
+        now[0] += 301
+        await service._observe_pool_audio(CAMERA, quiet)
+        assert [s["isAudioEventReady"] for s in sink.events("EventAIPortStatus")] == [True, False, True]
+        await audio_settings(service, sink, 61)                            # owner turned it on
+        now[0] += 3600
+        await service._observe_pool_audio(CAMERA, quiet)
+        assert len(sink.events("EventAIPortStatus")) == 3                   # enabled: quiet
+    finally:
+        await service.stop()
