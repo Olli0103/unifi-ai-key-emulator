@@ -324,5 +324,9 @@ class FairInference:
                                         if callable(getattr(self._model,
                                                             "diagnostic_counts", None))
                                         else None),
+                # Per-minute provider-gate measurements and outcomes (#6).
+                "gate_history": (self._model.gate_history(camera)
+                                 if callable(getattr(self._model, "gate_history", None))
+                                 else []),
             })
         return tuple(result)

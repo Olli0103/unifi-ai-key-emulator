@@ -31,7 +31,7 @@ from .aiport_ingest import (
 )
 from .aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
 from .aiport_api_detection import ApiObjectDetector, _frame_mode
-from .aiport_motion import (MotionDetector, MotionSettingsError,
+from .aiport_motion import (MotionDetector, MotionSettingsError, MotionTimeline,
                             motion_event_payload, parse_motion_settings)
 from .aiport_onnx_detection import OnnxRFDetrNanoDetector
 from .aiport_camera_engine import (
@@ -588,6 +588,8 @@ class CandidateService:
         self.smart_motion_events_started = 0
         self.smart_motion_events_stopped = 0
         self._pool_motion: dict[str, MotionDetector] = {}
+        # Per-minute motion measurements per camera; kept across settings pushes (#6).
+        self._pool_motion_timeline: dict[str, MotionTimeline] = {}
         self.smart_motion_probe_requests = 0
         self.smart_motion_probe_acks = 0
         self.smart_motion_probe_zones = 0
@@ -770,6 +772,9 @@ class CandidateService:
                     detector.observe, frame, now=time.monotonic())
             except MotionSettingsError:
                 edges = ()
+            else:
+                self._pool_motion_timeline.setdefault(camera_mac, MotionTimeline()).record(
+                    detector, edges)
             await self._publish_motion_edges(camera_mac, edges)
         engine, inference = self._camera_engine, self._inference
         if (engine is None or inference is None
@@ -965,8 +970,13 @@ class CandidateService:
             self.smart_motion_settings_rejected += 1
             return
         previous = self._pool_motion.get(camera)
+        timeline = self._pool_motion_timeline.setdefault(camera, MotionTimeline())
         if previous is not None:
-            await self._publish_motion_edges(camera, previous.stop(now=time.monotonic()))
+            edges = previous.stop(now=time.monotonic())
+            for edge in edges:
+                timeline.history.count("stops" if edge.edge == "stop" else "starts")
+            await self._publish_motion_edges(camera, edges)
+            timeline.settings_reset()
         self._pool_motion[camera] = MotionDetector(policy)
         await self._reply_control(ws, "ChangeSmartMotionSettings", request_id, 0, {})
         self.smart_motion_settings_acks += 1
@@ -1665,7 +1675,11 @@ class CandidateService:
                                     motion=(self._pool_motion[
                                         self._pool_camera_order[index]].snapshot()
                                         if self._pool_camera_order[index]
-                                        in self._pool_motion else None))
+                                        in self._pool_motion else None),
+                                    motion_history=(self._pool_motion_timeline[
+                                        self._pool_camera_order[index]].snapshot()
+                                        if self._pool_camera_order[index]
+                                        in self._pool_motion_timeline else []))
                               for index, (inference, policy, stream) in enumerate(zip(
                                   self._inference.camera_snapshot(),
                                   self._camera_engine.camera_snapshot(now=time.monotonic()),

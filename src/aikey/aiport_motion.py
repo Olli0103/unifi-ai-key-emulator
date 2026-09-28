@@ -18,6 +18,7 @@ import re
 from PIL import Image, UnidentifiedImageError
 
 from .aiport_ingest import IngressError, normalize_mac
+from .aiport_timeline import MinuteHistory
 
 
 _GRID_W, _GRID_H = 64, 36
@@ -152,6 +153,11 @@ class MotionDetector:
         self.change_bands = dict.fromkeys((name for name, _ in _BANDS), 0)
         self.starts = 0
         self.stops = 0
+        # The last frame's measurement, for the per-minute timeline (#6):
+        # "baseline", "disabled", "scene_change" or "measured".
+        self.last_kind: str | None = None
+        self.last_peak_permille: int | None = None
+        self.last_threshold_permille: int | None = None
 
     @property
     def active(self) -> bool:
@@ -173,13 +179,19 @@ class MotionDetector:
         if type(now) not in (int, float) or not math.isfinite(now):
             raise MotionSettingsError("invalid_motion_time")
         policy = self.policy
+        self.last_peak_permille = None
+        self.last_threshold_permille = (
+            round(1000 * min(_MIN_FRACTION + _FRACTION_RANGE * zone.level / 100
+                             for zone in policy.zones)) if policy.zones else None)
         if not policy.enabled or not policy.zones:
+            self.last_kind = "disabled"
             return self.stop(now=now) if self.active else ()
         thumbnail = self._thumbnail(frame)
         self.frames += 1
         background = self._background
         if background is None:
             self._background = [float(value) for value in thumbnail]
+            self.last_kind = "baseline"
             return ()
         changed = {index for index, value in enumerate(thumbnail)
                    if abs(value - background[index]) >= _PIXEL_DELTA}
@@ -189,10 +201,13 @@ class MotionDetector:
         if len(changed) >= _SCENE_CHANGE_FRACTION * len(thumbnail):
             self.scene_changes += 1
             self._background = [float(value) for value in thumbnail]
+            self.last_kind = "scene_change"
         else:
             fractions = [len(changed & zone.cells) / len(zone.cells)
                          for zone in policy.zones]
             peak = max(fractions)
+            self.last_kind = "measured"
+            self.last_peak_permille = round(1000 * peak)
             self.change_bands[next(name for name, limit in _BANDS
                                    if peak < limit)] += 1
             for zone, fraction in zip(policy.zones, fractions):
@@ -239,6 +254,52 @@ class MotionDetector:
                 "scene_changes": self.scene_changes,
                 "change_bands": dict(self.change_bands),
                 "starts": self.starts, "stops": self.stops}
+
+
+class MotionTimeline:
+    """Per-camera, per-minute motion measurements that outlive settings pushes.
+
+    ``ChangeSmartMotionSettings`` replaces the camera's ``MotionDetector``
+    (and resets its lifetime counters); this history is kept and counts each
+    push as ``settings_resets``, so a visit before and after a push stays
+    comparable. Per minute: frames measured, the peak changed fraction of the
+    most sensitive zone and the start threshold (both per mille), frames at or
+    above threshold, near misses (at least half the threshold), scene changes,
+    starts and stops.
+    """
+
+    def __init__(self, *, clock=None):
+        kwargs = {"clock": clock} if clock is not None else {}
+        self.history = MinuteHistory(
+            ("frames", "near_miss", "over_threshold", "scene_changes", "starts", "stops",
+             "settings_resets", "disabled"),
+            maxima=("peak_permille",), latest=("threshold_permille",), **kwargs)
+
+    def record(self, detector: MotionDetector, edges: tuple[MotionEdge, ...]) -> None:
+        kind, peak = detector.last_kind, detector.last_peak_permille
+        threshold = detector.last_threshold_permille
+        history = self.history
+        if kind == "disabled":
+            history.count("disabled")
+        elif kind in {"baseline", "measured", "scene_change"}:
+            history.count("frames")
+            history.set("threshold_permille", threshold)
+            if kind == "scene_change":
+                history.count("scene_changes")
+            elif kind == "measured" and peak is not None:
+                history.maximum("peak_permille", peak)
+                if threshold is not None and peak >= threshold:
+                    history.count("over_threshold")
+                elif threshold is not None and 2 * peak >= threshold:
+                    history.count("near_miss")
+        for edge in edges:
+            history.count("starts" if edge.edge == "start" else "stops")
+
+    def settings_reset(self) -> None:
+        self.history.count("settings_resets")
+
+    def snapshot(self) -> list[dict[str, int | None]]:
+        return self.history.snapshot()
 
 
 def motion_event_payload(camera_mac: str, edge: MotionEdge, *,

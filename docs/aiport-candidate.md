@@ -263,3 +263,41 @@ A third bounded trial used a fresh one-use permit on the same private recording 
 For a hello-only provisioning probe, the candidate answers empty `ChangeVideoSettings` and `ChangeIspSettings` queries with a minimal no-camera profile. Protect 7.3.60 requested both in that order during a no-camera trial. `unlisted_envelope_counts` divides other functions into request, response and other shapes without saving their names or payloads. The fixed allowlist also counts `StartService`, `StopService`, `UpdateUsernamePassword` and `ChangeSoundLedSettings`, which Protect 7.2.105 may send after provisioning. Because this container has no SSH server, it acknowledges a request to stop SSH and rejects a request to start it. An exact `UpdateUsernamePassword` payload received during an expiring diagnostic is acknowledged only after its SHA-512 crypt hash is atomically stored in a mode-600 private file. The candidate never stores the plain password. HTTPS `/api/1.2/login` checks the new password, and `/api/1.2/manage` rejects incorrect credentials. Sessions are short-lived, rate-limited and invalidated on rotation. The container includes OpenSSL for verification of the controller's hash format. In a no-camera Protect 7.3.60 trial, the candidate persisted one credential rotation and replied successfully; Protect then sent `ChangeSoundLedSettings`. Native login and subsequent provisioning remain `needs_evidence`. The diagnostic ended with the candidate passive and no camera paired. These replies do not prove adoption or durable operation.
 
 The candidate now accepts the exact AI Port `ChangeSoundLedSettings` and timezone-only `ChangeDeviceSettings` payloads during that same expiring diagnostic. It validates and persists them as private logical state before replying. This container has no physical LED or speaker; these replies do not claim a light or sound occurred. Protect 7.3.60 accepted both replies in no-camera trials. A subsequent five-minute, single-Flur trial paired the camera, decoded 129 frames without a reported stream error, and received an explicit stop when Flur was unpaired. No control reconnect happened during that brief interval. The camera returned to Online HD/Adaptive, the separate AI Key remained Online, and the candidate restarted passively with zero frames. This demonstrates bounded initial streaming after the settings sequence, not permanent operation, adoption, smart detection, or AI Port feature parity.
+
+## Correlating a visit with the motion and provider gates (#6)
+
+Each `pool_cameras[i]` in `/healthz` carries two per-minute histories covering the last 180 minutes that saw frames. Every bucket is `{"minute": <UTC minutes since the epoch>, …}`, with integer counters or maxima only: never a frame, provider text, camera identity or address.
+
+**`motion_history`**: the local motion stage that sends Protect's native Motion (`EventSmartMotion`) for a paired camera.
+- `frames`: frames measured.
+- `peak_permille`: the largest changed fraction of the most sensitive zone, in per mille.
+- `threshold_permille`: that zone's start threshold. Sensitivity 50 is 17.
+- `over_threshold`: frames at or above the threshold.
+- `near_miss`: frames at or above half the threshold but below it.
+- `scene_changes`, `starts`, `stops`.
+- `settings_resets`: a `ChangeSmartMotionSettings` push replaced the detector. The detector's lifetime `motion` counters reset then; this history does not.
+- `disabled`.
+
+**`gate_history`**: the frame-difference gate in front of paid provider requests.
+- `frames`.
+- `peak_cells`: the largest number of changed cells in a 32 × 18 grid.
+- `threshold_cells`: currently 8.
+- `quiet`, `near_miss` (at least 4 cells), `over_threshold`.
+- `opened`: the gate asked for a request.
+- `backoff_skipped`, `deferred`.
+- `requests`, and their outcomes: `empty`, `low` (below the score threshold), `objects`, `failed`.
+
+**For a reported visit at time T** (UTC), read the bucket with `minute == floor(T / 60)` and its neighbours:
+
+| What the buckets show | Stage that rejected the visit |
+|---|---|
+| Motion `peak_permille` below `threshold_permille`, `near_miss` at 0 | the change was too small for the motion stage (size, distance, edge) |
+| Motion `near_miss` above 0, no `over_threshold` | close, but below the motion start threshold |
+| Motion `over_threshold` above 0, `starts` at 0 | shorter than the start linger |
+| Gate `peak_cells` below 8, `opened` at 0 | no provider request (gate threshold) |
+| Gate `opened` above 0 with `backoff_skipped` or `deferred` | request suppressed by back-off or budget |
+| Gate `requests` with `empty` or `low` | the provider did not see, or scored low, the object |
+| Gate `objects` above 0 but no Protect smart event | tracking or zone stage (see `zone_rejections`, `unconfirmed_by_kind`) |
+
+A standing subject fades into the motion background within a few samples, so compare the arrival minute, not only later minutes.
+

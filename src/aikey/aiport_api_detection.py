@@ -24,6 +24,7 @@ from PIL import Image, UnidentifiedImageError
 from .aiport_detection import ObjectObservation
 from .aiport_plates import normalize_plate
 from .aiport_event_budget import EventBudget
+from .aiport_timeline import MinuteHistory
 from .aiport_tracking import TrackingError, validate_observation
 from .providers import ProviderError, image_mime, validate_inference_config
 
@@ -99,6 +100,9 @@ class _MotionGate:
         self._startup_probe: set[str] = set()
         self._last_change: dict[str, float] = {}
         self._fresh: dict[str, bool] = {}
+        # The last frame's changed-cell count (None for a baseline frame), for
+        # the per-minute gate history (#6). Never pixel data.
+        self.last_changed: dict[str, int | None] = {}
 
     def reset(self, camera: str) -> None:
         """Rearm startup sampling after a request was blocked before inference."""
@@ -173,6 +177,7 @@ class _MotionGate:
         previous = self._previous.get(camera)
         self._previous[camera] = thumbnail
         if previous is None:
+            self.last_changed[camera] = None
             # A stationary object already in view would never pass a
             # frame-difference gate. Only a positive first probe needs a
             # second observation for tracker confirmation. A restart with a
@@ -186,6 +191,7 @@ class _MotionGate:
                 self._armed[camera] = True
         else:
             changed = sum(abs(a - b) >= 24 for a, b in zip(previous, thumbnail, strict=True))
+            self.last_changed[camera] = changed
             if changed < _MOTION_CHANGED_CELLS:
                 self._quiet[camera] = min(3, self._quiet.get(camera, 0) + 1)
                 if self._quiet[camera] == 3:
@@ -530,6 +536,8 @@ class ApiObjectDetector:
         self.provider_outage_since: int | None = None
         self.http_429_categories = dict.fromkeys(HTTP_429_CATEGORIES, 0)
         self.current_429_category: str | None = None
+        # Per camera, per minute: what the provider gate measured and decided (#6).
+        self._gate_history: dict[str, MinuteHistory] = {}
         self.transport = transport
         self.motion = _MotionGate()
         self._camera_counts: dict[str, dict[str, int]] = {}
@@ -576,13 +584,23 @@ class ApiObjectDetector:
             return ()
         allow_startup_probe = (self.budget is None or self.motion.has_baseline(camera_mac)
                                or self.budget.remaining(camera_mac) == self.budget.limit)
-        if not self.motion.should_request(camera_mac, frame,
-                                          allow_startup_probe=allow_startup_probe):
+        opened = self.motion.should_request(camera_mac, frame,
+                                            allow_startup_probe=allow_startup_probe)
+        gate = self._gate(camera_mac)
+        gate.count("frames")
+        changed = self.motion.last_changed.get(camera_mac)
+        if changed is not None:
+            gate.maximum("peak_cells", changed)
+            gate.count("near_miss" if 2 * changed >= _MOTION_CHANGED_CELLS > changed
+                       else "over_threshold" if changed >= _MOTION_CHANGED_CELLS else "quiet")
+        if not opened:
             return ()
+        gate.count("opened")
         if time.monotonic() < self._provider_retry_at:
             # Drop this pair; the gate rearms on later motion after the pause.
             self.motion.defer(camera_mac)
             self.backoff_skips += 1
+            gate.count("backoff_skipped")
             return ()
         if (self.budget is not None and self.motion.is_refresh(camera_mac)
                 and self.budget.remaining(camera_mac) <= self.fresh_reserve):
@@ -594,6 +612,7 @@ class ApiObjectDetector:
                 "below_threshold": 0, "accepted_objects": 0,
             })
             counts["refreshes_deferred"] = counts.get("refreshes_deferred", 0) + 1
+            gate.count("deferred")
             return ()
         try:
             self._check_remote_dns()
@@ -606,6 +625,7 @@ class ApiObjectDetector:
             # idle frame, keeping a busy camera at zero budget indefinitely.
             self.motion.wait_for_motion(camera_mac)
             self._budget_retry_at[camera_mac] = time.monotonic() + 60
+            gate.count("deferred")
             return ()
         try:
             plates = camera_mac in self.plate_cameras
@@ -614,10 +634,12 @@ class ApiObjectDetector:
             if self.provider.provider == "openai" and self.provider.model == "gpt-6-luna":
                 payload["reasoning"] = {"effort": "none"}
             reply = None
+            gate.count("requests")
             try:
                 reply = self.transport(url, headers, payload)
                 text = self.provider.parse_response(reply)
             except (ApiDetectionError, ProviderError, TypeError, ValueError) as exc:
+                gate.count("failed")
                 if isinstance(exc, ProviderError) and reply is not None:
                     self._count_failure(camera_mac, _envelope_failure(reply))
                 if not (isinstance(exc, ApiDetectionError)
@@ -645,6 +667,7 @@ class ApiObjectDetector:
             counts["empty_responses"] += not reported and not rejected
             outcome = ("objects" if accepted else "low" if reported or rejected
                        else "empty")
+            gate.count(outcome)
             profile = self._profiles.setdefault(camera_mac, dict.fromkeys(_PROFILE_KEYS, 0))
             profile[f"{_frame_mode(frame)}_{outcome}"] += 1
             try:
@@ -703,6 +726,21 @@ class ApiObjectDetector:
         except (TypeError, ValueError) as exc:
             self.motion.sample_result(camera_mac, found_object=False)
             raise ApiDetectionError("api_detection_request_failed") from exc
+
+    def _gate(self, camera_mac: str) -> MinuteHistory:
+        """Per-minute gate counters for one camera: counts and cell maxima only."""
+        history = self._gate_history.get(camera_mac)
+        if history is None:
+            history = self._gate_history[camera_mac] = MinuteHistory(
+                ("frames", "quiet", "near_miss", "over_threshold", "opened", "backoff_skipped",
+                 "deferred", "requests", "empty", "low", "objects", "failed"),
+                maxima=("peak_cells",), latest=("threshold_cells",), clock=self.clock)
+        history.set("threshold_cells", _MOTION_CHANGED_CELLS)
+        return history
+
+    def gate_history(self, camera_mac: str) -> list[dict[str, int | None]]:
+        history = self._gate_history.get(camera_mac)
+        return history.snapshot() if history is not None else []
 
     def _count_failure(self, camera_mac: str, reason: str) -> None:
         counts = self._failure_reasons.setdefault(camera_mac, dict.fromkeys(_FAILURE_REASONS, 0))
