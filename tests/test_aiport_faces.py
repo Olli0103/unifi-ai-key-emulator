@@ -277,3 +277,26 @@ async def test_face_in_protects_smart_settings_is_stripped_and_remembered(tmp_pa
         assert service._face_enabled[CAMERA] is False
     finally:
         await service.stop()
+
+
+def test_the_default_sessions_keep_a_single_copy_of_the_weights(monkeypatch):
+    import sys
+    import types
+    created = []
+
+    class Options:
+        def __init__(self):
+            self.entries = {}
+
+        def add_session_config_entry(self, key, value):
+            self.entries[key] = value
+
+    fake = types.SimpleNamespace(
+        SessionOptions=Options,
+        GraphOptimizationLevel=types.SimpleNamespace(ORT_ENABLE_BASIC="basic"),
+        InferenceSession=lambda path, options, providers: created.append(options) or path)
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake)
+    FaceEngine("detector.onnx", "embedder.onnx")
+    assert len(created) == 2
+    assert all(o.graph_optimization_level == "basic" and o.intra_op_num_threads == 2
+               and o.entries == {"session.disable_prepacking": "1"} for o in created)

@@ -197,6 +197,12 @@ class FaceEngine:
             def session_factory(path):
                 options = onnxruntime.SessionOptions()
                 options.intra_op_num_threads = 2
+                # Basic graph optimisation without weight pre-packing keeps one
+                # copy of the weights: ArcFace uses 341 MB instead of 738 MB per
+                # AI Port, with identical embeddings (NAS, 29 Sep 2026).
+                options.graph_optimization_level = (
+                    onnxruntime.GraphOptimizationLevel.ORT_ENABLE_BASIC)
+                options.add_session_config_entry("session.disable_prepacking", "1")
                 return onnxruntime.InferenceSession(path, options,
                                                     providers=["CPUExecutionProvider"])
         self._detector = session_factory(detector_path)
