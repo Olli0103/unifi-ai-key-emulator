@@ -84,3 +84,28 @@ The NAS runs three AI Ports and no AI Key. **Only the Mac AI Port (.135) and the
 - **Address:** 192.168.0.98, now on macvlan with the device's own MAC, instead of the Mac adapter's MAC.
 - **Pairings and settings:** they live in Protect and are not touched. The AI Port slot state moves unchanged.
 - **Provider settings and private state:** they are copied, not re-entered. Nothing is printed, uploaded elsewhere or committed.
+
+## Result (29 Sep 2026)
+
+The move is done. The AI Port `.135` moved first, as `aiport_slot_1`. The AI Key moved after Olli released `.98` on the router; the Mac's en7 now has another address.
+
+**Final layout:**
+- The Key is on `caddy_lan` with its adopted MAC, and on `aikey_backend` at 172.30.50.20.
+- Postgres shares the Key's network namespace.
+- CLIP (172.30.50.31) and faces (172.30.50.32) sit on the internal backend only, next to Ollama (.10) and Whisper (.11).
+
+Two steps were needed beyond the plan:
+
+- **Search profile source.** `search-profile.json` fingerprints the CLIP server URL, so the Key refused to start.
+  - The model and revision did not change. The NAS CLIP returned identical text embeddings to the Mac server.
+  - The fix was to rewrite the profile with the new source and recompute its fingerprint. The original file is kept as `search-profile.json.before-nas`.
+- **Database role password.** `pg_dump` does not carry role passwords, so the restored role still had its initial password.
+  - The fix was to set the role password from the Key's `database-password` file inside the container. It was never printed.
+  - `EMULATOR_IP` is the Key's own LAN address, not 127.0.0.1, because the Key connects to `192.168.0.98` from the shared namespace.
+
+**Readback after the move:**
+- The Key is adopted and connected, and its search database is connected. The row counts match the Mac database (4876 / 4876).
+- All four AI Ports are up, with 9 of 9 streams decoding.
+- Speech-to-text and face-recognition jobs from the original cameras completed on the NAS Key.
+- The NAS had about 32 GB of memory available.
+- The camera registry reports no eligible cameras on Protect 7.3.70. That is the known automatic-caption gap and not a result of the move.
