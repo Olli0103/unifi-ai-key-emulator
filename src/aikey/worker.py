@@ -469,12 +469,12 @@ class JobProcessor:
         # (a G6 on its native microphone): a longer export is transcribed up
         # to max_audio_ms instead of refused. Every other camera keeps the
         # refusal that protects the real-time CPU Whisper.
-        clip = self.options.get("speech_clip_camera_ids", [])
-        if (not isinstance(clip, list) or len(clip) > 32 or len(set(clip)) != len(clip)
+        clip_ids = self.options.get("speech_clip_camera_ids", [])
+        if (not isinstance(clip_ids, list) or len(clip_ids) > 32 or len(set(clip_ids)) != len(clip_ids)
                 or any(not isinstance(c, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", c)
-                       for c in clip)):
+                       for c in clip_ids)):
             raise WorkerError("worker.speech_clip_camera_ids must list up to 32 camera IDs")
-        self.speech_clip_cameras = frozenset(clip)
+        self.speech_clip_cameras = frozenset(clip_ids)
         # A local CPU Whisper needs about real time; keep speech off the caption timeout.
         self.speech_timeout_s = min(self._positive("speech_timeout_s", 300), 900)
         # Key-moment captions got 30 s, enough for a cloud model. A local
@@ -1289,10 +1289,11 @@ class JobProcessor:
                 or body["format"] not in {"mp4", "ubv"} or body["skipVideo"] is not True
                 or body["createEvent"] is not False):
             raise WorkerError("speechToText is limited to the audio-only event export")
-        clip = body["camera"] in self.speech_clip_cameras
+        clipped_camera = body["camera"] in self.speech_clip_cameras
         if (any(type(body[key]) is not int for key in ("start", "end"))
                 or not 0 <= body["start"] < body["end"] <= 2 ** 53 - 1
-                or body["end"] - body["start"] > (SPEECH_EXPORT_MAX_MS if clip else self.max_audio_ms)):
+                or body["end"] - body["start"] > (SPEECH_EXPORT_MAX_MS if clipped_camera
+                                                  else self.max_audio_ms)):
             # Accepting longer exports from every camera overloaded the
             # real-time CPU Whisper on 30 Sep; the AI Port caps its speech
             # events instead (aiport_audio.MAX_EVENT_S).
