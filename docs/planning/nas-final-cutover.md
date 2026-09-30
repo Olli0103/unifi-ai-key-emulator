@@ -106,6 +106,6 @@ Two steps were needed beyond the plan:
 **Readback after the move:**
 - The Key is adopted and connected, and its search database is connected. The row counts match the Mac database (4876 / 4876).
 - All four AI Ports are up, with 9 of 9 streams decoding.
-- Speech-to-text and face-recognition jobs from the original cameras completed on the NAS Key.
+- Speech-to-text and face-recognition jobs from the original cameras reached `completed` in the NAS Key's journal (Protect answered their callbacks 2xx). Saved transcripts and faces were not read back.
 - The NAS had about 32 GB of memory available.
 - The camera registry reports no eligible cameras on Protect 7.3.70. That is the known automatic-caption gap and not a result of the move.

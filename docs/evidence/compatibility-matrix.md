@@ -104,6 +104,9 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `index.search_snapshots`: Key-moment regions indexed as keyMomentsTags search snapshots with local CLIP crop embeddings | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle | explicit_opt_in |
 | `index.thumbnail_tags`: thumbnailTags for existing smart-detect objects (thumbnailMeta and retroactive crops) | fixture-tested | — | — | not_observed | — | Protect 7.3.60 bundle | explicit_opt_in |
 | `search.index_recovery`: Search index recovery after restart or model change | needs_evidence | — | — | — | — | Protect 7.2.105 | default |
+| `index.face_task_search_tags`: Find Anything tags in the ram part of a face-recognition callback | fixture-tested | — | — | — | not_observed | Protect 7.3.60 bundle | default |
+| **control** | |  |  |  |  | | |
+| `control.update_lcm_settings`: updateLcmSettings display settings stored and answered 0 | fixture-tested | — | — | — | not_observed | — | default |
 
 ## Missing evidence
 
@@ -139,6 +142,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `control.update_timezone`: Live body shape
 - `control.request_ai.on_demand_inference`: Unscoped or repeated on-demand operation
 - `control.request_ai.on_demand_inference`: Other camera families
+- `control.request_ai.on_demand_inference`: A successful player AI summary after 7.3.60: it failed natively on 7.3.68 (28 Sep, owner report of "Failed to generate" summaries) and all 4 on-demand jobs on 7.3.70 timed out (30 Sep) behind a speech backlog
 - `control.request_ai.describe`: Whether 7.3.60 dispatches /describe at all (issue #10)
 - `control.request_ai.describe`: promptProfile session-v1 behavior is not reproduced
 - `control.request_ai.unknown_target`: Protect's retry treatment of errorCode 95 versus 5 for RequestAI
@@ -162,6 +166,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `framing.event_messages`: Which events Protect sends to AI processors and whether any need handling
 - `media.video_export_mp4`: The public record confirms MP4 for the on-demand job; the automatic event's export format is not recorded
 - `media.images_and_snapshots`: Any live image or snapshot job
+- `callback.on_demand_camera_upload`: An on-demand result delivered to the caller on 7.3.68 or 7.3.70
 - `callback.ram_full_event_tagging`: Persistence after a controller restart
 - `callback.ram_full_event_tagging`: Repeated or simultaneous jobs under continuous operation
 - `callback.ram_full_event_tagging`: Effect on events that already carry native tags
@@ -220,6 +225,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `search.index_recovery` (needs_evidence): Live recovery test after a controller restart (only the Mac relay restart was tested on 7.3.68)
 - `search.index_recovery` (needs_evidence): A live staged rebuild needs an approved object-crop source; the AI Key receives crops only inside Protect tasks
 - `search.index_recovery` (needs_evidence): Native validation of a rebuilt index is possible only after cutover (Protect searches only public.ramDetections)
+- `index.face_task_search_tags`: Native search hits for a native face camera's objects indexed through a face task (a row-count increase alone does not attribute rows)
+- `control.update_lcm_settings`: Protect's own view after the reply (its aiprocessors log no longer reporting the failure) was not read back
 
 ## Contradictions and stale records
 
@@ -237,6 +244,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - **C12** (static_contract): Protect 7.2.105 fills missing capability flags with enabled values, so an absent flag reads as support. Resolution: Unsupported capabilities are sent explicitly disabled. A capability flag is never treated as evidence.
 - **C13** (stale_record): The 26 Sep morning record said basic Find Anything was blocked on a search host and listed search as needs_evidence; the same day the Key became Protect's search host and native text and image search results were read back. Resolution: The record keeps the blocker as history; the manifest now records search on 7.3.68 only.
 - **C14** (static_contract): Sending face, plate and object-indexing flags explicitly disabled (C12) made Protect show Speech to Text, Face and License Plate Recognition as Off although native transcripts and face results existed; supportTts, not a speech flag, drives Speech to Text. Resolution: Flags follow the configured served features; unserved ones stay explicitly disabled. Flags remain configuration, never evidence.
+- **C15** (stale_record): control.request_ai.on_demand_inference and callback.on_demand_camera_upload are native-verified from one 7.3.60 trial, while the player's AI summary failed on 7.3.68 and every on-demand job timed out on 7.3.70. Resolution: The 7.3.60 observation stands as history; both features list the missing post-7.3.60 success, and remaining native test N14 covers it.
 
 ## Experimental activation during live trials
 
@@ -267,3 +275,5 @@ Every live trial must record each experimental activation below that was in effe
 - **N10** (`capability.retroactive_processing`, `control.recognize_key_frames.multiple_images`, `index.thumbnail_tags`): Completion path established (empty batch query at about 19:45 UTC on 26 Sep; the final batch, ending at the cursor, completed between 19:44 and 19:45 UTC per the Key archive). 27 Sep read-only comparison: the 2110 older and 2310 covered tracker-crop events do not differ in duration (p50 28 s vs 27 s, max 314 s both), camera mix (the same 8 cameras), thumbnail fields (croppedId, trackerId, objectId, confidence) or smartDetectTrack availability; only ramState differs. No task listing is exposed (aiprocessors carries aggregate taskStatistics only). Remaining (needs_evidence): Protect's aiprocessorTasks rows for the older events and the 7.3.68 retroactive batch query. Continuing them requires a new processor record (re-adoption), which is out of scope.
 - **N11** (`search.native_retrieval`, `search.index_recovery`, `database.controller_migrations`): After a planned controller restart, confirm isSearchHost true, that existing ramDetections rows survive, and that a known positive text search still returns its object.
 - **N13** (`control.request_ai.second_stage_verification`): Owner decision: enable find_anything.reverification for a bounded window, then read back one reverified event's detectedThumbnails (preReverificationObjectType and confidence) and confirm unsure verdicts left events unchanged.
+- **N14** (`control.request_ai.on_demand_inference`, `callback.on_demand_camera_upload`): With the speech queue healthy, press the player's AI summary once on one event and record only whether the summary rendered and the matching on_demand job state; no summary text is recorded.
+- **N15** (`callback.ram_full_event_tagging`): On 7.3.70, one exact-event GET for an event whose caption job completed after 30 Sep 06:00 local; record only metadata.ramState and whether ramDescription is non-empty.

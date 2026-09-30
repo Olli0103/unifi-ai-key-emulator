@@ -138,17 +138,19 @@
     "adopted and connected on the same state files after moving from a Mac Apple container to a NAS Docker container; no re-adoption",
     "changeUserPassword answered 13 until the restored search role got the device's stored password, then 0 on the next connect",
     "the local integration API camera inventory parsed under the 7.3.68 contract (10 smart-event candidates, 1 offline, no unknown types); the registry went fresh with 10 eligible cameras once 7.3.70 was listed",
-    "continuous captions: postVLM tasks were refused as video_contract while the registry was stale; afterwards 9 recognizeKeyFrames caption jobs completed with Protect answering each callback 2xx, and one failed on a persistent media 503",
-    "32 speechToText jobs completed in 30 minutes with segments posted to the speech-to-text callback",
-    "recognizeFaces jobs completed; the native face camera was answered without an AI Key face",
-    "the unhandled connect-time commands are diskInfo and updateLcmSettings (bounded fingerprint window, matched against Protect's AI processor log)"
+    "worker journal only: postVLM tasks were refused as video_contract while the registry was stale; afterwards 9 recognizeKeyFrames caption jobs reached completed, which means Protect answered each callback 2xx, and one failed on a persistent media 503",
+    "worker journal only: speechToText and recognizeFaces jobs reached completed (callback answered 2xx)",
+    "the unhandled connect-time commands are diskInfo and updateLcmSettings (bounded fingerprint window, matched against Protect's AI processor log); updateLcmSettings answered 0 after the Key stored it",
+    "search index row counts grew on the Key's PostgreSQL, including 2 rows for the native face camera after the face-task search tags change; counts do not attribute rows to that change"
    ],
    "not_observed": [
     "a caption read back from the exact-event record (metadata.ramDescription) on 7.3.70",
-    "the body or expected reply of diskInfo and updateLcmSettings",
-    "deep mode, /describe tasks, an on-demand player summary or a reverified event on 7.3.70"
+    "transcription rows or face thumbnails read back per event on 7.3.70",
+    "a successful player AI summary: all 4 on-demand jobs timed out on 30 Sep",
+    "the body or expected reply of diskInfo",
+    "deep mode, /describe tasks or a reverified event on 7.3.70"
    ],
-   "limits": "Callback acceptances, journal states and counters from one controller over about one day; a callback acceptance is not a native caption readback.",
+   "limits": "Worker journal states, callback status codes and counters from one controller over about one day. A 2xx callback, a completed job or a growing row count is not a native saved caption, transcript, face or summary.",
    "records": [
     "docs/evidence/live-protect-7.3.70.md",
     "docs/planning/nas-final-cutover.md"
@@ -930,7 +932,8 @@
    "activation": "experimental_opt_in",
    "missing_evidence": [
     "Unscoped or repeated on-demand operation",
-    "Other camera families"
+    "Other camera families",
+    "A successful player AI summary after 7.3.60: it failed natively on 7.3.68 (28 Sep, owner report of \"Failed to generate\" summaries) and all 4 on-demand jobs on 7.3.70 timed out (30 Sep) behind a speech backlog"
    ],
    "notes": "Verified once, under a single-use on-demand scope for one camera."
   },
@@ -1442,7 +1445,9 @@
     "src/aikey/worker.py"
    ],
    "activation": "default",
-   "missing_evidence": [],
+   "missing_evidence": [
+    "An on-demand result delivered to the caller on 7.3.68 or 7.3.70"
+   ],
    "notes": "The caller receives the description. On-demand results are not persisted by design."
   },
   {
@@ -2196,6 +2201,51 @@
     "A live staged rebuild needs an approved object-crop source; the AI Key receives crops only inside Protect tasks",
     "Native validation of a rebuilt index is possible only after cutover (Protect searches only public.ramDetections)"
    ]
+  },
+  {
+   "id": "index.face_task_search_tags",
+   "area": "search",
+   "title": "Find Anything tags in the ram part of a face-recognition callback",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "not_observed"
+   },
+   "static": [
+    "static-protect-7.3.60-bundle"
+   ],
+   "tests": [
+    "tests/test_local_faces.py::test_a_native_face_camera_still_gets_its_find_anything_tags_in_the_ram_part"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Native search hits for a native face camera's objects indexed through a face task (a row-count increase alone does not attribute rows)"
+   ],
+   "notes": "A camera with native face detection sends key-moment tasks only as face tasks; their search tags now travel as a ram part beside the face part (saveEventTagging and saveFaceRecognition read separate parts in the 7.3.60 bundle)."
+  },
+  {
+   "id": "control.update_lcm_settings",
+   "area": "control",
+   "title": "updateLcmSettings display settings stored and answered 0",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "not_observed"
+   },
+   "static": [],
+   "tests": [
+    "tests/test_command_fingerprints.py::test_connect_time_sync_commands_keep_only_their_field_shape",
+    "tests/test_command_fingerprints.py::test_display_settings_outside_the_observed_shape_are_refused"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Protect's own view after the reply (its aiprocessors log no longer reporting the failure) was not read back"
+   ],
+   "notes": "The body shape {brightness, nightMode{onMinute, offMinute}} came from a field-name-only recorder on 7.3.70; diskInfo arrives with an empty body and still answers 95."
   }
  ],
  "contradictions": [
@@ -2339,6 +2389,17 @@
    ],
    "statement": "Sending face, plate and object-indexing flags explicitly disabled (C12) made Protect show Speech to Text, Face and License Plate Recognition as Off although native transcripts and face results existed; supportTts, not a speech flag, drives Speech to Text.",
    "resolution": "Flags follow the configured served features; unserved ones stay explicitly disabled. Flags remain configuration, never evidence."
+  },
+  {
+   "id": "C15",
+   "type": "stale_record",
+   "sources": [
+    "live-protect-7.3.60",
+    "live-protect-7.3.70",
+    "docs/evidence/live-protect-7.3.70.md"
+   ],
+   "statement": "control.request_ai.on_demand_inference and callback.on_demand_camera_upload are native-verified from one 7.3.60 trial, while the player's AI summary failed on 7.3.68 and every on-demand job timed out on 7.3.70.",
+   "resolution": "The 7.3.60 observation stands as history; both features list the missing post-7.3.60 success, and remaining native test N14 covers it."
   }
  ],
  "trial_activation": {
@@ -2498,6 +2559,21 @@
     "control.request_ai.second_stage_verification"
    ],
    "procedure": "Owner decision: enable find_anything.reverification for a bounded window, then read back one reverified event's detectedThumbnails (preReverificationObjectType and confidence) and confirm unsure verdicts left events unchanged."
+  },
+  {
+   "id": "N14",
+   "features": [
+    "control.request_ai.on_demand_inference",
+    "callback.on_demand_camera_upload"
+   ],
+   "procedure": "With the speech queue healthy, press the player's AI summary once on one event and record only whether the summary rendered and the matching on_demand job state; no summary text is recorded."
+  },
+  {
+   "id": "N15",
+   "features": [
+    "callback.ram_full_event_tagging"
+   ],
+   "procedure": "On 7.3.70, one exact-event GET for an event whose caption job completed after 30 Sep 06:00 local; record only metadata.ramState and whether ramDescription is non-empty."
   }
  ]
 }

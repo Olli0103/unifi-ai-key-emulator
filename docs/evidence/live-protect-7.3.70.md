@@ -10,12 +10,14 @@ The values below are content-free device health counters, worker journal states 
 - **Credential rotation.** On the first connect after the move, `changeUserPassword` answered 13 three times. The cause was that the restored search database still had its initial role password. After the role was set from the device's stored password, the next connect's `changeUserPassword` answered 0.
 - **Controller version.** Protect reported 7.3.70 in `setConsoleInfo`, and `getInfo`, `getTaskQueueInfo`, `setConsoleInfo` and `updateTimezone` answered 0.
 - **Camera inventory.** The local integration API on 7.3.70 returned the same row and feature-flag fields as 7.3.68. All 11 rows parsed under the existing contract: 10 smart-event candidates and 1 offline camera, with no unknown smart types. Once 7.3.70 was listed, the registry went fresh with 10 eligible cameras.
-- **Continuous captions.**
+- **Continuous captions (worker journal only).**
   - Before 7.3.70 was listed, the stale registry refused every `postVLM` task as `video_contract`.
-  - Afterwards, 10 of the 12 video tasks in the first minutes were admitted. Nine `recognizeKeyFrames` caption jobs completed, each with its callback answered 2xx by Protect.
+  - Afterwards, 10 of the 12 video tasks in the first minutes were admitted. Nine `recognizeKeyFrames` caption jobs reached `completed`, which means Protect answered each callback 2xx. Whether Protect saved the captions was not read back.
   - One job failed after Protect answered the media export with 503 on every retry.
-- **Speech to text.** 32 `speechToText` jobs completed in 30 minutes across the AI Port cameras. Each job fetched the audio-only export and posted its segments to the speech-to-text callback.
-- **Faces.** `recognizeFaces` jobs completed. On the camera with native face detection they were answered with no AI Key face.
+- **Speech to text (worker journal only).** 32 `speechToText` jobs reached `completed` in 30 minutes across the AI Port cameras: each fetched the audio-only export and Protect answered the segment callback 2xx. No transcription rows were read back.
+- **Faces (worker journal only).** `recognizeFaces` jobs reached `completed`. On the camera with native face detection they were answered with no AI Key face.
+- **Search index (row counts only).** The Key's PostgreSQL gained rows, including 2 for the native face camera after the face-task search tags change (30 Sep). Counts do not attribute rows to that change.
+- **Player AI summary.** All 4 on-demand jobs at 06:56–06:57 local on 30 Sep timed out behind a speech backlog (fixed in 7807494). No successful summary was observed.
 - **Unhandled commands.**
   - During a bounded fingerprint window, the two unhandled command names Protect sends on connect were identified as `diskInfo` and `updateLcmSettings`. The same names appear in Protect's own AI processor log as "Failed to sync storage size to AI Key" and "Failed to updateLcmSettings for AI Key".
   - `RequestAI` for the `second_verifier` target answered 95 while reverification was off.
@@ -23,10 +25,12 @@ The values below are content-free device health counters, worker journal states 
 ## Not observed
 
 - A caption read back from Protect's exact-event record (`metadata.ramDescription`) on 7.3.70. That readback needs an owner browser session.
-- The body or expected reply of `diskInfo` and `updateLcmSettings`.
-- Deep mode, `/describe` tasks, or an on-demand player summary on 7.3.70.
+- Transcription rows or face thumbnails read back per event on 7.3.70.
+- A successful player AI summary on 7.3.70.
+- The expected reply of `diskInfo` (it arrives with an empty body). `updateLcmSettings` carries `brightness` and `nightMode.{onMinute, offMinute}`, field names only.
+- Deep mode or `/describe` tasks on 7.3.70.
 - A reverified event.
 
 ## Limits
 
-These are callback acceptances, journal states and counters from one controller over about one day. Protect's acceptance of a callback is not a native caption readback.
+These are journal states, callback status codes and counters from one controller over about one day. A 2xx callback, a completed job or a growing row count is not a native saved caption, transcript, face or summary.

@@ -176,6 +176,6 @@ Read-only, in a signed-in console session. Only counts, event-ID match status an
 **Live acceptance (28 Sep 2026, 13:33 UTC onward).**
 - **Cause of the earlier failures:** Protect's `ds.log` (support file) logged `invalid type: floating point 0.906, expected u8`. The detection service parses `faceMask.confidence` and `qualityScore` as u8 (0..100) and dropped the whole event message (ce31675).
 - **Büro, after the fix:** the event 13:33–13:37 UTC was saved as `face+person`, with face objects in the track. It has a face thumbnail assigned to a face group, the person linked through `associatedFaceTrackerID`, and all four snapshots uploaded.
-- **Grouping:** since then there are 4 face thumbnails on paired cameras (Büro 3, Haustür 1) in 3 distinct groups, so at least one repeat visit joined an existing group.
+- **Grouping:** since then there are 4 face thumbnails on paired cameras (Büro 3, Haustür 1) in 3 distinct groups, so one group holds two thumbnails. Whether those came from separate visits was not established; the Büro thumbnails may belong to one event.
 - **Rollout:** Face is on for all nine paired cameras. NAS runs `local-aiport:nas-amd64-face-r32-20260928`; the Mac AI Port runs `local-aiport:face5-arm64-20260928` with `max_events_per_hour` 30 (owner-approved).
-- **Still `needs_evidence`:** naming a group and later recognition by name.
+- **Still `needs_evidence`:** a repeat visit joining an existing group, naming a group, and later recognition by name.
