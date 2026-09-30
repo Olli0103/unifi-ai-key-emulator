@@ -65,7 +65,7 @@ def whisper_cpp_transcriber(model_path: str, threads: int, *, fallback: bool = T
 
 def build_app(transcribe: Transcriber, *, default_language: str = "auto") -> web.Application:
     lock = asyncio.Lock()
-    counters = {"requests": 0, "transcribed": 0, "rejected": 0, "failed": 0,
+    counters = {"requests": 0, "transcribed": 0, "rejected": 0, "failed": 0, "abandoned": 0,
                 "audio_seconds": 0.0, "processing_seconds": 0.0}
 
     async def transcriptions(request: web.Request) -> web.Response:
@@ -94,15 +94,35 @@ def build_app(transcribe: Transcriber, *, default_language: str = "auto") -> web
         if language != "auto" and not _LANGUAGE.fullmatch(language):
             counters["rejected"] += 1
             return web.json_response({"error": "invalid_language"}, status=400)
-        async with lock:
+        try:
+            await lock.acquire()
+        except asyncio.CancelledError:
+            # Servers that cancel handlers on disconnect end the wait here.
+            counters["abandoned"] += 1
+            raise
+        try:
+            if request.transport is None or request.transport.is_closing():
+                # The client gave up while this request waited for the model.
+                # Transcribing it anyway only delays every request behind it,
+                # until each one times out (30 Sep: 36 in 20 minutes).
+                counters["abandoned"] += 1
+                return web.Response(status=499)
             started = time.monotonic()
+            work = asyncio.ensure_future(asyncio.to_thread(transcribe, samples, language))
             try:
-                segments, detected = await asyncio.to_thread(transcribe, samples, language)
+                segments, detected = await asyncio.shield(work)
+            except asyncio.CancelledError:
+                # The model thread cannot be stopped; keep the lock until it
+                # ends so the next request never shares the model with it.
+                await asyncio.gather(work, return_exceptions=True)
+                raise
             except Exception:
                 counters["failed"] += 1
                 return web.json_response({"error": "transcription_failed"}, status=500)
             counters["processing_seconds"] = round(counters["processing_seconds"]
                                                    + time.monotonic() - started, 1)
+        finally:
+            lock.release()
         counters["transcribed"] += 1
         counters["audio_seconds"] = round(counters["audio_seconds"] + len(samples) / 16000, 1)
         body = {"text": " ".join(text.strip() for _, _, text in segments).strip(),

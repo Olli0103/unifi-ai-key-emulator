@@ -341,21 +341,18 @@ async def test_persistent_503_and_other_errors_still_fail_without_endless_retrie
     assert controller.callbacks == []
 
 
-async def test_a_padded_export_past_the_audio_bound_is_transcribed_up_to_the_bound(controller, tmp_path):
-    # A 120 s AI Port speech event plus Protect's export padding exceeds the
-    # 120 s bound; the first max_audio_ms are transcribed instead of refusing.
+async def test_an_export_past_the_audio_bound_is_refused_before_media(controller, tmp_path):
+    # Clipping longer exports overloaded the real-time CPU Whisper (30 Sep).
     settings = config(controller)
     settings["worker"]["max_audio_ms"] = 4000
     worker = JobProcessor(settings, tmp_path)
     try:
-        result = await worker.handle(task(body={"end": START + 130_000}))
         with pytest.raises(WorkerError, match="duration bound"):
-            await worker.handle(task(body={"end": START + 300_001}))
+            await worker.handle(task(body={"end": START + 4001}))
+        assert worker.status()["speech"] == {"refused_long": 1}
     finally:
         await worker.stop()
-    assert result["result"] == {"segments": 1}
-    assert controller.transcriptions[0]["audio_bytes"] <= 4 * 32000 + 4096
-    assert worker.status()["speech"] == {"clipped": 1}
+    assert controller.media_requests == [] and controller.transcriptions == []
 
 
 async def test_a_restart_lets_an_accepted_job_finish_and_refuses_new_ones(controller, tmp_path):

@@ -34,7 +34,9 @@ FRAME_BYTES = FRAME_SAMPLES * 2
 AUDIO_TYPES = ("alrmSmoke", "alrmCmonx", "alrmSiren", "alrmBabyCry", "alrmSpeak",
                "alrmBark", "alrmBurglar", "alrmCarHorn", "alrmGlassBreak")
 SPEECH = "alrmSpeak"
-MAX_EVENT_S = 120.0       # well inside Protect's 300 s event-without-end sweep
+# Protect pads the export of an event; 90 s keeps a capped speech event inside
+# the AI Key's 120 s speech bound (and well inside Protect's 300 s sweep).
+MAX_EVENT_S = 90.0
 
 
 class AudioSettingsError(ValueError):

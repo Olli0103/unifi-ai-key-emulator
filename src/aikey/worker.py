@@ -132,8 +132,6 @@ _RETYPE_CONFIDENCE = 0.9
 # Decoded event audio lives only in a temporary directory with this prefix
 # inside the worker journal directory, removed when the job ends (#5).
 AUDIO_TEMP_PREFIX = "aikey-audio-"
-# Longest speech export accepted: Protect sweeps an event without an end at 300 s.
-SPEECH_EXPORT_MAX_MS = 300_000
 # Terminal states a tombstone may keep. callback_uncertain is deliberately not
 # one: it stays in the active journal for operator review (#40).
 _ARCHIVABLE_STATES = frozenset({"completed", "failed"})
@@ -395,8 +393,8 @@ class JobProcessor:
         # Retroactive backfill progress; counts only, no identifiers (#21).
         self.retroactive = {"tasks": 0, "crops_indexed": 0, "completed": 0, "failed": 0,
                             "refused_unindexed_camera": 0, "refused_image": 0, "archived": 0}
-        # Speech exports longer than max_audio_ms are transcribed up to that bound.
-        self.speech_counts = {"clipped": 0}
+        # Speech exports refused for exceeding max_audio_ms.
+        self.speech_counts = {"refused_long": 0}
         self._stopping = False
         self._start_lock = asyncio.Lock()
         self._load_history()
@@ -1209,13 +1207,12 @@ class JobProcessor:
             raise WorkerError("speechToText is limited to the audio-only event export")
         if (any(type(body[key]) is not int for key in ("start", "end"))
                 or not 0 <= body["start"] < body["end"] <= 2 ** 53 - 1
-                or body["end"] - body["start"] > max(self.max_audio_ms, SPEECH_EXPORT_MAX_MS)):
+                or body["end"] - body["start"] > self.max_audio_ms):
+            # Accepting longer exports (clipped to the bound) overloaded the
+            # real-time CPU Whisper on 30 Sep; the AI Port caps its speech
+            # events instead (aiport_audio.MAX_EVENT_S).
+            self.speech_counts["refused_long"] += 1
             raise WorkerError("speechToText audio exceeds configured duration bound")
-        if body["end"] - body["start"] > self.max_audio_ms:
-            # Protect pads an event's export; a speech event near its length cap
-            # would otherwise lose its whole transcript. _audio keeps the first
-            # max_audio_ms of the track.
-            self.speech_counts["clipped"] += 1
         callback = self._url(body["resUrl"], "callback")
         if urlsplit(callback).path != _SPEECH_CALLBACK:
             raise WorkerError("speechToText requires the speech-to-text callback")

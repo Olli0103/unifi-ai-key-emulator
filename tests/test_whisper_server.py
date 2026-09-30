@@ -63,7 +63,7 @@ async def test_language_is_validated_and_health_exposes_only_counts(client):
     health = await (await client.get("/healthz")).json()
     processing = health.pop("processing_seconds")
     assert health == {"status": "ok", "requests": 2, "transcribed": 1, "rejected": 1,
-                      "failed": 0, "audio_seconds": 1.0}
+                      "failed": 0, "abandoned": 0, "audio_seconds": 1.0}
     assert 0 <= processing < 5
     assert client.calls == [(16000, "auto")]
 
@@ -75,3 +75,31 @@ async def test_a_model_failure_returns_no_text():
         response = await test_client.post("/v1/audio/transcriptions", data=_form(_wav()))
         assert response.status == 500
         assert await response.json() == {"error": "transcription_failed"}
+
+
+async def test_a_request_abandoned_while_waiting_for_the_model_is_not_transcribed():
+    import asyncio
+    import threading
+    release, calls = threading.Event(), []
+
+    def transcribe(samples, language):
+        calls.append(len(samples))
+        release.wait(5)
+        return [], None
+    async with TestClient(TestServer(build_app(transcribe))) as client:
+        first = asyncio.create_task(client.post("/v1/audio/transcriptions", data=_form(_wav())))
+        while not calls:
+            await asyncio.sleep(0.01)
+        waiting = asyncio.create_task(client.post("/v1/audio/transcriptions", data=_form(_wav())))
+        await asyncio.sleep(0.2)
+        waiting.cancel()                       # the Key's timeout closes the connection
+        await asyncio.gather(waiting, return_exceptions=True)
+        await asyncio.sleep(0.2)
+        release.set()
+        assert (await first).status == 200
+        for _ in range(50):
+            health = await (await client.get("/healthz")).json()
+            if health["abandoned"]:
+                break
+            await asyncio.sleep(0.05)
+        assert (health["abandoned"], calls) == (1, [16000])
