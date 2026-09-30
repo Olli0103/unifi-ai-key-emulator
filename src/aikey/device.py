@@ -130,6 +130,33 @@ _WORKER_REJECTION_REASONS = {
 }
 
 
+# speechToText refusals get their own fixed labels; the 28 Sep refusals
+# (16 of 123) could not be told apart from result codes alone.
+_SPEECH_REJECTION_REASONS = {
+    "speechToText requires a configured speech backend": "backend_unconfigured",
+    "Unsupported speechToText payload fields": "payload_fields",
+    "speechToText is outside the configured camera policy": "camera_policy",
+    "speechToText is limited to the audio-only event export": "export_contract",
+    "speechToText audio exceeds configured duration bound": "audio_too_long",
+    "speechToText requires the speech-to-text callback": "callback_path",
+    "speechToText requires the AI processor video export route": "media_path",
+    "speechToText export query is malformed": "export_query",
+    "speechToText export must exactly match the command": "export_query_match",
+}
+_SPEECH_SHARED_REASONS = ("command_size_or_shape", "invalid_json", "job_failed", "callback_url",
+                          "media_url", "http_origin", "callback_origin", "media_origin",
+                          "job_identity_conflict", "callback_uncertain", "queue_full",
+                          "journal_full", "worker_stopped")
+
+
+def _speech_rejection_reason(message: str) -> str:
+    reason = _SPEECH_REJECTION_REASONS.get(message)
+    if reason is None:
+        shared = _WORKER_REJECTION_REASONS.get(message)
+        reason = shared if shared in _SPEECH_SHARED_REASONS else "unclassified_worker_error"
+    return reason
+
+
 def _increment(counter, key):
     counter[key] = min(counter[key] + 1, _COUNTER_LIMIT)
 
@@ -396,6 +423,9 @@ class DeviceService:
             "worker_rejection_counts": dict.fromkeys(
                 sorted(set(_WORKER_REJECTION_REASONS.values()) | {"unclassified_worker_error"}), 0),
         }
+        self._speech_diagnostics = {"admitted": 0, "rejection_counts": dict.fromkeys(
+            sorted(set(_SPEECH_REJECTION_REASONS.values()) | set(_SPEECH_SHARED_REASONS)
+                   | {"unclassified_worker_error"}), 0)}
         # Process-local counts only; never retain request bodies or credentials.
         self._management_diagnostics = {
             "info_post_requests": 0, "info_credential_rejections": 0,
@@ -424,6 +454,7 @@ class DeviceService:
                 "unlisted": deepcopy(self._unlisted),
                 "sync_shapes": deepcopy(self._sync_shapes),
                 "recognize_key_frames": deepcopy(self._recognize_diagnostics),
+                "speech_to_text": deepcopy(self._speech_diagnostics),
                 "clock_offset_ms": self._clock_offset_ms, "discovery": "unsupported",
                 "compatibility": self._compatibility_status(),
                 "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "updateLcmSettings", "changeUserPassword", "RequestAI"]
@@ -1190,14 +1221,21 @@ class DeviceService:
         if action == "speechToText":
             # Protect 7.3.60 dispatches this for an alrmSpeak audio event; the
             # worker posts the transcript to /internal/aiprocessors/speech-to-text.
+            from .worker import WorkerError
             if not isinstance(body.get("camera"), str) or body["camera"] not in self._speech_cameras():
+                _increment(self._speech_diagnostics["rejection_counts"], "camera_policy")
                 raise CommandFailure(95, "speechToText is outside the configured camera policy")
             self._active_admissions += 1
             try:
                 async with asyncio.timeout(30):
                     admitted = await self.job_handler({"command": action, "payload": deepcopy(body)})
+            except WorkerError as exc:
+                _increment(self._speech_diagnostics["rejection_counts"], _speech_rejection_reason(str(exc)))
+                raise
             finally:
                 self._active_admissions -= 1
+            self._speech_diagnostics["admitted"] = min(self._speech_diagnostics["admitted"] + 1,
+                                                       _COUNTER_LIMIT)
             if not isinstance(admitted, dict):
                 raise ContractError("Job admission must return an object")
             return body

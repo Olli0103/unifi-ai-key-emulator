@@ -368,3 +368,30 @@ async def test_a_restart_lets_an_accepted_job_finish_and_refuses_new_ones(contro
     finally:
         await worker.stop()
     assert len(controller.callbacks) == 1
+
+
+async def test_speech_refusals_are_counted_by_fixed_reason_without_identifiers(tmp_path):
+    refusals = iter([WorkerError("speechToText audio exceeds configured duration bound"),
+                     WorkerError("Worker queue is full"),
+                     WorkerError("an unexpected worker message")])
+
+    async def admit(body):
+        error = next(refusals, None)
+        if error is not None:
+            raise error
+        return {"accepted": True}
+    options = device_config()
+    options["speech_to_text"] = {"provider": "openai-compatible", "model": "m",
+                                 "base_url": "http://127.0.0.1:9/v1", "camera_ids": [CAMERA]}
+    device = DeviceService(options, tmp_path, admit)
+    body = task()["payload"]
+    for number in range(4):
+        await device.handle_message(wire("speechToText", body, f"id-{number}"))
+    await device.handle_message(wire("speechToText", {**body, "camera": "other"}, "id-other"))
+    speech = device.status["speech_to_text"]
+    reasons = {k: v for k, v in speech["rejection_counts"].items() if v}
+    assert reasons == {"audio_too_long": 1, "queue_full": 1, "unclassified_worker_error": 1,
+                       "camera_policy": 1}
+    assert speech["admitted"] == 1
+    status = json.dumps(device.status)
+    assert CAMERA not in status and EVENT not in status and "unexpected" not in status
