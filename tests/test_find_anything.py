@@ -1010,6 +1010,17 @@ def test_key_tags_name_the_class_of_object_words_only():
     assert key_tags(None) == [] and len(key_tags(" ".join(["car"] * 20))) == 1
 
 
+def test_garden_animals_and_delivery_people_get_their_class_key_tag():
+    # "ein Igel im Garten" must share the animal tag with an indexed animal,
+    # or Protect's AI Trigger alarm can never fire for it.
+    from aikey.search import key_tags
+    assert [t["tags"] for t in key_tags("ein Igel und ein Marder im Garten")] == [["animal"], ["animal"]]
+    assert key_tags("squirrel on the fence")[0]["tags"] == ["animal"]
+    assert key_tags("Eichhörnchen am Futterhaus")[0]["tags"] == ["animal"]
+    assert key_tags("der Paketbote an der Tür")[0] == {"matchedWord": "paketbote", "tags": ["person"]}
+    assert key_tags("a boat and a tree") == []
+
+
 def test_class_tags_cover_supported_classes_and_nothing_else():
     from aikey.worker import _class_tags
     assert _class_tags("person", 0.87) == [{"confScore": 0.87, "tag": "person"}]
