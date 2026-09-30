@@ -146,7 +146,7 @@
    "not_observed": [
     "a caption read back from the exact-event record (metadata.ramDescription) on 7.3.70",
     "transcription rows or face thumbnails read back per event on 7.3.70",
-    "a successful player AI summary: all 4 on-demand jobs timed out on 30 Sep",
+    "an independently read-back player AI summary; the owner reported one rendered in the Büro player (screenshot, 09:09 local), while 4 on-demand jobs timed out earlier and 7 more after a restart with a caption backlog",
     "the body or expected reply of diskInfo",
     "deep mode, /describe tasks or a reverified event on 7.3.70"
    ],

@@ -130,3 +130,104 @@ def test_continuous_mode_archives_terminal_records_after_an_hour_not_a_day():
     assert not rollover_due(record("failed", 3 * 24 * 3600), now, continuous=False)  # a week for retries
     assert not rollover_due(record("callback_uncertain", 10 ** 6), now, continuous=True)
     assert rollover_due(record("completed", 61, "indexImages"), now, continuous=False)
+
+
+def scheduled_worker(tmp_path, **worker_options):
+    """A real JobProcessor whose captions block as if the model gate were stuck."""
+    worker = JobProcessor(config(tmp_path, max_concurrency=3, max_queue=16, **worker_options), tmp_path)
+    gate_open, done, started = asyncio.Event(), [], []
+
+    names = {}
+
+    def normalize(command):
+        import hashlib
+        op, name = command["operation"], command["name"]
+        job_id = hashlib.sha256(name.encode()).hexdigest()
+        names[job_id] = name
+        return (job_id, "fp-" + name, op, {"camera": "c"}, "http://127.0.0.1:9/cb", "legacy", [], 120)
+
+    async def execute(job):
+        started.append(names[job.job_id])
+        if job.operation in ("recognizeKeyFrames", "describe"):
+            await gate_open.wait()                          # waiting for the local model
+        done.append(names[job.job_id])
+        return {"status": "processed"}
+    worker._normalize, worker._execute = normalize, execute
+    worker.started = started
+    return worker, gate_open, done
+
+
+async def admit(worker, operation, name):
+    job, _ = await worker._admit({"operation": operation, "name": name})
+    return job
+
+
+async def settle():
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+
+async def test_a_blocked_caption_backlog_leaves_workers_for_summaries_faces_and_speech(tmp_path):
+    worker, gate_open, done = scheduled_worker(tmp_path, inference_concurrency=1)
+    try:
+        captions = [await admit(worker, "recognizeKeyFrames", f"caption-{n}") for n in range(6)]
+        await settle()
+        urgent = [await admit(worker, op, op) for op in
+                  ("on_demand", "recognizeFaces", "speechToText", "indexKeyFrames", "reverify")]
+        await asyncio.wait_for(asyncio.gather(*(job.future for job in urgent)), 2)
+        assert set(done) == {"on_demand", "recognizeFaces", "speechToText", "indexKeyFrames", "reverify"}
+        gate = worker.status()["inference_gate"]
+        assert (gate["caption_lane"], gate["captions_active"], gate["captions_waiting"]) == (2, 2, 4)
+        gate_open.set()
+        await asyncio.wait_for(asyncio.gather(*(job.future for job in captions)), 2)
+        # Waiting captions start oldest first.
+        assert [d for d in worker.started if d.startswith("caption")] == [f"caption-{n}" for n in range(6)]
+        gate = worker.status()["inference_gate"]
+        assert gate["captions_active"] == 0 and gate["captions_waiting"] == 0
+    finally:
+        await worker.stop()
+
+
+async def test_without_the_gate_the_old_behaviour_starves_short_jobs(tmp_path):
+    # The control: no inference_concurrency, no lane; three blocked captions
+    # take all three workers and a face job cannot start.
+    worker, gate_open, done = scheduled_worker(tmp_path)
+    try:
+        for n in range(3):
+            await admit(worker, "recognizeKeyFrames", f"caption-{n}")
+        await settle()
+        face = await admit(worker, "recognizeFaces", "face")
+        await settle()
+        assert not face.future.done() and done == []
+        gate_open.set()
+        await asyncio.wait_for(face.future, 2)
+    finally:
+        await worker.stop()
+
+
+async def test_waiting_captions_count_against_the_queue_and_stop_releases_every_slot(tmp_path):
+    worker, gate_open, done = scheduled_worker(tmp_path, inference_concurrency=1)
+    worker._queue = asyncio.PriorityQueue(maxsize=4)
+    captions = []
+    for n in range(6):
+        captions.append(await admit(worker, "recognizeKeyFrames", f"caption-{n}"))
+        await settle()
+    assert worker.status()["inference_gate"]["captions_waiting"] == 4
+    with pytest.raises(WorkerError, match="queue is full"):
+        await admit(worker, "recognizeKeyFrames", "one-too-many")
+    await worker.stop()
+    for job in captions:
+        assert job.future.done() and job.future.exception() is not None
+    gate = worker.status()["inference_gate"]
+    assert (gate["captions_active"], gate["captions_waiting"]) == (0, 0)
+    assert worker._pending == {} and done == []
+
+
+def test_a_single_worker_or_no_gate_has_no_lane(tmp_path):
+    assert JobProcessor(config(tmp_path), tmp_path)._caption_lane is None
+    assert JobProcessor(config(tmp_path, max_concurrency=1, inference_concurrency=1),
+                        tmp_path)._caption_lane is None
+    assert JobProcessor(config(tmp_path, max_concurrency=6, inference_concurrency=1),
+                        tmp_path)._caption_lane == 2
+    assert JobProcessor(config(tmp_path, max_concurrency=3, inference_concurrency=3),
+                        tmp_path)._caption_lane == 2          # always one worker left

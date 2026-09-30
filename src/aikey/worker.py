@@ -147,6 +147,11 @@ _QUEUE_PRIORITY = {
 }
 
 
+# Operations that wait for the vision model and so enter the caption lane.
+# The player's summary (on_demand) is urgent and bypasses it.
+_CAPTION_LANE_OPERATIONS = frozenset({"recognizeKeyFrames", "describe"})
+
+
 class _PriorityGate:
     """At most ``capacity`` holders; a lower priority number is served first, FIFO within one."""
 
@@ -471,6 +476,16 @@ class JobProcessor:
         if gate is not None and (type(gate) is not int or not 1 <= gate <= self.concurrency):
             raise WorkerError("worker.inference_concurrency must be 1 to max_concurrency")
         self._inference_gate = _PriorityGate(gate) if gate is not None else None
+        # With a gate, caption jobs waiting for the model would otherwise hold
+        # every worker (30 Sep: six captions queued at the gate, and player
+        # summaries timed out waiting for a free worker). At most gate + 1 of
+        # them occupy workers (one inferring, one preparing its media); the
+        # rest wait here, oldest first, so short and urgent jobs always find
+        # a free worker. They still count against max_queue.
+        self._caption_lane = (min(gate + 1, self.concurrency - 1)
+                              if gate is not None and self.concurrency > 1 else None)
+        self._caption_active = 0
+        self._caption_waiting: list[tuple[int, int, _Job]] = []
         # A restart lets queued and running jobs finish for this long first;
         # continuous captions keep jobs in flight, so there is rarely an idle gap.
         self.drain_s = min(self._positive("drain_s", 90), 600)
@@ -1514,7 +1529,7 @@ class JobProcessor:
             raise WorkerError("Worker journal is full; archive reviewed entries")
         if self._draining:
             raise WorkerError("Worker has stopped")
-        if self._queue.full():
+        if self._queue.full() or self._queue.qsize() + len(self._caption_waiting) >= self._queue.maxsize:
             raise WorkerError("Worker queue is full")
         future = asyncio.get_running_loop().create_future()
         future.add_done_callback(lambda value: value.exception() if not value.cancelled() else None)
@@ -1580,50 +1595,73 @@ class JobProcessor:
                 **({"inference_gate": {"capacity": self._inference_gate.capacity,
                                        "active": self._inference_gate.active,
                                        "waiting": self._inference_gate.waiting(),
-                                       "on_demand_waiting": self._inference_gate.waiting(0)}}
+                                       "on_demand_waiting": self._inference_gate.waiting(0),
+                                       "caption_lane": self._caption_lane,
+                                       "captions_active": self._caption_active,
+                                       "captions_waiting": len(self._caption_waiting)}}
                    if self._inference_gate is not None else {})}
 
     async def _consume(self):
         while True:
-            *_, job = await self._queue.get()
+            entry = await self._queue.get()
             try:
-                async with asyncio.timeout(max(0, job.deadline - time.monotonic())):
-                    result = await self._execute(job)
-                self._record(job, "completed", result=result)
-                if job.operation == "indexImages":
-                    self.retroactive["completed"] += 1
-                if not job.future.done():
-                    job.future.set_result(result)
-            except asyncio.CancelledError:
-                if not job.future.done():
-                    job.future.set_exception(WorkerError("Worker stopped before job completion"))
-                raise
-            except Exception as exc:
-                message = "Job timed out" if isinstance(exc, TimeoutError) else str(exc)
-                if job.operation == "indexImages":
-                    self.retroactive["failed"] += 1
-                current = self._history.get(job.job_id, {})
-                if current.get("state") not in {"callback_sending", "callback_uncertain"}:
-                    if (job.operation == "on_demand" and self.callback_mode == "enabled"
-                            and job.deadline > time.monotonic()):
-                        try:
-                            async with asyncio.timeout(job.deadline - time.monotonic()):
-                                result = await self._post_callback(job, {"error": message})
-                            result["status"] = "failed"
-                            self._record(job, "completed", result=result)
-                        except Exception:
-                            if self._history.get(job.job_id, {}).get("state") not in {
-                                    "callback_sending", "callback_uncertain"}:
-                                self._record(job, "failed", error=message)
-                    else:
-                        self._record(job, "failed", error=message)
-                if not job.future.done():
-                    job.future.set_exception(WorkerError(message))
+                job = entry[-1]
+                if self._caption_lane is not None and job.operation in _CAPTION_LANE_OPERATIONS:
+                    heapq.heappush(self._caption_waiting, entry)
+                    await self._run_caption_lane()
+                else:
+                    await self._run_job(job)
             finally:
-                if not job.future.done():
-                    job.future.set_exception(WorkerError("Job interrupted before durable completion"))
-                self._pending.pop(job.job_id, None)
                 self._queue.task_done()
+
+    async def _run_caption_lane(self):
+        """Run waiting captions while the lane has room; otherwise leave them waiting."""
+        while self._caption_waiting and self._caption_active < self._caption_lane:
+            *_, job = heapq.heappop(self._caption_waiting)
+            self._caption_active += 1
+            try:
+                await self._run_job(job)
+            finally:
+                self._caption_active -= 1
+
+    async def _run_job(self, job):
+        try:
+            async with asyncio.timeout(max(0, job.deadline - time.monotonic())):
+                result = await self._execute(job)
+            self._record(job, "completed", result=result)
+            if job.operation == "indexImages":
+                self.retroactive["completed"] += 1
+            if not job.future.done():
+                job.future.set_result(result)
+        except asyncio.CancelledError:
+            if not job.future.done():
+                job.future.set_exception(WorkerError("Worker stopped before job completion"))
+            raise
+        except Exception as exc:
+            message = "Job timed out" if isinstance(exc, TimeoutError) else str(exc)
+            if job.operation == "indexImages":
+                self.retroactive["failed"] += 1
+            current = self._history.get(job.job_id, {})
+            if current.get("state") not in {"callback_sending", "callback_uncertain"}:
+                if (job.operation == "on_demand" and self.callback_mode == "enabled"
+                        and job.deadline > time.monotonic()):
+                    try:
+                        async with asyncio.timeout(job.deadline - time.monotonic()):
+                            result = await self._post_callback(job, {"error": message})
+                        result["status"] = "failed"
+                        self._record(job, "completed", result=result)
+                    except Exception:
+                        if self._history.get(job.job_id, {}).get("state") not in {
+                                "callback_sending", "callback_uncertain"}:
+                            self._record(job, "failed", error=message)
+                else:
+                    self._record(job, "failed", error=message)
+            if not job.future.done():
+                job.future.set_exception(WorkerError(message))
+        finally:
+            if not job.future.done():
+                job.future.set_exception(WorkerError("Job interrupted before durable completion"))
+            self._pending.pop(job.job_id, None)
 
     async def _read_response(self, response, limit):
         if response.content_length is not None and response.content_length > limit:
@@ -2240,6 +2278,11 @@ class JobProcessor:
                 job.future.set_exception(WorkerError("Worker stopped before job admission completed"))
             self._pending.pop(job.job_id, None)
             self._queue.task_done()
+        while self._caption_waiting:
+            *_, job = heapq.heappop(self._caption_waiting)
+            if not job.future.done():
+                job.future.set_exception(WorkerError("Worker stopped before job admission completed"))
+            self._pending.pop(job.job_id, None)
         if self._embedding_service is not None:
             await self._embedding_service.close()
         if self._clip is not None:
