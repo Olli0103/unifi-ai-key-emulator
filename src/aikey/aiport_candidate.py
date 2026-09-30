@@ -32,10 +32,11 @@ from .aiport_ingest import (
 from .aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
 from .aiport_api_detection import ApiObjectDetector, _frame_mode
 from .aiport_faces import FaceEngine, FaceError, make_face_snapshot, verify_model
-from .aiport_audio import (AudioSettingsError, SpeechActivity, parse_audio_settings,
+from .aiport_audio import (AudioSettingsError, SpeechActivity, audio_event_payload, parse_audio_flags,
                            speech_event_payload)
 from .aiport_motion import (MotionDetector, MotionSettingsError, MotionTimeline,
                             motion_event_payload, parse_motion_settings)
+from .aiport_sounds import SOUND_TYPES, SoundClassifier, SoundError, SoundEvents
 from .aiport_onnx_detection import OnnxRFDetrNanoDetector
 from .aiport_camera_engine import (
     _PACKAGE_COOLDOWN_SECONDS, CameraEventCandidate, CameraPolicyEngine,
@@ -156,7 +157,7 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
     allowed = required | {"paired_stream", "paired_streams", "diagnostic_hello_until",
                           "diagnostic_stream", "live_detector", "live_pool_detector",
-                          "live_speech_cameras", "live_face",
+                          "live_speech_cameras", "live_face", "live_sound",
                           "diagnostic_streams",
                           "diagnostic_detector",
                           "diagnostic_pool_detector", "diagnostic_pool_event_until",
@@ -365,6 +366,30 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
                        for k in ("detector_sha256", "embedder_sha256"))):
             raise CandidateError("Invalid live face policy")
         face["cameras"] = cameras
+    if "live_sound" in value:
+        # Opt-in alarm and household sounds (#28): a pinned local AudioSet
+        # classifier on the audio decoder that speech already runs.
+        sound = value["live_sound"]
+        keys = {"cameras", "model_path", "model_sha256", "class_map_path", "class_map_sha256"}
+        try:
+            cameras = ([normalize_mac(mac) for mac in sound["cameras"]]
+                       if isinstance(sound, dict) and isinstance(sound.get("cameras"), list) else None)
+        except ValueError:
+            cameras = None
+        types = sound.get("types", list(SOUND_TYPES)) if isinstance(sound, dict) else None
+        limit = sound.get("max_events_per_hour", 20) if isinstance(sound, dict) else None
+        if (not isinstance(sound, dict) or not cameras or len(set(cameras)) != len(cameras)
+                or not set(cameras) <= set(value.get("live_speech_cameras") or [])
+                or not keys <= set(sound) <= keys | {"types", "max_events_per_hour"}
+                or any(not isinstance(sound[k], str) or not Path(sound[k]).is_absolute()
+                       for k in ("model_path", "class_map_path"))
+                or any(not isinstance(sound[k], str) or not _PIN.fullmatch(sound[k])
+                       for k in ("model_sha256", "class_map_sha256"))
+                or not isinstance(types, list) or not types or len(set(types)) != len(types)
+                or not set(types) <= set(SOUND_TYPES)
+                or type(limit) is not int or not 1 <= limit <= 120):
+            raise CandidateError("Invalid live sound policy")
+        sound["cameras"], sound["types"] = cameras, types
     if "diagnostic_hello_until" in value:
         until = value["diagnostic_hello_until"]
         if type(until) is not int or until < 0 or until > time.time() + 600:
@@ -648,6 +673,22 @@ class CandidateService:
         self.speech_rate_limited = 0
         self.speech_reannounces = 0
         self._speech_announced: set[str] = set()
+        # Alarm and household sounds per opted-in camera, only for the types
+        # Protect has enabled for it (ChangeAudioEventsSettings).
+        sound = config.get("live_sound") or {}
+        self._sound_cameras: frozenset[str] = frozenset(sound.get("cameras", ()))
+        self._sound_types: tuple[str, ...] = tuple(sound.get("types", SOUND_TYPES) if sound else ())
+        self._sound_limit = sound.get("max_events_per_hour", 20)
+        self._sound_classifier: SoundClassifier | None = None
+        self._sounds: dict[str, SoundEvents] = {}
+        self._audio_flags: dict[str, dict[str, bool]] = {}
+        self._sound_open: dict[str, str] = {}
+        self._sound_enter_times: dict[str, list[float]] = {}
+        self.sound_events_entered: dict[str, int] = {}
+        self.sound_events_left = 0
+        self.sound_rate_limited = 0
+        self.sound_speech_preempted = 0
+        self.sound_errors: dict[str, int] = {}
         # Local face embeddings per opted-in camera, only while Protect has
         # Face enabled for it (ChangeSmartDetectSettings).
         self._face_cameras: frozenset[str] = frozenset(
@@ -924,7 +965,9 @@ class CandidateService:
                                            audio_ready=False)
             await self._send_stream_status(ws, streaming=True, camera_mac=camera_mac)
         for edge in detector.feed(pcm):
-            if edge.edge == "enter" and not self._speech_enabled.get(camera_mac):
+            if edge.edge == "enter" and (not self._speech_enabled.get(camera_mac)
+                                         or camera_mac in self._sound_open):
+                # An open alarm or sound outranks speech on the same camera.
                 self.speech_edges_suppressed += 1
                 continue
             if edge.edge == "enter":
@@ -940,6 +983,51 @@ class CandidateService:
             if edge.edge == "leave" and camera_mac not in self._speech_open:
                 continue
             await self._send_speech_edge(ws, camera_mac, edge.edge, edge.level_db)
+        sounds = self._sounds.get(camera_mac)
+        if sounds is None:
+            return
+        try:
+            # The classifier runs off the event loop; one camera's chunks
+            # arrive in order, so its detector is never fed concurrently.
+            edges = await asyncio.to_thread(sounds.feed, pcm)
+        except (SoundError, RuntimeError, ValueError) as exc:
+            code = str(exc) if isinstance(exc, SoundError) else "sound_classifier_failed"
+            self.sound_errors[code] = self.sound_errors.get(code, 0) + 1
+            return
+        for edge in edges:
+            if edge.edge == "leave":
+                if self._sound_open.get(camera_mac) == edge.kind:
+                    await self._send_sound_edge(ws, camera_mac, edge.kind, "leave", edge.level_db)
+                continue
+            recent = [t for t in self._sound_enter_times.get(camera_mac, ()) if now - t < 3600]
+            # Smoke and CO alarms get four times the budget: they matter most
+            # and a real alarm repeats for minutes.
+            limit = self._sound_limit * (4 if edge.kind in ("alrmSmoke", "alrmCmonx") else 1)
+            if len(recent) >= limit:
+                self._sound_enter_times[camera_mac] = recent
+                self.sound_rate_limited += 1
+                sounds.close()
+                continue
+            self._sound_enter_times[camera_mac] = recent + [now]
+            if camera_mac in self._speech_open:
+                await self._send_speech_edge(ws, camera_mac, "leave", edge.level_db)
+                detector.reset()
+                self.sound_speech_preempted += 1
+            await self._send_sound_edge(ws, camera_mac, edge.kind, "enter", edge.level_db)
+
+    async def _send_sound_edge(self, ws: aiohttp.ClientWebSocketResponse, camera_mac: str,
+                               kind: str, edge: str, level_db: float) -> None:
+        await self._send_control_event(ws, "EventSmartAudio", audio_event_payload(
+            camera_mac, kind, edge, clock_wall_ms=int(time.time() * 1000), level_db=level_db))
+        if edge == "enter":
+            self._sound_open[camera_mac] = kind
+            self.sound_events_entered[kind] = self.sound_events_entered.get(kind, 0) + 1
+        else:
+            self._sound_open.pop(camera_mac, None)
+            self.sound_events_left += 1
+
+    def _sound_enabled(self, camera_mac: str, kind: str) -> bool:
+        return kind in self._sound_types and self._audio_flags.get(camera_mac, {}).get(kind, False)
 
     def _speech_camera_health(self, camera_mac: str) -> dict:
         if camera_mac not in self._speech:
@@ -963,16 +1051,22 @@ class CandidateService:
     async def _handle_audio_settings(self, ws: aiohttp.ClientWebSocketResponse,
                                      request_id: int, payload: object) -> None:
         try:
-            camera, enabled = parse_audio_settings(payload)
+            camera, flags = parse_audio_flags(payload)
+            enabled = flags["alrmSpeak"]
         except AudioSettingsError:
-            camera, enabled = None, False
+            camera, flags, enabled = None, {}, False
         if camera is None or camera not in self._speech:
             await self._reply_control(ws, "ChangeAudioEventsSettings", request_id, 501,
                                       {"description": "audio_events_unavailable"})
             self.speech_settings_rejected += 1
             return
         self._speech_enabled[camera] = enabled
+        self._audio_flags[camera] = flags
         self._speech_settings_seen.add(camera)
+        open_sound = self._sound_open.get(camera)
+        if open_sound is not None and not self._sound_enabled(camera, open_sound):
+            await self._send_sound_edge(ws, camera, open_sound, "leave", -120.0)
+            self._sounds[camera].close()
         if not enabled and camera in self._speech_open:
             await self._send_speech_edge(ws, camera, "leave", -120.0)
             self._speech[camera].reset()
@@ -1872,6 +1966,16 @@ class CandidateService:
                           "analyses": self.face_analyses, "found": self.faces_found,
                           "sent": self.faces_sent, "errors": dict(self.face_errors)}}
                if self._face_cameras else {}),
+            **({"sounds": {"cameras": len(self._sound_cameras),
+                           "classifier": self._sound_classifier is not None,
+                           "types": len(self._sound_types),
+                           "entered": dict(self.sound_events_entered),
+                           "left": self.sound_events_left, "open": len(self._sound_open),
+                           "rate_limited": self.sound_rate_limited,
+                           "speech_preempted": self.sound_speech_preempted,
+                           "classifications": sum(d.classifications for d in self._sounds.values()),
+                           "errors": dict(self.sound_errors)}}
+               if self._sound_cameras else {}),
             **({"speech": {"cameras": len(self._speech),
                            "enabled": sum(self._speech_enabled.get(c, False) for c in self._speech),
                            "settings_acks": self.speech_settings_acks,
@@ -2197,6 +2301,7 @@ class CandidateService:
                 "deviceID": camera_mac,
                 "smartDetect": (self._pool_feature_types()
                                 + (["alrmSpeak"] if camera_mac in self._speech else [])
+                                + (list(self._sound_types) if camera_mac in self._sounds else [])
                                 + (["face"] if camera_mac in self._face_cameras
                                    and self._face_engine is not None else [])
                                 if isinstance(self.ingress, AiPortIngressPool)
@@ -2225,6 +2330,10 @@ class CandidateService:
             if camera_mac in self._speech_open:
                 await self._send_speech_edge(ws, camera_mac, "leave", -120.0)
                 self._speech[camera_mac].reset()
+            if camera_mac in self._sound_open:
+                await self._send_sound_edge(ws, camera_mac, self._sound_open[camera_mac], "leave", -120.0)
+            if camera_mac in self._sounds:
+                self._sounds[camera_mac].reset()
         self.stream_status_events_sent += 1
 
     async def _handle_diagnostic_frame(self, ws: aiohttp.ClientWebSocketResponse,
@@ -2779,6 +2888,20 @@ class CandidateService:
                                        verify_model(face["embedder_path"], face["embedder_sha256"])))
             except (FaceError, OSError, ImportError, RuntimeError) as exc:
                 self._count_face_error(str(exc) if isinstance(exc, FaceError) else "face_engine_unavailable")
+        if self._sound_cameras and self._sound_classifier is None:
+            sound = self.config["live_sound"]
+            try:
+                self._sound_classifier = await asyncio.to_thread(
+                    lambda: SoundClassifier(Path(sound["model_path"]), sound["model_sha256"],
+                                            Path(sound["class_map_path"]), sound["class_map_sha256"]))
+            except (SoundError, OSError, ImportError, RuntimeError) as exc:
+                code = str(exc) if isinstance(exc, SoundError) else "sound_classifier_unavailable"
+                self.sound_errors[code] = self.sound_errors.get(code, 0) + 1
+            else:
+                self._sounds = {camera: SoundEvents(
+                    self._sound_classifier,
+                    enabled=lambda kind, camera=camera: self._sound_enabled(camera, kind))
+                    for camera in self._sound_cameras}
         self.runner = web.AppRunner(self.app(), access_log=None)
         await self.runner.setup()
         try:

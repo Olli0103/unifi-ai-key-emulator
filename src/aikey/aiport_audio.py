@@ -42,11 +42,16 @@ class AudioSettingsError(ValueError):
 
 
 def parse_audio_settings(payload: object) -> tuple[str, bool]:
-    """Return (camera MAC, speech enabled) from Protect's audio-events settings.
+    """Return (camera MAC, speech enabled) from Protect's audio-events settings."""
+    camera, flags = parse_audio_flags(payload)
+    return camera, flags[SPEECH]
+
+
+def parse_audio_flags(payload: object) -> tuple[str, dict[str, bool]]:
+    """Return (camera MAC, {audio type: enabled}) from Protect's audio-events settings.
 
     Protect sends every ``enableAlrm*`` flag as 0 or 1 plus ``deviceID`` when
-    the camera is paired with an AI Port. Only speech is detected here; the
-    other flags are validated and otherwise ignored.
+    the camera is paired with an AI Port. A type whose flag is absent is off.
     """
     if not isinstance(payload, dict) or len(payload) > 32:
         raise AudioSettingsError("invalid_audio_settings")
@@ -62,13 +67,21 @@ def parse_audio_settings(payload: object) -> tuple[str, bool]:
             raise AudioSettingsError("invalid_audio_settings")
     if "enableAlrmSpeak" not in payload:
         raise AudioSettingsError("invalid_audio_settings")
-    return camera, payload["enableAlrmSpeak"] == 1
+    return camera, {kind: payload.get("enable" + kind[0].upper() + kind[1:]) == 1
+                    for kind in AUDIO_TYPES}
 
 
 def speech_event_payload(camera_mac: str, edge: str, *, clock_wall_ms: int,
                          level_db: float) -> dict:
     """The ``EventSmartAudio`` payload for one speech edge."""
-    if (edge not in ("enter", "leave") or type(clock_wall_ms) is not int
+    return audio_event_payload(camera_mac, SPEECH, edge, clock_wall_ms=clock_wall_ms,
+                               level_db=level_db)
+
+
+def audio_event_payload(camera_mac: str, kind: str, edge: str, *, clock_wall_ms: int,
+                        level_db: float) -> dict:
+    """The ``EventSmartAudio`` payload for one edge of one audio type; the rest read none."""
+    if (kind not in AUDIO_TYPES or edge not in ("enter", "leave") or type(clock_wall_ms) is not int
             or clock_wall_ms <= 0 or not isinstance(level_db, (int, float))
             or not math.isfinite(level_db)):
         raise AudioSettingsError("invalid_audio_event")
@@ -79,7 +92,7 @@ def speech_event_payload(camera_mac: str, edge: str, *, clock_wall_ms: int,
         "leveldB": round(max(-120.0, min(0.0, float(level_db))), 1), "levels": 0,
         "loudNoise": "none", "soundLoss": "none"}
     payload.update(dict.fromkeys(AUDIO_TYPES, "none"))
-    payload[SPEECH] = edge
+    payload[kind] = edge
     return payload
 
 
