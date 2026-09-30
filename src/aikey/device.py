@@ -519,6 +519,10 @@ class DeviceService:
             "supportLicensePlateRecognition": False,
             # Opt-in local enhancer; Protect stores its output separately (#23).
             "supportFaceEnhancement": self._face_enhancement_configured(),
+            # The local person re-ID model (deep understanding). Protect 7.3.70
+            # aggregates it into nvr aiFeatureFlag, and its settings page only
+            # shows Person second-stage verification while it is enabled.
+            "supportPersonReId": self._deep_mode_capable(),
         }
 
     def _deep_mode_capable(self) -> bool:

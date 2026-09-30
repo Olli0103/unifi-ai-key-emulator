@@ -117,6 +117,7 @@ async def test_a_deep_capable_key_switches_mode_and_echoes_it(tmp_path):
     service = DeviceService(deep_device_config(), tmp_path, admit)
     flags = service.get_info()["featureFlags"]
     assert flags["supportDeepMode"] is True and flags["supportVlm"] is True
+    assert flags["supportPersonReId"] == {"enabled": True, "version": "v1"}
     assert flags["aiMode"] == "basic" and flags["describeConfigHash"] == ""
     assert (await send(service, "changeAiInferAgentSettings", {"modelMode": "deep"}))[0] == 0
     assert service.get_info()["featureFlags"]["aiMode"] == "deep"
@@ -144,6 +145,7 @@ async def test_a_key_without_deep_models_stays_basic(tmp_path):
     service = DeviceService(device_config(), tmp_path, admit)
     flags = service.get_info()["featureFlags"]
     assert flags["supportDeepMode"] is False and flags["aiMode"] == "basic"
+    assert flags["supportPersonReId"]["enabled"] is False
     assert (await send(service, "changeAiInferAgentSettings", {"modelMode": "deep"}))[0] != 0
     assert (await send(service, "changeDescribePrompts", prompts_body(), "b"))[0] != 0
 
