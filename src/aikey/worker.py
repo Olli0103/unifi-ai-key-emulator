@@ -2095,8 +2095,11 @@ class JobProcessor:
             tags, moments, crops = await self._index_objects(job, data, headers, url)
             taken = {name for name, _ in images}
             kept = {name for name, _ in crops if name not in taken}
+            # Scene tags (no search snapshot) stay; object moments whose crop
+            # a face already claimed go.
             moments = [moment for moment in moments
-                       if str(moment["searchSnapshots"][0]["trackerID"]) in kept]
+                       if "searchSnapshots" not in moment
+                       or str(moment["searchSnapshots"][0]["trackerID"]) in kept]
             ram = ({"cameraId": job.payload["camera"], "eventId": job.payload["event"],
                     "description": "", "status": "success", "keyMomentsTags": moments,
                     "thumbnailTags": tags, "inferBoxMs": 0,

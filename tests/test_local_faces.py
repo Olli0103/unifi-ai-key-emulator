@@ -85,6 +85,8 @@ async def controller(tmp_path):
     app.router.add_get("/internal/aiprocessors/video/export", service.export)
     app.router.add_post("/v1/faces", service.faces)
     app.router.add_post("/v1/image", service.image)
+    app.router.add_post("/v1/tags", lambda request: web.json_response(
+        {"tags": [{"tag": "garden", "confScore": 0.8}], "model": "ram-plus-swin-large-14m"}))
     app.router.add_post("/v1/chat/completions", service.vision)
     app.router.add_post("/internal/aiprocessors/recognize-anything", service.callback)
     runner = web.AppRunner(app, shutdown_timeout=1)
@@ -425,3 +427,30 @@ async def test_a_native_face_camera_still_gets_its_find_anything_tags_in_the_ram
     [moment] = ram["keyMomentsTags"]
     assert moment["searchSnapshots"][0]["trackerID"] == 3 and len(moment["imgEmbed"]) == 768
     assert result["result"] == {"faces": 0, "matched": 0, "indexed": 0, "snapshots": 1}
+
+
+async def test_a_face_task_with_ram_tags_keeps_its_scene_tags_and_completes(controller, tmp_path):
+    # 30 Sep: the scene-tag moment has no search snapshot, and the face path
+    # filtered moments by snapshot tracker, failing every indexed face task.
+    inventory(tmp_path)
+    options = config(controller)
+    options["find_anything"] = {"clip_server": controller.origin, "index_camera_ids": [CAMERA],
+                                "tag_server": controller.origin}
+    options["search"] = {"enabled": True, "profile": "clip-basic-v1"}
+    command = task()
+    command["payload"]["roiMeta"] = [{"ts": START + 1500, "roi": [
+        {"name": "", "coord": [300, 100, 200, 500], "trackerId": 3, "confidence": 0.9,
+         "objectType": "person", "attributes": {"objectType": "person"}}]}]
+    worker = JobProcessor(options, tmp_path)
+    try:
+        result = await worker.handle(command)
+    finally:
+        await worker.stop()
+    [parts] = controller.callbacks
+    moments = parts["ram"][1]["keyMomentsTags"]
+    scene = [m for m in moments if "searchSnapshots" not in m]
+    objects = [m for m in moments if "searchSnapshots" in m]
+    assert [t["tag"] for t in scene[0]["tags"]] == ["garden"]
+    assert objects[0]["searchSnapshots"][0]["trackerID"] == 3
+    assert [t["tag"] for t in objects[0]["tags"]] == ["person", "garden"]
+    assert result["result"]["snapshots"] == 2
