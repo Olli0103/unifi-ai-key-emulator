@@ -51,7 +51,8 @@ These gates are what still stands between the current code and native parity. No
 
 - **State:** `find_anything.reverification` is on in the NAS Key config since r3 (30 Sep). No `second_verifier` request has arrived. The 7.3.70 bundle explains why: Protect sends an enabled `reVerificationPolicy` to cameras and AI Ports only while an AI reverification policy (person, vehicle or animal) exists. Without one, no track is ever flagged `reVerifyEligible`.
 - **Code (9bf674f, AI Ports r43):** AI Port tracks inside the policy's presence-probability window now pass and carry `reVerifyEligible` in their snapshot; scores below the window are dropped.
-- **Needs:** Olli creates one person reverification policy in Protect's AI settings.
+- **Readback (30 Sep, owner's web session, counts only):** all three reverification policies have been enabled since about 23 Sep (person earlier) with zero hits. In 3 hours, 28 detected thumbnails fell in the 40–80 % window, but 27 were face confidences, which verification does not cover. The one person, on the native Wohnzimmer G6, was not verified. The AI Ports publish only scores at or above their 0.8 detector threshold, so they never produce an in-window track to flag.
+- **Needs:** a test that produces in-window tracks. Either lower one AI Port slot's detector threshold to the window's floor for a bounded trial (flagged tracks would then reach Protect with `reVerifyEligible`), or an owner walk in poor light past a native camera.
 - **Record:** health `reverification_person_enabled` on the AI Ports, the Key's `reverify` job count, and for one reverified event `detectedThumbnails` `preReverificationObjectType` and the confidence type. Also confirm that an unsure verdict left the event type unchanged.
 - **Rollback:**
   1. Delete the policy in Protect.
