@@ -64,15 +64,19 @@ def test_a_sound_enters_after_two_hops_and_leaves_after_its_quiet_time():
     assert run(events, clock, 6) == [("alrmBabyCry", "leave")]
 
 
-def test_a_higher_priority_sound_preempts_and_a_lower_one_waits():
+def test_two_sounds_open_and_close_independently():
+    # Protect adds every entering type to the camera's one audio event.
     clock, scores = Clock(), Scores()
     events = detector(scores, clock)
     scores.value = {"alrmBark": 0.9}
     assert run(events, clock, 2) == [("alrmBark", "enter")]
     scores.value = {"alrmBark": 0.9, "alrmCarHorn": 0.9}
-    assert run(events, clock, 1) == []                           # car horn ranks lower
-    scores.value = {"alrmBark": 0.9, "alrmSiren": 0.9}
-    assert run(events, clock, 2) == [("alrmBark", "leave"), ("alrmSiren", "enter")]
+    assert run(events, clock, 1) == [("alrmCarHorn", "enter")]
+    assert events.open_kinds == {"alrmBark", "alrmCarHorn"} and events.open == "alrmBark"
+    scores.value = {"alrmBark": 0.9}
+    assert run(events, clock, 3) == [("alrmCarHorn", "leave")]
+    events.close("alrmBark")
+    assert events.open is None
 
 
 def test_disabled_types_and_quiet_audio_never_enter_or_classify():
@@ -135,7 +139,7 @@ async def feed(service, samples, clock):
         await service._observe_pool_audio(CAMERA, data[offset:offset + 9600])
 
 
-async def test_an_enabled_alarm_preempts_open_speech_and_is_announced_as_a_feature(tmp_path):
+async def test_an_alarm_joins_open_speech_in_one_event_and_is_announced_as_a_feature(tmp_path):
     clock, scores = Clock(), Scores()
     service, sink = await sound_service(tmp_path, scores, clock)
     try:
@@ -145,13 +149,71 @@ async def test_an_enabled_alarm_preempts_open_speech_and_is_announced_as_a_featu
         scores.value = {"alarm": 0.9}
         await feed(service, list(beeps(0.5, 0.5, 3, 1.5, repeats=1)), clock)   # a T3 pattern
         audio = sink.events("EventSmartAudio")
-        assert [(e["alrmSpeak"], e["alrmSmoke"]) for e in audio] == [
-            ("enter", "none"), ("leave", "none"), ("none", "enter")]
+        assert [(e["alrmSpeak"], e["alrmSmoke"]) for e in audio][:2] == [
+            ("enter", "none"), ("moving", "enter")]
         flags = sink.events("EventFeatureFlagsUpdated")[0]["smartDetect"]
         assert {"alrmSpeak", "alrmSmoke", "alrmGlassBreak"} <= set(flags)
         sounds = (await health(service))["sounds"]
-        assert sounds["entered"] == {"alrmSmoke": 1} and sounds["speech_preempted"] == 1
+        assert sounds["entered"] == {"alrmSmoke": 1} and sounds["joined_speech"] == 1
+        assert sounds["combined_events"] == 1
         assert sounds["enabled_types"] == 1                  # only smoke is enabled
+        scores.value = {}
+        await feed(service, noise(12, amplitude=200), clock)
+        last = sink.events("EventSmartAudio")[-1]
+        assert all(last[kind] in ("leave", "none") for kind in AUDIO_TYPES)   # the event ends
+        assert not service._audio_open
+    finally:
+        await service.stop()
+
+
+async def test_speech_does_not_enter_while_a_sound_is_open(tmp_path):
+    clock, scores = Clock(), Scores()
+    service, sink = await sound_service(tmp_path, scores, clock)
+    try:
+        await audio_settings(service, sink, 45, enableAlrmBark=1)
+        scores.value = {"alrmBark": 0.9}
+        await feed(service, noise(2, amplitude=600), clock)
+        await feed(service, voice(2), clock)
+        assert all(e["alrmSpeak"] == "none" for e in sink.events("EventSmartAudio"))
+        assert service.speech_edges_suppressed >= 1
+    finally:
+        await service.stop()
+
+
+async def test_two_sounds_share_one_event_that_ends_when_both_have_left(tmp_path):
+    clock, scores = Clock(), Scores()
+    service, sink = await sound_service(tmp_path, scores, clock)
+    try:
+        await audio_settings(service, sink, 46, enableAlrmBark=1, enableAlrmSiren=1)
+        scores.value = {"alrmBark": 0.9}
+        await feed(service, noise(1.5, amplitude=6000), clock)
+        scores.value = {"alrmBark": 0.9, "alrmSiren": 0.9}
+        await feed(service, noise(3, amplitude=6000), clock)
+        scores.value = {"alrmSiren": 0.9}
+        await feed(service, noise(4, amplitude=6000), clock)
+        scores.value = {}
+        await feed(service, noise(6, amplitude=6000), clock)
+        audio = [(e["alrmBark"], e["alrmSiren"]) for e in sink.events("EventSmartAudio")]
+        assert audio == [("enter", "none"), ("moving", "enter"), ("leave", "moving"),
+                         ("none", "leave")]
+        assert (await health(service))["sounds"]["combined_events"] == 1
+    finally:
+        await service.stop()
+
+
+async def test_overlapping_types_cannot_chain_one_event_past_the_cap(tmp_path, monkeypatch):
+    import aikey.aiport_candidate as candidate
+    clock, scores = Clock(), Scores()
+    service, sink = await sound_service(tmp_path, scores, clock)
+    monkeypatch.setattr(candidate.time, "monotonic", clock)
+    try:
+        await audio_settings(service, sink, 47, enableAlrmBark=1)
+        scores.value = {"alrmBark": 0.9}
+        await feed(service, noise(1.5, amplitude=6000), clock)
+        clock.now += candidate.MAX_EVENT_S
+        await feed(service, noise(0.3, amplitude=6000), clock)
+        ends = [e for e in sink.events("EventSmartAudio") if e["alrmBark"] == "leave"]
+        assert len(ends) == 1 and (await health(service))["sounds"]["events_capped"] == 1
     finally:
         await service.stop()
 

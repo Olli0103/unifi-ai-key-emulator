@@ -83,9 +83,25 @@ def speech_event_payload(camera_mac: str, edge: str, *, clock_wall_ms: int,
 def audio_event_payload(camera_mac: str, kind: str, edge: str, *, clock_wall_ms: int,
                         level_db: float) -> dict:
     """The ``EventSmartAudio`` payload for one edge of one audio type; the rest read none."""
-    if (kind not in AUDIO_TYPES or edge not in ("enter", "leave") or type(clock_wall_ms) is not int
-            or clock_wall_ms <= 0 or not isinstance(level_db, (int, float))
-            or not math.isfinite(level_db)):
+    if edge not in ("enter", "leave"):
+        raise AudioSettingsError("invalid_audio_event")
+    return audio_state_payload(camera_mac, {kind: edge}, clock_wall_ms=clock_wall_ms,
+                               level_db=level_db)
+
+
+def audio_state_payload(camera_mac: str, states: dict[str, str], *, clock_wall_ms: int,
+                        level_db: float) -> dict:
+    """The ``EventSmartAudio`` payload for the camera's whole audio event.
+
+    ``states`` names each type that enters, stays open (``moving``) or leaves;
+    every other type reads ``none``. Protect adds each entering type to the
+    camera's one open audio event and ends it once all types read ``leave`` or
+    ``none`` (``onAudioAlarm``).
+    """
+    if (not states or any(kind not in AUDIO_TYPES or edge not in ("enter", "moving", "leave")
+                          for kind, edge in states.items())
+            or type(clock_wall_ms) is not int or clock_wall_ms <= 0
+            or not isinstance(level_db, (int, float)) or not math.isfinite(level_db)):
         raise AudioSettingsError("invalid_audio_event")
     payload: dict[str, object] = {
         "deviceID": normalize_mac(camera_mac),
@@ -94,7 +110,7 @@ def audio_event_payload(camera_mac: str, kind: str, edge: str, *, clock_wall_ms:
         "leveldB": round(max(-120.0, min(0.0, float(level_db))), 1), "levels": 0,
         "loudNoise": "none", "soundLoss": "none"}
     payload.update(dict.fromkeys(AUDIO_TYPES, "none"))
-    payload[kind] = edge
+    payload.update(states)
     return payload
 
 

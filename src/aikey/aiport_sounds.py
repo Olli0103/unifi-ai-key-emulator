@@ -33,7 +33,7 @@ from .aiport_audio import MAX_EVENT_S, SAMPLE_RATE, SPEECH
 
 SOUND_TYPES = ("alrmSmoke", "alrmCmonx", "alrmSiren", "alrmBabyCry", "alrmBark",
                "alrmBurglar", "alrmCarHorn", "alrmGlassBreak")
-# Lower number wins. Speech is the lowest, so any sound preempts it.
+# Order of simultaneous enters, and the type health reports first.
 PRIORITY = {"alrmSmoke": 0, "alrmCmonx": 0, "alrmBurglar": 1, "alrmSiren": 1,
             "alrmGlassBreak": 1, "alrmBabyCry": 2, "alrmBark": 3, "alrmCarHorn": 4,
             SPEECH: 5}
@@ -199,7 +199,12 @@ class SoundClassifier:
 
 
 class SoundEvents:
-    """Hysteresis per sound group over classifier scores, one open type at most."""
+    """Hysteresis per sound group over classifier scores; groups open independently.
+
+    Protect keeps one audio event per camera and adds every type that enters
+    to it (``onAudioAlarm``), so a dog barking during a siren is one event
+    with both types. Each group enters and leaves on its own evidence.
+    """
 
     def __init__(self, classify: Callable[[array.array], dict[str, float]], *,
                  enabled: Callable[[str], bool], min_level_db: float = -55.0,
@@ -212,21 +217,33 @@ class SoundEvents:
         self._pending = b""
         self._hits = dict.fromkeys(POLICY, 0)
         self._last_seen = dict.fromkeys(POLICY, 0.0)
-        self.open: str | None = None
-        self._open_group: str | None = None
-        self._opened_at = 0.0
+        self._opened: dict[str, tuple[str, float]] = {}      # group -> (type, opened at)
         self.classifications = 0
         self.skipped_quiet = 0
+
+    @property
+    def open_kinds(self) -> frozenset[str]:
+        return frozenset(kind for kind, _ in self._opened.values())
+
+    @property
+    def open(self) -> str | None:
+        """The highest-priority open type, if any."""
+        return min(self.open_kinds, key=PRIORITY.__getitem__, default=None)
 
     def reset(self) -> None:
         self._history = array.array("h")
         self._pending, self._since_hop = b"", 0
         self._hits = dict.fromkeys(POLICY, 0)
-        self.open = self._open_group = None
+        self._opened.clear()
 
-    def close(self) -> None:
-        """Forget an open type that was closed from outside (preemption, stop)."""
-        self.open = self._open_group = None
+    def close(self, kind: str | None = None) -> None:
+        """Forget open types that were closed from outside (disabled, stop, cap)."""
+        if kind is None:
+            self._opened.clear()
+            return
+        for group, (open_kind, _) in list(self._opened.items()):
+            if open_kind == kind:
+                del self._opened[group]
 
     def feed(self, pcm: bytes) -> list[SoundEdge]:
         data = self._pending + pcm
@@ -263,30 +280,21 @@ class SoundEvents:
                 self._last_seen[group] = now
             else:
                 self._hits[group] = 0
-        if self._open_group is not None:
-            _, _, leave_s = POLICY[self._open_group]
-            if (now - self._last_seen[self._open_group] >= leave_s
-                    or now - self._opened_at >= MAX_EVENT_S):
-                edges.append(SoundEdge(self.open, "leave", level))
-                self.close()
+        for group, (kind, opened_at) in list(self._opened.items()):
+            _, _, leave_s = POLICY[group]
+            if now - self._last_seen[group] >= leave_s or now - opened_at >= MAX_EVENT_S:
+                edges.append(SoundEdge(kind, "leave", level))
+                del self._opened[group]
         candidates = []
         for group, (_, needed, _) in POLICY.items():
-            if self._hits[group] < needed:
+            if group in self._opened or self._hits[group] < needed:
                 continue
             # A smoke or CO alarm needs its T3/T4 beep pattern; alarm-like
             # scores without one (microwave or oven beeps) do not count.
             kind = beep_kind(self._history) if group == "alarm" else group
-            if kind is None:
-                continue
-            if self._enabled(kind):
+            if kind is not None and self._enabled(kind):
                 candidates.append((PRIORITY[kind], kind, group))
-        if candidates:
-            _, kind, group = min(candidates)
-            if self.open is None:
-                self.open, self._open_group, self._opened_at = kind, group, now
-                edges.append(SoundEdge(kind, "enter", level))
-            elif PRIORITY[kind] < PRIORITY[self.open]:
-                edges.append(SoundEdge(self.open, "leave", level))
-                self.open, self._open_group, self._opened_at = kind, group, now
-                edges.append(SoundEdge(kind, "enter", level))
+        for _, kind, group in sorted(candidates):
+            self._opened[group] = (kind, now)
+            edges.append(SoundEdge(kind, "enter", level))
         return edges

@@ -56,4 +56,29 @@ def test_speech_keeps_its_own_limit_independent_of_object_events(tmp_path):
     config = pool_config(tmp_path)
     del config["live_pool_detector"]["max_events_per_hour"]
     service = CandidateService(load(tmp_path, config), tmp_path)
-    assert SPEECH_EVENTS_PER_HOUR == 10 and CAMERA in service._speech
+    assert SPEECH_EVENTS_PER_HOUR == 60 and CAMERA in service._speech
+    assert service._speech_limit == 60
+
+
+def test_the_speech_limit_is_set_per_ai_port(tmp_path):
+    config = pool_config(tmp_path)
+    config["live_speech_max_events_per_hour"] = 240
+    service = CandidateService(load(tmp_path, config), tmp_path)
+    assert service._speech_limit == 240
+
+
+@pytest.mark.parametrize("value", [0, 3601, "60", 1.5, True])
+def test_a_malformed_speech_limit_is_refused(tmp_path, value):
+    config = pool_config(tmp_path)
+    config["live_speech_max_events_per_hour"] = value
+    with pytest.raises(CandidateError):
+        load(tmp_path, config)
+
+
+def test_a_speech_limit_needs_speech_cameras(tmp_path):
+    config = pool_config(tmp_path)
+    del config["live_speech_cameras"]
+    config.pop("live_sound", None)
+    config["live_speech_max_events_per_hour"] = 60
+    with pytest.raises(CandidateError):
+        load(tmp_path, config)
