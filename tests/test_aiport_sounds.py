@@ -143,7 +143,7 @@ async def test_an_enabled_alarm_preempts_open_speech_and_is_announced_as_a_featu
         await feed(service, noise(1) + voice(2), clock)
         assert [e["alrmSpeak"] for e in sink.events("EventSmartAudio")] == ["enter"]
         scores.value = {"alarm": 0.9}
-        await feed(service, noise(1.5, amplitude=6000), clock)   # steady: no beep pattern
+        await feed(service, list(beeps(0.5, 0.5, 3, 1.5, repeats=1)), clock)   # a T3 pattern
         audio = sink.events("EventSmartAudio")
         assert [(e["alrmSpeak"], e["alrmSmoke"]) for e in audio] == [
             ("enter", "none"), ("leave", "none"), ("none", "enter")]
@@ -226,7 +226,9 @@ async def test_sounds_are_capped_per_camera_and_hour_and_alarms_get_four_times_t
 
         async def episode(kind_scores):
             scores.value = kind_scores
-            await feed(service, noise(1.5, amplitude=6000), clock)
+            sound = (list(beeps(0.5, 0.5, 3, 1.5, repeats=1)) if "alarm" in kind_scores
+                     else noise(1.5, amplitude=6000))
+            await feed(service, sound, clock)
             scores.value = {}
             await feed(service, noise(8, amplitude=6000), clock)
 
@@ -329,3 +331,19 @@ async def test_a_sound_camera_without_enabled_types_is_pulsed_until_protect_push
         assert len(sink.events("EventAIPortStatus")) == 3                  # enabled: quiet
     finally:
         await service.stop()
+
+
+
+def test_alarm_scores_without_a_beep_pattern_and_short_siren_blips_do_not_enter():
+    # 30 Sep: appliance tones and road noise produced false alarms and sirens.
+    clock, scores = Clock(), Scores()
+    events = detector(scores, clock)
+    scores.value = {"alarm": 0.9}
+    assert run(events, clock, 3) == []                  # steady noise: no T3/T4 pattern
+    scores.value = {"alrmSiren": 0.9}
+    assert run(events, clock, 1.2) == []                # under ~2 s of siren
+    assert run(events, clock, 1.5) == [("alrmSiren", "enter")]
+    scores.value = {}
+    run(events, clock, 5)
+    scores.value = {"alrmGlassBreak": 0.55}             # below the shatter bar
+    assert run(events, clock, 2) == []

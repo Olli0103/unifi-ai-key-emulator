@@ -45,20 +45,26 @@ CLASSES = {
                   "Fire engine, fire truck (siren)", "Emergency vehicle"),
     "alrmBabyCry": ("Baby cry, infant cry",),
     "alrmBark": ("Bark", "Bow-wow", "Yip"),
-    # YAMNet's 521 classes have no "Burglar alarm"; its alarm sirens score as
-    # these. "Alarm" also fires for smoke alarms, which outrank it.
-    "alrmBurglar": ("Car alarm", "Alarm"),
+    # YAMNet's 521 classes have no "Burglar alarm". The generic "Alarm"
+    # also scored reversing beeps and appliance tones (30 Sep: 9 false
+    # burglar events on the road-facing cameras), so only "Car alarm" counts.
+    "alrmBurglar": ("Car alarm",),
     "alrmCarHorn": ("Vehicle horn, car horn, honking", "Air horn, truck horn", "Toot"),
-    "alrmGlassBreak": ("Shatter", "Glass"),
+    # "Glass" is mostly clinking dishes and mugs (30 Sep: 16 false indoor
+    # events); only "Shatter" is breaking glass.
+    "alrmGlassBreak": ("Shatter",),
 }
 WINDOW_SAMPLES = 15600                     # 0.975 s, the YAMNet patch
 HOP_SAMPLES = 7680                         # 0.48 s
 HISTORY_SAMPLES = 6 * SAMPLE_RATE          # beep-pattern analysis only
-# Score to enter, consecutive hops above it, seconds below it to leave.
-POLICY = {"alarm": (0.35, 2, 6.0), "alrmSiren": (0.4, 2, 4.0),
-          "alrmBabyCry": (0.4, 2, 4.0), "alrmBark": (0.45, 2, 3.0),
-          "alrmBurglar": (0.4, 2, 4.0), "alrmCarHorn": (0.45, 1, 2.0),
-          "alrmGlassBreak": (0.4, 1, 2.0)}
+# Score to enter, consecutive 0.48 s hops above it, seconds below it to
+# leave. Tightened after the first live day (30 Sep): sirens and car alarms
+# must hold for about 2 s (road noise crossed a 1 s bar), glass must shatter
+# clearly, and the rest need a higher score.
+POLICY = {"alarm": (0.4, 3, 6.0), "alrmSiren": (0.6, 4, 4.0),
+          "alrmBabyCry": (0.5, 3, 4.0), "alrmBark": (0.5, 2, 3.0),
+          "alrmBurglar": (0.5, 4, 4.0), "alrmCarHorn": (0.5, 2, 2.0),
+          "alrmGlassBreak": (0.6, 1, 2.0)}
 
 
 # YAMNet's published frontend: 25 ms periodic Hann window, 10 ms hop, a
@@ -267,7 +273,11 @@ class SoundEvents:
         for group, (_, needed, _) in POLICY.items():
             if self._hits[group] < needed:
                 continue
-            kind = (beep_kind(self._history) or "alrmSmoke") if group == "alarm" else group
+            # A smoke or CO alarm needs its T3/T4 beep pattern; alarm-like
+            # scores without one (microwave or oven beeps) do not count.
+            kind = beep_kind(self._history) if group == "alarm" else group
+            if kind is None:
+                continue
             if self._enabled(kind):
                 candidates.append((PRIORITY[kind], kind, group))
         if candidates:
