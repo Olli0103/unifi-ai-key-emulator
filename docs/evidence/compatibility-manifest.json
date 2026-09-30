@@ -257,6 +257,23 @@
    "note": "Static inspection of the 7.3.60 controller bundle for the speech-to-text path. Live 7.3.60 evidence is a separate source; this does not change that version's classification. Nothing is redistributed here."
   },
   {
+   "id": "static-protect-7.3.70-bundle",
+   "kind": "static",
+   "bundle_version": "7.3.70",
+   "date": "2026-09-30",
+   "artifacts": [
+    {
+     "name": "usr/share/unifi-protect/app/service.js",
+     "version": "Protect 7.3.70",
+     "sha256": "b2dbea8740a201826b66d427e26cc428651751fcf1c4bda6de9b26765e558c16"
+    }
+   ],
+   "records": [
+    "docs/evidence/live-protect-7.3.70.md"
+   ],
+   "note": "The owner copied service.js from his console for private interoperability inspection of the AI Key connect-time commands (onAiprocessorConnected). Nothing is redistributed here."
+  },
+  {
    "id": "vendor-docs",
    "kind": "vendor_documentation",
    "urls": [
@@ -1194,7 +1211,7 @@
   {
    "id": "control.ai_settings_commands",
    "area": "control",
-   "title": "changeAiInferAgentSettings, changeDescribePrompts, networkStatus and sshService",
+   "title": "changeDescribePrompts, networkStatus and sshService",
    "status": "unsupported",
    "live": {
     "live-protect-7.3.68": "indirect"
@@ -1211,6 +1228,54 @@
     "These names appear in the device diagnostic allowlist, but no public record states their source or when Protect sends them"
    ],
    "rejection": "errorCode 95 with an empty body; counted in fixed diagnostics."
+  },
+  {
+   "id": "control.change_ai_infer_agent_settings",
+   "area": "control",
+   "title": "changeAiInferAgentSettings stored and answered 0",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "not_observed"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect",
+    "tests/test_command_fingerprints.py::test_ai_infer_agent_settings_are_stored_and_malformed_ones_refused"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Protect's aiprocessors log no longer reporting \"Failed to updateAiSettings\" after a connect (not read back)"
+   ],
+   "notes": "Protect 7.3.70 updateAiSettings sends {deepModeSupported, enableFaceEnhance, enableFaceRecognize, enableLprRecognize, enableRAM, enableSTT, region} on connect. The Key validates the exact field set and stores it; which engines it runs stays governed by its own configuration."
+  },
+  {
+   "id": "control.disk_info",
+   "area": "control",
+   "title": "diskInfo answered with the storage size in GB",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "not_observed"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect",
+    "tests/test_command_fingerprints.py::test_connect_time_sync_commands_keep_only_their_field_shape"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "featureFlags.storageSize read back from Protect after a connect"
+   ],
+   "notes": "Protect 7.3.70 syncStorageSize sends diskInfo {} and parses {storageSize: string} with parseInt into featureFlags.storageSize (GB, default 128; a UP-AI-KEY with 128 is shown as the UP-AI-KEY-128 platform). The Key answers device.storage_size_gb, default 128, so Protect's stored value is unchanged."
   },
   {
    "id": "control.unknown_command",

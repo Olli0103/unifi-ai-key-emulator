@@ -131,7 +131,7 @@ async def test_connect_time_sync_commands_keep_only_their_field_shape(tmp_path):
     # Protect 7.3.68/7.3.70 send diskInfo (an empty query) and
     # updateLcmSettings (display settings) on every connect.
     service = device(tmp_path)
-    assert await send(service, "diskInfo", {"detail": {"token": SECRET, "used": 1.5}}, "a") == 95
+    assert await send(service, "diskInfo", {"detail": {"token": SECRET, "used": 1.5}}, "a") == 0
     lcm = {"brightness": 40, "nightMode": {"onMinute": 1320, "offMinute": 420}}
     assert await send(service, "updateLcmSettings", lcm, "b") == 0
     assert service.status["sync_shapes"] == {
@@ -148,3 +148,16 @@ async def test_connect_time_sync_commands_keep_only_their_field_shape(tmp_path):
                                  {"nightMode": {"onMinute": 1440}}, {"nightMode": []}])
 async def test_display_settings_outside_the_observed_shape_are_refused(tmp_path, bad):
     assert await send(device(tmp_path), "updateLcmSettings", bad, "a") != 0
+
+
+
+async def test_ai_infer_agent_settings_are_stored_and_malformed_ones_refused(tmp_path):
+    # Protect 7.3.70 updateAiSettings sends this on every connect.
+    service = device(tmp_path)
+    settings = {"deepModeSupported": True, "enableFaceEnhance": True, "enableFaceRecognize": True,
+                "enableLprRecognize": False, "enableRAM": True, "enableSTT": True, "region": "DE"}
+    assert await send(service, "changeAiInferAgentSettings", settings, "a") == 0
+    assert json.loads((tmp_path / "device-state.json").read_text())["ai_infer_agent_settings"] == settings
+    for bad in ({**settings, "enableSTT": "yes"}, {**settings, "extra": 1}, {**settings, "region": "Germany"},
+                {k: v for k, v in settings.items() if k != "enableRAM"}):
+        assert await send(service, "changeAiInferAgentSettings", bad, f"b-{len(json.dumps(bad))}") != 0

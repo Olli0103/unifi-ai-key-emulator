@@ -457,7 +457,7 @@ class DeviceService:
                 "speech_to_text": deepcopy(self._speech_diagnostics),
                 "clock_offset_ms": self._clock_offset_ms, "discovery": "unsupported",
                 "compatibility": self._compatibility_status(),
-                "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "updateLcmSettings", "changeUserPassword", "RequestAI"]
+                "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "updateLcmSettings", "diskInfo", "changeAiInferAgentSettings", "changeUserPassword", "RequestAI"]
                     + (["recognizeKeyFrames"] if basic_enabled else [])
                     + (["speechToText"] if self._speech_cameras() else [])
                     + (["enhanceImage"] if self._face_enhancement_configured() else [])}
@@ -1292,6 +1292,30 @@ class DeviceService:
                 _increment(phases, "invalid_admission_result")
                 raise ContractError("Job admission must return an object")
             _increment(phases, "admitted")
+            return body
+        if action == "diskInfo":
+            # Protect 7.3.70 syncStorageSize: {storageSize: "<GB>"} parsed with
+            # parseInt into featureFlags.storageSize ("Storage of aiprocessor by
+            # GB", default 128; 128 makes a UP-AI-KEY the UP-AI-KEY-128 platform).
+            size = self.config.get("device", {}).get("storage_size_gb", 128)
+            if type(size) is not int or not 1 <= size <= 65536:
+                raise CommandFailure(22, "Invalid configured storage size")
+            return {"storageSize": str(size)}
+        if action == "changeAiInferAgentSettings":
+            # Protect 7.3.70 updateAiSettings pushes which engines the AI Key
+            # should run. They are stored and acknowledged; what this Key
+            # processes stays governed by its own configuration.
+            fields = {"deepModeSupported", "enableFaceEnhance", "enableFaceRecognize",
+                      "enableLprRecognize", "enableRAM", "enableSTT"}
+            region = body.get("region")
+            if (not fields <= set(body) <= fields | {"region"}
+                    or any(type(body[name]) is not bool for name in fields)
+                    or region is not None and (not isinstance(region, str)
+                                               or not re.fullmatch(r"[A-Za-z]{2}", region))):
+                raise ContractError("Unsupported AI infer agent settings")
+            async with self._lock:
+                self._state["ai_infer_agent_settings"] = deepcopy(body)
+                self._save_state()
             return body
         if action == "updateLcmSettings":
             # Front-display settings Protect pushes on connect (7.3.68/7.3.70):

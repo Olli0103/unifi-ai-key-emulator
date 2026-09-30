@@ -32,7 +32,7 @@ The values below are content-free device health counters, worker journal states 
 - A caption read back from Protect's exact-event record (`metadata.ramDescription`) on 7.3.70. That readback needs an owner browser session.
 - Transcription rows or face thumbnails read back per event on 7.3.70.
 - A successful player AI summary on 7.3.70.
-- The expected reply of `diskInfo` (it arrives with an empty body). `updateLcmSettings` carries `brightness` and `nightMode.{onMinute, offMinute}`, field names only.
+- Protect's own view after the connect-time replies. The replies are now known statically from the owner-copied 7.3.70 `service.js` (`static-protect-7.3.70-bundle`): `diskInfo` expects `{storageSize: "<GB>"}` and `changeAiInferAgentSettings` carries `deepModeSupported`, `enableFaceEnhance`, `enableFaceRecognize`, `enableLprRecognize`, `enableRAM`, `enableSTT` and `region`. Both are answered in code (fixture-tested); the Key's `featureFlags.storageSize` and the absence of Protect's failure log lines were not read back.
 - Deep mode or `/describe` tasks on 7.3.70.
 - A reverified event.
 

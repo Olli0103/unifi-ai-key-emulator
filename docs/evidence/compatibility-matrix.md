@@ -54,7 +54,9 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `control.recognize_key_frames.other_variants`: recognizeKeyFrames image variant (one cropped audio-event thumbnail) | unsupported | — | — | indirect | — | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | default |
 | `control.recognize_key_frames.multiple_images`: recognizeKeyFrames multipleImages (retroactive backfill of saved object crops) | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle | explicit_opt_in |
 | `control.host_management`: reboot, factoryReset, firmware install, SSH management, support upload and hardware statistics | unsupported | — | — | — | — | AI Key 2.2.8 | default |
-| `control.ai_settings_commands`: changeAiInferAgentSettings, changeDescribePrompts, networkStatus and sshService | unsupported | — | — | indirect | — | — | default |
+| `control.ai_settings_commands`: changeDescribePrompts, networkStatus and sshService | unsupported | — | — | indirect | — | — | default |
+| `control.change_ai_infer_agent_settings`: changeAiInferAgentSettings stored and answered 0 | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | default |
+| `control.disk_info`: diskInfo answered with the storage size in GB | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | default |
 | `control.unknown_command`: Any other command name | unsupported | — | — | indirect | — | — | default |
 | **framing** | |  |  |  |  | | |
 | `framing.ucp_two_record`: Binary two-record JSON framing (type, format 1, uncompressed) | fixture-tested | indirect | indirect | indirect | — | AI Key 2.2.8 | default |
@@ -160,6 +162,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `control.recognize_key_frames.multiple_images`: Crops of older events can be gone (HTTP 404); those events stay unindexed
 - `control.recognize_key_frames.multiple_images`: 39 events whose tasks were dropped at a mid-run Key swap stay unindexed; Protect does not retry timed-out tasks
 - `control.ai_settings_commands`: These names appear in the device diagnostic allowlist, but no public record states their source or when Protect sends them
+- `control.change_ai_infer_agent_settings`: Protect's aiprocessors log no longer reporting "Failed to updateAiSettings" after a connect (not read back)
+- `control.disk_info`: featureFlags.storageSize read back from Protect after a connect
 - `framing.ucp_two_record`: No raw native frame capture or independently recorded two-record layout
 - `framing.compressed_or_other_format`: Whether any Protect version sends compressed or other-format records
 - `framing.request_deduplication`: Whether Protect ever retries with the same request ID
