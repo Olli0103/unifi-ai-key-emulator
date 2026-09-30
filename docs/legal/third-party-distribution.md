@@ -4,8 +4,17 @@ This is a scope inventory, not a completed license audit. The existing runtime
 CycloneDX SBOM covers its isolated Python environment, not OS packages, optional
 extras, model weights, external services or the complete image. Passing a
 vulnerability scan is not license clearance. The [core license observations](runtime-license-observations.json)
-record declared lock versions and any matching local package metadata. Missing
-or conflicting declarations remain open; none of those rows is an approval.
+record all 14 exact lock versions from the isolated CI SBOM at run 36674537757,
+with the artifact hash and source commit. These are upstream metadata
+declarations, not license grants or a reviewed notice/source bundle. Missing
+or ambiguous declarations remain open; none of those rows is an approval.
+
+The SBOM declares `LGPL-3.0-only` for both psycopg and psycopg-binary 3.3.6.
+Those components must retain their own terms; the project's Apache license does
+not replace them. Binary wheels also need their bundled native-library review.
+The multidict row contains no license declaration, and aiosignal is represented
+by a generic Apache classifier without an exact SPDX expression. Retrieve the
+exact distribution's license files and resolve these gaps before distribution.
 
 | Distribution | Declared input | Still required |
 | --- | --- | --- |
