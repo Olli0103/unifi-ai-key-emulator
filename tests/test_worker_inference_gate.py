@@ -99,3 +99,18 @@ async def test_the_worker_sends_at_most_the_gated_number_of_requests_summary_fir
     await asyncio.gather(first, *rest, summary)
     assert peak[0] == 1 and sent == ["caption-a", "summary", "caption-b", "caption-c"]
     await worker.stop()
+
+
+def test_short_local_jobs_leave_the_queue_before_captions_and_summaries_first():
+    # A job's deadline includes its queue wait; on 30 Sep a 60 s face job
+    # timed out behind a 20-job caption backlog.
+    from aikey.worker import _QUEUE_PRIORITY
+    queue = asyncio.PriorityQueue()
+    arrivals = ["recognizeKeyFrames"] * 3 + ["recognizeFaces", "speechToText", "indexImages",
+                                             "on_demand", "indexKeyFrames", "reverify"]
+    for sequence, operation in enumerate(arrivals):
+        queue.put_nowait((_QUEUE_PRIORITY.get(operation, 1), sequence, operation))
+    order = [queue.get_nowait()[2] for _ in arrivals]
+    assert order == ["on_demand", "recognizeFaces", "speechToText", "indexKeyFrames", "reverify",
+                     "recognizeKeyFrames", "recognizeKeyFrames", "recognizeKeyFrames", "indexImages"]
+    assert _QUEUE_PRIORITY.get("unknown-operation", 1) == 1          # unknown work waits with captions

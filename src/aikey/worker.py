@@ -135,6 +135,18 @@ _RETYPE_CONFIDENCE = 0.9
 AUDIO_TEMP_PREFIX = "aikey-audio-"
 
 
+# Lower runs first. A job's deadline includes its queue wait, so short local
+# jobs must not queue behind captions that each wait ~30 s for the local model
+# (30 Sep: a 60 s face job timed out behind a 20-job caption backlog).
+_QUEUE_PRIORITY = {
+    "on_demand": -1,                          # the player's summary: someone is waiting
+    "recognizeFaces": 0, "indexKeyFrames": 0, "reverify": 0,
+    "speechToText": 0, "enhanceImage": 0,     # local work with short deadlines
+    "recognizeKeyFrames": 1, "describe": 1,   # captions: the vision model
+    "indexImages": 2,                         # retroactive backfill
+}
+
+
 class _PriorityGate:
     """At most ``capacity`` holders; a lower priority number is served first, FIFO within one."""
 
@@ -1525,8 +1537,7 @@ class JobProcessor:
                 if not receipt.new:
                     raise WorkerError("Caption reservation exists without completed job")
                 self.captions["admitted"] += 1
-            self._queue.put_nowait((-1 if job.operation == "on_demand" else
-                                    1 if job.operation == "indexImages" else 0,
+            self._queue.put_nowait((_QUEUE_PRIORITY.get(job.operation, 1),
                                     next(self._sequence), job))
         except asyncio.QueueFull as exc:
             future.cancel()
