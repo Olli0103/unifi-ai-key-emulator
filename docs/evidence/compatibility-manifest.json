@@ -1366,9 +1366,9 @@
    "id": "callbacks.audio_image_tagging",
    "area": "callbacks",
    "title": "Audio-event thumbnails (ramType image) answered with event-level tags and a local description",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
-    "live-protect-7.3.70": "not_observed"
+    "live-protect-7.3.70": "native-verified"
    },
    "static": [
     "static-protect-7.3.70-bundle"
@@ -1382,18 +1382,16 @@
     "src/aikey/worker.py"
    ],
    "activation": "explicit_opt_in",
-   "missing_evidence": [
-    "An audio event's metadata.ramTags and ramDescription read back in Protect"
-   ],
-   "notes": "7.3.70 pushAudioTask sends recognizeKeyFrames with ramType image. Audio events have no smart objects, so saveEventTagging keeps only event-level results: a key moment without search snapshots and the description."
+   "missing_evidence": [],
+   "notes": "7.3.70 pushAudioTask sends recognizeKeyFrames with ramType image. Audio events have no smart objects, so saveEventTagging keeps only event-level results: a key moment without search snapshots and the description. Native readback, 30 Sep (Protect's own event records through the signed-in web app): 31 audio events saved with ramState done, event-level ramTags (7 to 15 each) and a ramDescription."
   },
   {
    "id": "index.ram_open_vocabulary_tags",
    "area": "search",
    "title": "RAM++ open-vocabulary tags for scenes, objects and crops",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
-    "live-protect-7.3.70": "not_observed"
+    "live-protect-7.3.70": "native-verified"
    },
    "static": [
     "static-protect-7.3.70-bundle"
@@ -1411,7 +1409,7 @@
    "missing_evidence": [
     "Protect's ramTags table was not read; tags it does not know are skipped with a warning (saveEventTagging)"
    ],
-   "notes": "RAM++ Swin-L 14M (OpenVINO, NPU) with its own per-class thresholds; its 4585-tag list is public. The class tag stays first."
+   "notes": "RAM++ Swin-L 14M (OpenVINO, NPU) with its own per-class thresholds; its 4585-tag list is public. The class tag stays first. Native readback, 30 Sep (Protect's own event records through the signed-in web app): 31 audio events saved with ramState done, event-level ramTags (7 to 15 each) and a ramDescription."
   },
   {
    "id": "control.disk_info",

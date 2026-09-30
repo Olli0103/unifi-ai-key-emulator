@@ -63,9 +63,9 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | **search** | |  |  |  |  | | |
 | `search.e5_session_query`: E5 session search queries next to basic CLIP search | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | explicit_opt_in |
 | **callbacks** | |  |  |  |  | | |
-| `callbacks.audio_image_tagging`: Audio-event thumbnails (ramType image) answered with event-level tags and a local description | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | explicit_opt_in |
+| `callbacks.audio_image_tagging`: Audio-event thumbnails (ramType image) answered with event-level tags and a local description | native-verified | — | — | — | native-verified | Protect 7.3.70 bundle | explicit_opt_in |
 | **search** | |  |  |  |  | | |
-| `index.ram_open_vocabulary_tags`: RAM++ open-vocabulary tags for scenes, objects and crops | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | explicit_opt_in |
+| `index.ram_open_vocabulary_tags`: RAM++ open-vocabulary tags for scenes, objects and crops | native-verified | — | — | — | native-verified | Protect 7.3.70 bundle | explicit_opt_in |
 | **control** | |  |  |  |  | | |
 | `control.disk_info`: diskInfo answered with the storage size in GB | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | default |
 | `control.unknown_command`: Any other command name | unsupported | — | — | indirect | — | — | default |
@@ -181,7 +181,6 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `worker.deep_session_describe`: A describe task from Protect and the session's description and labels read back in Protect
 - `worker.deep_session_describe`: The unit of detectedThumbnails coord in close-pass video objects is assumed to be x, y, w, h in 0..1000 like smart-detect coords
 - `search.e5_session_query`: A deep session search in Protect returning sessions
-- `callbacks.audio_image_tagging`: An audio event's metadata.ramTags and ramDescription read back in Protect
 - `index.ram_open_vocabulary_tags`: Protect's ramTags table was not read; tags it does not know are skipped with a warning (saveEventTagging)
 - `control.disk_info`: featureFlags.storageSize read back from Protect after a connect
 - `framing.ucp_two_record`: No raw native frame capture or independently recorded two-record layout

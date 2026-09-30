@@ -50,6 +50,16 @@ These come from reading Protect's own bundle, not from live observation.
   - Session search encodes the query with E5 through `NL_PARSE` (`model: multilingual-e5-small`, 384 values).
 - **Search host (read back 30 Sep).** The Key's PostgreSQL already holds `smartDetectSessionsSearch` (`descEmbedding vector(384)`) and `smartDetectSessionObjects` (`reidEmbedding vector(512)`), both empty, with pgvector 0.8.6.
 
+## Native readback through the owner's web session (30 Sep evening)
+
+Read with the Protect web app's own API client in the owner's signed-in browser; counts and states only.
+
+- **Audio-event thumbnails:** 31 `smartAudioDetect` events have `ramState: done`, event-level `ramTags` (7 to 15 each) and a `ramDescription`. This is the Key's `ramType: image` path with RAM++ tags and a local description.
+- **A 2xx is not a save.** 735 audio events and most smart events between 16:00 and 18:30 UTC read `ramState: failed`. The Model Server had failed every request since a full-size 4K snapshot exhausted the iGPU (CL_OUT_OF_RESOURCES); the Key had already bounded images at 1280 px, but the server was not restarted after that fix. After a restart it served every request.
+- **Transcripts:** 96 events in one hour carry `sttSearchable`, so they get Protect's transcript filter label.
+- **Second-stage verification:** all three reverification policies (person, vehicle, animal) exist and are enabled at 40 to 80 %. The settings page hid Person because no AI Key reported `supportPersonReId`; with Key r16 the console's `aiFeatureFlag` lists it and the Person row is shown and ticked.
+- **Deep understanding:** the Key reads as `supportDeepMode: true`, `aiMode: basic`. Protect 7.3.70 offers the switch only in an internal QA window; the setting itself is the standard `deepUnderstanding` AI policy (disabled).
+
 ## Limits
 
 These are journal states, callback status codes and counters from one controller over about one day. A 2xx callback, a completed job or a growing row count is not a native saved caption, transcript, face or summary.
