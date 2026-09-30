@@ -36,6 +36,20 @@ The values below are content-free device health counters, worker journal states 
 - Deep mode or `/describe` tasks on 7.3.70.
 - A reverified event.
 
+## Static findings from the owner-copied 7.3.70 service.js (30 Sep)
+
+These come from reading Protect's own bundle, not from live observation.
+
+- **Audio events.** Protect keeps one audio event per camera (`onAudioAlarm`). Every type that reads `enter` is added to the event's `smartDetectTypes`, and the event ends only when a message reads `leave` or `none` for every type. Two sounds, or speech and a sound, are therefore one event with both types.
+- **Audio-event thumbnails.** `pushAudioTask` sends `recognizeKeyFrames` with `ramType: image`. An audio event has no smart objects, so `saveEventTagging` keeps only event-level results: the description and key-moment tags (`metadata.ramTags`). Tag names must exist in Protect's own `ramTags` table; unknown names are skipped with a warning.
+- **Reverification.** `ChangeSmartDetectSettings` carries `reVerificationPolicy`, built from enabled AI policies of type person, vehicle or animal reverification. Without such a policy every class reads `enable: false`, so no camera flags a track (`reVerifyEligible`) and the detection service never asks the AI Key. This explains why no `second_verifier` request has arrived.
+- **Transcript search.** There is no transcript text search. An event with a non-empty transcript gets the filter label `smartDetectType:transcript`; transcripts are shown per event.
+- **Deep understanding.** Capability `featureFlags.supportDeepMode` (or `supportVlm`). The mode is switched with `changeAiInferAgentSettings {modelMode}` and confirmed from getInfo's `featureFlags.aiMode`. Prompts, sampling and a JSON schema per object-type combination arrive with `changeDescribePrompts` and are confirmed from `featureFlags.describeConfigHash`. Tasks:
+  - `RequestAI :7445/generate-embeddings`: person crops, answered at `/internal/aiprocessors/embeddings/{taskId}`. Protect joins sessions at cosine 0.75 by default.
+  - `RequestAI :7968/describe` (`promptProfile: session-v1`, `open` or `close` pass): answered at `/internal/aiprocessors/descriptions/{taskId}` with `{description, labels, descEmbedding}`.
+  - Session search encodes the query with E5 through `NL_PARSE` (`model: multilingual-e5-small`, 384 values).
+- **Search host (read back 30 Sep).** The Key's PostgreSQL already holds `smartDetectSessionsSearch` (`descEmbedding vector(384)`) and `smartDetectSessionObjects` (`reidEmbedding vector(512)`), both empty, with pgvector 0.8.6.
+
 ## Limits
 
 These are journal states, callback status codes and counters from one controller over about one day. A 2xx callback, a completed job or a growing row count is not a native saved caption, transcript, face or summary.

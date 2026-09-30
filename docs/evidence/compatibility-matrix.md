@@ -54,8 +54,19 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `control.recognize_key_frames.other_variants`: recognizeKeyFrames image variant (one cropped audio-event thumbnail) | unsupported | — | — | indirect | — | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | default |
 | `control.recognize_key_frames.multiple_images`: recognizeKeyFrames multipleImages (retroactive backfill of saved object crops) | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle | explicit_opt_in |
 | `control.host_management`: reboot, factoryReset, firmware install, SSH management, support upload and hardware statistics | unsupported | — | — | — | — | AI Key 2.2.8 | default |
-| `control.ai_settings_commands`: changeDescribePrompts, networkStatus and sshService | unsupported | — | — | indirect | — | — | default |
+| `control.ai_settings_commands`: networkStatus and sshService | unsupported | — | — | indirect | — | — | default |
 | `control.change_ai_infer_agent_settings`: changeAiInferAgentSettings stored and answered 0 | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | default |
+| `control.deep_mode`: Deep understanding: supportDeepMode, aiMode switch and describe prompt sync | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | explicit_opt_in |
+| **worker** | |  |  |  |  | | |
+| `worker.deep_reid_embeddings`: generate-embeddings: person re-ID vectors for dedup sessions | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | explicit_opt_in |
+| `worker.deep_session_describe`: session-v1 describe: open and close passes with Protect's prompts and schema | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | explicit_opt_in |
+| **search** | |  |  |  |  | | |
+| `search.e5_session_query`: E5 session search queries next to basic CLIP search | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | explicit_opt_in |
+| **callbacks** | |  |  |  |  | | |
+| `callbacks.audio_image_tagging`: Audio-event thumbnails (ramType image) answered with event-level tags and a local description | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | explicit_opt_in |
+| **search** | |  |  |  |  | | |
+| `index.ram_open_vocabulary_tags`: RAM++ open-vocabulary tags for scenes, objects and crops | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | explicit_opt_in |
+| **control** | |  |  |  |  | | |
 | `control.disk_info`: diskInfo answered with the storage size in GB | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | default |
 | `control.unknown_command`: Any other command name | unsupported | — | — | indirect | — | — | default |
 | **framing** | |  |  |  |  | | |
@@ -163,6 +174,15 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `control.recognize_key_frames.multiple_images`: 39 events whose tasks were dropped at a mid-run Key swap stay unindexed; Protect does not retry timed-out tasks
 - `control.ai_settings_commands`: These names appear in the device diagnostic allowlist, but no public record states their source or when Protect sends them
 - `control.change_ai_infer_agent_settings`: Protect's aiprocessors log no longer reporting "Failed to updateAiSettings" after a connect (not read back)
+- `control.deep_mode`: Protect showing the Key as deep-capable and switching it with changeAiInferAgentSettings {modelMode: deep}
+- `control.deep_mode`: Protect's reconcile tick confirming featureFlags.aiMode and describeConfigHash after the switch
+- `worker.deep_reid_embeddings`: A generate-embeddings task from Protect with deep understanding enabled
+- `worker.deep_reid_embeddings`: Session grouping quality: Protect joins at cosine 0.75 by default, tuned for its native 512-value model; this Key uses Intel's 256-value person-reidentification-retail-0288 zero-padded to 512
+- `worker.deep_session_describe`: A describe task from Protect and the session's description and labels read back in Protect
+- `worker.deep_session_describe`: The unit of detectedThumbnails coord in close-pass video objects is assumed to be x, y, w, h in 0..1000 like smart-detect coords
+- `search.e5_session_query`: A deep session search in Protect returning sessions
+- `callbacks.audio_image_tagging`: An audio event's metadata.ramTags and ramDescription read back in Protect
+- `index.ram_open_vocabulary_tags`: Protect's ramTags table was not read; tags it does not know are skipped with a warning (saveEventTagging)
 - `control.disk_info`: featureFlags.storageSize read back from Protect after a connect
 - `framing.ucp_two_record`: No raw native frame capture or independently recorded two-record layout
 - `framing.compressed_or_other_format`: Whether any Protect version sends compressed or other-format records

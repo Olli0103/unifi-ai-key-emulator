@@ -49,11 +49,13 @@ These gates are what still stands between the current code and native parity. No
 
 ## G5: reverification readback (N13)
 
-- **State:** `find_anything.reverification` is on in the NAS Key config since r3 (30 Sep). No `second_verifier` request has arrived since then (still none at the 30 Sep afternoon check).
-- **Record:** for one reverified event, `detectedThumbnails` `preReverificationObjectType` and the confidence type. Also confirm that an unsure verdict left the event type unchanged.
+- **State:** `find_anything.reverification` is on in the NAS Key config since r3 (30 Sep). No `second_verifier` request has arrived. The 7.3.70 bundle explains why: Protect sends an enabled `reVerificationPolicy` to cameras and AI Ports only while an AI reverification policy (person, vehicle or animal) exists. Without one, no track is ever flagged `reVerifyEligible`.
+- **Code (9bf674f, AI Ports r43):** AI Port tracks inside the policy's presence-probability window now pass and carry `reVerifyEligible` in their snapshot; scores below the window are dropped.
+- **Needs:** Olli creates one person reverification policy in Protect's AI settings.
+- **Record:** health `reverification_person_enabled` on the AI Ports, the Key's `reverify` job count, and for one reverified event `detectedThumbnails` `preReverificationObjectType` and the confidence type. Also confirm that an unsure verdict left the event type unchanged.
 - **Rollback:**
-  1. Restore `config.json.before-r3-20260930` in `/home/olli/aiport-deployment/aikey/state` (reverification off, byte-identical otherwise).
-  2. Restart the Key once; it drains accepted jobs first.
+  1. Delete the policy in Protect.
+  2. Optionally restore `config.json.before-r3-20260930` in `/home/olli/aiport-deployment/aikey/state` (reverification off) and restart the Key once; it drains accepted jobs first.
 
 ## G6: native face camera indexed through face tasks
 
@@ -98,9 +100,20 @@ These gates are what still stands between the current code and native parity. No
 - **Pass:** Protect saves events past the former 12 or 30 per hour on at least one busy camera (native readback of event counts), and NAS load stays below the monitor's alert level.
 - **Rollback:** restore the slot's `config.json` backup and the previous image tag in Compose, then redeploy that slot.
 
-## G8: diskInfo reply and two open audio types
+## G8: diskInfo reply and two open audio types (resolved in code, 30 Sep)
 
-- **Blocked:** the `diskInfo` reply shape, and how Protect treats two audio types open at once, both need static analysis of the Protect 7.3.70 controller package. That needs the owner's download approval **and** clearance of the open firmware-rights review. Neither is assumed.
-- **Interim, reversible:**
-  - `diskInfo` keeps answering 95, as before. Its only known effect is Protect's "Failed to sync storage size" log line.
-  - Sounds keep the one-open-type rule.
+- `diskInfo` answers `{storageSize}` (aca60ed), from the owner-copied 7.3.70 bundle.
+- Two audio types share Protect's one audio event per camera (f243d2d, AI Ports r43).
+- **Record:** one native `smartAudioDetect` event whose `smartDetectTypes` names two types (type and time only).
+
+## G10: deep understanding (7.3.70)
+
+- **State:** Key r14 reports `supportDeepMode`, with re-ID (NPU), E5 (CPU) and the local Qwen3-VL describer. Protect's describe prompts have not been pushed yet.
+- **Needs:** Olli enables Deep Understanding in Protect's AI settings (all cameras or selected ones).
+- **Record:**
+  1. getInfo `aiMode` reads deep and `describeConfigHash` is non-empty.
+  2. The Key's `deep` counters: `embed_tasks`, `describe_tasks`, `described`.
+  3. Row counts in `smartDetectSessionsSearch` and `smartDetectSessionObjects` on the Key's search host.
+  4. One session found by a deep search.
+- **Known risk:** Protect joins people to a session at cosine 0.75, tuned for its native 512-value model. This Key uses Intel's 256-value re-ID model zero-padded to 512, so grouping may be too loose or too strict. Protect's per-camera `reidCutoffByCamera` setting can tune it.
+- **Rollback:** Olli disables Deep Understanding in Protect; Protect then switches the Key back with `modelMode: basic`.

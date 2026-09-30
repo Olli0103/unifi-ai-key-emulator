@@ -1211,7 +1211,7 @@
   {
    "id": "control.ai_settings_commands",
    "area": "control",
-   "title": "changeDescribePrompts, networkStatus and sshService",
+   "title": "networkStatus and sshService",
    "status": "unsupported",
    "live": {
     "live-protect-7.3.68": "indirect"
@@ -1227,7 +1227,8 @@
    "missing_evidence": [
     "These names appear in the device diagnostic allowlist, but no public record states their source or when Protect sends them"
    ],
-   "rejection": "errorCode 95 with an empty body; counted in fixed diagnostics."
+   "rejection": "errorCode 95 with an empty body; counted in fixed diagnostics.",
+   "notes": "changeDescribePrompts moved to control.deep_mode (Protect 7.3.70 syncDescribePrompts)."
   },
   {
    "id": "control.change_ai_infer_agent_settings",
@@ -1252,6 +1253,165 @@
     "Protect's aiprocessors log no longer reporting \"Failed to updateAiSettings\" after a connect (not read back)"
    ],
    "notes": "Protect 7.3.70 updateAiSettings sends {deepModeSupported, enableFaceEnhance, enableFaceRecognize, enableLprRecognize, enableRAM, enableSTT, region} on connect. The Key validates the exact field set and stores it; which engines it runs stays governed by its own configuration."
+  },
+  {
+   "id": "control.deep_mode",
+   "area": "control",
+   "title": "Deep understanding: supportDeepMode, aiMode switch and describe prompt sync",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "not_observed"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_deep_mode.py::test_a_deep_capable_key_switches_mode_and_echoes_it",
+    "tests/test_deep_mode.py::test_describe_prompts_are_stored_and_their_hash_echoed",
+    "tests/test_deep_mode.py::test_a_key_without_deep_models_stays_basic"
+   ],
+   "implementation": [
+    "src/aikey/device.py",
+    "src/aikey/deep_mode.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Protect showing the Key as deep-capable and switching it with changeAiInferAgentSettings {modelMode: deep}",
+    "Protect's reconcile tick confirming featureFlags.aiMode and describeConfigHash after the switch"
+   ],
+   "notes": "getInfo reports supportDeepMode/supportVlm only with deep_understanding.reid_server, an http E5 backend and an OpenAI-compatible describer. aiMode and describeConfigHash echo what Protect last set; changeDescribePrompts is stored privately in describe-prompts.json."
+  },
+  {
+   "id": "worker.deep_reid_embeddings",
+   "area": "worker",
+   "title": "generate-embeddings: person re-ID vectors for dedup sessions",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "not_observed"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_deep_mode.py::test_person_crops_get_padded_reid_vectors",
+    "tests/test_deep_mode.py::test_a_failing_reid_server_reports_failed_objects",
+    "tests/test_deep_mode.py::test_malformed_embed_requests_are_refused_before_media",
+    "tests/test_vision_server.py::test_a_person_crop_gets_a_normalized_reid_vector"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/deep_mode.py",
+    "src/aikey/vision_server.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "A generate-embeddings task from Protect with deep understanding enabled",
+    "Session grouping quality: Protect joins at cosine 0.75 by default, tuned for its native 512-value model; this Key uses Intel's 256-value person-reidentification-retail-0288 zero-padded to 512"
+   ],
+   "notes": "RequestAI :7445/generate-embeddings; callback /internal/aiprocessors/embeddings/{taskId} with {camera, event, embeddings:[{objectId, objectType, reidEmbed, model, dim}], failed}. smartDetectSessionObjects.reidEmbedding on the Key's search host is vector(512) (read back 30 Sep)."
+  },
+  {
+   "id": "worker.deep_session_describe",
+   "area": "worker",
+   "title": "session-v1 describe: open and close passes with Protect's prompts and schema",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "not_observed"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_deep_mode.py::test_an_open_pass_is_described_with_protects_prompt_and_schema",
+    "tests/test_deep_mode.py::test_a_close_pass_crops_each_object_box_from_the_video_export",
+    "tests/test_deep_mode.py::test_describing_before_protect_synced_prompts_fails",
+    "tests/test_deep_mode.py::test_a_describer_answer_without_json_fails_the_task"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/deep_mode.py",
+    "src/aikey/providers.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "A describe task from Protect and the session's description and labels read back in Protect",
+    "The unit of detectedThumbnails coord in close-pass video objects is assumed to be x, y, w, h in 0..1000 like smart-detect coords"
+   ],
+   "notes": "The prompt for the sorted object-type combination (describeComboKey) is sent with its sampling and describeSchema as response_format json_schema to the local OpenAI-compatible model; the reply {description, labels} gets an E5 passage descEmbedding (384 values) and goes to /internal/aiprocessors/descriptions/{taskId}."
+  },
+  {
+   "id": "search.e5_session_query",
+   "area": "search",
+   "title": "E5 session search queries next to basic CLIP search",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "not_observed"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_deep_mode.py::test_session_search_gets_an_e5_vector_under_the_clip_profile"
+   ],
+   "implementation": [
+    "src/aikey/search.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "A deep session search in Protect returning sessions"
+   ],
+   "notes": "7.3.70 encodeSessionSearchQuery sends NL_PARSE with model multilingual-e5-small and requires a 384-value txtEmbed; the clip-basic-v1 profile now answers it from the configured E5 backend."
+  },
+  {
+   "id": "callbacks.audio_image_tagging",
+   "area": "callbacks",
+   "title": "Audio-event thumbnails (ramType image) answered with event-level tags and a local description",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "not_observed"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_find_anything.py::test_an_audio_event_thumbnail_gets_event_level_ram_tags",
+    "tests/test_find_anything.py::test_a_continuous_unmetered_key_also_describes_the_audio_thumbnail",
+    "tests/test_find_anything.py::test_malformed_audio_image_tasks_are_refused_before_media"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "An audio event's metadata.ramTags and ramDescription read back in Protect"
+   ],
+   "notes": "7.3.70 pushAudioTask sends recognizeKeyFrames with ramType image. Audio events have no smart objects, so saveEventTagging keeps only event-level results: a key moment without search snapshots and the description."
+  },
+  {
+   "id": "index.ram_open_vocabulary_tags",
+   "area": "search",
+   "title": "RAM++ open-vocabulary tags for scenes, objects and crops",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "not_observed"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_find_anything.py::test_index_jobs_carry_scene_tags_and_ram_tags_per_object",
+    "tests/test_find_anything.py::test_a_failing_tag_server_never_fails_the_job",
+    "tests/test_vision_server.py::test_a_jpeg_gets_ram_tags"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/vision_server.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Protect's ramTags table was not read; tags it does not know are skipped with a warning (saveEventTagging)"
+   ],
+   "notes": "RAM++ Swin-L 14M (OpenVINO, NPU) with its own per-class thresholds; its 4585-tag list is public. The class tag stays first."
   },
   {
    "id": "control.disk_info",
