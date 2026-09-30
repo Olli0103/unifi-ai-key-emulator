@@ -32,8 +32,12 @@ jobs:
         run: python -m pytest -q
       - name: Run static checks
         run: python -m ruff check .
+      - name: Audit public source and release record
+        run: python tools/community_release_check.py --audit-only
       - name: Build package
         run: python -m build
+      - name: Audit package contents without approving release
+        run: python tools/community_release_check.py --audit-only --dist dist
 
   dependency-and-sbom:
     runs-on: ubuntu-latest

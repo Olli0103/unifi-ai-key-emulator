@@ -4,6 +4,10 @@ Static inspection on 2026-09-22 supports building an independent AI Key protocol
 
 This finding covers adoption. It does not establish that a replacement can complete every AI job, populate Find Anything, or survive upgrades.
 
+## Publication status
+
+This is historical technical evidence, not legal clearance. Public availability of the packages does not establish authorized use or permission for disassembly. Analysis authorization, interoperability necessity, minimal scope, and the absence of copied protected expression remain `needs_evidence` in [provenance](../legal/provenance.md). The reported sequence of analysis and implementation is not evidence of an organizational clean-room separation. Retain raw research privately; do not add firmware, disassemblies or extracted vendor functions to public artifacts.
+
 ## Scope and reproducibility
 
 Only public package files were read. Firmware code was not executed. No controller or local device was contacted, adopted, modified, or scanned. Native ARM64 binaries were inspected with Apple's LLVM objdump. Source offsets below are zero-based UTF-8 byte offsets in the unmodified minified `service.js`.

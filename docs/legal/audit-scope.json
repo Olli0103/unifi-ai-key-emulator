@@ -1,0 +1,10 @@
+{
+  "scope": "reachable history of reviewed base 4c71b732723ce2ccaec0a540736675789db9173d only",
+  "commits": 104,
+  "blobs_checked": 551,
+  "prohibited_filename_hits": 0,
+  "binary_header_hits": 0,
+  "code_copy_comparison": "needs_evidence",
+  "secret_scan": "existing redacted full-history CI; reverify on PR",
+  "rights_clearance": "needs_evidence"
+}

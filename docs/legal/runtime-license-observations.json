@@ -1,0 +1,91 @@
+{
+  "scope": "declared core lock compared with local installed distribution metadata, 2026-09-30; not extras, OS, images or weights",
+  "clearance": "needs_evidence",
+  "packages": [
+    {
+      "package": "aiohappyeyeballs",
+      "declared_version": "2.7.1",
+      "review_status": "needs_evidence",
+      "observation_status": "not_in_local_environment"
+    },
+    {
+      "package": "aiohttp",
+      "declared_version": "3.14.3",
+      "review_status": "needs_evidence",
+      "observation_status": "not_in_local_environment"
+    },
+    {
+      "package": "aiosignal",
+      "declared_version": "1.4.0",
+      "review_status": "needs_evidence",
+      "observation_status": "not_in_local_environment"
+    },
+    {
+      "package": "attrs",
+      "declared_version": "26.1.0",
+      "review_status": "needs_evidence",
+      "observation_status": "not_in_local_environment"
+    },
+    {
+      "package": "cffi",
+      "declared_version": "2.1.1",
+      "review_status": "needs_evidence",
+      "observation_status": "not_in_local_environment"
+    },
+    {
+      "package": "cryptography",
+      "declared_version": "50.0.1",
+      "review_status": "needs_evidence",
+      "observation_status": "not_in_local_environment"
+    },
+    {
+      "package": "frozenlist",
+      "declared_version": "1.8.0",
+      "review_status": "needs_evidence",
+      "observation_status": "not_in_local_environment"
+    },
+    {
+      "package": "idna",
+      "declared_version": "3.20",
+      "review_status": "needs_evidence",
+      "observed_version": "3.15",
+      "observation_status": "version_mismatch_not_license_evidence"
+    },
+    {
+      "package": "multidict",
+      "declared_version": "6.9.1",
+      "review_status": "needs_evidence",
+      "observation_status": "not_in_local_environment"
+    },
+    {
+      "package": "propcache",
+      "declared_version": "0.5.4",
+      "review_status": "needs_evidence",
+      "observation_status": "not_in_local_environment"
+    },
+    {
+      "package": "psycopg",
+      "declared_version": "3.3.6",
+      "review_status": "needs_evidence",
+      "observation_status": "not_in_local_environment"
+    },
+    {
+      "package": "psycopg-binary",
+      "declared_version": "3.3.6",
+      "review_status": "needs_evidence",
+      "observation_status": "not_in_local_environment"
+    },
+    {
+      "package": "pycparser",
+      "declared_version": "3.0",
+      "review_status": "needs_evidence",
+      "observation_status": "not_in_local_environment"
+    },
+    {
+      "package": "yarl",
+      "declared_version": "1.25.1",
+      "review_status": "needs_evidence",
+      "observation_status": "not_in_local_environment"
+    }
+  ]
+}

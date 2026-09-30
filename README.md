@@ -1,4 +1,6 @@
-# Local AI processor for Protect
+# Local AI processor
+
+Compatible with UniFi Protect. Independent and unofficial; not affiliated with or endorsed by Ubiquiti.
 
 An independent experimental AI processor for UniFi Protect. The implemented profile currently emulates a bounded subset of AI Key. The roadmap also targets a separate AI Port compatibility profile for G3, G4/G5 and ONVIF cameras. Native AI Key adoption has been tested with Protect 7.3.56 on a UDM Pro Max using Apple container 1.4.1 on an Apple silicon Mac. A separate [AI Port candidate](docs/aiport-candidate.md) appeared in Protect 7.3.60, paired one G3 camera, decoded live video, and delivered a Person-class smart event observed through Protect's Integration API. An opt-in, single-camera detector can now run beyond the diagnostic window. Fresh management-token adoption, sustained event indexing, multi-camera pairing, and UGREEN NAS deployment remain open. This is an unofficial project and is not affiliated with Ubiquiti.
 
@@ -12,7 +14,7 @@ The inspected controller source is 7.2.105, alongside AI Key firmware 2.2.8. Pub
 
 The [roadmap](PLAN.md) covers native AI Key and AI Port behavior, automatic camera discovery, AI Port processing for legacy and ONVIF cameras, a provider/model control site, security and detection-quality checks, and the path to a maintained open-source product. Work is tracked in the [issue index](docs/planning/issues.md), with [Claude/contributor handoff instructions](docs/planning/claude-handoff.md).
 
-The repository currently has no license. Licensing, provenance and release governance are explicit product work; public source availability alone does not establish an open-source release. Opt-in all-camera admission has synthetic tests, but it has not been deployed or native-verified. The control site is planned.
+This PR proposes the [Apache-2.0 license](LICENSE) for the project code. [Community release readiness](docs/legal/release-readiness.md) tracks code origin, firmware-use authorization, contributor/employer rights, dependency/image/model obligations and adoption proof. Third-party components retain their own terms. The license choice does not establish code-origin, firmware-analysis or legal clearance; those release gates remain open. See [contributing](CONTRIBUTING.md). Opt-in all-camera admission has synthetic tests, but it has not been deployed or native-verified. The control site is planned.
 
 A [read-only camera inventory preflight](docs/camera-inventory-preflight.md) is available for Protect 7.3.60. It reads the local integration API with a private API-key file and pinned web certificate, then writes a private eligibility report. It does not enable processing. An opt-in continuous policy now refreshes that same inventory and gates automatic jobs by an explicit model-family allowlist and a durable 12-per-hour global limit. The live deployment still uses one-use permits; Protect-side all-camera dispatch, broader model-family validation, legacy event ingress and the control site remain open work.
 
