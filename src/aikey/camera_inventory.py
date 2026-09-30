@@ -38,7 +38,7 @@ _SMART_TYPES = {"person", "vehicle", "package", "licensePlate", "face", "animal"
 _AUDIO_TYPES = {"alrmSmoke", "alrmCmonx", "alrmSiren", "alrmBabyCry", "alrmSpeak",
                 "alrmBark", "alrmBurglar", "alrmCarHorn", "alrmGlassBreak",
                 "smoke_cmonx"}  # Seen in a 7.3.60 inventory, absent from its published enum.
-_VALIDATED_VERSIONS = frozenset({"7.3.60", "7.3.68"})
+_VALIDATED_VERSIONS = frozenset({"7.3.60", "7.3.68", "7.3.70"})
 
 
 class InventoryError(RuntimeError):

@@ -125,3 +125,16 @@ def test_a_window_within_fourteen_days_is_accepted(tmp_path):
     config = defaults(tmp_path / "state", "020000000001")
     config["device"]["diagnostic_command_fingerprints_until"] = int(time.time()) + 7 * 24 * 3600
     assert validate_config(config)["device"]["diagnostic_command_fingerprints_until"] > time.time()
+
+
+async def test_connect_time_sync_commands_keep_only_their_field_shape(tmp_path):
+    # Protect 7.3.68/7.3.70 send diskInfo and updateLcmSettings on every connect.
+    service = device(tmp_path)
+    assert await send(service, "diskInfo", {"size": 123, "detail": {"token": SECRET, "used": 1.5}}, "a") == 95
+    assert await send(service, "updateLcmSettings", {"brightness": 40, "enabled": True}, "b") == 95
+    assert service.status["sync_shapes"] == {
+        "diskInfo": {"detail": "object", "detail.token": "string", "detail.used": "number", "size": "number"},
+        "updateLcmSettings": {"brightness": "number", "enabled": "boolean"}}
+    assert service.status["control_commands"]["diskInfo"]["count"] == 1
+    assert service.status["control_commands"]["unknown"]["count"] == 0
+    assert SECRET not in json.dumps(service.status)

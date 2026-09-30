@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-27.15). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-09-30.16). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-27.15` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-09-30.16` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -12,98 +12,98 @@ Manifest `ai-key/2026-09-27.15` for the `ai-key` profile, based on commit `7241d
 
 Live columns show each live trial separately. `indirect` means the behavior was necessarily exercised by another verified workflow but not individually recorded. Static references are source inspection of other versions and never count as native evidence.
 
-| Feature | Status | Live 7.3.56 | Live 7.3.60 | Live 7.3.68 | Static references | Activation |
-| --- | --- | --- | --- | --- | --- | --- |
-| **adoption** | |  |  |  | | |
-| `discovery.udp_v1_query`: Read-only UDP discovery: v1 information query and v1 command 4 MAC query | fixture-tested | indirect | not_observed | not_observed | AI Key 2.2.8 | explicit_opt_in |
-| `discovery.other_opcodes`: Discovery v0/v2, mutation opcodes, GUID/controller UUID, DDC and Wi-Fi fields | unsupported | — | — | — | AI Key 2.2.8 | default |
-| `adoption.management_info_post`: Credentialed HTTPS POST /api/info before adoption | fixture-tested | indirect | not_observed | not_observed | Protect 7.2.105, AI Key 2.2.8 | default |
-| `adoption.management_adopt`: HTTPS POST /api/adopt with controller token, WSS mode 0 and configured controller host | native-verified | native-verified | not_observed | not_observed | Protect 7.2.105, AI Key 2.2.8 | default |
-| `adoption.layer3_host_adoption`: Layer-3 host adoption route (/api/adopt_layer3 in firmware) | unsupported | — | — | — | AI Key 2.2.8 | default |
-| `adoption.factory_enrollment`: Bounded factory-credential enrollment window (at most ten minutes) | native-verified | native-verified | not_observed | not_observed | Protect 7.2.105 | experimental_opt_in |
-| `adoption.generated_password_flow`: Credentialed adoption with the generated private management password | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105 | default |
-| `adoption.readoption_refused`: Re-adoption of an already adopted device is refused until an explicit local reset | fixture-tested | not_observed | not_observed | not_observed | — | default |
-| `control.connection_headers`: WSS control connection with client certificate and x-ident/x-type/x-sysid/x-ip/x-version/x-mode/x-adopted/x-token | fixture-tested | indirect | indirect | indirect | Protect 7.2.105, AI Key 2.2.8 | default |
-| `control.profile_ucp4_negotiated`: Strict ucp4 control profile requiring a negotiated Sec-WebSocket-Protocol | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105 | default |
-| `control.profile_device_service`: device-service control profile: absent subprotocol accepted only with a token or confirmed adoption and an explicit pin | native-verified | native-verified | not_observed | not_observed | — | default |
-| `adoption.time_sync_confirmation`: Adoption is confirmed only by a matching timeSync response on the current token connection | native-verified | native-verified | not_observed | not_observed | Protect 7.2.105, AI Key 2.2.8 | default |
-| **lifecycle** | |  |  |  | | |
-| `lifecycle.credential_rotation`: changeUserPassword rotates the management password, stored only as a PBKDF2 hash | native-verified | native-verified | not_observed | not_observed | Protect 7.2.105, AI Key 2.2.8 | default |
-| `lifecycle.factory_login_disabled`: Factory credentials rejected after rotation or enrollment expiry | native-verified | native-verified | not_observed | not_observed | — | default |
-| `lifecycle.reconnect_after_restart`: Restart reuses identity and certificate and reconnects adopted without a token | native-verified | native-verified | native-verified | native-verified | Protect 7.2.105, AI Key 2.2.8 | default |
-| `lifecycle.abnormal_closure_backoff`: Abnormal transport loss preserves adoption and reconnects with capped exponential backoff | fixture-tested | not_observed | not_observed | not_observed | — | default |
-| `lifecycle.protocol_violation_close`: Malformed or unsupported frames close the control socket with 1002 (1003 for text) without changing adoption | fixture-tested | not_observed | not_observed | not_observed | — | default |
-| `lifecycle.unknown_controller_version`: Unknown or unrecognized Protect versions in setConsoleInfo are reported as fixed categories; adoption and the baseline continue | native-verified | not_observed | not_observed | native-verified | — | default |
-| `lifecycle.controller_upgrade`: Adoption survives an in-place Protect upgrade | needs_evidence | not_observed | not_observed | not_observed | — | default |
-| `lifecycle.emulator_upgrade`: Adoption and identity survive an emulator version upgrade | needs_evidence | — | — | — | — | default |
-| **control** | |  |  |  | | |
-| `control.get_info`: getInfo returns type, sysid, version, MAC, uptime, poeType, storageSize and featureFlags | native-verified | indirect | indirect | native-verified | Protect 7.2.105, AI Key 2.2.8 | default |
-| `control.get_task_queue_info`: getTaskQueueInfo reports the six observed queue fields | native-verified | not_observed | not_observed | native-verified | Protect 7.2.105, AI Key 2.2.8 | default |
-| `control.set_console_info`: setConsoleInfo stores consoleName, id, protectVersion and supportsDbCredential locally | native-verified | not_observed | not_observed | native-verified | Protect 7.2.105, AI Key 2.2.8 | default |
-| `control.set_info`: setInfo accepts only {hostname} as logical metadata | fixture-tested | not_observed | not_observed | not_observed | AI Key 2.2.8 | default |
-| `control.update_timezone`: updateTimezone accepts only {timezone} as logical metadata | native-verified | not_observed | not_observed | native-verified | AI Key 2.2.8 | default |
-| `control.request_ai.on_demand_inference`: RequestAI :7968/on_demand_inference, admitted before inference | native-verified | not_observed | native-verified | not_observed | Protect 7.2.105, AI Key 2.2.8 | experimental_opt_in |
-| `control.request_ai.describe`: RequestAI :7968/describe session task with image or video inputs | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105 | default |
-| `control.request_ai.unknown_target`: RequestAI with an unimplemented or malformed targetUri | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105, AI Key 2.2.8 | default |
-| `control.request_ai.second_stage_verification`: RequestAI second_verifier_mlabel classify (Second Stage Verification) answered by local CLIP zero-shot | fixture-tested | — | — | not_observed | Protect 7.3.60 bundle | explicit_opt_in |
-| `control.recognize_key_frames`: recognizeKeyFrames video caption command within explicit one-use camera scopes | native-verified | not_observed | native-verified | native-verified | Protect 7.2.105, AI Key 2.2.8 | experimental_opt_in |
-| `control.continuous_caption_admission`: Opt-in automatic captions admitted by fresh Protect inventory, model-family policy and a durable global budget | fixture-tested | not_observed | not_observed | not_observed | — | experimental_opt_in |
-| **worker** | |  |  |  | | |
-| `worker.private_journal_rollover`: Private terminal-job tombstones keep duplicate protection while bounding the active journal | fixture-tested | not_observed | not_observed | not_observed | — | experimental_opt_in |
-| **control** | |  |  |  | | |
-| `control.recognize_key_frames.other_variants`: recognizeKeyFrames image variant (one cropped audio-event thumbnail) | unsupported | — | — | indirect | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | default |
-| `control.recognize_key_frames.multiple_images`: recognizeKeyFrames multipleImages (retroactive backfill of saved object crops) | native-verified | — | — | native-verified | Protect 7.3.60 bundle | explicit_opt_in |
-| `control.host_management`: reboot, factoryReset, firmware install, SSH management, support upload and hardware statistics | unsupported | — | — | — | AI Key 2.2.8 | default |
-| `control.ai_settings_commands`: changeAiInferAgentSettings, changeDescribePrompts, networkStatus and sshService | unsupported | — | — | indirect | — | default |
-| `control.unknown_command`: Any other command name | unsupported | — | — | indirect | — | default |
-| **framing** | |  |  |  | | |
-| `framing.ucp_two_record`: Binary two-record JSON framing (type, format 1, uncompressed) | fixture-tested | indirect | indirect | indirect | AI Key 2.2.8 | default |
-| `framing.compressed_or_other_format`: Compressed records or record format versions other than 1 | unsupported | — | — | — | AI Key 2.2.8 | default |
-| `framing.request_deduplication`: Identical request IDs share a result; a reused ID with changed content is a protocol violation | fixture-tested | — | — | — | — | default |
-| `framing.binary_only`: Text WebSocket frames are rejected | fixture-tested | — | — | — | — | default |
-| `framing.event_messages`: Controller event messages | unsupported | — | — | — | — | default |
-| **media** | |  |  |  | | |
-| `media.video_export_mp4`: Opt-in MP4 adaptation of the verified AI processor video export route | native-verified | not_observed | native-verified | native-verified | Protect 7.2.105 | explicit_opt_in |
-| `media.ubv_decoding`: Decoding raw UBV | unsupported | — | — | — | Protect 7.2.105 | default |
-| `media.images_and_snapshots`: Image and snapshot inputs for session descriptions | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105 | default |
-| `media.origin_and_redirect_policy`: Exact controller-origin allowlist, known paths only, no redirects | fixture-tested | — | — | — | — | default |
-| **callbacks** | |  |  |  | | |
-| `callback.on_demand_camera_upload`: On-demand result JSON at /internal/camera-upload/<token> | native-verified | not_observed | native-verified | not_observed | Protect 7.2.105, AI Key 2.2.8 | default |
-| `callback.ram_full_event_tagging`: Full RAM event-tagging multipart callback with keyMomentsTags [] | native-verified | not_observed | native-verified | native-verified | Protect 7.2.105, AI Key 2.2.8 | default |
-| `callback.ram_description_only`: Legacy description-only multipart profiles key-2.2.8 and protect-7.2.105 | unsupported | not_observed | not_observed | not_observed | Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
-| `callback.task_description`: Session description JSON at /internal/aiprocessors/descriptions/<taskId> | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105 | default |
-| `callback.origin_allowlist`: Callbacks only to configured controller origins and known routes | fixture-tested | — | — | — | — | default |
-| `callback.journal_and_uncertain_delivery`: Private job journal; completed callbacks deduplicated and uncertain callbacks never replayed | fixture-tested | — | — | — | — | default |
-| **capabilities** | |  |  |  | | |
-| `capability.explicit_disabled_flags`: Capability flags derived from served features; unserved ones sent explicitly disabled | fixture-tested | — | — | indirect | Protect 7.2.105 | default |
-| `capability.ai_mode_basic`: aiMode reported as basic | fixture-tested | — | — | — | Protect 7.2.105 | default |
-| `capability.support_ai_summary`: supportAiSummary advertised only with explicit opt-in and a configured caption path | fixture-tested | not_observed | not_observed | indirect | Protect 7.2.105 | experimental_opt_in |
-| `capability.deep_mode_vlm`: supportDeepMode / supportVlm | unsupported | — | — | — | Protect 7.2.105 | default |
-| `capability.face_recognition`: supportFaceRecognition advertised with local face recognition | fixture-tested | — | — | indirect | Protect 7.2.105 | explicit_opt_in |
-| `capability.license_plate_recognition`: License-plate recognition | unsupported | — | — | indirect | Protect 7.2.105 | default |
-| `capability.face_enhancement`: Automatic and manual face enhancement | unsupported | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
-| `capability.retroactive_processing`: supportRetroactiveProcessing opt-in for Find Anything backfill | fixture-tested | — | — | indirect | Protect 7.3.60 bundle | explicit_opt_in |
-| `capability.recognize_anything_tagging`: Recognize Anything tags, detections and key-moment snapshots | unsupported | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
-| `capability.audio_speech`: Speech transcription (speechToText) | fixture-tested | — | — | indirect | Protect 7.3.60 bundle, AI Key 2.2.8 | explicit_opt_in |
-| **callbacks** | |  |  |  | | |
-| `callback.speech_to_text_transcriptions`: speechToText callback saved as native transcription rows | native-verified | — | — | native-verified | Protect 7.3.60 bundle, AI Key 2.2.8 | explicit_opt_in |
-| `callback.face_recognition_part`: face multipart callback saved as native face thumbnails linked to person trackers | native-verified | — | — | native-verified | Protect 7.3.60 bundle | explicit_opt_in |
-| **capabilities** | |  |  |  | | |
-| `capability.ai_alarms`: AI query matches in Alarm Manager | unsupported | — | — | — | — | default |
-| **database** | |  |  |  | | |
-| `database.credential_rotation_hook`: PostgreSQL unifi-protect role rotated before management-password rotation | native-verified | — | — | native-verified | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
-| `database.supports_db_credential_handoff`: supportsDbCredential console capability and controller access-rule update | needs_evidence | — | — | indirect | Protect 7.2.105, AI Key 2.2.8 | default |
-| `database.controller_migrations`: Protect migrations and extensions applied to the processor database | native-verified | — | — | native-verified | Protect 7.3.60 bundle, Protect 7.2.105 | explicit_opt_in |
-| `database.bm25_rerank`: pg_tokenizer, vchord_bm25 and rerank function | unsupported | — | — | — | Protect 7.2.105 | default |
-| **search** | |  |  |  | | |
-| `search.e5_nl_parse`: NL_PARSE with multilingual-e5-small returns a 384-value query embedding | fixture-tested | not_observed | not_observed | not_observed | Protect 7.2.105 | explicit_opt_in |
-| `search.description_embedding`: 384-value passage embedding attached to task descriptions | fixture-tested | — | — | — | Protect 7.2.105 | explicit_opt_in |
-| `search.legacy_clip_image`: 768-value CLIP ViT-L/14 NL_PARSE text vectors and IMAGE_SEARCH image vectors (basic Find Anything) | native-verified | — | — | native-verified | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
-| `search.tags_and_time_filters`: NL_PARSE objectTypes and time window from the query text (keyTags stay empty) | native-verified | — | — | native-verified | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
-| `search.native_retrieval`: Find Anything retrieval of processor results in Protect | native-verified | — | — | native-verified | Protect 7.3.60 bundle, Protect 7.2.105 | explicit_opt_in |
-| `index.search_snapshots`: Key-moment regions indexed as keyMomentsTags search snapshots with local CLIP crop embeddings | native-verified | — | — | native-verified | Protect 7.3.60 bundle | explicit_opt_in |
-| `index.thumbnail_tags`: thumbnailTags for existing smart-detect objects (thumbnailMeta and retroactive crops) | fixture-tested | — | — | not_observed | Protect 7.3.60 bundle | explicit_opt_in |
-| `search.index_recovery`: Search index recovery after restart or model change | needs_evidence | — | — | — | Protect 7.2.105 | default |
+| Feature | Status | Live 7.3.56 | Live 7.3.60 | Live 7.3.68 | Live 7.3.70 | Static references | Activation |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **adoption** | |  |  |  |  | | |
+| `discovery.udp_v1_query`: Read-only UDP discovery: v1 information query and v1 command 4 MAC query | fixture-tested | indirect | not_observed | not_observed | — | AI Key 2.2.8 | explicit_opt_in |
+| `discovery.other_opcodes`: Discovery v0/v2, mutation opcodes, GUID/controller UUID, DDC and Wi-Fi fields | unsupported | — | — | — | — | AI Key 2.2.8 | default |
+| `adoption.management_info_post`: Credentialed HTTPS POST /api/info before adoption | fixture-tested | indirect | not_observed | not_observed | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `adoption.management_adopt`: HTTPS POST /api/adopt with controller token, WSS mode 0 and configured controller host | native-verified | native-verified | not_observed | not_observed | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `adoption.layer3_host_adoption`: Layer-3 host adoption route (/api/adopt_layer3 in firmware) | unsupported | — | — | — | — | AI Key 2.2.8 | default |
+| `adoption.factory_enrollment`: Bounded factory-credential enrollment window (at most ten minutes) | native-verified | native-verified | not_observed | not_observed | — | Protect 7.2.105 | experimental_opt_in |
+| `adoption.generated_password_flow`: Credentialed adoption with the generated private management password | fixture-tested | not_observed | not_observed | not_observed | — | Protect 7.2.105 | default |
+| `adoption.readoption_refused`: Re-adoption of an already adopted device is refused until an explicit local reset | fixture-tested | not_observed | not_observed | not_observed | — | — | default |
+| `control.connection_headers`: WSS control connection with client certificate and x-ident/x-type/x-sysid/x-ip/x-version/x-mode/x-adopted/x-token | fixture-tested | indirect | indirect | indirect | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `control.profile_ucp4_negotiated`: Strict ucp4 control profile requiring a negotiated Sec-WebSocket-Protocol | fixture-tested | not_observed | not_observed | not_observed | — | Protect 7.2.105 | default |
+| `control.profile_device_service`: device-service control profile: absent subprotocol accepted only with a token or confirmed adoption and an explicit pin | native-verified | native-verified | not_observed | not_observed | — | — | default |
+| `adoption.time_sync_confirmation`: Adoption is confirmed only by a matching timeSync response on the current token connection | native-verified | native-verified | not_observed | not_observed | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| **lifecycle** | |  |  |  |  | | |
+| `lifecycle.credential_rotation`: changeUserPassword rotates the management password, stored only as a PBKDF2 hash | native-verified | native-verified | not_observed | not_observed | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `lifecycle.factory_login_disabled`: Factory credentials rejected after rotation or enrollment expiry | native-verified | native-verified | not_observed | not_observed | — | — | default |
+| `lifecycle.reconnect_after_restart`: Restart reuses identity and certificate and reconnects adopted without a token | native-verified | native-verified | native-verified | native-verified | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `lifecycle.abnormal_closure_backoff`: Abnormal transport loss preserves adoption and reconnects with capped exponential backoff | fixture-tested | not_observed | not_observed | not_observed | — | — | default |
+| `lifecycle.protocol_violation_close`: Malformed or unsupported frames close the control socket with 1002 (1003 for text) without changing adoption | fixture-tested | not_observed | not_observed | not_observed | — | — | default |
+| `lifecycle.unknown_controller_version`: Unknown or unrecognized Protect versions in setConsoleInfo are reported as fixed categories; adoption and the baseline continue | native-verified | not_observed | not_observed | native-verified | — | — | default |
+| `lifecycle.controller_upgrade`: Adoption survives an in-place Protect upgrade | needs_evidence | not_observed | not_observed | not_observed | — | — | default |
+| `lifecycle.emulator_upgrade`: Adoption and identity survive an emulator version upgrade | needs_evidence | — | — | — | — | — | default |
+| **control** | |  |  |  |  | | |
+| `control.get_info`: getInfo returns type, sysid, version, MAC, uptime, poeType, storageSize and featureFlags | native-verified | indirect | indirect | native-verified | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `control.get_task_queue_info`: getTaskQueueInfo reports the six observed queue fields | native-verified | not_observed | not_observed | native-verified | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `control.set_console_info`: setConsoleInfo stores consoleName, id, protectVersion and supportsDbCredential locally | native-verified | not_observed | not_observed | native-verified | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `control.set_info`: setInfo accepts only {hostname} as logical metadata | fixture-tested | not_observed | not_observed | not_observed | — | AI Key 2.2.8 | default |
+| `control.update_timezone`: updateTimezone accepts only {timezone} as logical metadata | native-verified | not_observed | not_observed | native-verified | — | AI Key 2.2.8 | default |
+| `control.request_ai.on_demand_inference`: RequestAI :7968/on_demand_inference, admitted before inference | native-verified | not_observed | native-verified | not_observed | — | Protect 7.2.105, AI Key 2.2.8 | experimental_opt_in |
+| `control.request_ai.describe`: RequestAI :7968/describe session task with image or video inputs | fixture-tested | not_observed | not_observed | not_observed | — | Protect 7.2.105 | default |
+| `control.request_ai.unknown_target`: RequestAI with an unimplemented or malformed targetUri | fixture-tested | not_observed | not_observed | not_observed | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `control.request_ai.second_stage_verification`: RequestAI second_verifier_mlabel classify (Second Stage Verification) answered by local CLIP zero-shot | fixture-tested | — | — | not_observed | — | Protect 7.3.60 bundle | explicit_opt_in |
+| `control.recognize_key_frames`: recognizeKeyFrames video caption command within explicit one-use camera scopes | native-verified | not_observed | native-verified | native-verified | — | Protect 7.2.105, AI Key 2.2.8 | experimental_opt_in |
+| `control.continuous_caption_admission`: Opt-in automatic captions admitted by fresh Protect inventory, model-family policy and a durable global budget | fixture-tested | not_observed | not_observed | not_observed | — | — | experimental_opt_in |
+| **worker** | |  |  |  |  | | |
+| `worker.private_journal_rollover`: Private terminal-job tombstones keep duplicate protection while bounding the active journal | fixture-tested | not_observed | not_observed | not_observed | — | — | experimental_opt_in |
+| **control** | |  |  |  |  | | |
+| `control.recognize_key_frames.other_variants`: recognizeKeyFrames image variant (one cropped audio-event thumbnail) | unsupported | — | — | indirect | — | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | default |
+| `control.recognize_key_frames.multiple_images`: recognizeKeyFrames multipleImages (retroactive backfill of saved object crops) | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle | explicit_opt_in |
+| `control.host_management`: reboot, factoryReset, firmware install, SSH management, support upload and hardware statistics | unsupported | — | — | — | — | AI Key 2.2.8 | default |
+| `control.ai_settings_commands`: changeAiInferAgentSettings, changeDescribePrompts, networkStatus and sshService | unsupported | — | — | indirect | — | — | default |
+| `control.unknown_command`: Any other command name | unsupported | — | — | indirect | — | — | default |
+| **framing** | |  |  |  |  | | |
+| `framing.ucp_two_record`: Binary two-record JSON framing (type, format 1, uncompressed) | fixture-tested | indirect | indirect | indirect | — | AI Key 2.2.8 | default |
+| `framing.compressed_or_other_format`: Compressed records or record format versions other than 1 | unsupported | — | — | — | — | AI Key 2.2.8 | default |
+| `framing.request_deduplication`: Identical request IDs share a result; a reused ID with changed content is a protocol violation | fixture-tested | — | — | — | — | — | default |
+| `framing.binary_only`: Text WebSocket frames are rejected | fixture-tested | — | — | — | — | — | default |
+| `framing.event_messages`: Controller event messages | unsupported | — | — | — | — | — | default |
+| **media** | |  |  |  |  | | |
+| `media.video_export_mp4`: Opt-in MP4 adaptation of the verified AI processor video export route | native-verified | not_observed | native-verified | native-verified | — | Protect 7.2.105 | explicit_opt_in |
+| `media.ubv_decoding`: Decoding raw UBV | unsupported | — | — | — | — | Protect 7.2.105 | default |
+| `media.images_and_snapshots`: Image and snapshot inputs for session descriptions | fixture-tested | not_observed | not_observed | not_observed | — | Protect 7.2.105 | default |
+| `media.origin_and_redirect_policy`: Exact controller-origin allowlist, known paths only, no redirects | fixture-tested | — | — | — | — | — | default |
+| **callbacks** | |  |  |  |  | | |
+| `callback.on_demand_camera_upload`: On-demand result JSON at /internal/camera-upload/<token> | native-verified | not_observed | native-verified | not_observed | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `callback.ram_full_event_tagging`: Full RAM event-tagging multipart callback with keyMomentsTags [] | native-verified | not_observed | native-verified | native-verified | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `callback.ram_description_only`: Legacy description-only multipart profiles key-2.2.8 and protect-7.2.105 | unsupported | not_observed | not_observed | not_observed | — | Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
+| `callback.task_description`: Session description JSON at /internal/aiprocessors/descriptions/<taskId> | fixture-tested | not_observed | not_observed | not_observed | — | Protect 7.2.105 | default |
+| `callback.origin_allowlist`: Callbacks only to configured controller origins and known routes | fixture-tested | — | — | — | — | — | default |
+| `callback.journal_and_uncertain_delivery`: Private job journal; completed callbacks deduplicated and uncertain callbacks never replayed | fixture-tested | — | — | — | — | — | default |
+| **capabilities** | |  |  |  |  | | |
+| `capability.explicit_disabled_flags`: Capability flags derived from served features; unserved ones sent explicitly disabled | fixture-tested | — | — | indirect | — | Protect 7.2.105 | default |
+| `capability.ai_mode_basic`: aiMode reported as basic | fixture-tested | — | — | — | — | Protect 7.2.105 | default |
+| `capability.support_ai_summary`: supportAiSummary advertised only with explicit opt-in and a configured caption path | fixture-tested | not_observed | not_observed | indirect | — | Protect 7.2.105 | experimental_opt_in |
+| `capability.deep_mode_vlm`: supportDeepMode / supportVlm | unsupported | — | — | — | — | Protect 7.2.105 | default |
+| `capability.face_recognition`: supportFaceRecognition advertised with local face recognition | fixture-tested | — | — | indirect | — | Protect 7.2.105 | explicit_opt_in |
+| `capability.license_plate_recognition`: License-plate recognition | unsupported | — | — | indirect | — | Protect 7.2.105 | default |
+| `capability.face_enhancement`: Automatic and manual face enhancement | unsupported | — | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `capability.retroactive_processing`: supportRetroactiveProcessing opt-in for Find Anything backfill | fixture-tested | — | — | indirect | — | Protect 7.3.60 bundle | explicit_opt_in |
+| `capability.recognize_anything_tagging`: Recognize Anything tags, detections and key-moment snapshots | unsupported | — | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `capability.audio_speech`: Speech transcription (speechToText) | fixture-tested | — | — | indirect | — | Protect 7.3.60 bundle, AI Key 2.2.8 | explicit_opt_in |
+| **callbacks** | |  |  |  |  | | |
+| `callback.speech_to_text_transcriptions`: speechToText callback saved as native transcription rows | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle, AI Key 2.2.8 | explicit_opt_in |
+| `callback.face_recognition_part`: face multipart callback saved as native face thumbnails linked to person trackers | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle | explicit_opt_in |
+| **capabilities** | |  |  |  |  | | |
+| `capability.ai_alarms`: AI query matches in Alarm Manager | unsupported | — | — | — | — | — | default |
+| **database** | |  |  |  |  | | |
+| `database.credential_rotation_hook`: PostgreSQL unifi-protect role rotated before management-password rotation | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
+| `database.supports_db_credential_handoff`: supportsDbCredential console capability and controller access-rule update | needs_evidence | — | — | indirect | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `database.controller_migrations`: Protect migrations and extensions applied to the processor database | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle, Protect 7.2.105 | explicit_opt_in |
+| `database.bm25_rerank`: pg_tokenizer, vchord_bm25 and rerank function | unsupported | — | — | — | — | Protect 7.2.105 | default |
+| **search** | |  |  |  |  | | |
+| `search.e5_nl_parse`: NL_PARSE with multilingual-e5-small returns a 384-value query embedding | fixture-tested | not_observed | not_observed | not_observed | — | Protect 7.2.105 | explicit_opt_in |
+| `search.description_embedding`: 384-value passage embedding attached to task descriptions | fixture-tested | — | — | — | — | Protect 7.2.105 | explicit_opt_in |
+| `search.legacy_clip_image`: 768-value CLIP ViT-L/14 NL_PARSE text vectors and IMAGE_SEARCH image vectors (basic Find Anything) | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
+| `search.tags_and_time_filters`: NL_PARSE objectTypes and time window from the query text (keyTags stay empty) | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
+| `search.native_retrieval`: Find Anything retrieval of processor results in Protect | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle, Protect 7.2.105 | explicit_opt_in |
+| `index.search_snapshots`: Key-moment regions indexed as keyMomentsTags search snapshots with local CLIP crop embeddings | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle | explicit_opt_in |
+| `index.thumbnail_tags`: thumbnailTags for existing smart-detect objects (thumbnailMeta and retroactive crops) | fixture-tested | — | — | not_observed | — | Protect 7.3.60 bundle | explicit_opt_in |
+| `search.index_recovery`: Search index recovery after restart or model change | needs_evidence | — | — | — | — | Protect 7.2.105 | default |
 
 ## Missing evidence
 

@@ -132,6 +132,8 @@ _RETYPE_CONFIDENCE = 0.9
 # Decoded event audio lives only in a temporary directory with this prefix
 # inside the worker journal directory, removed when the job ends (#5).
 AUDIO_TEMP_PREFIX = "aikey-audio-"
+# Longest speech export accepted: Protect sweeps an event without an end at 300 s.
+SPEECH_EXPORT_MAX_MS = 300_000
 # Terminal states a tombstone may keep. callback_uncertain is deliberately not
 # one: it stays in the active journal for operator review (#40).
 _ARCHIVABLE_STATES = frozenset({"completed", "failed"})
@@ -393,6 +395,8 @@ class JobProcessor:
         # Retroactive backfill progress; counts only, no identifiers (#21).
         self.retroactive = {"tasks": 0, "crops_indexed": 0, "completed": 0, "failed": 0,
                             "refused_unindexed_camera": 0, "refused_image": 0, "archived": 0}
+        # Speech exports longer than max_audio_ms are transcribed up to that bound.
+        self.speech_counts = {"clipped": 0}
         self._stopping = False
         self._start_lock = asyncio.Lock()
         self._load_history()
@@ -1201,8 +1205,13 @@ class JobProcessor:
             raise WorkerError("speechToText is limited to the audio-only event export")
         if (any(type(body[key]) is not int for key in ("start", "end"))
                 or not 0 <= body["start"] < body["end"] <= 2 ** 53 - 1
-                or body["end"] - body["start"] > self.max_audio_ms):
+                or body["end"] - body["start"] > max(self.max_audio_ms, SPEECH_EXPORT_MAX_MS)):
             raise WorkerError("speechToText audio exceeds configured duration bound")
+        if body["end"] - body["start"] > self.max_audio_ms:
+            # Protect pads an event's export; a speech event near its length cap
+            # would otherwise lose its whole transcript. _audio keeps the first
+            # max_audio_ms of the track.
+            self.speech_counts["clipped"] += 1
         callback = self._url(body["resUrl"], "callback")
         if urlsplit(callback).path != _SPEECH_CALLBACK:
             raise WorkerError("speechToText requires the speech-to-text callback")
@@ -1301,6 +1310,11 @@ class JobProcessor:
             # with no faces and fetch no video (#20).
             body["_faces"] = []
             self.faces["counts"]["skipped_native_face_camera"] += 1
+        if body["camera"] in self.index_cameras:
+            # The same task is the camera's only key-moment task: without its
+            # search tags a face camera never gets Find Anything rows (G6, #1).
+            # They go in the ram part of the same callback (saveEventTagging).
+            body["_index"] = self._index_targets(body)
         normalized = {"operation": "recognizeFaces", "payload": body, "callback": callback,
                       "callbackKind": "face", "media": media}
         fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
@@ -1498,6 +1512,7 @@ class JobProcessor:
         return {"queued": queued, "active": max(0, len(self._pending) - queued),
                 "pending": len(self._pending), "capacity": self._queue.maxsize,
                 "ledger": len(self._history), "retroactive": dict(self.retroactive),
+                "speech": dict(self.speech_counts),
                 **({"faces": dict(self.faces["counts"], native_face_cameras=len(self.faces["native"]))}
                    if self.faces else {}),
                 **({"enhance": dict(self.enhance["counts"])} if self.enhance else {}),
@@ -1745,9 +1760,10 @@ class JobProcessor:
         from PIL import Image
         started = time.monotonic()
         attrs, snapshots, images, matched = {}, [], [], 0
-        if job.payload["_faces"]:
+        if job.payload["_faces"] or job.payload.get("_index"):
             (_, url), = job.media
             data, headers = await self._fetch(url, "video")
+        if job.payload["_faces"]:
             self.faces["counts"]["processed"] += 1
         for tracker, ts, coord, person in job.payload["_faces"]:
             frame = await self._video_frame(data, headers, url, job, timestamp=ts)
@@ -1792,10 +1808,25 @@ class JobProcessor:
                 "inferMs": elapsed, "preProcessMs": 0, "status": "success",
                 "timeElapsedMs": elapsed}
         summary = {"faces": len(snapshots), "matched": matched}
+        ram = None
+        if job.payload.get("_index"):
+            prepared = time.monotonic()
+            tags, moments, crops = await self._index_objects(job, data, headers, url)
+            taken = {name for name, _ in images}
+            kept = {name for name, _ in crops if name not in taken}
+            moments = [moment for moment in moments
+                       if str(moment["searchSnapshots"][0]["trackerID"]) in kept]
+            ram = ({"cameraId": job.payload["camera"], "eventId": job.payload["event"],
+                    "description": "", "status": "success", "keyMomentsTags": moments,
+                    "thumbnailTags": tags, "inferBoxMs": 0,
+                    "inferTagMs": round((time.monotonic() - prepared) * 1000), "inferTxtMs": 0,
+                    "preProcessMs": 0, "timeElapsedMs": round((time.monotonic() - started) * 1000)},
+                   [(name, image) for name, image in crops if name in kept])
+            summary.update(indexed=len(tags), snapshots=len(moments))
         if self.callback_mode == "disabled":
             return {"status": "processed", "jobId": job.job_id, "callback": "disabled",
                     "result": summary}
-        result = await self._post_callback(job, face, images=images)
+        result = await self._post_callback(job, face, images=images, ram=ram)
         # Names, crops and embeddings stay out of the journal.
         result["result"] = summary
         return result
@@ -2063,7 +2094,7 @@ class JobProcessor:
                                 "keyMomentsTags": len(key_moment_tags)}
         return result
 
-    async def _post_callback(self, job, payload, *, images=()):
+    async def _post_callback(self, job, payload, *, images=(), ram=None):
         self._record(job, "callback_sending")
         try:
             if job.callback_kind == "face":
@@ -2074,6 +2105,13 @@ class JobProcessor:
                                content_type="application/json")
                 for name, image in images:
                     form.add_field(name, image, filename=f"{name}.jpg", content_type="image/jpeg")
+                if ram is not None:
+                    # Search tags of the same event, read by saveEventTagging.
+                    tagging, crops = ram
+                    form.add_field("ram", _json(tagging), filename="description.json",
+                                   content_type="application/json")
+                    for name, image in crops:
+                        form.add_field(name, image, filename=f"{name}.jpg", content_type="image/jpeg")
                 kwargs = {"data": form}
             elif job.callback_kind in {"legacy", "legacy_tagging"}:
                 form = aiohttp.FormData()

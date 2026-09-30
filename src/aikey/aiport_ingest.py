@@ -438,6 +438,9 @@ class AiPortIngress:
                                         "reader_stopped": 0,
                                         "no_recent_frame": 0}
         self.restart_failures: dict[str, int] = {}
+        # Starts accepted while the relay refused the connection, then
+        # recovered by the watch loop (Protect never repeats a failed start).
+        self.deferred_starts = 0
         self.audio_observer = audio_observer
         self._audio: _AudioSession | None = None
         self._audio_retry_at = 0.0
@@ -483,6 +486,15 @@ class AiPortIngress:
                 self.last_decoder_error_markers = session.error_markers
                 self.last_decoder_error_terms = session.error_terms
                 await session.close()
+                if isinstance(exc, IngressError) and exc.code == "rtsp_connect_failed":
+                    # After a Protect restart its RTSP relay can refuse
+                    # connections for a while, and Protect does not retry a
+                    # failed UiStreamControl. Accept the stream and let the
+                    # watch loop connect with backoff, as the relay comes up.
+                    self._desired_spec = spec
+                    self.deferred_starts += 1
+                    self._restart_task = asyncio.create_task(self._watch_decoder())
+                    return {"status": "started", "usedPoints": spec.points}
                 if isinstance(exc, IngressError):
                     raise
                 raise IngressError("stream_decoder_unavailable") from exc
@@ -735,6 +747,7 @@ class AiPortIngressPool:
                 "stream_restart_observed_states": dict(
                     ingress.restart_observed_states),
                 "stream_restart_failures": dict(ingress.restart_failures),
+                "stream_deferred_starts": ingress.deferred_starts,
             }
             if getattr(ingress, "audio_observer", None) is not None:
                 row["audio"] = {"ready": ingress.audio_ready, "starts": ingress.audio_starts,

@@ -278,7 +278,6 @@ async def test_ingress_never_reports_started_without_a_frame(tmp_path):
      ("describe", "failed", "rtsp", "unauthorized")),
     ("[rtsp] method DESCRIBE failed: 404 Not Found", "rtsp_stream_not_found", (),
      ("describe", "failed", "found", "not", "rtsp")),
-    ("Connection refused", "rtsp_connect_failed", (), ("connection", "refused")),
     ("Option rw_timeout not found", "decoder_option_missing", (),
      ("found", "not", "option", "timeout")),
     ("[rtsp] method DESCRIBE failed: 454 Session Not Found", "rtsp_status_454", (),
@@ -435,3 +434,38 @@ async def test_a_stopped_stream_reports_no_geometry(tmp_path):
         assert pool.camera_diagnostics((CAMERA_MAC,))[0]["stream_geometry"] is None
     finally:
         await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_a_refused_relay_connection_is_accepted_and_retried_until_it_decodes(tmp_path):
+    # Protect 7.3.70 sent UiStreamControl before its RTSP relay listened and
+    # never repeated it; the stream must recover once the relay comes up.
+    decoder, _ = fake_decoder(tmp_path, emit_frame=False, stderr_text="Connection refused")
+    ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
+                           ffmpeg_path=decoder, start_timeout=2)
+    try:
+        assert (await ingress.control(start_payload()))["status"] == "started"
+        assert ingress.deferred_starts == 1 and ingress.list_streams() == []
+        fake_decoder(tmp_path)                       # the relay now answers
+
+        async def decoding() -> None:
+            while not ingress.list_streams():
+                await asyncio.sleep(0.05)
+
+        await asyncio.wait_for(decoding(), timeout=8)
+        assert ingress.restart_successes == 1
+    finally:
+        await ingress.close()
+
+
+@pytest.mark.asyncio
+async def test_a_stop_ends_the_retries_of_a_deferred_start(tmp_path):
+    decoder, _ = fake_decoder(tmp_path, emit_frame=False, stderr_text="Connection refused")
+    ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
+                           ffmpeg_path=decoder, start_timeout=2)
+    try:
+        await ingress.control(start_payload())
+        await ingress.control({"streaming": False, "deviceID": CAMERA_MAC})
+        assert ingress.reserved_points == 0 and ingress._restart_task is None
+    finally:
+        await ingress.close()

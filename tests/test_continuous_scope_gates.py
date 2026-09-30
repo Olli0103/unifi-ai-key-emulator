@@ -67,7 +67,7 @@ def _config(tmp_path, **policy_changes):
 def test_the_config_accepts_a_camera_pin_and_the_true_controller_label(tmp_path):
     assert validate_config(_config(tmp_path, camera_ids=[LISTED, OTHER]))["worker"]["continuous"][
         "camera_ids"] == [LISTED, OTHER]
-    assert CONTINUOUS_CAPTION_VERSIONS == {"7.3.60", "7.3.68"}
+    assert CONTINUOUS_CAPTION_VERSIONS == {"7.3.60", "7.3.68", "7.3.70"}
 
 
 @pytest.mark.parametrize("ids", [[], [LISTED, LISTED], [LISTED, 7], ["two words"], [""],

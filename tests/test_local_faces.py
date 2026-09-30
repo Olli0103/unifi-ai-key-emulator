@@ -44,6 +44,16 @@ class Controller:
                                    "jpeg": parts["image"][:3] == b"\xff\xd8\xff"})
         return web.json_response(self.face_reply)
 
+    async def image(self, request):
+        reader = await request.multipart()
+        parts = {}
+        while (part := await reader.next()) is not None:
+            parts[part.name] = await part.read(decode=False)
+        regions = json.loads(parts["regions"])
+        self.clip_requests = getattr(self, "clip_requests", []) + [regions]
+        return web.json_response({"model": "clip-ViT-L-14", "dim": 768,
+                                  "embeddings": [[1.0] + [0.0] * 767 for _ in regions]})
+
     async def vision(self, request):
         self.vision_requests.append(True)
         return web.json_response({}, status=500)
@@ -54,7 +64,7 @@ class Controller:
         while (part := await reader.next()) is not None:
             body = await part.read(decode=False)
             parts[part.name] = (part.headers.get("Content-Type"),
-                                json.loads(body) if part.name == "face" else body[:3])
+                                json.loads(body) if part.name in {"face", "ram"} else body[:3])
         self.callbacks.append(parts)
         return web.json_response({"ram": None})
 
@@ -74,6 +84,7 @@ async def controller(tmp_path):
     app = web.Application()
     app.router.add_get("/internal/aiprocessors/video/export", service.export)
     app.router.add_post("/v1/faces", service.faces)
+    app.router.add_post("/v1/image", service.image)
     app.router.add_post("/v1/chat/completions", service.vision)
     app.router.add_post("/internal/aiprocessors/recognize-anything", service.callback)
     runner = web.AppRunner(app, shutdown_timeout=1)
@@ -388,3 +399,29 @@ def test_the_native_face_policy_is_validated(tmp_path):
                "worker": {"max_queue": 2}}
     with pytest.raises(WorkerError, match="skip or process"):
         JobProcessor(options, tmp_path)
+
+
+async def test_a_native_face_camera_still_gets_its_find_anything_tags_in_the_ram_part(controller, tmp_path):
+    # The G6 detects faces itself, so its face answer stays empty, but its
+    # key-moment task must still index its person for Find Anything (#1).
+    inventory(tmp_path)
+    options = config(controller)
+    options["find_anything"] = {"clip_server": controller.origin, "index_camera_ids": [CAMERA]}
+    options["search"] = {"enabled": True, "profile": "clip-basic-v1"}
+    command = task()
+    command["payload"]["roiMeta"] = [{"ts": START + 1500, "roi": [
+        {"name": "", "coord": [300, 100, 200, 500], "trackerId": 3, "confidence": 0.9,
+         "objectType": "person", "attributes": {"objectType": "person"}}]}]
+    worker = JobProcessor(options, tmp_path)
+    try:
+        result = await worker.handle(command)
+    finally:
+        await worker.stop()
+    [parts] = controller.callbacks
+    assert set(parts) == {"face", "ram", "3"} and controller.face_requests == []
+    assert parts["face"][1]["faceAttrs"] == {}
+    ram = parts["ram"][1]
+    assert ram["cameraId"] == CAMERA and ram["eventId"] == EVENT and ram["status"] == "success"
+    [moment] = ram["keyMomentsTags"]
+    assert moment["searchSnapshots"][0]["trackerID"] == 3 and len(moment["imgEmbed"]) == 768
+    assert result["result"] == {"faces": 0, "matched": 0, "indexed": 0, "snapshots": 1}

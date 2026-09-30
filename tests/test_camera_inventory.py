@@ -118,7 +118,7 @@ def test_invalid_inventory_fails_as_a_whole(rows):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("version", ["7.3.60", "7.3.68"])
+@pytest.mark.parametrize("version", ["7.3.60", "7.3.68", "7.3.70"])
 async def test_pinned_read_only_inventory_has_no_processing_scope(tmp_path, monkeypatch,
                                                                    version):
     async with synthetic_protect(tmp_path, monkeypatch, meta_version=version,

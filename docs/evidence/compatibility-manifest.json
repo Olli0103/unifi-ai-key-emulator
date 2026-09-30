@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-27.15",
+ "manifest_version": "ai-key/2026-09-30.16",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -122,6 +122,36 @@
     "docs/basic-descriptions.md",
     "docs/evidence/find-anything-contract.md",
     "docs/evidence/ai-key-capability-status.md"
+   ],
+   "raw_traces_public": false
+  },
+  {
+   "id": "live-protect-7.3.70",
+   "kind": "live",
+   "protect_version": "7.3.70",
+   "date": "2026-09-30",
+   "console": "UDM Pro Max",
+   "camera_family": "AI Port-paired G3/G4/G5 cameras and a G6 Instant",
+   "vision_provider": "local Ollama qwen3-vl 8B instruct on the NAS iGPU",
+   "operator": "integration owner",
+   "observed": [
+    "adopted and connected on the same state files after moving from a Mac Apple container to a NAS Docker container; no re-adoption",
+    "changeUserPassword answered 13 until the restored search role got the device's stored password, then 0 on the next connect",
+    "the local integration API camera inventory parsed under the 7.3.68 contract (10 smart-event candidates, 1 offline, no unknown types); the registry went fresh with 10 eligible cameras once 7.3.70 was listed",
+    "continuous captions: postVLM tasks were refused as video_contract while the registry was stale; afterwards 9 recognizeKeyFrames caption jobs completed with Protect answering each callback 2xx, and one failed on a persistent media 503",
+    "32 speechToText jobs completed in 30 minutes with segments posted to the speech-to-text callback",
+    "recognizeFaces jobs completed; the native face camera was answered without an AI Key face",
+    "the unhandled connect-time commands are diskInfo and updateLcmSettings (bounded fingerprint window, matched against Protect's AI processor log)"
+   ],
+   "not_observed": [
+    "a caption read back from the exact-event record (metadata.ramDescription) on 7.3.70",
+    "the body or expected reply of diskInfo and updateLcmSettings",
+    "deep mode, /describe tasks, an on-demand player summary or a reverified event on 7.3.70"
+   ],
+   "limits": "Callback acceptances, journal states and counters from one controller over about one day; a callback acceptance is not a native caption readback.",
+   "records": [
+    "docs/evidence/live-protect-7.3.70.md",
+    "docs/planning/nas-final-cutover.md"
    ],
    "raw_traces_public": false
   },

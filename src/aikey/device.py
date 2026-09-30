@@ -148,6 +148,33 @@ def _field_shape(body, field):
             list: "array", dict: "object"}.get(type(value), "other")
 
 
+# Connect-time sync commands Protect 7.3.68/7.3.70 send to an AI Key that this
+# project does not answer yet. Only their field names and JSON types are kept,
+# so the reply contract can be established without recording any values.
+SYNC_SHAPE_COMMANDS = ("diskInfo", "updateLcmSettings")
+_SHAPE_FIELD_LIMIT = 24
+
+
+def _body_shape(body) -> dict:
+    """Field name -> JSON type for up to two levels of a command body; never values."""
+    shape: dict[str, str] = {}
+
+    def walk(value, prefix):
+        for name in sorted(value)[:_SHAPE_FIELD_LIMIT]:
+            if len(shape) >= _SHAPE_FIELD_LIMIT:
+                return
+            if not isinstance(name, str) or not _FINGERPRINT_NAME.fullmatch(name):
+                shape[prefix + "<malformed>"] = "other"
+                continue
+            shape[prefix + name] = _field_shape(value, name)
+            if not prefix and isinstance(value[name], dict):
+                walk(value[name], name + ".")
+
+    if isinstance(body, dict):
+        walk(body, "")
+    return shape
+
+
 class CommandFailure(Exception):
     """A bounded local command error represented in the UCP response envelope."""
 
@@ -324,7 +351,8 @@ class DeviceService:
             "getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone",
             "changeUserPassword", "RequestAI", "recognizeKeyFrames", "speechToText",
             "enhanceImage", "changeAiInferAgentSettings",
-            "changeDescribePrompts", "networkStatus", "sshService", "unknown")}
+            "changeDescribePrompts", "networkStatus", "sshService", *SYNC_SHAPE_COMMANDS, "unknown")}
+        self._sync_shapes: dict[str, dict] = {}
         self._unlisted = {"command": _unlisted_bucket(), "request_ai_target": _unlisted_bucket()}
         self._recognize_diagnostics = {
             "camera_shape_counts": dict.fromkeys(_JSON_SHAPES, 0),
@@ -394,6 +422,7 @@ class DeviceService:
                 "management": dict(self._management_diagnostics),
                 "control_commands": deepcopy(self._control_diagnostics),
                 "unlisted": deepcopy(self._unlisted),
+                "sync_shapes": deepcopy(self._sync_shapes),
                 "recognize_key_frames": deepcopy(self._recognize_diagnostics),
                 "clock_offset_ms": self._clock_offset_ms, "discovery": "unsupported",
                 "compatibility": self._compatibility_status(),
@@ -933,6 +962,8 @@ class DeviceService:
             self._record_unlisted("command", action)
         _increment(diagnostic, "count")
         matches = self._record_recognize_shape(body) if action == "recognizeKeyFrames" else ()
+        if action in SYNC_SHAPE_COMMANDS:
+            self._sync_shapes[action] = _body_shape(body)
         try:
             try:
                 result = await self._command(action, body, _connection=_connection)
