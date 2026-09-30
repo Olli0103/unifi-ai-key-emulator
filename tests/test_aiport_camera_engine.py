@@ -390,7 +390,7 @@ def test_zone_rejection_health_distinguishes_overlap_and_exclusion_without_geome
     assert status["eligible_observations"] == 0
 
 
-def test_live_pool_event_budget_survives_engine_restart(tmp_path):
+def test_a_capped_diagnostic_engine_budget_survives_restart(tmp_path):
     wall = [5 * _HOUR_NS]
     budget = EventBudget(tmp_path, limit=1, clock_ns=lambda: wall[0])
     first = CameraPolicyEngine([FIRST], max_events_per_camera=1,
@@ -416,7 +416,7 @@ def test_live_pool_event_budget_survives_engine_restart(tmp_path):
     assert restarted.observe(FIRST, (person(),), now=13)[0].change.edge == "enter"
 
 
-def test_live_pool_budget_corruption_denies_new_enters(tmp_path):
+def test_a_capped_diagnostic_engine_denies_enters_on_budget_corruption(tmp_path):
     budget = EventBudget(tmp_path, limit=1)
     engine = CameraPolicyEngine([FIRST], max_events_per_camera=1,
                                 event_window_seconds=3600, event_budget=budget)
@@ -760,3 +760,28 @@ def test_a_released_follow_up_restores_the_normal_dwell_rule():
     engine.release_held(FIRST, track)                   # follow-up expired
     entered, = engine.observe(FIRST, (parcel,), now=30, infrared=True)
     assert (entered.change.edge, entered.change.kind) == ("enter", "package")
+
+
+def test_the_live_pool_engine_has_no_object_event_ceiling():
+    # The owner rejected per-camera object caps: every confirmed, zone-matched
+    # object event enters, far past the former 12 or 30 per hour.
+    engine = CameraPolicyEngine([FIRST, SECOND], max_events_per_camera=None)
+    engine.replace_policy(FIRST, policy(FIRST))
+    entered, now = 0, 0.0
+    for _ in range(50):
+        now += 1
+        engine.observe(FIRST, (person(),), now=now)            # tentative
+        now += 1
+        entered += sum(c.change.edge == "enter"
+                       for c in engine.observe(FIRST, (person(),), now=now))
+        now += 10
+        engine.observe(FIRST, (), now=now)                     # track leaves
+    assert entered == 50
+    status = engine.camera_snapshot(now=now)
+    assert status[0]["events_entered"] == 50 and status[0]["event_budget_remaining"] is None
+
+
+def test_an_uncapped_engine_refuses_a_budget_that_would_reintroduce_a_ceiling(tmp_path):
+    with pytest.raises(IngressError):
+        CameraPolicyEngine([FIRST], max_events_per_camera=None,
+                           event_budget=EventBudget(tmp_path, limit=1))

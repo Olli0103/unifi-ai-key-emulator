@@ -614,7 +614,6 @@ class ControlSite:
                            "max_output_tokens": port.max_output_tokens or 256,
                            "threshold": port.threshold if port.threshold is not None else .8,
                            "smart_types": port.smart_types or ("person",),
-                           "max_events_per_hour": port.max_events_per_hour or 12,
                            "max_requests_per_hour": port.max_requests_per_hour}
                 body += self._provider_form(title, profile, port.revision, current,
                                             port.key_configured, csrf,
@@ -675,8 +674,6 @@ class ControlSite:
                          f"<label><input name='smart_types' type='checkbox' value='{kind}'"
                          f"{' checked' if kind in current['smart_types'] else ''}>{kind.title()}</label>"
                          for kind in ("person", "vehicle", "animal", "package")) + "</div>"
-                     f"<label>Maximum events per camera per hour<input name='max_events_per_hour' "
-                     f"type='number' min='1' max='3600' value='{_safe(current['max_events_per_hour'])}'></label>"
                      "<label>Optional API request cost cap per camera per hour "
                      "(empty = no cap)<input name='max_requests_per_hour' type='number' "
                      "min='2' max='3600' value='"
@@ -711,7 +708,6 @@ class ControlSite:
                 selection.update({
                     "threshold": float(fields["threshold"]),
                     "smart_types": fields.getall("smart_types", []),
-                    "max_events_per_hour": int(fields["max_events_per_hour"]),
                     "max_requests_per_hour": (
                         int(fields["max_requests_per_hour"])
                         if fields.get("max_requests_per_hour", "").strip() else None),

@@ -65,8 +65,7 @@ def test_existing_slot_accepts_valid_camera_policy_without_rewriting_identity(tm
         "inference_backend": "vision_api",
         "provider_config": {"provider": "ollama", "model": "synthetic-vision",
                             "base_url": "http://127.0.0.1:11434"},
-        "threshold": 0.8, "smart_types": ["person"],
-        "max_events_per_hour": 12, "max_requests_per_hour": 24,
+        "threshold": 0.8, "smart_types": ["person"], "max_requests_per_hour": 24,
     }
     config_path.write_text(json.dumps(config) + "\n")
     previous_config = config_path.read_bytes()

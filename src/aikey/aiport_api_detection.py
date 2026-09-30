@@ -105,7 +105,13 @@ _FALLBACK_SCHEMA = {
                        "score": {"type": "number"},
                        "box": {"type": "array", "minItems": 4, "maxItems": 4,
                                "items": {"type": "number"}}}}}}}
-FALLBACK_REASONS = ("http_429", "http_5xx", "request_failed", "dns_unavailable", "backoff")
+# paid_budget: the optional paid-request cost cap is spent; the frame is
+# still detected, locally, so the cap never limits object events.
+FALLBACK_REASONS = ("http_429", "http_5xx", "request_failed", "dns_unavailable", "backoff",
+                    "paid_budget")
+# After a failed local request the fallback pauses, doubling from 30 s to
+# 300 s, so an overloaded NAS model is not queued up against.
+_FALLBACK_BACKOFF_S = (30, 300)
 
 
 def fallback_to_fractions(text: str) -> str:
@@ -593,14 +599,17 @@ class ApiObjectDetector:
                              else None)
         self._dns_ok_until = 0.0
         self._dns_retry_at = 0.0
-        # Optional local fallback (Ollama on the LAN), used only while the
-        # primary provider fails; bounded per camera and hour, with its own
-        # timeout, and never charged to the paid request budget.
+        # Optional local fallback (Ollama on the LAN), used while the primary
+        # provider fails or its optional paid cap is spent. It has no count
+        # ceiling: the caller runs one request at a time per AI Port with at
+        # most two queued frames per camera, each request has a timeout, and
+        # a failure pauses the fallback. It never uses the paid budget.
         self.fallback = None
         self.fallback_counts = {"requests": 0, "objects": 0, "empty": 0, "failed": 0,
-                                "rate_limited": 0,
+                                "backoff_skipped": 0,
                                 "reasons": dict.fromkeys(FALLBACK_REASONS, 0)}
-        self._fallback_times: dict[str, list[float]] = {}
+        self._fallback_failures = 0
+        self._fallback_retry_at = 0.0
         if fallback is not None:
             try:
                 provider = validate_inference_config(dict(fallback["provider_config"]),
@@ -616,7 +625,8 @@ class ApiObjectDetector:
                     "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"))
             except ValueError:
                 private = False
-            timeout, per_hour = fallback.get("timeout_s", 60), fallback.get("max_per_hour", 120)
+            # max_per_hour is a legacy key: still validated, no longer applied.
+            timeout, per_hour = fallback.get("timeout_s", 60), fallback.get("max_per_hour", 1)
             if (provider.provider != "ollama" or not private
                     or type(timeout) is not int or not 5 <= timeout <= 180
                     or type(per_hour) is not int or not 1 <= per_hour <= 3600):
@@ -624,7 +634,6 @@ class ApiObjectDetector:
             provider.max_output_tokens = max(provider.max_output_tokens, 512)
             self.fallback = provider
             self.fallback_timeout = timeout
-            self.fallback_max_per_hour = per_hour
             self.fallback_transport = fallback_transport or (
                 lambda url, headers, payload: _post(url, headers, payload, timeout=timeout))
 
@@ -656,7 +665,7 @@ class ApiObjectDetector:
                 raise ApiDetectionError("invalid_api_detection_frame")
         except ProviderError as exc:
             raise ApiDetectionError("invalid_api_detection_frame") from exc
-        if time.monotonic() < self._budget_retry_at.get(camera_mac, 0):
+        if self.fallback is None and time.monotonic() < self._budget_retry_at.get(camera_mac, 0):
             return ()
         allow_startup_probe = (self.budget is None or self.motion.has_baseline(camera_mac)
                                or self.budget.remaining(camera_mac) == self.budget.limit)
@@ -681,7 +690,12 @@ class ApiObjectDetector:
                 gate.count("backoff_skipped")
                 return ()
             fallback_reason = "backoff"
-        if (self.budget is not None and self.motion.is_refresh(camera_mac)
+        if (fallback_reason is None and self.budget is not None and self.motion.is_refresh(camera_mac)
+                and self.budget.remaining(camera_mac) <= self.fresh_reserve
+                and self.fallback is not None):
+            # Keep the paid reserve for fresh motion; detect this one locally.
+            fallback_reason = "paid_budget"
+        if (fallback_reason is None and self.budget is not None and self.motion.is_refresh(camera_mac)
                 and self.budget.remaining(camera_mac) <= self.fresh_reserve):
             # Keep the last part of the unchanged hourly cap for motion that
             # starts in a quiet scene, e.g. an animal after people left.
@@ -701,8 +715,12 @@ class ApiObjectDetector:
                     self.motion.reset(camera_mac)
                     raise
                 fallback_reason = "dns_unavailable"
-        if (fallback_reason is None and self.budget is not None
-                and not self.budget.claim(camera_mac)):
+        paid_denied = (fallback_reason is None and self.budget is not None
+                       and not self.budget.claim(camera_mac))
+        if paid_denied and self.fallback is not None:
+            # The paid cost cap is spent: detect locally instead of dropping.
+            fallback_reason = "paid_budget"
+        elif paid_denied:
             # Preserve the current scene. Otherwise a denied request resets
             # startup sampling and burns each newly freed allowance on an
             # idle frame, keeping a busy camera at zero budget indefinitely.
@@ -825,12 +843,9 @@ class ApiObjectDetector:
     def _fallback_text(self, camera_mac: str, frame: bytes, reason: str) -> str:
         """One bounded local request; the reply in the shared schema, or a fixed error."""
         now = time.monotonic()
-        recent = [t for t in self._fallback_times.get(camera_mac, ()) if now - t < 3600]
-        if len(recent) >= self.fallback_max_per_hour:
-            self._fallback_times[camera_mac] = recent
-            self.fallback_counts["rate_limited"] += 1
-            raise ApiDetectionError("api_detection_fallback_rate_limited")
-        self._fallback_times[camera_mac] = recent + [now]
+        if now < self._fallback_retry_at:
+            self.fallback_counts["backoff_skipped"] += 1
+            raise ApiDetectionError("api_detection_fallback_backoff")
         self.fallback_counts["requests"] += 1
         self.fallback_counts["reasons"][reason] += 1
         try:
@@ -840,7 +855,12 @@ class ApiObjectDetector:
                 self.fallback.parse_response(self.fallback_transport(url, headers, payload)))
         except (ApiDetectionError, ProviderError, TypeError, ValueError) as exc:
             self.fallback_counts["failed"] += 1
+            self._fallback_failures += 1
+            first, cap = _FALLBACK_BACKOFF_S
+            self._fallback_retry_at = time.monotonic() + min(
+                cap, first * 2 ** (self._fallback_failures - 1))
             raise ApiDetectionError("api_detection_fallback_failed") from exc
+        self._fallback_failures = 0
         return text
 
     @staticmethod

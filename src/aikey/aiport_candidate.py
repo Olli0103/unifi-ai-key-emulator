@@ -243,7 +243,11 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
             stream["camera_mac"] = camera_mac
     if "live_pool_detector" in value:
         detector = value["live_pool_detector"]
-        common = {"threshold", "smart_types", "max_events_per_hour"}
+        # No object-event ceiling: the owner rejected per-camera caps on saved
+        # object events. A max_events_per_hour left in an older config is
+        # accepted and ignored (health: legacy_limits_ignored).
+        common = {"threshold", "smart_types"}
+        legacy = {"max_events_per_hour"}
         pytorch_fields = common | {"checkpoint_path", "checkpoint_sha256"}
         onnx_fields = common | {"inference_backend", "model_path", "model_sha256"}
         api_fields = common | {"inference_backend", "provider_config",
@@ -255,12 +259,12 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
         supported_types = ({"person", "vehicle", "animal", "package"} if is_api
                            else {"person", "vehicle", "animal"})
         if ("paired_streams" not in value or not isinstance(detector, dict)
-                or not (set(detector) == (api_fields if is_api else
-                                          onnx_fields if is_onnx else pytorch_fields)
+                or not (set(detector) - legacy == (api_fields if is_api else
+                                                   onnx_fields if is_onnx else pytorch_fields)
                         # The API request cap is an optional cost control; the
                         # held-package follow-up mode is optional (shadow).
                         or is_api and (api_fields - {"max_requests_per_hour"}
-                                       <= set(detector)
+                                       <= set(detector) - legacy
                                        <= api_fields | {"held_package_followup",
                                                         "plate_cameras", "fallback"}))
                 or detector.get("held_package_followup", "shadow") not in {"shadow", "announce"}
@@ -279,8 +283,9 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
                 or any(type(kind) is not str or kind not in supported_types
                        for kind in detector["smart_types"])
                 or len(set(detector["smart_types"])) != len(detector["smart_types"])
-                or type(detector["max_events_per_hour"]) is not int
-                or not 1 <= detector["max_events_per_hour"] <= 3600):
+                or "max_events_per_hour" in detector
+                and (type(detector["max_events_per_hour"]) is not int
+                     or not 1 <= detector["max_events_per_hour"] <= 3600)):
             raise CandidateError("Invalid live pool detector policy")
         if "fallback" in detector:
             # Local detection used only while the primary provider fails.
@@ -617,9 +622,11 @@ class CandidateService:
         self.config = config
         self.state_dir = Path(state_dir)
         live_config = config.get("live_pool_detector", config.get("live_detector"))
+        # Only the legacy single-stream live_detector keeps an event ceiling;
+        # the live pool admits every confirmed, zone-matched object event.
         self._event_budget = (EventBudget(
-            self.state_dir, limit=live_config["max_events_per_hour"])
-            if live_config is not None else None)
+            self.state_dir, limit=config["live_detector"]["max_events_per_hour"])
+            if "live_detector" in config else None)
         # One Package event per camera per 30 minutes, across restarts.
         self._package_cooldown = (EventBudget(
             self.state_dir, limit=1, namespace="package-cooldown",
@@ -811,10 +818,9 @@ class CandidateService:
             self._pool_camera_order = tuple(normalize_mac(camera) for camera in cameras)
             self._camera_engine = CameraPolicyEngine(
                 cameras,
-                max_events_per_camera=(detector["max_events_per_hour"] if live_pool
-                                       else len(self._pool_smart_types())),
-                event_window_seconds=3600 if live_pool else None,
-                event_budget=self._event_budget if live_pool else None,
+                max_events_per_camera=None if live_pool else len(self._pool_smart_types()),
+                event_window_seconds=None,
+                event_budget=None,
                 package_cooldown=self._package_cooldown if live_pool else None,
                 max_track_gap_seconds=(20 if live_pool and
                                        detector.get("inference_backend") == "vision_api"
@@ -1914,6 +1920,12 @@ class CandidateService:
         app.router.add_post("/api/1.2/manage", self._manage)
         return app
 
+    def _legacy_limits_ignored(self) -> list[str]:
+        detector = self.config.get("live_pool_detector") or {}
+        return ((["live_pool_detector.max_events_per_hour"] if "max_events_per_hour" in detector else [])
+                + (["live_pool_detector.fallback.max_per_hour"]
+                   if "max_per_hour" in (detector.get("fallback") or {}) else []))
+
     async def _health(self, request: web.Request) -> web.Response:
         live_budget_remaining = None
         live_budget_healthy = None
@@ -2067,6 +2079,8 @@ class CandidateService:
                                "diagnostic" if "diagnostic_detector" in self.config else
                                "passive"),
             "live_event_budget_remaining": live_budget_remaining,
+            # Limits an older config still names but this version does not apply.
+            "legacy_limits_ignored": self._legacy_limits_ignored(),
             "live_event_budget_healthy": live_budget_healthy,
             "pool_inference": (self._inference.snapshot()
                                if self._inference is not None else None),

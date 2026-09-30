@@ -42,15 +42,19 @@ class CameraEventCandidate:
 class CameraPolicyEngine:
     """One independent policy and tracker per explicitly allowed camera."""
 
-    def __init__(self, camera_macs: list[str], *, max_events_per_camera: int = 1,
+    def __init__(self, camera_macs: list[str], *, max_events_per_camera: int | None = 1,
                  event_window_seconds: float | None = None,
                  event_budget: EventBudget | None = None,
                  max_track_gap_seconds: float = 3.0,
                  max_center_distance: float | None = None,
                  package_cooldown: EventBudget | None = None):
         if (not isinstance(camera_macs, list) or not 1 <= len(camera_macs) <= 5
-                or type(max_events_per_camera) is not int
-                or not 1 <= max_events_per_camera <= 3600
+                # None: no event ceiling (the live pool). A diagnostic pool
+                # keeps a small fixed one.
+                or max_events_per_camera is not None
+                and (type(max_events_per_camera) is not int
+                     or not 1 <= max_events_per_camera <= 3600)
+                or max_events_per_camera is None and event_budget is not None
                 or event_window_seconds is not None
                 and (type(event_window_seconds) not in (int, float)
                      or not math.isfinite(event_window_seconds)
@@ -294,7 +298,7 @@ class CameraPolicyEngine:
                     self.package_cooldown_skips += 1
                     return None
         if (change.edge == "enter" and active is None
-                and budget_used < self._max_events):
+                and (self._max_events is None or budget_used < self._max_events)):
             zones = policy.zone_ids(change.kind, change.box)
             if (zones is not None and (self._event_budget is None
                                        or self._event_budget.claim(camera))):
@@ -399,7 +403,9 @@ class CameraPolicyEngine:
                 cutoff = now - self._event_window_seconds
                 used = sum(at > cutoff for at in self._event_times[camera])
             budget_healthy = True
-            if self._event_budget is not None:
+            if self._max_events is None:
+                used = None
+            elif self._event_budget is not None:
                 try:
                     used = max(used, self._max_events
                                - self._event_budget.remaining(camera))
@@ -434,7 +440,8 @@ class CameraPolicyEngine:
                     for name, count in self._association_totals[camera].items()},
                 "events_entered": self._event_counts[camera],
                 "active_tracks": len(self._active[camera]),
-                "event_budget_remaining": max(0, self._max_events - used),
+                "event_budget_remaining": (None if self._max_events is None
+                                           else max(0, self._max_events - used)),
                 "event_budget_healthy": budget_healthy,
             })
         return tuple(result)

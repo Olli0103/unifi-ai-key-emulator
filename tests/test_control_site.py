@@ -41,7 +41,7 @@ def fixture(tmp_path):
         "live_pool_detector": {
             "checkpoint_path": str(port_state / "model.pth"),
             "checkpoint_sha256": "a" * 64, "threshold": 0.3,
-            "smart_types": ["person"], "max_events_per_hour": 12},
+            "smart_types": ["person"]},
     }) + "\n")
     port_config.chmod(0o600)
     return key_config, port_config
@@ -94,7 +94,7 @@ async def test_browser_login_provider_save_and_csrf_preserve_pairing(tmp_path):
                 "provider": "ollama", "model": "synthetic-vision",
                 "base_url": "http://127.0.0.1:11434",
                 "max_output_tokens": "128", "threshold": "0.8",
-                "smart_types": "package", "max_events_per_hour": "12",
+                "smart_types": "package",
                 "max_requests_per_hour": "24"}
         rejected = await client.post("/provider", data={**data, "csrf": "wrong"},
                                      headers={"Origin": site.origin}, allow_redirects=False)
@@ -236,7 +236,7 @@ async def test_openai_key_is_write_only_and_wrong_host_is_rejected(tmp_path):
             "provider": "openai", "model": "gpt-6-luna",
             "base_url": "https://api.openai.com/v1",
             "allow_remote": "on", "max_output_tokens": "256", "threshold": "0.8",
-            "smart_types": "person", "max_events_per_hour": "12",
+            "smart_types": "person",
             "max_requests_per_hour": "24", "api_key": secret,
         }, headers={"Origin": site.origin}, allow_redirects=False)
         assert response.status == 303
@@ -320,7 +320,7 @@ async def test_named_aiport_provider_change_targets_only_that_instance(tmp_path)
                 "provider": "ollama", "model": "synthetic-vision",
                 "base_url": "http://127.0.0.1:11434",
                 "max_output_tokens": "128", "threshold": "0.8",
-                "smart_types": "person", "max_events_per_hour": "12",
+                "smart_types": "person",
                 "max_requests_per_hour": "24"}
         saved = await client.post("/provider", data=data,
                                   headers={"Origin": site.origin}, allow_redirects=False)

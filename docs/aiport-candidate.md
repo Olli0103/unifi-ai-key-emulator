@@ -84,12 +84,11 @@ The live multi-camera profile uses one AI Port identity for two to five explicit
   "checkpoint_path": "/state/models/rf-detr-nano.pth",
   "checkpoint_sha256": "SHA256_OF_THE_EXACT_LOCAL_CHECKPOINT",
   "threshold": 0.3,
-  "smart_types": ["person", "vehicle", "animal"],
-  "max_events_per_hour": 120
+  "smart_types": ["person", "vehicle", "animal"]
 }
 ```
 
-The shared model takes fair turns without a lifetime frame ceiling. Local inference keeps at most one queued frame per camera. API vision keeps the first waiting frame and one replaceable latest frame per camera, so a slow request cannot discard the immediately following frame needed to confirm a short object track. When an API reply contains an object, the worker processes that camera's first waiting frame next, then resumes rotation; this avoids expiring a tentative track behind another camera's remote request. A deterministic two-camera, 12-second-per-request test reproduces the lost event before that scheduling change and emits one enter afterward. This is a local source fix, not live Protect acceptance. Each camera keeps a separate validated Protect policy, zone gate, tracker and rolling event budget. The same private state file enforces each camera's event cap across process restarts. A failed local model call disables only that camera; a failed vision API request is counted and the camera remains eligible for later frames, subject to the provider backoff and, when set, its optional durable request cap. Native enter and leave events carry the original camera ID; leave events can supply the matching crop and full-frame JPEG through the pinned, mutual-TLS upload route. The instance enforces a ten-point stream-capacity budget using the dimensions in Protect's stream command: HD costs two points, up to 2560×1440 costs three, and larger streams cost five. Protect's displayed "2K" label did not predict the cost of one G4 Instant stream, which the candidate rejected as `stream_capacity_exceeded` after three other cameras were paired. Protect kept those three pairings. Synthetic two-camera tests cover isolation and snapshot routing. Native three-camera pairing and concurrent inference now pass on the Mac; saved Person events from the other cameras, long-running resource use and automatic all-camera reconciliation remain `needs_evidence`.
+The shared model takes fair turns without a lifetime frame ceiling. Local inference keeps at most one queued frame per camera. API vision keeps the first waiting frame and one replaceable latest frame per camera, so a slow request cannot discard the immediately following frame needed to confirm a short object track. When an API reply contains an object, the worker processes that camera's first waiting frame next, then resumes rotation; this avoids expiring a tentative track behind another camera's remote request. A deterministic two-camera, 12-second-per-request test reproduces the lost event before that scheduling change and emits one enter afterward. This is a local source fix, not live Protect acceptance. Each camera keeps a separate validated Protect policy, zone gate and tracker. There is no per-camera object-event ceiling (see "Limits and their scopes"). A failed local model call disables only that camera; a failed vision API request is counted and the camera remains eligible for later frames, subject to the provider backoff and, when set, its optional durable request cap. Native enter and leave events carry the original camera ID; leave events can supply the matching crop and full-frame JPEG through the pinned, mutual-TLS upload route. The instance enforces a ten-point stream-capacity budget using the dimensions in Protect's stream command: HD costs two points, up to 2560×1440 costs three, and larger streams cost five. Protect's displayed "2K" label did not predict the cost of one G4 Instant stream, which the candidate rejected as `stream_capacity_exceeded` after three other cameras were paired. Protect kept those three pairings. Synthetic two-camera tests cover isolation and snapshot routing. Native three-camera pairing and concurrent inference now pass on the Mac; saved Person events from the other cameras, long-running resource use and automatic all-camera reconciliation remain `needs_evidence`.
 
 ### Optional vision API detector
 
@@ -115,12 +114,11 @@ For OpenAI, replace only `live_pool_detector` while retaining the paired streams
     "max_output_tokens": 256
   },
   "threshold": 0.8,
-  "smart_types": ["person"],
-  "max_events_per_hour": 12
+  "smart_types": ["person"]
 }
 ```
 
-The key file must be owned by the container user and mode 600. The adapter sends selected JPEGs to the configured provider. It does not forward Protect credentials or follow HTTP redirects. API detection allows only official OpenAI and Anthropic endpoints or a loopback provider endpoint; arbitrary remote provider hosts need the DNS and destination controls in issue #13. OpenAI requests set `store:false` and use `reasoning.effort:"none"` for `gpt-6-luna`. The API detector and motion gate have synthetic tests, including Package policy, zone, tracker and event-shape checks. Their box accuracy, score calibration, alert timing and native Protect results on real footage remain `needs_evidence`. The loopback [control site](control-site.md) exposes provider, model, classes, the event limit and the optional request cost cap (empty means no cap). Its settings take effect after an AI Port restart.
+The key file must be owned by the container user and mode 600. The adapter sends selected JPEGs to the configured provider. It does not forward Protect credentials or follow HTTP redirects. API detection allows only official OpenAI and Anthropic endpoints or a loopback provider endpoint; arbitrary remote provider hosts need the DNS and destination controls in issue #13. OpenAI requests set `store:false` and use `reasoning.effort:"none"` for `gpt-6-luna`. The API detector and motion gate have synthetic tests, including Package policy, zone, tracker and event-shape checks. Their box accuracy, score calibration, alert timing and native Protect results on real footage remain `needs_evidence`. The loopback [control site](control-site.md) exposes provider, model, classes and the optional request cost cap (empty means no cap); a save keeps the local fallback, plate cameras and held-package mode. Its settings take effect after an AI Port restart.
 
 ### Optional ONNX inference for an Intel GPU trial
 
@@ -134,8 +132,7 @@ Replace only `live_pool_detector` with this block to select the Intel GPU execut
   "model_path": "/state/models/rfdetr-nano.onnx",
   "model_sha256": "SHA256_OF_THE_EXACT_ONNX_ARTIFACT",
   "threshold": 0.3,
-  "smart_types": ["person", "vehicle", "animal"],
-  "max_events_per_hour": 120
+  "smart_types": ["person", "vehicle", "animal"]
 }
 ```
 
@@ -306,11 +303,11 @@ A standing subject fades into the motion background within a few samples, so com
 
 `live_pool_detector.fallback` adds a local Ollama vision model behind the primary API detector (5b16c12).
 
-**When it is used:** only when the primary fails with HTTP 429, a 5xx, a request failure or a DNS error, or while the primary is in its failure backoff. A 4xx rejection is not retried locally.
+**When it is used:** when the primary fails with HTTP 429, a 5xx, a request failure or a DNS error, while the primary is in its failure backoff, or when an optional paid request cap is spent (`paid_budget`). A 4xx rejection is not retried locally.
 
 **Bounds:**
 - the fallback must be a private-LAN Ollama server;
-- it has its own timeout (5–180 s) and a per-camera hourly cap;
+- it has its own timeout (5–180 s) and no count ceiling; it is bounded by compute backpressure (see "Limits and their scopes");
 - its reply is constrained by a JSON schema;
 - its 0..1000 boxes are converted to fractions before the shared parser;
 - it never draws on the paid request budget.
@@ -323,4 +320,20 @@ A standing subject fades into the motion background within a few samples, so com
 
 It is a degraded-mode path, not a primary one: it is too slow for live two-sighting tracking under load.
 
-**Live:** all four AI Ports run with `fallback` pointing at the NAS Ollama (`qwen3-vl:8b-instruct`, 90 s timeout, 120 per camera and hour). OpenAI remains the primary.
+**Live (30 Sep 2026):** all four AI Ports run with `fallback` pointing at the NAS Ollama (`qwen3-vl:8b-instruct`, 90 s timeout). Their configs still name the former `max_per_hour` 120 and object-event caps of 12 or 30; the running images apply them, and code from this change onward ignores them (see the owner decision below). OpenAI remains the primary.
+
+## Limits and their scopes
+
+The owner rejected per-camera caps on object events (30 Sep 2026). Each remaining limit protects one specific resource:
+
+| Limit | Scope | Protects | Configured by |
+| --- | --- | --- | --- |
+| Object events | None. Every confirmed, zone-matched object event on a live pool camera is sent. | — | — |
+| Duplicate parcel | One Package event per camera per 30 min | Repeated alerts for one delivery | fixed |
+| Paid API cost guard | Optional `max_requests_per_hour`, per camera, counts only paid provider requests. When spent, the frame goes to the local fallback (`paid_budget`); without a fallback it is deferred. It never counts or refuses saved object events. | Provider spend | owner; unset on every live AI Port |
+| Local fallback | No count. One inference in flight per AI Port, at most two queued frames per camera (older frames replaced), a 5–180 s timeout, and a 30 s pause doubling to 300 s after a failed local request | NAS load | `timeout_s` |
+| Speech | 10 `alrmSpeak` events per camera and hour, events capped at 90 s | The real-time CPU Whisper | fixed |
+| Alarm and household sounds | `live_sound.max_events_per_hour` per camera (default 20); smoke and CO alarms have their own budget of four times that | Protect event noise | owner (feature off) |
+| Local captions (AI Key) | No hourly budget with a local Ollama model (`worker.continuous.unmetered`); bounded by `max_concurrency`, `max_queue` and `caption_timeout_s` | NAS load | owner |
+
+A `max_events_per_hour` left in `live_pool_detector`, or `max_per_hour` in its `fallback`, is accepted but not applied, and health lists it under `legacy_limits_ignored`. Removing those keys from the live slot configs is the owner's deployment step, not part of this change. The legacy single-stream `live_detector` mode, which is not deployed, keeps its own event limit.

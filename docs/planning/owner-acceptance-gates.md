@@ -78,6 +78,23 @@ These gates are what still stands between the current code and native parity. No
   1. Restore the slot's `config.json` backup and redeploy that slot.
   2. Olli turns the audio types off in Protect.
 
+## G9: object limits in the live configs (owner deployment decision)
+
+- **State:** the staged code has no per-camera object-event ceiling and no count ceiling on the local fallback. The live slot configs still carry `max_events_per_hour` (12, and 30 on slot 1) and `fallback.max_per_hour` 120, and the running images apply them. No slot sets the optional paid `max_requests_per_hour`.
+- **Owner decisions:**
+  1. Deploy the new AI Port image, which ignores those keys (health `legacy_limits_ignored`).
+  2. Delete the keys from each slot config.
+  3. Whether any paid cost guard should exist at all.
+- **Steps (per slot, one at a time):**
+  1. Back up the slot's `config.json`.
+  2. Deploy the image with `up -d --no-deps --no-build aiport_slot_N`.
+  3. Confirm health lists the two ignored keys and 9 of 9 streams decode.
+  4. Delete the keys and redeploy.
+  5. Confirm `legacy_limits_ignored` is empty.
+- **Record:** per camera, `events_entered` against the former cap over a busy hour, NAS load, `pool_inference.api_fallback` `backoff_skipped` and failures, and Ollama latency. Counts only.
+- **Pass:** Protect saves events past the former 12 or 30 per hour on at least one busy camera (native readback of event counts), and NAS load stays below the monitor's alert level.
+- **Rollback:** restore the slot's `config.json` backup and the previous image tag in Compose, then redeploy that slot.
+
 ## G8: diskInfo reply and two open audio types
 
 - **Blocked:** the `diskInfo` reply shape, and how Protect treats two audio types open at once, both need static analysis of the Protect 7.3.70 controller package. That needs the owner's download approval **and** clearance of the open firmware-rights review. Neither is assumed.

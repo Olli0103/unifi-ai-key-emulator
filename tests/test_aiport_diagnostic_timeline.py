@@ -227,8 +227,7 @@ async def test_the_candidate_keeps_one_timeline_per_camera_across_motion_setting
     config["paired_streams"] = [{"camera_mac": camera, "source_ip": "192.168.10.1",
                                  "ffmpeg_path": sys.executable}]
     config["live_pool_detector"] = {
-        "inference_backend": "vision_api", "threshold": 0.8, "smart_types": ["person"],
-        "max_events_per_hour": 12, "max_requests_per_hour": 12,
+        "inference_backend": "vision_api", "threshold": 0.8, "smart_types": ["person"], "max_requests_per_hour": 12,
         "provider_config": {"provider": "openai", "model": "gpt-6-luna",
                             "base_url": "https://api.openai.com/v1", "allow_remote": True,
                             "max_output_tokens": 256, "api_key_file": str(tmp_path / "api-key")}}

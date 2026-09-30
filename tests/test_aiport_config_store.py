@@ -30,8 +30,7 @@ def fixture(tmp_path):
                             "ffmpeg_path": sys.executable} for mac in CAMERAS],
         "live_pool_detector": {
             "checkpoint_path": str(tmp_path / "model.pth"), "checkpoint_sha256": "a" * 64,
-            "threshold": 0.3, "smart_types": ["person"],
-            "max_events_per_hour": 12},
+            "threshold": 0.3, "smart_types": ["person"]},
     }
     path = tmp_path / "config.json"
     path.write_text(json.dumps(config) + "\n")
@@ -44,8 +43,7 @@ def settings(tmp_path):
             "base_url": "https://api.openai.com/v1", "allow_remote": True,
             "allow_insecure_http": False, "max_output_tokens": 256,
             "api_key_file": str(tmp_path / "openai-key"),
-            "threshold": 0.8, "smart_types": ["person"],
-            "max_events_per_hour": 12, "max_requests_per_hour": 24}
+            "threshold": 0.8, "smart_types": ["person"], "max_requests_per_hour": 24}
 
 
 def test_preview_and_apply_change_only_detector_and_redact_key_path(tmp_path):
@@ -129,3 +127,22 @@ def test_host_editor_validates_container_paths_without_changing_pairing(tmp_path
     assert saved["paired_streams"] == raw["paired_streams"]
     assert saved["live_pool_detector"]["provider_config"]["api_key_file"] == (
         str(store.runtime_state_dir / "provider-key"))
+
+
+def test_a_provider_save_keeps_the_local_fallback_and_drops_a_legacy_event_cap(tmp_path):
+    store, path, _ = fixture(tmp_path)
+    first = store.apply(store.snapshot().revision, settings(tmp_path))
+    raw = json.loads(path.read_text())
+    raw["live_pool_detector"].update({
+        "max_events_per_hour": 30, "held_package_followup": "announce",
+        "fallback": {"provider_config": {"provider": "ollama", "model": "qwen3-vl:8b-instruct",
+                                         "base_url": "http://192.168.0.110:11434",
+                                         "allow_remote": True, "allow_insecure_http": True},
+                     "timeout_s": 90}})
+    path.write_text(json.dumps(raw) + "\n")
+    after = store.apply(store.snapshot().revision, {**settings(tmp_path), "threshold": 0.7})
+    assert after.revision != first.revision
+    saved = json.loads(path.read_text())["live_pool_detector"]
+    assert saved["fallback"]["provider_config"]["model"] == "qwen3-vl:8b-instruct"
+    assert saved["held_package_followup"] == "announce" and saved["threshold"] == 0.7
+    assert "max_events_per_hour" not in saved

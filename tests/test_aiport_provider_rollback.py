@@ -163,8 +163,7 @@ async def test_the_control_site_rolls_back_only_the_chosen_ai_port(tmp_path):
         saved = await client.post("/provider", data={
             "csrf": csrf, "profile": "aiport:nas-2", "revision": store.snapshot().revision,
             "provider": "ollama", "model": "synthetic-vision", "base_url": "http://127.0.0.1:11434",
-            "max_output_tokens": "128", "threshold": "0.8", "smart_types": "person",
-            "max_events_per_hour": "12", "max_requests_per_hour": "24",
+            "max_output_tokens": "128", "threshold": "0.8", "smart_types": "person", "max_requests_per_hour": "24",
         }, headers={"Origin": site.origin}, allow_redirects=False)
         assert saved.status == 303
         page = await (await client.get("/")).text()

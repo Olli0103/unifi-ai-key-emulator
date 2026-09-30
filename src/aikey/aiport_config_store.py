@@ -23,8 +23,7 @@ from .config import atomic_private
 _REVISION = re.compile(r"[0-9a-f]{64}\Z")
 _FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
                      "allow_insecure_http", "max_output_tokens", "api_key_file",
-                     "threshold", "smart_types", "max_events_per_hour",
-                     "max_requests_per_hour"})
+                     "threshold", "smart_types", "max_requests_per_hour"})
 _OPTIONAL_FIELDS = frozenset({"api_key_file", "max_requests_per_hour"})
 _PROVIDER_FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
                               "allow_insecure_http", "max_output_tokens", "api_key_file"})
@@ -52,7 +51,6 @@ class AiPortSettings:
     max_output_tokens: int | None
     threshold: float | None
     smart_types: tuple[str, ...]
-    max_events_per_hour: int | None
     max_requests_per_hour: int | None
 
 
@@ -110,8 +108,7 @@ class AiPortConfigurationStore:
             provider.get("allow_remote") is True,
             provider.get("allow_insecure_http") is True,
             provider.get("max_output_tokens"), detector.get("threshold"),
-            tuple(detector.get("smart_types", ())), detector.get("max_events_per_hour"),
-            detector.get("max_requests_per_hour"),
+            tuple(detector.get("smart_types", ())), detector.get("max_requests_per_hour"),
         )
 
     def snapshot(self) -> AiPortSettings:
@@ -331,11 +328,15 @@ class AiPortConfigurationStore:
                 and previous.get("api_key_file")):
             provider["api_key_file"] = previous["api_key_file"]
         candidate = deepcopy(current)
+        # Settings this form does not manage (the local fallback, plate
+        # cameras, the held-package mode) are kept. A legacy object-event cap
+        # is dropped: object events have no per-camera ceiling.
+        kept = {key: value for key, value in current.get("live_pool_detector", {}).items()
+                if key in {"fallback", "plate_cameras", "held_package_followup"}}
         candidate["live_pool_detector"] = {
             "inference_backend": "vision_api", "provider_config": provider,
             "threshold": settings["threshold"],
-            "smart_types": settings["smart_types"],
-            "max_events_per_hour": settings["max_events_per_hour"],
+            "smart_types": settings["smart_types"], **deepcopy(kept),
         }
         if settings.get("max_requests_per_hour") is not None:
             candidate["live_pool_detector"]["max_requests_per_hour"] = (
