@@ -32,14 +32,14 @@ from .caption_budget import (CaptionBudget, CaptionBudgetDeferred, CaptionBudget
 from .providers import ProviderError, validate_inference_config
 from .speech import SpeechError, validate_speech_config
 from .faces import FaceStore, FaceStoreError
-from . import clip
+from . import clip, deep_mode
 
 
 _LOCAL_INDEX_OPERATIONS = frozenset({"indexImages", "indexKeyFrames"})
 # Work that never spends a caption permit: local models only. An audio
 # thumbnail (describeImage) is described only by an unmetered local model.
 _LOCAL_OPERATIONS = frozenset({"speechToText", "recognizeFaces", "indexKeyFrames", "indexImages",
-                               "reverify", "describeImage"})
+                               "reverify", "describeImage", "reidEmbed", "sessionDescribe"})
 _INDEX_IMAGES_BUDGET_S = 600
 
 
@@ -152,13 +152,16 @@ _QUEUE_PRIORITY = {
     "speechToText": 0, "enhanceImage": 0,     # local work with short deadlines
     "recognizeKeyFrames": 1, "describe": 1,   # captions: the vision model
     "describeImage": 1,                       # an audio event's thumbnail
+    "reidEmbed": 0,                           # deep mode: person re-ID on the NPU
+    "sessionDescribe": 1,                     # deep mode: a session's description
     "indexImages": 2,                         # retroactive backfill
 }
 
 
 # Operations that wait for the vision model and so enter the caption lane.
 # The player's summary (on_demand) is urgent and bypasses it.
-_CAPTION_LANE_OPERATIONS = frozenset({"recognizeKeyFrames", "describe", "describeImage"})
+_CAPTION_LANE_OPERATIONS = frozenset({"recognizeKeyFrames", "describe", "describeImage",
+                                      "sessionDescribe"})
 
 
 class _PriorityGate:
@@ -520,6 +523,13 @@ class JobProcessor:
         self._draining = False
         self.faces = self._face_config(self.config.get("face_recognition"), Path(state_dir))
         self.enhance = self._enhance_config(self.config.get("face_enhancement"))
+        try:
+            self.deep = deep_mode.validate_config(self.config.get("deep_understanding"))
+        except deep_mode.DeepModeError as exc:
+            raise WorkerError(str(exc)) from exc
+        # Deep-mode work; counts only, no identifiers or text.
+        self.deep_counts = {"embed_tasks": 0, "crops_embedded": 0, "crops_failed": 0,
+                            "describe_tasks": 0, "described": 0, "labels": 0}
         self.find_anything, self.index_cameras, self._clip = None, frozenset(), None
         search = self.config.get("search", {})
         if (self.config.get("find_anything") is not None and search.get("enabled") is True
@@ -787,6 +797,7 @@ class JobProcessor:
         if purpose == "callback":
             if parsed.query or not (_CALLBACK_TASK.fullmatch(parsed.path)
                                     or _CALLBACK_UPLOAD.fullmatch(parsed.path)
+                                    or deep_mode.EMBED_CALLBACK.fullmatch(parsed.path)
                                     or parsed.path in {_LEGACY_CALLBACK, _SPEECH_CALLBACK, _REVERIFICATION_CALLBACK,
                                                        _ENHANCED_CALLBACK}):
                 raise WorkerError("Unsupported callback path")
@@ -841,6 +852,12 @@ class JobProcessor:
                 raise WorkerError("Unsupported RequestAI targetUri")
             return self._normalize_reverification(command)
         target = command.get("targetUri")
+        if self.deep is not None and target == deep_mode.EMBED_TARGET:
+            return self._normalize_reid_embed(command)
+        if (self.deep is not None and target == deep_mode.DESCRIBE_TARGET
+                and isinstance(command.get("payload"), dict)
+                and "promptProfile" in command["payload"]):
+            return self._normalize_session_describe(command)
         if self.continuous and target != ":7968/on_demand_inference":
             # The player's "AI summary" button is the one on-demand route
             # continuous mode also serves; other RequestAI forms stay off.
@@ -1113,6 +1130,55 @@ class JobProcessor:
         budget = min(self.timeout_s, timeout / 1000) if type(timeout) is int and timeout > 0 else 30
         return (job_id, fingerprint, "reverify", body, callback, "reverification",
                 [("video", media_url)], budget)
+
+    def _deep_budget(self, command):
+        timeout_ms = command.get("timeoutMs", 30000)
+        if type(timeout_ms) is not int or timeout_ms <= 0:
+            raise WorkerError("timeoutMs must be positive")
+        # Protect fails a deep task after 180 s regardless of timeoutMs.
+        return min(self.timeout_s, 170, max(timeout_ms / 1000, 60))
+
+    def _normalize_reid_embed(self, command):
+        """``:7445/generate-embeddings``: one re-ID vector per person crop."""
+        try:
+            body, callback_path = deep_mode.validate_embed_request(command)
+        except deep_mode.DeepModeError as exc:
+            raise WorkerError(str(exc)) from exc
+        body = json.loads(_json(body))
+        callback = self._url(command["resUrl"], "callback")
+        media = [("image", self._url(image["reqUrl"], "media")) for image in body["images"]]
+        normalized = {"operation": "reidEmbed", "payload": body, "callback": callback,
+                      "callbackKind": "task", "media": media}
+        fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
+        job_id = hashlib.sha256(f"task:{callback_path}".encode()).hexdigest()
+        self.deep_counts["embed_tasks"] += 1
+        return (job_id, fingerprint, "reidEmbed", body, callback, "task", media,
+                self._deep_budget(command))
+
+    def _normalize_session_describe(self, command):
+        """``:7968/describe`` with ``promptProfile: session-v1`` (7.3.70 deep mode)."""
+        body = command.get("payload")
+        try:
+            deep_mode.validate_describe_request(body)
+        except deep_mode.DeepModeError as exc:
+            raise WorkerError(str(exc)) from exc
+        if not self._describes_locally():
+            raise WorkerError("Deep-mode descriptions need an unmetered local model")
+        body = json.loads(_json(body))
+        callback = self._url(command.get("resUrl"), "callback")
+        callback_path = urlsplit(callback).path
+        if not _CALLBACK_TASK.fullmatch(callback_path):
+            raise WorkerError("Description callbacks require a task or legacy RAM route")
+        media = ([("image", self._url(image["reqUrl"], "media")) for image in body.get("images", [])]
+                 or [("video", self._mp4_export_url(self._url(video["reqUrl"], "media")))
+                     for video in body["videos"]])
+        normalized = {"operation": "sessionDescribe", "payload": body, "callback": callback,
+                      "callbackKind": "task", "media": media}
+        fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
+        job_id = hashlib.sha256(f"task:{callback_path}".encode()).hexdigest()
+        self.deep_counts["describe_tasks"] += 1
+        return (job_id, fingerprint, "sessionDescribe", body, callback, "task", media,
+                self._deep_budget(command))
 
     def _tag_server(self):
         return (self.find_anything or {}).get("tag_server")
@@ -1689,6 +1755,7 @@ class JobProcessor:
                 "ledger": len(self._history), "retroactive": dict(self.retroactive),
                 "speech": dict(self.speech_counts),
                 **({"ram_tagging": dict(self.ram_tagging)} if self._tag_server() else {}),
+                **({"deep": dict(self.deep_counts)} if self.deep else {}),
                 **({"faces": dict(self.faces["counts"], native_face_cameras=len(self.faces["native"]))}
                    if self.faces else {}),
                 **({"enhance": dict(self.enhance["counts"])} if self.enhance else {}),
@@ -2252,6 +2319,136 @@ class JobProcessor:
         self.ram_tagging["tags"] += len(tags)
         return tags
 
+    async def _execute_reid_embed(self, job):
+        embeddings, failed = [], []
+        for image, (_, url) in zip(job.payload["images"], job.media):
+            try:
+                data, _ = await self._fetch(url, "image")
+                vector = await self._reid_vector(self._as_jpeg(data))
+            except (WorkerError, deep_mode.DeepModeError, OSError, ValueError):
+                failed.append({"objectId": image["objectId"], "reason": "reid_failed"})
+                self.deep_counts["crops_failed"] += 1
+                continue
+            embeddings.append({"objectId": image["objectId"],
+                               "objectType": image.get("objectType") or "person",
+                               "reidEmbed": vector, "model": deep_mode.REID_MODEL,
+                               "dim": deep_mode.REID_DIMENSIONS})
+            self.deep_counts["crops_embedded"] += 1
+        payload = {"camera": job.payload["camera"], "event": job.payload["event"],
+                   "embeddings": embeddings, "failed": failed}
+        summary = {"embedded": len(embeddings), "failed": len(failed)}
+        if self.callback_mode == "disabled":
+            return {"status": "processed", "jobId": job.job_id, "callback": "disabled", "result": summary}
+        result = await self._post_callback(job, payload)
+        result["result"] = summary                    # vectors stay out of the journal
+        return result
+
+    async def _reid_vector(self, jpeg):
+        form = aiohttp.FormData()
+        form.add_field("image", jpeg, filename="person.jpg", content_type="image/jpeg")
+        async with self._inference_session.post(
+                self.deep["reid_server"] + "/v1/reid", data=form, allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=_TAG_TIMEOUT_S)) as response:
+            if response.status != 200:
+                raise WorkerError(f"Re-ID server returned HTTP {response.status}")
+            body = json.loads(await self._read_response(response, 131072))
+        vector = body.get("embedding") if isinstance(body, dict) else None
+        if (not isinstance(vector, list)
+                or any(type(v) not in (int, float) or not math.isfinite(v) for v in vector)):
+            raise WorkerError("Re-ID server returned an invalid vector")
+        return deep_mode.padded_reid([float(v) for v in vector])
+
+    def _as_jpeg(self, data):
+        if self._image_type(data) == "image/jpeg":
+            return data
+        from PIL import Image
+        with Image.open(BytesIO(data)) as picture:
+            out = BytesIO()
+            picture.convert("RGB").save(out, format="JPEG", quality=92)
+            return out.getvalue()
+
+    async def _execute_session_describe(self, job):
+        from PIL import Image
+        started = time.monotonic()
+        try:
+            prompts = deep_mode.load_prompts(self.state_dir.parent)
+        except deep_mode.DeepModeError as exc:
+            raise WorkerError(str(exc)) from exc
+        if prompts is None:
+            raise WorkerError("Describe prompts have not been synced")
+        crops, types = [], []
+        if job.payload.get("images"):
+            for image, (_, url) in zip(job.payload["images"], job.media):
+                data, _ = await self._fetch(url, "image")
+                crops.append(self._as_jpeg(data))
+                types.append(image["objectType"])
+        else:
+            types = [item["objectType"] for video in job.payload["videos"] for item in video["objects"]]
+        try:
+            prompt = deep_mode.select_prompt(prompts, types)
+        except deep_mode.DeepModeError as exc:
+            raise WorkerError(str(exc)) from exc
+        for video, (_, url) in zip(job.payload.get("videos", []), job.media):
+            data, headers = await self._fetch(url, "video")
+            for item in video["objects"]:
+                frame = await self._video_frame(data, headers, url, job, timestamp=item["ts"])
+                with Image.open(BytesIO(frame)) as picture:
+                    picture = picture.convert("RGB")
+                    width, height = picture.size
+                    x1, y1, x2, y2 = _padded(item["coord"], prompt["margin"])
+                    crop = picture.crop((int(x1 * width), int(y1 * height),
+                                         max(int(x1 * width) + 1, round(x2 * width)),
+                                         max(int(y1 * height) + 1, round(y2 * height))))
+                    crop.thumbnail((768, 768))
+                    out = BytesIO()
+                    crop.save(out, format="JPEG", quality=90)
+                    crops.append(out.getvalue())
+        if not crops:
+            raise WorkerError("No crops to describe")
+        prepared = time.monotonic()
+        try:
+            url, headers, request = self.provider.build_structured_request(
+                crops, prompt["system"], prompt["user"], prompt["schema"], prompt["sampling"])
+        except ProviderError as exc:
+            raise WorkerError(str(exc)) from exc
+        gate = self._inference_gate
+        if gate is not None:
+            await gate.acquire(1)
+        try:
+            async with self._inference_session.post(url, json=request, headers=headers,
+                                                    allow_redirects=False) as response:
+                if response.status != 200:
+                    raise WorkerError(f"Inference returned HTTP {response.status}")
+                raw = await self._read_response(response, 1024 * 1024)
+        finally:
+            if gate is not None:
+                gate.release()
+        try:
+            text = self.provider.parse_response(json.loads(raw))
+            description, labels = deep_mode.parse_description(text)
+        except (ValueError, ProviderError, deep_mode.DeepModeError) as exc:
+            raise WorkerError("The describer did not return a description and labels") from exc
+        inferred = time.monotonic()
+        if self._embedding_service is None:
+            from aikey.search import EmbeddingService
+            self._embedding_service = EmbeddingService(self.config.get("embeddings", {}))
+        vectors = await self._embedding_service.encode_documents([description])
+        if len(vectors) != 1:
+            raise WorkerError("Embedding service returned wrong result count")
+        payload = {"camera": job.payload["camera"], "event": job.payload["event"],
+                   "pass": job.payload["pass"], "description": description, "labels": labels,
+                   "descEmbedding": vectors[0], "model": self.model, "version": "session-v1"}
+        self.deep_counts["described"] += 1
+        self.deep_counts["labels"] += len(labels)
+        summary = {"pass": job.payload["pass"], "crops": len(crops), "labels": len(labels),
+                   "inferMs": round((inferred - prepared) * 1000),
+                   "timeElapsedMs": round((time.monotonic() - started) * 1000)}
+        if self.callback_mode == "disabled":
+            return {"status": "processed", "jobId": job.job_id, "callback": "disabled", "result": summary}
+        result = await self._post_callback(job, payload)
+        result["result"] = summary                    # text and vectors stay out of the journal
+        return result
+
     async def _execute_describe_image(self, job):
         started = time.monotonic()
         (_, url), = job.media
@@ -2317,6 +2514,10 @@ class JobProcessor:
             return await self._execute_index_images(job)
         if job.operation == "describeImage":
             return await self._execute_describe_image(job)
+        if job.operation == "reidEmbed":
+            return await self._execute_reid_embed(job)
+        if job.operation == "sessionDescribe":
+            return await self._execute_session_describe(job)
         if job.operation == "enhanceImage":
             return await self._execute_enhance(job)
         if job.operation == "reverify":

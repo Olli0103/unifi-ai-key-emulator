@@ -146,6 +146,35 @@ class VisionProvider:
                 payload["temperature"] = self.temperature
         return self.url, dict(self.headers), payload
 
+    def build_structured_request(self, images: list[bytes], system: str, user: str, schema: dict,
+                                 sampling: dict) -> tuple[str, dict, dict]:
+        """A JSON-schema-constrained chat request (deep-mode session describe).
+
+        Only OpenAI-compatible servers (the local OpenVINO Model Server) take
+        Protect's prompts, sampling and schema as they are.
+        """
+        if self.provider != "openai-compatible":
+            raise ProviderError("Deep-mode descriptions need an OpenAI-compatible local server")
+        if not isinstance(images, list) or not images or not isinstance(schema, dict):
+            raise ProviderError("Images and a JSON schema are required")
+        content = [{"type": "image_url", "image_url": {
+            "url": f"data:{image_mime(image)};base64,{base64.b64encode(image).decode('ascii')}"}}
+            for image in images]
+        content.append({"type": "text", "text": user})
+        payload = {"model": self.model, "stream": False,
+                   "max_tokens": max(self.max_output_tokens, 512),
+                   "messages": [{"role": "system", "content": system},
+                                {"role": "user", "content": content}],
+                   "response_format": {"type": "json_schema", "json_schema": {
+                       "name": "session_description", "schema": schema}}}
+        names = {"temperature": "temperature", "topP": "top_p", "topK": "top_k",
+                 "repeatPenalty": "repetition_penalty", "presencePenalty": "presence_penalty"}
+        for source, target in names.items():
+            value = sampling.get(source)
+            if type(value) in (int, float) and math.isfinite(value):
+                payload[target] = value
+        return self.url, dict(self.headers), payload
+
     def parse_response(self, result: Any) -> str:
         try:
             if not isinstance(result, dict) or result.get("error") is not None:

@@ -599,6 +599,16 @@ class SearchService:
             elif self.clip is not None and header.get("action") == "IMAGE_SEARCH":
                 result = {"imgEmbed": await self._image_embedding(body.get("imgUri"))}
                 self.status["image_queries"] += 1
+            elif (self.clip is not None and header.get("action") == "NL_PARSE"
+                  and body.get("model") == MODEL
+                  and self.embeddings.backend in ("http", "sentence-transformers")):
+                # Deep-mode session search (7.3.70 encodeSessionSearchQuery)
+                # asks for a 384-value E5 query vector next to basic CLIP.
+                vector = (await self.embeddings.encode_queries([body.get("querySentence")]))[0]
+                result = {"keyTags": [], "objectTypes": [], "txtEmbed": vector, "model": MODEL,
+                          "dim": DIMENSIONS, "exact_match": False}
+                self.status["queries"] += 1
+                self.status["session_queries"] = self.status.get("session_queries", 0) + 1
             elif self.clip is not None:
                 # Basic Find Anything: Protect defaults model to clip-ViT-L-14.
                 if header.get("action") != "NL_PARSE" or body.get("model", clip.MODEL) != clip.MODEL:

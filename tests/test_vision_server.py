@@ -25,8 +25,9 @@ def _form(data):
 
 
 class _Fake(Models):
-    def __init__(self, *, tagger=True, enhancer=True, encoders=True):
-        self.devices = {"tags": "NPU", "enhance": "NPU", "embeddings": "NPU"}
+    def __init__(self, *, tagger=True, enhancer=True, encoders=True, reid=True):
+        self.devices = {"tags": "NPU", "enhance": "NPU", "embeddings": "NPU", "reid": "NPU"}
+        self.reid = (lambda pixels: [numpy.arange(1, 257, dtype=numpy.float32)[None]]) if reid else None
         self.tag_names, self.tag_thresholds = ["dog", "grass", "car"], [0.6, 0.7, 0.9]
         self.tagger = (lambda pixels: [numpy.array([[0.95, 0.72, 0.5]])]) if tagger else None
         self.enhancer = (lambda pixels: [numpy.zeros_like(pixels)]) if enhancer else None
@@ -126,5 +127,21 @@ async def test_a_missing_model_answers_404_and_health_lists_devices():
         assert (await c.post("/v1/tags", data=_form(_jpeg()))).status == 404
         assert (await c.post("/v1/embeddings", json={"input": ["x"]})).status == 404
         health = await (await c.get("/healthz")).json()
-        assert health["models"] == {"tags": None, "enhance": "gfpgan-1.4", "embeddings": None}
+        assert health["models"] == {"tags": None, "enhance": "gfpgan-1.4", "embeddings": None,
+                                    "reid": "person-reidentification-retail-0288"}
         assert health["devices"]["enhance"] == "NPU"
+
+
+async def test_a_person_crop_gets_a_normalized_reid_vector(client):
+    response = await client.post("/v1/reid", data=_form(_jpeg(60, 140)))
+    body = await response.json()
+    assert response.status == 200 and body["dim"] == 256
+    assert body["model"] == "person-reidentification-retail-0288"
+    assert abs(sum(v * v for v in body["embedding"]) - 1) < 1e-4
+
+
+def test_reid_input_is_bgr_128_by_256():
+    from aikey.vision_server import reid_pixels
+    pixels = reid_pixels(Image.new("RGB", (40, 90), (255, 0, 0)))
+    assert pixels.shape == (1, 3, 256, 128)
+    assert pixels[0, 2].max() == 255 and pixels[0, 0].max() == 0          # red lands in channel 2

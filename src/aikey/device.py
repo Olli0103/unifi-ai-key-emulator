@@ -492,7 +492,7 @@ class DeviceService:
                 "request_ai_rejection_counts": deepcopy(self._request_ai_rejections),
                 "clock_offset_ms": self._clock_offset_ms, "discovery": "unsupported",
                 "compatibility": self._compatibility_status(),
-                "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "updateLcmSettings", "diskInfo", "changeAiInferAgentSettings", "changeUserPassword", "RequestAI"]
+                "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "updateLcmSettings", "diskInfo", "changeAiInferAgentSettings", "changeDescribePrompts", "changeUserPassword", "RequestAI"]
                     + (["recognizeKeyFrames"] if basic_enabled else [])
                     + (["speechToText"] if self._speech_cameras() else [])
                     + (["enhanceImage"] if self._face_enhancement_configured() else [])}
@@ -520,6 +520,18 @@ class DeviceService:
             # Opt-in local enhancer; Protect stores its output separately (#23).
             "supportFaceEnhancement": self._face_enhancement_configured(),
         }
+
+    def _deep_mode_capable(self) -> bool:
+        """Local re-ID, E5 embeddings and an OpenAI-compatible local describer."""
+        from .deep_mode import DeepModeError, validate_config
+        try:
+            deep = validate_config(self.config.get("deep_understanding"))
+        except DeepModeError:
+            return False
+        embeddings = self.config.get("embeddings") or {}
+        inference = self.config.get("inference") or {}
+        return (deep is not None and embeddings.get("backend") == "http"
+                and inference.get("provider", "openai-compatible") == "openai-compatible")
 
     def _face_enhancement_configured(self) -> bool:
         value = self.config.get("face_enhancement")
@@ -713,6 +725,12 @@ class DeviceService:
             requested = overrides.get(name)
             if not (isinstance(requested, dict) and requested.get("enabled") is False):
                 flags[name] = {"enabled": available, "version": "v1"}
+        if self._deep_mode_capable():
+            # Deep understanding (7.3.70): a static capability; the mode and
+            # the describe config are Protect's, echoed from what it last set.
+            flags.update({"supportDeepMode": True, "supportVlm": True,
+                          "aiMode": self._state.get("ai_mode", "basic"),
+                          "describeConfigHash": self._state.get("describe_config_hash", "")})
         return {"type": self.device.get("model", "UP-AI-KEY"), "sysid": self.device.get("sysid", "0xa5f0"),
                 "version": self.device.get("firmware_version", "2.2.8"), "mac": self.mac,
                 "uptime": int(time.monotonic() - self._started_at), "poeType": self.device.get("poe_type", "unknown"),
@@ -1338,6 +1356,31 @@ class DeviceService:
             if type(size) is not int or not 1 <= size <= 65536:
                 raise CommandFailure(22, "Invalid configured storage size")
             return {"storageSize": str(size)}
+        if action == "changeAiInferAgentSettings" and set(body) == {"modelMode"}:
+            # 7.3.70 syncAiMode switches the global mode; getInfo echoes it as
+            # featureFlags.aiMode, which Protect reads to confirm the switch.
+            mode = body["modelMode"]
+            if mode not in ("basic", "deep") or (mode == "deep" and not self._deep_mode_capable()):
+                raise ContractError("Unsupported AI mode")
+            async with self._lock:
+                self._state["ai_mode"] = mode
+                self._save_state()
+            return body
+        if action == "changeDescribePrompts":
+            # 7.3.70 syncDescribePrompts: per object-type combination, the
+            # session describe prompts, sampling and JSON schema (base64).
+            from .deep_mode import DeepModeError, save_prompts, validate_prompts
+            if not self._deep_mode_capable():
+                raise ContractError("Deep understanding is not configured")
+            try:
+                prompts, config_hash = validate_prompts(body)
+            except (DeepModeError, ValueError) as exc:
+                raise ContractError("Unsupported describe prompts") from exc
+            async with self._lock:
+                save_prompts(self.state_dir, prompts, config_hash)
+                self._state["describe_config_hash"] = config_hash
+                self._save_state()
+            return {"configHash": config_hash}
         if action == "changeAiInferAgentSettings":
             # Protect 7.3.70 updateAiSettings pushes which engines the AI Key
             # should run. They are stored and acknowledged; what this Key
