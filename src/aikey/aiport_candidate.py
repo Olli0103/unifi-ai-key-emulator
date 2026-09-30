@@ -957,7 +957,13 @@ class CandidateService:
                and now - self._speech_announced_at.get(camera_mac, now) >= 60
                and self._speech_reannounces.get(camera_mac, 0) < 3)
               or (camera_mac in self._speech_settings_seen
-                  and not self._speech_enabled.get(camera_mac)
+                  and (not self._speech_enabled.get(camera_mac)
+                       # 30 Sep 7.3.70: enabling sound types on eight
+                       # cameras reached only three; keep pulsing while a
+                       # sound camera has none enabled.
+                       or camera_mac in self._sounds
+                       and not any(self._sound_enabled(camera_mac, kind)
+                                   for kind in self._sound_types))
                   and now - self._speech_announced_at.get(camera_mac, now) >= 600)):
             # Protect pushes settings only on a not-ready -> ready change, and
             # on 7.3.68 it skipped the push after a Speech toggle for four of

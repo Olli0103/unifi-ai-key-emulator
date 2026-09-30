@@ -307,3 +307,25 @@ def test_patch_models_get_log_mel_patches_and_waveform_models_get_audio(tmp_path
     digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()   # noqa: E731
     SoundClassifier(model, digest(model), class_map, digest(class_map))(array.array("h", [0] * 15600))
     assert fed[0].shape == expected and fed[0].dtype == np.float32
+
+
+async def test_a_sound_camera_without_enabled_types_is_pulsed_until_protect_pushes_them(tmp_path, monkeypatch):
+    # 7.3.70 skipped the settings push for five of eight cameras whose sound
+    # types were enabled; speech was on, so nothing asked Protect again.
+    import aikey.aiport_candidate as candidate
+    now = [800.0]
+    monkeypatch.setattr(candidate.time, "monotonic", lambda: now[0])
+    service, sink = await sound_service(tmp_path, Scores(), Clock())
+    quiet = pcm(noise(0.3))
+    try:
+        await service._observe_pool_audio(CAMERA, quiet)                  # announce
+        await audio_settings(service, sink, 70)                           # speech on, no sounds
+        now[0] += 601
+        await service._observe_pool_audio(CAMERA, quiet)
+        assert [s["isAudioEventReady"] for s in sink.events("EventAIPortStatus")] == [True, False, True]
+        await audio_settings(service, sink, 71, enableAlrmSmoke=1)        # the missed push arrives
+        now[0] += 3600
+        await service._observe_pool_audio(CAMERA, quiet)
+        assert len(sink.events("EventAIPortStatus")) == 3                  # enabled: quiet
+    finally:
+        await service.stop()
