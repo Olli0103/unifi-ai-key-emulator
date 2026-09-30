@@ -320,7 +320,7 @@ A standing subject fades into the motion background within a few samples, so com
 
 It is a degraded-mode path, not a primary one: it is too slow for live two-sighting tracking under load.
 
-**Live (30 Sep 2026):** all four AI Ports run with `fallback` pointing at the NAS Ollama (`qwen3-vl:8b-instruct`, 90 s timeout). Their configs still name the former `max_per_hour` 120 and object-event caps of 12 or 30; the running images apply them, and code from this change onward ignores them (see the owner decision below). OpenAI remains the primary.
+**Live (30 Sep 2026, afternoon):** all four AI Ports run with `fallback` pointing at OpenVINO Model Server on the NAS iGPU (`openai-compatible`, Qwen3-VL-8B INT4, 90 s timeout), which also serves the AI Key's captions. Ollama and the Model Server cannot share the iGPU (a Model Server request stalled for 20 minutes while Ollama held it), so Ollama is stopped and kept for rollback. Measured on a synthetic scene: 3.0 s per caption against about 20 s on Ollama. Speech-to-text runs on the NPU through OpenVINO (`whisper_server --backend openvino`): 87 s of live speech took 7.8 s, against about 1.1x real time for whisper.cpp on the CPU. Their configs still name the former `max_per_hour` 120 and object-event caps of 12 or 30; the running images apply them, and code from this change onward ignores them (see the owner decision below). OpenAI remains the primary.
 
 ## Limits and their scopes
 
