@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import hashlib
+import heapq
 from io import BytesIO
 import ipaddress
 import itertools
@@ -132,6 +133,39 @@ _RETYPE_CONFIDENCE = 0.9
 # Decoded event audio lives only in a temporary directory with this prefix
 # inside the worker journal directory, removed when the job ends (#5).
 AUDIO_TEMP_PREFIX = "aikey-audio-"
+
+
+class _PriorityGate:
+    """At most ``capacity`` holders; a lower priority number is served first, FIFO within one."""
+
+    def __init__(self, capacity: int):
+        self.capacity, self.active = capacity, 0
+        self._waiting: list[tuple[int, int, asyncio.Future]] = []
+        self._order = itertools.count()
+
+    def waiting(self, priority: int | None = None) -> int:
+        return sum(1 for p, _, f in self._waiting if not f.done() and (priority is None or p == priority))
+
+    async def acquire(self, priority: int) -> None:
+        if self.active < self.capacity and not self.waiting():
+            self.active += 1
+            return
+        future = asyncio.get_running_loop().create_future()
+        heapq.heappush(self._waiting, (priority, next(self._order), future))
+        try:
+            await future
+        except asyncio.CancelledError:
+            if future.done() and not future.cancelled():
+                self.release()          # granted just as the waiter was cancelled
+            raise
+
+    def release(self) -> None:
+        while self._waiting:
+            *_, future = heapq.heappop(self._waiting)
+            if not future.done():
+                future.set_result(None)  # the slot passes straight to this waiter
+                return
+        self.active -= 1
 # Terminal states a tombstone may keep. callback_uncertain is deliberately not
 # one: it stays in the active journal for operator review (#40).
 _ARCHIVABLE_STATES = frozenset({"completed", "failed"})
@@ -415,6 +449,14 @@ class JobProcessor:
         # model reading several frames needs longer (28 Sep: about 25 s per
         # frame on the NAS iGPU), so the owner can raise it.
         self.caption_timeout_s = min(self._positive("caption_timeout_s", 30), 600)
+        # Optional: how many vision requests may reach the provider at once. A
+        # local Ollama serves one at a time, so six concurrent caption jobs
+        # queue inside it and a player summary waits behind all of them
+        # (30 Sep: 4 timed out). With a gate the summary takes the next slot.
+        gate = self.options.get("inference_concurrency")
+        if gate is not None and (type(gate) is not int or not 1 <= gate <= self.concurrency):
+            raise WorkerError("worker.inference_concurrency must be 1 to max_concurrency")
+        self._inference_gate = _PriorityGate(gate) if gate is not None else None
         # A restart lets queued and running jobs finish for this long first;
         # continuous captions keep jobs in flight, so there is rarely an idle gap.
         self.drain_s = min(self._positive("drain_s", 90), 600)
@@ -1483,7 +1525,9 @@ class JobProcessor:
                 if not receipt.new:
                     raise WorkerError("Caption reservation exists without completed job")
                 self.captions["admitted"] += 1
-            self._queue.put_nowait((1 if job.operation == "indexImages" else 0, next(self._sequence), job))
+            self._queue.put_nowait((-1 if job.operation == "on_demand" else
+                                    1 if job.operation == "indexImages" else 0,
+                                    next(self._sequence), job))
         except asyncio.QueueFull as exc:
             future.cancel()
             raise WorkerError("Worker queue is full") from exc
@@ -1519,7 +1563,12 @@ class JobProcessor:
                 **({"faces": dict(self.faces["counts"], native_face_cameras=len(self.faces["native"]))}
                    if self.faces else {}),
                 **({"enhance": dict(self.enhance["counts"])} if self.enhance else {}),
-                **({"captions": dict(self.captions)} if self.continuous else {})}
+                **({"captions": dict(self.captions)} if self.continuous else {}),
+                **({"inference_gate": {"capacity": self._inference_gate.capacity,
+                                       "active": self._inference_gate.active,
+                                       "waiting": self._inference_gate.waiting(),
+                                       "on_demand_waiting": self._inference_gate.waiting(0)}}
+                   if self._inference_gate is not None else {})}
 
     async def _consume(self):
         while True:
@@ -1655,16 +1704,23 @@ class JobProcessor:
             self._image_type(result)
             return result
 
-    async def _infer(self, images):
+    async def _infer(self, images, *, priority: int = 1):
         try:
             url, headers, request = self.provider.build_request(images, _PROMPT)
         except ProviderError as exc:
             raise WorkerError(str(exc)) from exc
-        async with self._inference_session.post(url, json=request,
-                    headers=headers, allow_redirects=False) as response:
-            if response.status != 200:
-                raise WorkerError(f"Inference returned HTTP {response.status}")
-            raw = await self._read_response(response, 1024 * 1024)
+        gate = self._inference_gate
+        if gate is not None:
+            await gate.acquire(priority)
+        try:
+            async with self._inference_session.post(url, json=request,
+                        headers=headers, allow_redirects=False) as response:
+                if response.status != 200:
+                    raise WorkerError(f"Inference returned HTTP {response.status}")
+                raw = await self._read_response(response, 1024 * 1024)
+        finally:
+            if gate is not None:
+                gate.release()
         try:
             description = self.provider.parse_response(json.loads(raw))
             if len(description) > self.max_description:
@@ -2056,7 +2112,8 @@ class JobProcessor:
             self._image_type(data)
             images.append(data)
         prepared = time.monotonic()
-        description = await self._infer(images)
+        # A player summary (on demand) is served before automatic captions.
+        description = await self._infer(images, priority=0 if job.operation == "on_demand" else 1)
         inferred = time.monotonic()
         if job.callback_kind == "on_demand":
             payload = {"description": description}

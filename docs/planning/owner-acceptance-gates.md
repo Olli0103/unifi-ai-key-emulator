@@ -24,6 +24,7 @@ These gates are what still stands between the current code and native parity. No
 ## G2: player AI summary (N14)
 
 - **Needs:** Olli presses the summary button once, on one recent event with a caption.
+- **Recommended before it (owner deploy decision):** deploy a Key image that includes `worker.inference_concurrency` and set it to 1. The local Ollama serves one request at a time, so a summary then waits for at most one caption instead of up to six. Health `worker.inference_gate` shows `on_demand_waiting`. Rollback: remove the key and restart the Key; it drains accepted jobs first.
 - **Record:** whether the summary rendered, and the state of the matching `on_demand` job in the NAS Key journal.
 - **Pass:** it rendered and the job reached `completed`. That closes the C15 gap for `control.request_ai.on_demand_inference` on 7.3.70.
 - **Fail:** record the job's fixed error or `worker_rejection` label. Do not repeat the press in a loop.
