@@ -103,3 +103,30 @@ async def test_a_request_abandoned_while_waiting_for_the_model_is_not_transcribe
                 break
             await asyncio.sleep(0.05)
         assert (health["abandoned"], calls) == (1, [16000])
+
+
+def test_the_openvino_backend_returns_timestamped_segments_and_maps_the_language(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from aikey.whisper_server import openvino_transcriber
+    seen = {}
+
+    class Pipeline:
+        def __init__(self, model_dir, device, **options):
+            seen.update(model_dir=model_dir, device=device, options=options)
+
+        def get_generation_config(self):
+            return SimpleNamespace(task=None, return_timestamps=False, language="x")
+
+        def generate(self, samples, config):
+            seen.update(samples=len(samples), language=config.language, task=config.task,
+                        timestamps=config.return_timestamps)
+            return SimpleNamespace(chunks=[SimpleNamespace(start_ts=0.5, end_ts=1.25, text=" Hallo.")])
+
+    monkeypatch.setitem(sys.modules, "openvino_genai", SimpleNamespace(WhisperPipeline=Pipeline))
+    transcribe = openvino_transcriber("/models/turbo", "NPU", "/cache")
+    assert transcribe([0.0] * 16000, "de") == ([(0.5, 1.25, " Hallo.")], "de")
+    assert seen == {"model_dir": "/models/turbo", "device": "NPU", "options": {"CACHE_DIR": "/cache"},
+                    "samples": 16000, "language": "<|de|>", "task": "transcribe", "timestamps": True}
+    assert transcribe([0.0], "auto")[1] is None and seen["language"] is None

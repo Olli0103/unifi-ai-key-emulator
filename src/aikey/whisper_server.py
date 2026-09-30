@@ -63,6 +63,29 @@ def whisper_cpp_transcriber(model_path: str, threads: int, *, fallback: bool = T
     return transcribe
 
 
+def openvino_transcriber(model_dir: str, device: str, cache_dir: str | None = None) -> Transcriber:
+    """The same Whisper model through OpenVINO GenAI, e.g. on an Intel NPU.
+
+    On the NAS NPU (Core Ultra 7 255H) large-v3-turbo INT8 transcribed 34.5 s
+    of speech in 4.2 s against about 31 s for whisper.cpp on five cores, with
+    an identical transcript (30 Sep 2026). The first NPU compile takes about
+    two minutes; ``cache_dir`` keeps the compiled model for later starts.
+    """
+    import openvino_genai
+    options = {"CACHE_DIR": cache_dir} if cache_dir else {}
+    pipeline = openvino_genai.WhisperPipeline(model_dir, device, **options)
+
+    def transcribe(samples, language):
+        config = pipeline.get_generation_config()
+        config.task = "transcribe"
+        config.return_timestamps = True
+        config.language = None if language == "auto" else f"<|{language}|>"
+        result = pipeline.generate(list(map(float, samples)), config)
+        return ([(chunk.start_ts, chunk.end_ts, chunk.text) for chunk in result.chunks],
+                None if language == "auto" else language)
+    return transcribe
+
+
 def build_app(transcribe: Transcriber, *, default_language: str = "auto") -> web.Application:
     lock = asyncio.Lock()
     counters = {"requests": 0, "transcribed": 0, "rejected": 0, "failed": 0, "abandoned": 0,
@@ -151,11 +174,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--language", default="auto")
     parser.add_argument("--no-fallback", action="store_true",
                         help="decode once at temperature 0 (no temperature fallback)")
+    parser.add_argument("--backend", choices=("whispercpp", "openvino"), default="whispercpp",
+                        help="openvino: --model is an OpenVINO model directory")
+    parser.add_argument("--device", default="NPU", help="OpenVINO device (NPU, GPU or CPU)")
+    parser.add_argument("--cache-dir", help="OpenVINO compiled-model cache (writable)")
     args = parser.parse_args(argv)
     if args.language != "auto" and not _LANGUAGE.fullmatch(args.language):
         parser.error("--language must be auto or a two-letter code")
-    app = build_app(whisper_cpp_transcriber(args.model, args.threads, fallback=not args.no_fallback),
-                    default_language=args.language)
+    if args.device not in {"NPU", "GPU", "CPU"}:
+        parser.error("--device must be NPU, GPU or CPU")
+    transcriber = (openvino_transcriber(args.model, args.device, args.cache_dir)
+                   if args.backend == "openvino" else
+                   whisper_cpp_transcriber(args.model, args.threads, fallback=not args.no_fallback))
+    app = build_app(transcriber, default_language=args.language)
     web.run_app(app, host=args.host, port=args.port, access_log=None, print=None)
     return 0
 
