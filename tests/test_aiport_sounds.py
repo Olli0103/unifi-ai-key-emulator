@@ -238,3 +238,71 @@ async def test_sounds_are_capped_per_camera_and_hour_and_alarms_get_four_times_t
         assert service.sound_rate_limited >= 2
     finally:
         await service.stop()
+
+
+def test_the_mel_filterbank_matches_yamnets_frontend_shape_and_edges():
+    import numpy as np
+
+    from aikey.aiport_sounds import _hz_to_mel, mel_weights
+    weights = mel_weights()
+    assert weights.shape == (257, 64) and not weights[0].any()        # no DC
+    freqs = np.linspace(0, 8000, 257)
+    assert not weights[freqs < 125].any() and not weights[freqs > 7500].any()
+    peaks = freqs[weights.argmax(axis=0)]
+    assert (np.diff(peaks) >= 0).all()                                 # bands rise in pitch
+    centers = np.linspace(_hz_to_mel(125.0), _hz_to_mel(7500.0), 66)[1:-1]
+    hz = 700 * (np.exp(centers / 1127.0) - 1)
+    assert np.all(np.abs(peaks - hz) <= 8000 / 256 + 1e-6)             # peak within one FFT bin
+
+
+def test_a_tone_lights_its_own_mel_band_and_silence_reads_the_log_floor():
+    import numpy as np
+
+    from aikey.aiport_sounds import SoundError, log_mel_patch, mel_weights
+    t = np.arange(15600) / SAMPLE_RATE
+    patch = log_mel_patch(0.5 * np.sin(2 * np.pi * 1000 * t))
+    assert patch.shape == (96, 64) and patch.dtype == np.float32
+    band = int(np.bincount(patch.argmax(axis=1)).argmax())
+    freqs = np.linspace(0, 8000, 257)
+    assert abs(freqs[mel_weights()[:, band].argmax()] - 1000) < 100
+    assert np.allclose(log_mel_patch(np.zeros(15600)), np.log(0.001))
+    with pytest.raises(SoundError):
+        log_mel_patch(np.zeros(16000))
+
+
+@pytest.mark.parametrize("shape,expected", [
+    ([1, 1, 96, 64], (1, 1, 96, 64)), (["batch", 96, 64], (1, 96, 64)),
+    ([96, 64], (96, 64)), (["samples"], (15600,))])
+def test_patch_models_get_log_mel_patches_and_waveform_models_get_audio(tmp_path, monkeypatch,
+                                                                       shape, expected):
+    import hashlib
+    import sys
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from aikey.aiport_sounds import CLASSES, SoundClassifier
+    names = [label for labels in CLASSES.values() for label in labels]
+    class_map = tmp_path / "classes.csv"
+    class_map.write_text("index,mid,display_name\n" + "".join(
+        f'{i},/m/{i},"{name}"\n' for i, name in enumerate(names)))
+    model = tmp_path / "sound.onnx"
+    model.write_bytes(b"synthetic")
+    fed = []
+
+    class Session:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_inputs(self):
+            return [SimpleNamespace(name="input", shape=shape)]
+
+        def run(self, outputs, feeds):
+            fed.append(feeds["input"])
+            return [np.zeros((1, len(names)), dtype=np.float32)]
+
+    monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(
+        SessionOptions=SimpleNamespace, InferenceSession=Session))
+    digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()   # noqa: E731
+    SoundClassifier(model, digest(model), class_map, digest(class_map))(array.array("h", [0] * 15600))
+    assert fed[0].shape == expected and fed[0].dtype == np.float32

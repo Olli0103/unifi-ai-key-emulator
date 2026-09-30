@@ -59,6 +59,44 @@ POLICY = {"alarm": (0.35, 2, 6.0), "alrmSiren": (0.4, 2, 4.0),
           "alrmGlassBreak": (0.4, 1, 2.0)}
 
 
+# YAMNet's published frontend: 25 ms periodic Hann window, 10 ms hop, a
+# 512-point FFT magnitude, 64 HTK-mel bands from 125 to 7500 Hz, log(mel +
+# 0.001), and 96-frame (0.96 s) patches. Exports that take patches instead of
+# a waveform are fed through it; 0.975 s of audio is exactly one patch.
+MEL_FRAMES, MEL_BANDS = 96, 64
+_STFT_WINDOW, _STFT_HOP, _FFT = 400, 160, 512
+
+
+def _hz_to_mel(hz):
+    import numpy as np
+    return 1127.0 * np.log1p(np.asarray(hz, dtype=np.float64) / 700.0)
+
+
+def mel_weights():
+    """[257, 64] triangle weights, as TensorFlow's linear_to_mel_weight_matrix builds them."""
+    import numpy as np
+    bins = _FFT // 2 + 1
+    linear = _hz_to_mel(np.linspace(0.0, SAMPLE_RATE / 2, bins)[1:])[:, None]
+    edges = np.linspace(_hz_to_mel(125.0), _hz_to_mel(7500.0), MEL_BANDS + 2)
+    lower, center, upper = edges[:-2], edges[1:-1], edges[2:]
+    weights = np.maximum(0.0, np.minimum((linear - lower) / (center - lower),
+                                         (upper - linear) / (upper - center)))
+    return np.vstack([np.zeros((1, MEL_BANDS)), weights]).astype(np.float32)
+
+
+def log_mel_patch(wave):
+    """One [96, 64] log-mel patch from 0.975 s of float audio in [-1, 1]."""
+    import numpy as np
+    wave = np.asarray(wave, dtype=np.float32)
+    if wave.shape != (WINDOW_SAMPLES,):
+        raise SoundError("sound_window_size")
+    window = (0.5 - 0.5 * np.cos(2 * np.pi * np.arange(_STFT_WINDOW) / _STFT_WINDOW)).astype(np.float32)
+    starts = np.arange(MEL_FRAMES) * _STFT_HOP
+    frames = np.stack([wave[i:i + _STFT_WINDOW] for i in starts]) * window
+    magnitude = np.abs(np.fft.rfft(frames, n=_FFT, axis=1)).astype(np.float32)
+    return np.log(magnitude @ mel_weights() + 0.001).astype(np.float32)
+
+
 class SoundError(ValueError):
     """An invalid sound model, class map or detector input."""
 
@@ -129,13 +167,21 @@ class SoundClassifier:
         options.intra_op_num_threads = options.inter_op_num_threads = threads
         self._session = onnxruntime.InferenceSession(
             str(model_path), options, providers=["CPUExecutionProvider"])
-        self._input = self._session.get_inputs()[0].name
+        model_input = self._session.get_inputs()[0]
+        self._input = model_input.name
+        shape = [d if isinstance(d, int) else None for d in (getattr(model_input, "shape", None) or [])]
+        # A waveform model takes [samples] (or [1, samples]); a patch model's
+        # input ends in [96, 64], optionally after batch and channel axes.
+        self._patch_shape = (tuple(1 if d is None else d for d in shape)
+                             if shape[-2:] == [MEL_FRAMES, MEL_BANDS] else None)
         self._classes = len(names)
 
     def __call__(self, window: array.array) -> dict[str, float]:
         import numpy as np
         wave = np.frombuffer(window.tobytes(), dtype=np.int16).astype(np.float32) / 32768.0
-        outputs = self._session.run(None, {self._input: wave})
+        feed = (log_mel_patch(wave).reshape(self._patch_shape)
+                if self._patch_shape is not None else wave)
+        outputs = self._session.run(None, {self._input: feed})
         scores = next((o for o in outputs if getattr(o, "shape", ())[-1:] == (self._classes,)),
                       None)
         if scores is None:

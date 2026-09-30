@@ -64,7 +64,7 @@ These gates are what still stands between the current code and native parity. No
 
 - **Needs:**
   1. The owner's approval of the exact download: file names, source, size, licence and SHA-256 are shown before anything is fetched.
-  2. A check that the chosen export takes a 16 kHz waveform. `SoundClassifier` assumes waveform input. Exports that expect log-mel patches (some ONNX conversions do) need a small, tested frontend change first.
+  2. A check of the export's input and output: `SoundClassifier` feeds a 16 kHz waveform, or YAMNet's log-mel patch when the input shape ends in [96, 64] (the frontend is synthetic-tested only). It needs an output whose last axis equals the class-map length. One offline run on a known clip, recording the top class only, confirms the frontend matches before any camera uses it.
 - **Steps:**
   1. Put the model and class map under `aiport-deployment/models/sound` and record their SHA-256.
   2. Load them once offline: `SoundClassifier` refuses a class map that lacks any mapped AudioSet label.
