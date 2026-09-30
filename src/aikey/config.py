@@ -17,6 +17,23 @@ class ConfigError(ValueError):
     pass
 
 
+
+def _local_inference(inference: dict) -> bool:
+    """A caption model with no per-request cost: Ollama or OpenAI-compatible on a private address."""
+    import ipaddress
+    from urllib.parse import urlsplit
+    provider = inference.get("provider")
+    if provider == "ollama":
+        return True
+    if provider != "openai-compatible" or not isinstance(inference.get("base_url"), str):
+        return False
+    try:
+        address = ipaddress.ip_address(urlsplit(inference["base_url"]).hostname or "")
+    except ValueError:
+        return False
+    return any(address in ipaddress.ip_network(net) for net in (
+        "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"))
+
 def atomic_private(path: Path, content: str | bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
@@ -180,11 +197,13 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
                            or not value.isprintable() or any(ch.isspace() for ch in value)
                            for value in ids)):
                 raise ConfigError("worker.continuous.camera_ids requires distinct camera IDs")
-        # The 12-per-hour budget caps provider cost. A local Ollama model has
-        # none, so the owner may run it unmetered; a paid provider cannot.
+        # The 12-per-hour budget caps provider cost. A local model (Ollama, or an
+        # OpenAI-compatible server such as OpenVINO Model Server on a private
+        # address) has none, so the owner may run it unmetered; a paid or
+        # public provider cannot.
         if "unmetered" in policy and (policy["unmetered"] is not True
-                                      or config.get("inference", {}).get("provider") != "ollama"):
-            raise ConfigError("worker.continuous.unmetered requires a local ollama caption model")
+                                      or not _local_inference(config.get("inference", {}))):
+            raise ConfigError("worker.continuous.unmetered requires a local caption model")
         interval = policy.get("refresh_seconds", 60)
         if type(interval) is not int or not 30 <= interval <= 300:
             raise ConfigError("worker.continuous.refresh_seconds must be 30 to 300")

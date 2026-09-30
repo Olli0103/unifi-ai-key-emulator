@@ -293,7 +293,8 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
             provider = fallback.get("provider_config") if isinstance(fallback, dict) else None
             if (not is_api or not isinstance(provider, dict)
                     or not set(fallback) <= {"provider_config", "timeout_s", "max_per_hour"}
-                    or provider.get("provider") != "ollama" or "api_key" in provider
+                    or provider.get("provider") not in {"ollama", "openai-compatible"}
+                    or "api_key" in provider
                     or "api_key_file" in provider):
                 raise CandidateError("Invalid live pool detector fallback")
             try:

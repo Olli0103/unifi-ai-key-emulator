@@ -627,7 +627,7 @@ class ApiObjectDetector:
                 private = False
             # max_per_hour is a legacy key: still validated, no longer applied.
             timeout, per_hour = fallback.get("timeout_s", 60), fallback.get("max_per_hour", 1)
-            if (provider.provider != "ollama" or not private
+            if (provider.provider not in {"ollama", "openai-compatible"} or not private
                     or type(timeout) is not int or not 5 <= timeout <= 180
                     or type(per_hour) is not int or not 1 <= per_hour <= 3600):
                 raise ApiDetectionError("invalid_api_detection_fallback")
@@ -850,7 +850,13 @@ class ApiObjectDetector:
         self.fallback_counts["reasons"][reason] += 1
         try:
             url, headers, payload = self.fallback.build_request([frame], _FALLBACK_PROMPT)
-            payload["format"] = _FALLBACK_SCHEMA
+            if self.fallback.provider == "ollama":
+                payload["format"] = _FALLBACK_SCHEMA
+            else:
+                # An OpenAI-compatible local server (OpenVINO Model Server)
+                # takes the same schema as a structured-output response format.
+                payload["response_format"] = {"type": "json_schema", "json_schema": {
+                    "name": "detections", "schema": _FALLBACK_SCHEMA}}
             text = fallback_to_fractions(
                 self.fallback.parse_response(self.fallback_transport(url, headers, payload)))
         except (ApiDetectionError, ProviderError, TypeError, ValueError) as exc:

@@ -333,7 +333,7 @@ async def test_a_paired_g3_never_enters_caption_scope_without_an_explicit_model_
     assert narrow.allows(paired_g3["id"]) is bool(paired_g3_smart)
 
 
-def test_unmetered_captions_need_a_local_ollama_model(tmp_path):
+def test_unmetered_captions_need_a_local_caption_model(tmp_path):
     config = defaults(tmp_path / "state", "020000000001")
     config["controller"]["protect_version"] = "7.3.68"
     config["worker"].update(callback_mode="enabled", request_mp4_exports=True,
@@ -341,7 +341,15 @@ def test_unmetered_captions_need_a_local_ollama_model(tmp_path):
     config["inference"].update(provider="ollama", base_url="http://127.0.0.1:11434",
                                model="qwen3-vl:8b-instruct")
     assert validate_config(deepcopy(config))["worker"]["continuous"]["unmetered"] is True
-    for mutation in (lambda value: value["inference"].update(provider="openai-compatible"),
+    # OpenVINO Model Server on the NAS backend network is local and free too.
+    ovms = deepcopy(config)
+    ovms["inference"].update(provider="openai-compatible", base_url="http://172.30.50.13:8000/v3",
+                             allow_remote=True, allow_insecure_http=True)
+    assert validate_config(ovms)["worker"]["continuous"]["unmetered"] is True
+    for mutation in (lambda value: value["inference"].update(provider="openai-compatible",
+                                                             base_url="https://api.groq.com/openai/v1"),
+                     lambda value: value["inference"].update(provider="openai",
+                                                             base_url="https://api.openai.com/v1"),
                      lambda value: value["worker"]["continuous"].update(unmetered=False),
                      lambda value: value["worker"]["continuous"].update(unmetered="yes")):
         bad = deepcopy(config)

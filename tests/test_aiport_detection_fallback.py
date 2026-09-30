@@ -172,7 +172,7 @@ def test_a_failing_fallback_raises_a_fixed_code(tmp_path):
     dict(FALLBACK, provider_config=dict(FALLBACK["provider_config"],
                                         base_url="http://203.0.113.9:11434")),   # public host
     dict(FALLBACK, provider_config=dict(FALLBACK["provider_config"], provider="openai-compatible",
-                                        base_url="http://192.168.0.110:11434/v1")),
+                                        base_url="http://203.0.113.9:8000/v3")),        # public host
     dict(FALLBACK, timeout_s=1), dict(FALLBACK, max_per_hour=0)])   # legacy key still type-checked
 def test_the_fallback_must_be_a_bounded_private_ollama_server(tmp_path, bad):
     with pytest.raises(ApiDetectionError, match="invalid_api_detection_fallback"):
@@ -204,3 +204,18 @@ def test_the_candidate_config_accepts_only_an_ollama_fallback(tmp_path):
         private_file(path, json.dumps(config).encode())
         with pytest.raises(CandidateError):
             load_config(path, check_decoder_executable=False)
+
+
+def test_a_local_openai_compatible_fallback_asks_for_the_schema_as_a_response_format(tmp_path):
+    # OpenVINO Model Server on the NAS backend replaces Ollama as the fallback.
+    calls = []
+    ovms = dict(FALLBACK, provider_config={"provider": "openai-compatible", "model": "qwen3-vl-8b",
+                                           "base_url": "http://172.30.50.13:8000/v3",
+                                           "allow_remote": True, "allow_insecure_http": True})
+    local = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps({"detections": [
+        {"kind": "person", "label": "person", "score": 0.9, "box": [100, 200, 400, 800]}]})}}]}
+    engine = detector(tmp_path, http_error("api_detection_http_429"), calls, fallback=ovms, local=local)
+    found = engine.detect_for_camera(CAMERA, STILL)
+    assert [(o.kind, o.box) for o in found] == [("person", (0.1, 0.2, 0.4, 0.8))]
+    assert calls[0]["response_format"]["json_schema"]["schema"]["required"] == ["detections"]
+    assert "format" not in calls[0]
