@@ -71,6 +71,8 @@ def test_the_model_answer_becomes_a_description_and_clean_labels():
     text = '```json\n{"description": "A person in a red hoodie.", "labels": ' \
            '["top:hoodie", "topColor:red", "top:hoodie", "nonsense", "gender:", 5]}\n```'
     assert deep_mode.parse_description(text) == ("A person in a red hoodie.", ["top:hoodie", "topColor:red"])
+    live = '{"description": "A figure.", "labels": ["topColor: red", "bottomColor:  dark blue", " : x"]}'
+    assert deep_mode.parse_description(live)[1] == ["topColor:red", "bottomColor:dark blue"]
     for bad in ("not json", '{"labels": []}', '{"description": "", "labels": []}', "[1]"):
         with pytest.raises(deep_mode.DeepModeError):
             deep_mode.parse_description(bad)

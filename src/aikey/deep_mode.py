@@ -164,10 +164,14 @@ def parse_description(text: str) -> tuple[str, list[str]]:
         raise DeepModeError("The model's JSON lacks a description")
     kept, seen = [], set()
     for label in labels:
-        if (isinstance(label, str) and re.fullmatch(r"[A-Za-z]+:[^\s:][^:]{0,62}", label.strip())
-                and label.strip() not in seen):
-            seen.add(label.strip())
-            kept.append(label.strip())
+        # Qwen3-VL writes "key: value" (live, 30 Sep); spaces around the colon go.
+        key, _, value = label.partition(":") if isinstance(label, str) else ("", "", "")
+        key, value = key.strip(), " ".join(value.split())
+        normalized = f"{key}:{value}"
+        if (re.fullmatch(r"[A-Za-z]+", key) and value and ":" not in value and len(normalized) <= 64
+                and normalized not in seen):
+            seen.add(normalized)
+            kept.append(normalized)
     return description.strip(), kept[:MAX_LABELS]
 
 
