@@ -1,5 +1,14 @@
-include README.md PLAN.md BUILD-RESULT.md lab-results.json Dockerfile compose.yaml requirements-runtime.lock .dockerignore
+include LICENSE README.md CONTRIBUTING.md PLAN.md BUILD-RESULT.md Dockerfile compose.yaml requirements-runtime.lock .dockerignore
 recursive-include docs *.md
 recursive-include deployment *.sh *.sql Dockerfile *.md
 recursive-include examples *
 recursive-include tests *.py
+
+recursive-include docs/legal *.json
+recursive-include tools *.py
+prune research
+prune private
+prune state
+prune secrets
+global-exclude *.key *.pem *.p12 *.pfx *.deb *.bin *.elf *.pth *.pt *.onnx *.safetensors *.gguf *.jpg *.jpeg *.png *.wav *.mp4 *.ubv
+global-exclude *.tar *.tgz *.gz *.xz *.zip *.7z *.so *.dylib *.dll *.exe *.tflite *.pb *.h5 *.ckpt *.gif *.webp *.mov *.mp3 *.mkv

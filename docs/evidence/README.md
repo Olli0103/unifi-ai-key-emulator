@@ -1,6 +1,6 @@
 # Research provenance
 
-The implementation is independently written from observed contracts. These records document the static investigation, before any emulator code existed. They contain source references and hashes, not a redistributed vendor runtime.
+These records describe the interface observations used by the implementation. They contain package references and hashes. They are not proof of permission to analyze firmware, a complete code-origin audit, or an organizationally separate clean-room process. Those questions remain open in the [provenance record](../legal/provenance.md).
 
 - [Adoption investigation](adoption-evidence.md)
 - [Controller callbacks and saving](controller-evidence.md)
@@ -18,4 +18,4 @@ Synthetic protocol fixtures live in `tests/fixtures/compatibility/`. They contai
 
 Public source packages were AI Key 2.2.8 and Protect 7.2.105 with its matching services. Live trials covered selected behaviors on Protect 7.3.56 and 7.3.60. Three public metadata queries for 7.3.56 returned empty results on 22 September 2026. Do not treat the inspected package as either live-tested version.
 
-The records identify package-relative paths and local analysis artifacts. Vendor binaries and extracted source are not included in the distribution. Use the linked official metadata and source hashes to repeat the static investigation.
+The records identify package-relative paths and local analysis artifacts. Vendor binaries and extracted source are not included in the distribution. Before any further investigation, establish authorized access, necessity, scope and applicable terms. A public download link and a matching hash do not establish those rights.
