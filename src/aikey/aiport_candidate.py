@@ -1982,6 +1982,10 @@ class CandidateService:
             **({"sounds": {"cameras": len(self._sound_cameras),
                            "classifier": self._sound_classifier is not None,
                            "types": len(self._sound_types),
+                           # Sound types Protect has enabled, summed over cameras.
+                           "enabled_types": sum(self._sound_enabled(camera, kind)
+                                                for camera in self._sound_cameras
+                                                for kind in self._sound_types),
                            "entered": dict(self.sound_events_entered),
                            "left": self.sound_events_left, "open": len(self._sound_open),
                            "rate_limited": self.sound_rate_limited,

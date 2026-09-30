@@ -151,6 +151,7 @@ async def test_an_enabled_alarm_preempts_open_speech_and_is_announced_as_a_featu
         assert {"alrmSpeak", "alrmSmoke", "alrmGlassBreak"} <= set(flags)
         sounds = (await health(service))["sounds"]
         assert sounds["entered"] == {"alrmSmoke": 1} and sounds["speech_preempted"] == 1
+        assert sounds["enabled_types"] == 1                  # only smoke is enabled
     finally:
         await service.stop()
 
