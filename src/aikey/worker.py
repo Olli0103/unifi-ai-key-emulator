@@ -133,6 +133,9 @@ _RETYPE_CONFIDENCE = 0.9
 # Decoded event audio lives only in a temporary directory with this prefix
 # inside the worker journal directory, removed when the job ends (#5).
 AUDIO_TEMP_PREFIX = "aikey-audio-"
+# Longest export an opted-in camera may send (Protect sweeps an event without
+# an end at 300 s); only its first max_audio_ms is transcribed.
+SPEECH_EXPORT_MAX_MS = 300_000
 
 
 # Lower runs first. A job's deadline includes its queue wait, so short local
@@ -447,7 +450,7 @@ class JobProcessor:
         self.retroactive = {"tasks": 0, "crops_indexed": 0, "completed": 0, "failed": 0,
                             "refused_unindexed_camera": 0, "refused_image": 0, "archived": 0}
         # Speech exports refused for exceeding max_audio_ms.
-        self.speech_counts = {"refused_long": 0}
+        self.speech_counts = {"refused_long": 0, "clipped": 0}
         self._stopping = False
         self._start_lock = asyncio.Lock()
         self._load_history()
@@ -462,6 +465,16 @@ class JobProcessor:
         self._check_inference_config()
         self.speech, self.speech_cameras = None, frozenset()
         self.max_audio_ms = self._positive("max_audio_ms", 120000)
+        # Opt-in cameras whose own speech events are not capped by an AI Port
+        # (a G6 on its native microphone): a longer export is transcribed up
+        # to max_audio_ms instead of refused. Every other camera keeps the
+        # refusal that protects the real-time CPU Whisper.
+        clip = self.options.get("speech_clip_camera_ids", [])
+        if (not isinstance(clip, list) or len(clip) > 32 or len(set(clip)) != len(clip)
+                or any(not isinstance(c, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", c)
+                       for c in clip)):
+            raise WorkerError("worker.speech_clip_camera_ids must list up to 32 camera IDs")
+        self.speech_clip_cameras = frozenset(clip)
         # A local CPU Whisper needs about real time; keep speech off the caption timeout.
         self.speech_timeout_s = min(self._positive("speech_timeout_s", 300), 900)
         # Key-moment captions got 30 s, enough for a cloud model. A local
@@ -1276,14 +1289,17 @@ class JobProcessor:
                 or body["format"] not in {"mp4", "ubv"} or body["skipVideo"] is not True
                 or body["createEvent"] is not False):
             raise WorkerError("speechToText is limited to the audio-only event export")
+        clip = body["camera"] in self.speech_clip_cameras
         if (any(type(body[key]) is not int for key in ("start", "end"))
                 or not 0 <= body["start"] < body["end"] <= 2 ** 53 - 1
-                or body["end"] - body["start"] > self.max_audio_ms):
-            # Accepting longer exports (clipped to the bound) overloaded the
+                or body["end"] - body["start"] > (SPEECH_EXPORT_MAX_MS if clip else self.max_audio_ms)):
+            # Accepting longer exports from every camera overloaded the
             # real-time CPU Whisper on 30 Sep; the AI Port caps its speech
             # events instead (aiport_audio.MAX_EVENT_S).
             self.speech_counts["refused_long"] += 1
             raise WorkerError("speechToText audio exceeds configured duration bound")
+        if body["end"] - body["start"] > self.max_audio_ms:
+            self.speech_counts["clipped"] += 1        # _audio keeps the first max_audio_ms
         callback = self._url(body["resUrl"], "callback")
         if urlsplit(callback).path != _SPEECH_CALLBACK:
             raise WorkerError("speechToText requires the speech-to-text callback")

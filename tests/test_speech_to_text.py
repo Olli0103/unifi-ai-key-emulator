@@ -349,7 +349,7 @@ async def test_an_export_past_the_audio_bound_is_refused_before_media(controller
     try:
         with pytest.raises(WorkerError, match="duration bound"):
             await worker.handle(task(body={"end": START + 4001}))
-        assert worker.status()["speech"] == {"refused_long": 1}
+        assert worker.status()["speech"] == {"refused_long": 1, "clipped": 0}
     finally:
         await worker.stop()
     assert controller.media_requests == [] and controller.transcriptions == []
@@ -395,3 +395,32 @@ async def test_speech_refusals_are_counted_by_fixed_reason_without_identifiers(t
     assert speech["admitted"] == 1
     status = json.dumps(device.status)
     assert CAMERA not in status and EVENT not in status and "unexpected" not in status
+
+
+async def test_an_opted_in_native_camera_is_clipped_while_others_stay_refused(controller, tmp_path):
+    # A G6 on its own microphone is not under the AI Port's 90 s event cap;
+    # only listed cameras get their long export transcribed up to the bound.
+    settings = config(controller)
+    settings["worker"]["max_audio_ms"] = 4000
+    settings["worker"]["speech_clip_camera_ids"] = [CAMERA]
+    worker = JobProcessor(settings, tmp_path)
+    try:
+        result = await worker.handle(task(body={"end": START + 130_000}))
+        with pytest.raises(WorkerError, match="duration bound"):
+            await worker.handle(task(body={"end": START + 300_001, "event": "too-long"},
+                                     query={"event": "too-long"}))
+    finally:
+        await worker.stop()
+    assert result["result"] == {"segments": 1}
+    assert controller.transcriptions[0]["audio_bytes"] <= 4 * 32000 + 4096
+    assert worker.status()["speech"] == {"refused_long": 1, "clipped": 1}
+
+
+@pytest.mark.parametrize("value", ["x", ["two words"], [7], ["a"] * 2, [f"c{n}" for n in range(33)]])
+def test_the_clip_camera_list_is_validated(tmp_path, value):
+    options = {"runtime": {"mode": "lab"}, "controller_origins": ["http://127.0.0.1:9"],
+               "device": {"mac": "02:00:00:00:00:99"},
+               "inference": {"base_url": "http://127.0.0.1:9/v1", "model": "m"},
+               "worker": {"speech_clip_camera_ids": value}}
+    with pytest.raises(WorkerError, match="speech_clip_camera_ids"):
+        JobProcessor(options, tmp_path)
