@@ -48,7 +48,7 @@ These gates are what still stands between the current code and native parity. No
 
 ## G5: reverification readback (N13)
 
-- **State:** `find_anything.reverification` is on in the NAS Key config since r3 (30 Sep). No `second_verifier` request has arrived since then.
+- **State:** `find_anything.reverification` is on in the NAS Key config since r3 (30 Sep). No `second_verifier` request has arrived since then (still none at the 30 Sep afternoon check).
 - **Record:** for one reverified event, `detectedThumbnails` `preReverificationObjectType` and the confidence type. Also confirm that an unsure verdict left the event type unchanged.
 - **Rollback:**
   1. Restore `config.json.before-r3-20260930` in `/home/olli/aiport-deployment/aikey/state` (reverification off, byte-identical otherwise).
@@ -59,6 +59,7 @@ These gates are what still stands between the current code and native parity. No
 - **Needs:** a new person event on the Wohnzimmer G6 after the r3 deploy.
 - **Record:** whether Protect's Find Anything returns that event's person for a "person" query, and its hit count.
 - **Pass:** the event is returned. Then promote `index.face_task_search_tags` beyond `fixture-tested`.
+- **Status (30 Sep, read-only counts):** after the r5 restart the Key answered 3 G6 face tasks (native-face skip path, which now carries the search tags), and the G6 gained 4 `ramDetections` rows between 05:00 and 06:08 UTC. This is consistent with the path but does not attribute the rows; the gate still needs the search hit.
 - **Rollback:** none; the step is read-only.
 
 ## G7: alarm and household sounds (`live_sound`, 5c3a1a6)
