@@ -190,14 +190,16 @@ def rollover_due(record: dict, now: float, *, continuous: bool) -> bool:
     # minute so a retroactive backfill never fills the ledger (#21).
     if record.get("operation") in _LOCAL_INDEX_OPERATIONS and state == "completed" and age > 60:
         return True
-    # Every other completed record leaves after a day in every mode (#12):
-    # otherwise the ledger fills and all admission stops with "journal is
-    # full". The tombstone answers a replay with already_completed. Failed
-    # tasks outside continuous mode stay a week so Protect can retry them.
+    # Every other completed record leaves after a day (#12): otherwise the
+    # ledger fills and all admission stops with "journal is full". The
+    # tombstone answers a replay with already_completed, so continuous mode,
+    # which on 30 Sep took over 1000 jobs a day for nine cameras and filled a
+    # 1024-entry ledger, archives after an hour. Failed tasks outside
+    # continuous mode stay a week so Protect can retry them.
     if state == "completed":
-        return age > 24 * 3600
+        return age > (3600 if continuous else 24 * 3600)
     if state == "failed":
-        return age > (24 if continuous else 7 * 24) * 3600
+        return age > (3600 if continuous else 7 * 24 * 3600)
     return False
 # A face found inside a person region gets its own tracker ID, linked to the person.
 _PERSON_FACE_OFFSET = 1_000_000

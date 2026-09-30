@@ -114,3 +114,19 @@ def test_short_local_jobs_leave_the_queue_before_captions_and_summaries_first():
     assert order == ["on_demand", "recognizeFaces", "speechToText", "indexKeyFrames", "reverify",
                      "recognizeKeyFrames", "recognizeKeyFrames", "recognizeKeyFrames", "indexImages"]
     assert _QUEUE_PRIORITY.get("unknown-operation", 1) == 1          # unknown work waits with captions
+
+
+def test_continuous_mode_archives_terminal_records_after_an_hour_not_a_day():
+    # Nine continuous cameras made over 1000 jobs a day and filled the
+    # 1024-entry ledger with day-old completed records (30 Sep).
+    from aikey.worker import rollover_due
+    now = 1_000_000.0
+    record = lambda state, age, op="recognizeKeyFrames": {"state": state, "updatedAt": now - age, "operation": op}  # noqa: E731
+    assert not rollover_due(record("completed", 3500), now, continuous=True)
+    assert rollover_due(record("completed", 3700), now, continuous=True)
+    assert rollover_due(record("failed", 3700), now, continuous=True)
+    assert not rollover_due(record("completed", 3700), now, continuous=False)      # a day outside continuous
+    assert rollover_due(record("completed", 24 * 3600 + 1), now, continuous=False)
+    assert not rollover_due(record("failed", 3 * 24 * 3600), now, continuous=False)  # a week for retries
+    assert not rollover_due(record("callback_uncertain", 10 ** 6), now, continuous=True)
+    assert rollover_due(record("completed", 61, "indexImages"), now, continuous=False)
