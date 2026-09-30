@@ -1774,7 +1774,7 @@
    "missing_evidence": [
     "Structured object results (issue #14)"
    ],
-   "rejection": "No RAM tag words are produced (tags are empty). supportRecognizeAnything is sent enabled only with Find Anything object indexing, which supplies embeddings."
+   "rejection": "No Recognize Anything model: since 9de93fd each indexed object carries only its class (person, vehicle, animal or package) as one RAM tag, and no open-vocabulary tag words are produced. supportRecognizeAnything is sent enabled only with Find Anything object indexing, which supplies embeddings."
   },
   {
    "id": "capability.audio_speech",
@@ -1868,16 +1868,26 @@
    "id": "capability.ai_alarms",
    "area": "capabilities",
    "title": "AI query matches in Alarm Manager",
-   "status": "unsupported",
+   "status": "fixture-tested",
    "live": {},
-   "static": [],
-   "tests": [],
-   "implementation": [],
+   "static": [
+    "static-protect-7.3.60-bundle"
+   ],
+   "tests": [
+    "tests/test_find_anything.py::test_key_tags_name_the_class_of_object_words_only",
+    "tests/test_find_anything.py::test_class_tags_cover_supported_classes_and_nothing_else",
+    "tests/test_find_anything.py::test_objects_are_embedded_locally_and_posted_as_thumbnail_tags"
+   ],
+   "implementation": [
+    "src/aikey/search.py",
+    "src/aikey/worker.py"
+   ],
    "activation": "default",
    "missing_evidence": [
-    "Native contract (issue #26)"
+    "An owner-created AI Trigger alarm on an AI Key-indexed camera, its ai_nls trigger on the original event, and a negative control of another class (no alarm has been created)",
+    "ramDetections rows with non-empty ramTagIds after 9de93fd"
    ],
-   "rejection": "Not implemented."
+   "notes": "Protect 7.3.60 matchRules needs at least one RAM tag shared between the rule sentence's keyTags (NL_PARSE) and the detection's tags, then compares embeddings. Since 9de93fd, NL_PARSE returns class keyTags (person, vehicle, animal, package; English and German) and indexed objects carry their class as one RAM tag. Only class words are matched; no vendor tag vocabulary is shipped."
   },
   {
    "id": "database.credential_rotation_hook",

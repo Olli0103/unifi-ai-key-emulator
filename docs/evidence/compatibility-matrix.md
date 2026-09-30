@@ -89,7 +89,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `callback.speech_to_text_transcriptions`: speechToText callback saved as native transcription rows | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle, AI Key 2.2.8 | explicit_opt_in |
 | `callback.face_recognition_part`: face multipart callback saved as native face thumbnails linked to person trackers | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle | explicit_opt_in |
 | **capabilities** | |  |  |  |  | | |
-| `capability.ai_alarms`: AI query matches in Alarm Manager | unsupported | — | — | — | — | — | default |
+| `capability.ai_alarms`: AI query matches in Alarm Manager | fixture-tested | — | — | — | — | Protect 7.3.60 bundle | default |
 | **database** | |  |  |  |  | | |
 | `database.credential_rotation_hook`: PostgreSQL unifi-protect role rotated before management-password rotation | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
 | `database.supports_db_credential_handoff`: supportsDbCredential console capability and controller access-rule update | needs_evidence | — | — | indirect | — | Protect 7.2.105, AI Key 2.2.8 | default |
@@ -195,7 +195,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `callback.speech_to_text_transcriptions`: Transcript text search: Protect 7.3.68 basic mode has none (events filters ignore searchText, keyword and labels; detection-nls searches object vectors only); only the transcript label and per-event viewer exist
 - `callback.face_recognition_part`: Named matches (owner must name a face group)
 - `callback.face_recognition_part`: Persistence after a controller restart
-- `capability.ai_alarms`: Native contract (issue #26)
+- `capability.ai_alarms`: An owner-created AI Trigger alarm on an AI Key-indexed camera, its ai_nls trigger on the original event, and a negative control of another class (no alarm has been created)
+- `capability.ai_alarms`: ramDetections rows with non-empty ramTagIds after 9de93fd
 - `database.credential_rotation_hook`: Protect only re-sent the current password; a change to a genuinely new value was not observed
 - `database.credential_rotation_hook`: Pending/uncertain rotation recovery on a live controller
 - `database.supports_db_credential_handoff` (needs_evidence): setConsoleInfo stored supportsDbCredential true on 7.3.68, but the access-rule behavior 7.3.x expects from it is not established
