@@ -45,7 +45,9 @@ CLASSES = {
                   "Fire engine, fire truck (siren)", "Emergency vehicle"),
     "alrmBabyCry": ("Baby cry, infant cry",),
     "alrmBark": ("Bark", "Bow-wow", "Yip"),
-    "alrmBurglar": ("Burglar alarm", "Car alarm"),
+    # YAMNet's 521 classes have no "Burglar alarm"; its alarm sirens score as
+    # these. "Alarm" also fires for smoke alarms, which outrank it.
+    "alrmBurglar": ("Car alarm", "Alarm"),
     "alrmCarHorn": ("Vehicle horn, car horn, honking", "Air horn, truck horn", "Toot"),
     "alrmGlassBreak": ("Shatter", "Glass"),
 }
