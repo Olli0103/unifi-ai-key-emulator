@@ -1,4 +1,4 @@
-# False positives: the detector parsed the legacy compatibility profile name
-# `key-2.2.8` followed by the Protect version as an API-key assignment.
-67aa5e8941d7162c06ea65c5020e124e089ac547:src/aikey/worker.py:generic-api-key:291
-67aa5e8941d7162c06ea65c5020e124e089ac547:tests/test_worker.py:generic-api-key:279
+# Verified synthetic loopback credential sentinel in historical test fixture.
+# Reviewed for PR #124 with Gitleaks 8.30.1. This exact commit/path/rule/line
+# exception does not permit real credentials in current or future test code.
+0f519e43dec3d0cc2534f6c4f250b279b19b7304:tests/test_credential_isolation.py:generic-api-key:22

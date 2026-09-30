@@ -71,6 +71,11 @@ specific tree; it cannot prove the truth or legal sufficiency of attestations.
 
 This repository has no publishing workflow. Any future package, image or release
 publisher must require the final check and a maintainer approval before upload.
+The full-history secret scan has one exact-fingerprint exception in
+`.gitleaksignore` for a verified synthetic loopback credential sentinel from
+historical commit `0f519e4`, `tests/test_credential_isolation.py:22`. It does not
+exclude the test file, disable a rule, or permit current/future credentials.
+
 These checks do not restrict GitHub's existing source visibility or prevent
 someone distributing a local copy. Inspect the history separately; deleting a
 file at HEAD does not remove it from earlier commits. Do not rewrite history
