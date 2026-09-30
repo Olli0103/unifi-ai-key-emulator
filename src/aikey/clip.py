@@ -58,24 +58,20 @@ def validate_find_anything_config(value: Any) -> dict:
     """Return a normalized copy of ``find_anything`` or raise ClipError."""
     if (not isinstance(value, dict)
             or set(value) - {"clip_server", "index_camera_ids", "max_objects", "retroactive",
-                             "reverification"}
+                             "reverification", "tag_server"}
             or "clip_server" not in value):
         raise ClipError("find_anything needs clip_server and optional index_camera_ids, max_objects, retroactive")
     for flag in ("retroactive", "reverification"):
         if type(value.get(flag, False)) is not bool:
             raise ClipError(f"find_anything.{flag} must be a JSON boolean")
     server = value["clip_server"]
-    parsed = urlsplit(server) if isinstance(server, str) else None
-    try:
-        address = ipaddress.ip_address(parsed.hostname or "") if parsed else None
-    except ValueError:
-        address = None
-    if (parsed is None or parsed.scheme != "http" or address is None
-            or not (address.is_loopback or address.is_private)
-            or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
-            or parsed.username or parsed.password):
+    if not _local_server(server):
         # Query text and frames stay on this host or its container network.
         raise ClipError("find_anything.clip_server must be a local HTTP server")
+    tag_server = value.get("tag_server")
+    if tag_server is not None and not _local_server(tag_server):
+        # RAM++ open-vocabulary tags (vision_server): frames stay local too.
+        raise ClipError("find_anything.tag_server must be a local HTTP server")
     cameras = value.get("index_camera_ids", [])
     if (not isinstance(cameras, list) or len(cameras) > 32
             or any(not isinstance(c, str) or not _CAMERA_ID.match(c) for c in cameras)
@@ -86,7 +82,20 @@ def validate_find_anything_config(value: Any) -> dict:
         raise ClipError("find_anything.max_objects must be 1..16")
     return {"clip_server": server.rstrip("/"), "index_camera_ids": list(cameras), "max_objects": limit,
             "retroactive": value.get("retroactive", False),
-            "reverification": value.get("reverification", False)}
+            "reverification": value.get("reverification", False),
+            **({"tag_server": tag_server.rstrip("/")} if tag_server is not None else {})}
+
+
+def _local_server(server: Any) -> bool:
+    parsed = urlsplit(server) if isinstance(server, str) else None
+    try:
+        address = ipaddress.ip_address(parsed.hostname or "") if parsed else None
+    except ValueError:
+        address = None
+    return not (parsed is None or parsed.scheme != "http" or address is None
+                or not (address.is_loopback or address.is_private)
+                or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
+                or parsed.username or parsed.password)
 
 
 class ClipClient:

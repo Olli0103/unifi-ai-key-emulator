@@ -38,6 +38,18 @@ class Controller:
         self.vision_reply = None
         self.region_vectors = None                # per-region image vectors, when set
         self.reverifications = []
+        self.tag_requests, self.tag_status = 0, 200
+
+    async def tags(self, request):
+        reader = await request.multipart()
+        part = await reader.next()
+        assert part.name == "image" and (await part.read(decode=False))[:3] == b"\xff\xd8\xff"
+        self.tag_requests += 1
+        if self.tag_status != 200:
+            return web.json_response({}, status=self.tag_status)
+        return web.json_response({"model": "ram-plus-swin-large-14m", "tags": [
+            {"tag": "person", "confScore": 0.97}, {"tag": "garden", "confScore": 0.81},
+            {"tag": "bicycle", "confScore": 0.74}]})
 
     async def export(self, request):
         return web.Response(body=self.video, content_type="video/mp4",
@@ -107,6 +119,7 @@ async def controller(tmp_path):
     app.router.add_post("/v1/image", service.image)
     app.router.add_get("/internal/aiprocessors/image/{image}", service.crop)
     app.router.add_post("/v1/text", service.text)
+    app.router.add_post("/v1/tags", service.tags)
     app.router.add_post("/v1/chat/completions", service.vision)
     app.router.add_post("/internal/aiprocessors/recognize-anything", service.callback)
     app.router.add_post("/internal/aiprocessors/reverification", service.reverification)
@@ -1172,3 +1185,127 @@ async def test_a_continuous_camera_keeps_its_index_tasks_local_and_unbudgeted(co
     assert result["result"] == {"indexed": 2, "snapshots": 0}
     assert controller.vision_requests == []
     assert not (tmp_path / "caption-budget.json").exists()            # no caption permit spent
+
+
+# --- RAM++ open-vocabulary tags and audio-event thumbnails (7.3.70) ---------
+
+def tagged_config(controller, **extra):
+    options = config(controller, **extra)
+    options["find_anything"]["tag_server"] = controller.origin
+    return options
+
+
+def audio_image(**changes):
+    payload = {"reqUrl": "/internal/aiprocessors/image/crop1", "imageId": "crop1",
+               "resUrl": "/internal/aiprocessors/recognize-anything", "ramType": "image",
+               "format": "jpeg", "camera": "audio-camera-fixture", "event": EVENT, "channel": 0,
+               "start": START, "end": END, "type": "rotating", "keyMoment": START + 700}
+    payload.update(changes)
+    return {"command": "recognizeKeyFrames", "payload": payload}
+
+
+async def test_an_audio_event_thumbnail_gets_event_level_ram_tags(controller, tmp_path):
+    worker = JobProcessor(tagged_config(controller), tmp_path)
+    try:
+        result = await worker.handle(audio_image())
+        status = worker.status()
+    finally:
+        await worker.stop()
+    assert controller.crop_requests == ["crop1"] and controller.vision_requests == []
+    [parts] = controller.callbacks
+    ram = parts["ram"]
+    assert ram["description"] == "" and ram["eventId"] == EVENT and "thumbnailTags" not in ram
+    assert ram["keyMomentsTags"] == [{"keyMomentMs": START + 700, "tags": [
+        {"confScore": 0.97, "tag": "person"}, {"confScore": 0.81, "tag": "garden"},
+        {"confScore": 0.74, "tag": "bicycle"}]}]                  # no search snapshots: event level
+    assert result["result"] == {"tags": 3, "described": False}
+    assert status["retroactive"]["images"] == 1 and status["ram_tagging"]["tags"] == 3
+
+
+@pytest.mark.parametrize("changes", [
+    {"reqUrl": "/internal/aiprocessors/image/other"}, {"imageId": "../x"}, {"format": "png"},
+    {"type": "fixed"}, {"channel": 3}, {"keyMoment": "1"}, {"start": END + 1},
+    {"resUrl": "/internal/aiprocessors/descriptions/1"}, {"extra": 1},
+])
+async def test_malformed_audio_image_tasks_are_refused_before_media(controller, tmp_path, changes):
+    worker = JobProcessor(tagged_config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError):
+            await worker.handle(audio_image(**changes))
+    finally:
+        await worker.stop()
+    assert getattr(controller, "crop_requests", []) == [] and controller.tag_requests == 0
+
+
+async def test_index_jobs_carry_scene_tags_and_ram_tags_per_object(controller, tmp_path):
+    worker = JobProcessor(tagged_config(controller), tmp_path)
+    try:
+        await worker.handle(task())
+    finally:
+        await worker.stop()
+    ram = controller.callbacks[0]["ram"]
+    scene = [m for m in ram["keyMomentsTags"] if "searchSnapshots" not in m]
+    assert [t["tag"] for t in scene[0]["tags"]] == ["person", "garden", "bicycle"]
+    tags = {t["trackerID"]: [x["tag"] for x in t["tags"]] for t in ram.get("thumbnailTags", [])}
+    tags.update({m["searchSnapshots"][0]["trackerID"]: [x["tag"] for x in m["tags"]]
+                 for m in ram["keyMomentsTags"] if "searchSnapshots" in m})
+    assert tags == {3: ["person", "garden", "bicycle"], 4: ["vehicle", "person", "garden", "bicycle"]}
+    assert controller.tag_requests == 3                          # the scene and two objects
+
+
+async def test_a_failing_tag_server_never_fails_the_job(controller, tmp_path):
+    controller.tag_status = 503
+    worker = JobProcessor(tagged_config(controller), tmp_path)
+    try:
+        await worker.handle(multiple_images([crop_entry("crop1", 11, START + 500)]))
+        status = worker.status()
+    finally:
+        await worker.stop()
+    [tagged] = controller.callbacks[0]["ram"]["thumbnailTags"]
+    assert [t["tag"] for t in tagged["tags"]] == ["person"]      # the class tag alone
+    assert status["ram_tagging"] == {"requests": 1, "tags": 0, "failed": 1}
+
+
+async def test_an_audio_image_without_tags_or_a_local_describer_fails(controller, tmp_path):
+    controller.tag_status = 500
+    worker = JobProcessor(tagged_config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError, match="No local tags or description"):
+            await worker.handle(audio_image())
+    finally:
+        await worker.stop()
+    assert controller.callbacks == []
+
+
+def test_the_tag_server_must_be_local(controller):
+    options = config(controller)["find_anything"]
+    assert clip.validate_find_anything_config({**options, "tag_server": "http://172.30.50.14:8190/"})[
+        "tag_server"] == "http://172.30.50.14:8190"
+    for bad in ("https://tags.example.com", "http://8.8.8.8:8190", "http://10.0.0.1/v1", 5):
+        with pytest.raises(clip.ClipError):
+            clip.validate_find_anything_config({**options, "tag_server": bad})
+
+
+async def test_a_continuous_unmetered_key_also_describes_the_audio_thumbnail(controller, tmp_path):
+    class Registry:
+        allowed_ids = frozenset({"audio-camera-fixture"})
+
+        def allows(self, camera_id):
+            return camera_id in self.allowed_ids
+
+    controller.vision_reply = {"choices": [{"finish_reason": "stop",
+                                            "message": {"content": "A synthetic scene."}}]}
+    options = tagged_config(controller)
+    options["worker"]["continuous"] = {"enabled": True, "camera_models": ["Fixture"],
+                                       "unmetered": True}
+    worker = JobProcessor(options, tmp_path, camera_registry=Registry())
+    try:
+        result = await worker.handle(audio_image())
+        other = await worker.handle(audio_image(camera="unlisted-camera", event="other-event"))
+    finally:
+        await worker.stop()
+    assert result["result"] == {"tags": 3, "described": True}
+    assert other["result"] == {"tags": 3, "described": False}        # not a registry camera
+    assert controller.callbacks[0]["ram"]["description"] == "A synthetic scene."
+    assert len(controller.vision_requests) == 1
+    assert not (tmp_path / "caption-budget.json").exists()

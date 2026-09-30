@@ -36,6 +36,10 @@ from . import clip
 
 
 _LOCAL_INDEX_OPERATIONS = frozenset({"indexImages", "indexKeyFrames"})
+# Work that never spends a caption permit: local models only. An audio
+# thumbnail (describeImage) is described only by an unmetered local model.
+_LOCAL_OPERATIONS = frozenset({"speechToText", "recognizeFaces", "indexKeyFrames", "indexImages",
+                               "reverify", "describeImage"})
 _INDEX_IMAGES_BUDGET_S = 600
 
 
@@ -115,6 +119,7 @@ def configured_test_scopes(options):
 _CALLBACK_TASK = re.compile(r"^/internal/aiprocessors/descriptions/([A-Za-z0-9_-]+)$")
 _CALLBACK_UPLOAD = re.compile(r"^/internal/camera-upload/[A-Za-z0-9_-]+$")
 _LEGACY_CALLBACK = "/internal/aiprocessors/recognize-anything"
+_TAG_TIMEOUT_S = 20
 _SPEECH_CALLBACK = "/internal/aiprocessors/speech-to-text"
 _REVERIFICATION_CALLBACK = "/internal/aiprocessors/reverification"
 _ENHANCED_CALLBACK = "/internal/aiprocessors/image/enhanced"
@@ -146,13 +151,14 @@ _QUEUE_PRIORITY = {
     "recognizeFaces": 0, "indexKeyFrames": 0, "reverify": 0,
     "speechToText": 0, "enhanceImage": 0,     # local work with short deadlines
     "recognizeKeyFrames": 1, "describe": 1,   # captions: the vision model
+    "describeImage": 1,                       # an audio event's thumbnail
     "indexImages": 2,                         # retroactive backfill
 }
 
 
 # Operations that wait for the vision model and so enter the caption lane.
 # The player's summary (on_demand) is urgent and bypasses it.
-_CAPTION_LANE_OPERATIONS = frozenset({"recognizeKeyFrames", "describe"})
+_CAPTION_LANE_OPERATIONS = frozenset({"recognizeKeyFrames", "describe", "describeImage"})
 
 
 class _PriorityGate:
@@ -322,6 +328,12 @@ def _class_tags(kind, confidence=None):
     return [{"confScore": round(score, 4), "tag": name}]
 
 
+def _merged_tags(first, extra):
+    """The class tag first, then RAM++ tags it does not already name."""
+    seen = {item["tag"] for item in first}
+    return first + [item for item in extra if item["tag"] not in seen]
+
+
 def _clean_enhanced_jpeg(data, source_size):
     """A freshly encoded JPEG of the enhancer's output, or b"" to decline.
 
@@ -448,7 +460,10 @@ class JobProcessor:
         self._history = {}
         # Retroactive backfill progress; counts only, no identifiers (#21).
         self.retroactive = {"tasks": 0, "crops_indexed": 0, "completed": 0, "failed": 0,
-                            "refused_unindexed_camera": 0, "refused_image": 0, "archived": 0}
+                            "refused_unindexed_camera": 0, "refused_image": 0, "archived": 0,
+                            "images": 0, "images_described": 0}
+        # RAM++ open-vocabulary tags from the local tag server; counts only.
+        self.ram_tagging = {"requests": 0, "tags": 0, "failed": 0}
         # Speech exports refused for exceeding max_audio_ms.
         self.speech_counts = {"refused_long": 0, "clipped": 0}
         self._stopping = False
@@ -796,10 +811,13 @@ class JobProcessor:
         if (command.get("command") == "recognizeKeyFrames" and isinstance(command.get("payload"), dict)
                 and command["payload"].get("ramType") in ("multipleImages", "image")):
             if command["payload"]["ramType"] == "image":
-                # Retroactive audio events send their thumbnail as ramType image;
-                # it has no local index path and must never reach the provider.
-                self.retroactive["refused_image"] += 1
-                raise WorkerError("recognizeKeyFrames image tasks are not processed")
+                # Retroactive audio events send their thumbnail as ramType image
+                # (7.3.70 pushAudioTask). It is answered with local tags and a
+                # local description; a metered provider is never used.
+                if not (self._tag_server() or self._describes_locally()):
+                    self.retroactive["refused_image"] += 1
+                    raise WorkerError("recognizeKeyFrames image tasks are not processed")
+                return self._normalize_audio_image(command)
             if command["payload"].get("camera") not in self.index_cameras:
                 self.retroactive["refused_unindexed_camera"] += 1
                 raise WorkerError("multipleImages camera is not a Find Anything index camera")
@@ -1095,6 +1113,53 @@ class JobProcessor:
         budget = min(self.timeout_s, timeout / 1000) if type(timeout) is int and timeout > 0 else 30
         return (job_id, fingerprint, "reverify", body, callback, "reverification",
                 [("video", media_url)], budget)
+
+    def _tag_server(self):
+        return (self.find_anything or {}).get("tag_server")
+
+    def _describes_locally(self):
+        return self.continuous and self.caption_budget is None
+
+    def _normalize_audio_image(self, command):
+        """The thumbnail of an audio event (7.3.70 ``dispatchRecognizeImage``).
+
+        Protect has no smart objects for an audio event, so saveEventTagging
+        keeps only event-level results: the description and the key moment's
+        tags (``metadata.ramTags``). Embeddings would need an object and are
+        not sent.
+        """
+        body = command["payload"]
+        required = {"reqUrl", "resUrl", "ramType", "imageId", "format", "camera", "event",
+                    "channel", "start", "end", "type", "keyMoment"}
+        if set(command) != {"command", "payload"} or set(body) != required:
+            raise WorkerError("Unsupported recognizeKeyFrames payload fields")
+        body = json.loads(_json(body))
+        if (not isinstance(body["event"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])
+                or not isinstance(body["camera"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["camera"])
+                or not isinstance(body["imageId"], str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", body["imageId"])
+                or body["reqUrl"] != f"/internal/aiprocessors/image/{body['imageId']}"
+                or body["format"] != "jpeg" or body["type"] != "rotating"
+                or type(body["channel"]) is not int or not 0 <= body["channel"] <= 2
+                or any(type(body[key]) is not int for key in ("start", "end", "keyMoment"))
+                or not 0 <= body["start"] <= body["end"] <= 2 ** 53 - 1
+                or not 0 <= body["keyMoment"] <= 2 ** 53 - 1):
+            raise WorkerError("An image task names one audio event's thumbnail")
+        callback = self._url(body["resUrl"], "callback")
+        if urlsplit(callback).path != _LEGACY_CALLBACK:
+            raise WorkerError("recognizeKeyFrames requires the observed RAM callback")
+        # Describe only with an unmetered local model and a camera the
+        # registry currently allows; tags alone otherwise.
+        body["_describe"] = bool(self._describes_locally()
+                                 and self.camera_registry.allows(body["camera"]))
+        media = [("image", self._url(body["reqUrl"], "media"))]
+        normalized = {"operation": "describeImage", "payload": body, "callback": callback,
+                      "callbackKind": "legacy_tagging", "media": media}
+        fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
+        job_id = hashlib.sha256(f"audioImage:{body['camera']}:{body['event']}".encode()).hexdigest()
+        self.retroactive["images"] += 1
+        return (job_id, fingerprint, "describeImage", body, callback, "legacy_tagging",
+                media, min(self.timeout_s, self.caption_timeout_s))
 
     def _normalize_multiple_images(self, command):
         """Protect's retroactive task: the saved object crops of a past event.
@@ -1466,8 +1531,7 @@ class JobProcessor:
             raise WorkerError("Invalid test scope reservation; inspect it without resetting the permit") from exc
 
     def _reserve_test_scope(self, job):
-        if not self.test_scopes or job.operation in {"speechToText", "recognizeFaces", "indexKeyFrames",
-                                                     "indexImages", "reverify"}:
+        if not self.test_scopes or job.operation in _LOCAL_OPERATIONS:
             return
         camera_id = job.payload.get("camera") if job.operation == "recognizeKeyFrames" else job.payload.get("cameraId")
         scope = self._scopes_by_camera.get(camera_id)
@@ -1536,8 +1600,7 @@ class JobProcessor:
         normalized = self._normalize(command)
         await self.start()
         job_id, fingerprint, operation, body, callback, kind, media, budget = normalized
-        if (self.continuous and operation not in {"speechToText", "recognizeFaces", "indexKeyFrames",
-                                                  "indexImages", "reverify"}
+        if (self.continuous and operation not in _LOCAL_OPERATIONS
                 and not self.camera_registry.allows(body.get("camera", body.get("cameraId")))):
             raise WorkerError("Camera inventory changed before admission")
         if job_id in self._pending:
@@ -1576,9 +1639,7 @@ class JobProcessor:
                    time.monotonic() + budget, future)
         try:
             self._reserve_test_scope(job)
-            if self.caption_budget is not None and operation not in {"speechToText", "recognizeFaces",
-                                                                     "indexKeyFrames", "indexImages",
-                                                                     "reverify"}:
+            if self.caption_budget is not None and operation not in _LOCAL_OPERATIONS:
                 try:
                     receipt = self.caption_budget.reserve(job_id, fingerprint, body.get("camera", body.get("cameraId")),
                                                           self.camera_registry.allowed_ids)
@@ -1627,6 +1688,7 @@ class JobProcessor:
                 "pending": len(self._pending), "capacity": self._queue.maxsize,
                 "ledger": len(self._history), "retroactive": dict(self.retroactive),
                 "speech": dict(self.speech_counts),
+                **({"ram_tagging": dict(self.ram_tagging)} if self._tag_server() else {}),
                 **({"faces": dict(self.faces["counts"], native_face_cameras=len(self.faces["native"]))}
                    if self.faces else {}),
                 **({"enhance": dict(self.enhance["counts"])} if self.enhance else {}),
@@ -1996,16 +2058,23 @@ class JobProcessor:
         for tracker, ts, region, kind, mode, confidence in targets:
             by_time.setdefault(ts, []).append((tracker, region, kind, mode, confidence))
         tags, moments, images = [], [], []
+        tagging = bool(self._tag_server())
         for ts, objects in sorted(by_time.items()):
             frame = await self._video_frame(data, headers, url, job, timestamp=ts)
             try:
                 vectors = await self._clip.embed_regions(frame, [item[1] for item in objects])
             except clip.ClipError as exc:
                 raise WorkerError(str(exc)) from exc
+            if tagging and not moments:
+                # The whole scene's open-vocabulary tags, once per job: an
+                # entry without search snapshots feeds only the event's ramTags.
+                scene = await self._ram_tags(frame)
+                if scene:
+                    moments.append({"keyMomentMs": ts, "tags": scene})
             picture = None
             for (tracker, region, kind, mode, confidence), vector in zip(objects, vectors):
                 embedding = [round(value, 6) for value in vector]
-                if mode == "existing":
+                if mode == "existing" and not tagging:
                     tags.append({"keyMomentMs": ts, "tags": _class_tags(kind, confidence),
                                  "trackerID": tracker, "imgEmbed": embedding})
                     continue
@@ -2018,8 +2087,14 @@ class JobProcessor:
                 crop.thumbnail((512, 512))
                 out = BytesIO()
                 crop.save(out, format="JPEG", quality=85)
+                object_tags = _merged_tags(_class_tags(kind, confidence),
+                                           await self._ram_tags(out.getvalue()) if tagging else [])
+                if mode == "existing":
+                    tags.append({"keyMomentMs": ts, "tags": object_tags,
+                                 "trackerID": tracker, "imgEmbed": embedding})
+                    continue
                 name = f"{tracker}.jpg"
-                moments.append({"keyMomentMs": ts, "tags": _class_tags(kind, confidence),
+                moments.append({"keyMomentMs": ts, "tags": object_tags,
                                 "imgEmbed": embedding,
                                 "searchSnapshots": [{
                                     "clockBestMonotonic": ts, "clockBestWall": ts,
@@ -2128,7 +2203,8 @@ class JobProcessor:
                 [vector] = await self._clip.embed_regions(data, [[0.0, 0.0, 1.0, 1.0]])
             except clip.ClipError as exc:
                 raise WorkerError(str(exc)) from exc
-            tags.append({"keyMomentMs": moment, "tags": _class_tags(kind_of.get(tracker)),
+            tags.append({"keyMomentMs": moment,
+                         "tags": _merged_tags(_class_tags(kind_of.get(tracker)), await self._ram_tags(data)),
                          "trackerID": tracker,
                          "imgEmbed": [round(value, 6) for value in vector]})
             self.retroactive["crops_indexed"] += 1
@@ -2138,6 +2214,73 @@ class JobProcessor:
                    "thumbnailTags": tags, "inferBoxMs": 0, "inferTagMs": elapsed,
                    "inferTxtMs": 0, "preProcessMs": 0, "timeElapsedMs": elapsed}
         summary = {"indexed": len(tags), "snapshots": 0}
+        if self.callback_mode == "disabled":
+            return {"status": "processed", "jobId": job.job_id, "callback": "disabled", "result": summary}
+        result = await self._post_callback(job, payload)
+        result["result"] = summary
+        return result
+
+    async def _ram_tags(self, jpeg):
+        """RAM++ tags of one JPEG from the local tag server; none when unset or failing.
+
+        Tags only enrich a result, so a tag server fault never fails the job.
+        """
+        server = self._tag_server()
+        if not server:
+            return []
+        self.ram_tagging["requests"] += 1
+        try:
+            form = aiohttp.FormData()
+            form.add_field("image", jpeg, filename="image.jpg", content_type="image/jpeg")
+            async with self._inference_session.post(
+                    server + "/v1/tags", data=form, allow_redirects=False,
+                    timeout=aiohttp.ClientTimeout(total=_TAG_TIMEOUT_S)) as response:
+                if response.status != 200:
+                    raise WorkerError(f"Tag server returned HTTP {response.status}")
+                body = json.loads(await self._read_response(response, 262144))
+            tags = []
+            for item in body["tags"][:32]:
+                tag, score = item["tag"], item["confScore"]
+                if (not isinstance(tag, str) or not 0 < len(tag) <= 64
+                        or type(score) not in (int, float) or not 0 <= score <= 1):
+                    raise ValueError("invalid tag")
+                tags.append({"confScore": round(float(score), 4), "tag": tag})
+        except (WorkerError, aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError,
+                KeyError):
+            self.ram_tagging["failed"] += 1
+            return []
+        self.ram_tagging["tags"] += len(tags)
+        return tags
+
+    async def _execute_describe_image(self, job):
+        started = time.monotonic()
+        (_, url), = job.media
+        data, _ = await self._fetch(url, "image")
+        if self._image_type(data) != "image/jpeg":
+            from PIL import Image
+            with Image.open(BytesIO(data)) as picture:
+                out = BytesIO()
+                picture.convert("RGB").save(out, format="JPEG", quality=92)
+                data = out.getvalue()
+        prepared = time.monotonic()
+        tags = await self._ram_tags(data)
+        tagged = time.monotonic()
+        description = ""
+        if job.payload.get("_describe"):
+            description = await self._infer([data], priority=1)
+            self.retroactive["images_described"] += 1
+        inferred = time.monotonic()
+        if not tags and not description:
+            raise WorkerError("No local tags or description for the image")
+        payload = {"cameraId": job.payload["camera"], "eventId": job.payload["event"],
+                   "description": description, "status": "success",
+                   "keyMomentsTags": ([{"keyMomentMs": job.payload["keyMoment"], "tags": tags}]
+                                      if tags else []),
+                   "inferBoxMs": 0, "inferTagMs": round((tagged - prepared) * 1000),
+                   "inferTxtMs": round((inferred - tagged) * 1000),
+                   "preProcessMs": round((prepared - started) * 1000),
+                   "timeElapsedMs": round((inferred - started) * 1000)}
+        summary = {"tags": len(tags), "described": bool(description)}
         if self.callback_mode == "disabled":
             return {"status": "processed", "jobId": job.job_id, "callback": "disabled", "result": summary}
         result = await self._post_callback(job, payload)
@@ -2172,6 +2315,8 @@ class JobProcessor:
             return await self._execute_index(job)
         if job.operation == "indexImages":
             return await self._execute_index_images(job)
+        if job.operation == "describeImage":
+            return await self._execute_describe_image(job)
         if job.operation == "enhanceImage":
             return await self._execute_enhance(job)
         if job.operation == "reverify":
@@ -2196,6 +2341,11 @@ class JobProcessor:
                     frame = await self._video_frame(data, headers, url, job, timestamp=timestamp)
                     self._image_type(frame)
                     images.append(frame)
+                if (self._tag_server() and images
+                        and all("searchSnapshots" in moment for moment in key_moment_tags)):
+                    scene = await self._ram_tags(images[0])
+                    if scene:
+                        key_moment_tags = [{"keyMomentMs": moments[0], "tags": scene}, *key_moment_tags]
                 continue
             if kind == "video":
                 data = await self._video_frame(data, headers, url, job)
