@@ -172,3 +172,15 @@ async def test_request_ai_refusals_are_counted_by_fixed_reason(tmp_path):
     assert await send(service, "RequestAI", body, "a") == 5
     counts = service.status["request_ai_rejection_counts"]
     assert {k: v for k, v in counts.items() if v} == {"export_span": 1}
+
+
+async def test_request_ai_refusals_also_name_their_target_class(tmp_path):
+    async def refuse(body):
+        raise WorkerError("Reverification has no person, vehicle or animal regions")
+    service = device(tmp_path, handler=refuse)
+    body = {"targetUri": ":7788/v1/models/second_verifier_mlabel/inference", "timeoutMs": 30000,
+            "payload": {"action": "classify"}}
+    assert await send(service, "RequestAI", body, "a") == 5
+    status = service.status
+    assert {k: v for k, v in status["request_ai_rejection_counts"].items() if v} == {"reverify_no_regions": 1}
+    assert {k: v for k, v in status["request_ai_rejection_targets"].items() if v} == {"reverification": 1}

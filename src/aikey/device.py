@@ -172,6 +172,33 @@ _REQUEST_AI_REJECTION_REASONS = {
     "callback URL is outside configured controller origins": "callback_origin",
     "Worker queue is full": "queue_full", "Worker has stopped": "worker_stopped",
     "Task identity reused with different input": "job_identity_conflict",
+    "Unsupported reverification payload": "reverify_shape",
+    "Unsupported reverification fields": "reverify_shape",
+    "Reverification needs a camera and event": "reverify_shape",
+    "Reverification requires the reverification callback": "callback_path",
+    "Reverification export needs a start and end": "reverify_export",
+    "Reverification export must match the camera and a bounded interval": "reverify_export",
+    "Reverification has no person, vehicle or animal regions": "reverify_no_regions",
+    "Unsupported callback path": "callback_path",
+    "Unsupported controller media path": "media_url",
+    "Description callbacks require a task or legacy RAM route": "callback_path",
+    "Exactly one nonempty images or videos list is required": "payload_shape",
+    "Too many media inputs": "payload_shape",
+    "Deep-mode descriptions need an unmetered local model": "target_not_served",
+    "Unsupported generate-embeddings payload": "deep_shape",
+    "Unsupported generate-embeddings image": "deep_shape",
+    "Embeddings callbacks use the task route": "callback_path",
+    "Unsupported describe payload": "deep_shape",
+    "Unsupported describe image": "deep_shape",
+    "Unsupported describe video": "deep_shape",
+    "Unsupported describe object": "deep_shape",
+    "Too many describe inputs": "deep_shape",
+}
+# RequestAI refusals by fixed target class, so a refusal names what was asked.
+_REQUEST_AI_TARGET_CLASSES = {
+    ":7968/on_demand_inference": "on_demand", ":7968/describe": "describe",
+    ":7788/v1/models/second_verifier_mlabel/inference": "reverification",
+    ":7445/generate-embeddings": "generate_embeddings",
 }
 
 
@@ -457,6 +484,8 @@ class DeviceService:
         }
         self._request_ai_rejections = dict.fromkeys(
             sorted(set(_REQUEST_AI_REJECTION_REASONS.values()) | {"unclassified_worker_error"}), 0)
+        self._request_ai_rejection_targets = dict.fromkeys(
+            sorted(set(_REQUEST_AI_TARGET_CLASSES.values()) | {"other"}), 0)
         self._speech_diagnostics = {"admitted": 0, "rejection_counts": dict.fromkeys(
             sorted(set(_SPEECH_REJECTION_REASONS.values()) | set(_SPEECH_SHARED_REASONS)
                    | {"unclassified_worker_error"}), 0)}
@@ -490,6 +519,7 @@ class DeviceService:
                 "recognize_key_frames": deepcopy(self._recognize_diagnostics),
                 "speech_to_text": deepcopy(self._speech_diagnostics),
                 "request_ai_rejection_counts": deepcopy(self._request_ai_rejections),
+                "request_ai_rejection_targets": deepcopy(self._request_ai_rejection_targets),
                 "clock_offset_ms": self._clock_offset_ms, "discovery": "unsupported",
                 "compatibility": self._compatibility_status(),
                 "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "updateLcmSettings", "diskInfo", "changeAiInferAgentSettings", "changeDescribePrompts", "changeUserPassword", "RequestAI"]
@@ -1260,6 +1290,8 @@ class DeviceService:
                     raise CommandFailure(95, "Unsupported RequestAI targetUri") from None
                 _increment(self._request_ai_rejections, _REQUEST_AI_REJECTION_REASONS.get(
                     str(exc), "unclassified_worker_error"))
+                _increment(self._request_ai_rejection_targets,
+                           _REQUEST_AI_TARGET_CLASSES.get(target, "other"))
                 raise
             finally:
                 self._active_admissions -= 1
