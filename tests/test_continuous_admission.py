@@ -404,10 +404,13 @@ async def test_the_player_summary_button_works_in_continuous_mode(services, tmp_
         # 10 s export rule; continuous mode allows a caption-length export.
         assert worker._normalize(on_demand(end="99000"))[2] == "on_demand"
         assert worker._normalize(on_demand(start="1000", end="6000"))[2] == "on_demand"   # moment at the end
+        assert worker._normalize(on_demand(mute="false"))[2] == "on_demand"                # player asks with audio
+        assert worker._normalize(on_demand(channel="1"))[2] == "on_demand"
         for bad in (on_demand(camera="other-camera"),            # not in caption scope
                     on_demand(end="130000"),                     # past max_video_duration_ms
                     on_demand(start="7000", end="9000"),         # moment outside the export
                     on_demand(createEvent="true"),
+                    on_demand(channel="3"), on_demand(type="timelapse"), on_demand(format="avi"),
                     dict(on_demand(), targetUri=":7968/describe")):
             with pytest.raises(WorkerError):
                 worker._normalize(bad)

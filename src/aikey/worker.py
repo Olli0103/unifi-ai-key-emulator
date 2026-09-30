@@ -918,11 +918,26 @@ class JobProcessor:
         if len(keys) != len(set(keys)) or set(keys) != fields:
             raise WorkerError("Test scope export query has missing, repeated, or unknown fields")
         query = dict(pairs)
-        if (query["camera"] != body["cameraId"] or query["event"] != body["eventId"]
-                or query["channel"] != "0" or query["mute"] != "true"
-                or query["createEvent"] != "false" or query["format"] not in {"ubv", "mp4"}
-                or query["type"] != "rotating"):
-            raise WorkerError("Test scope export does not match the permitted camera, channel, event, or format")
+        whole_event = self.continuous and not self.test_scopes
+        # A manual player summary (30 Sep) asked for an export that failed this
+        # check. Only one frame is taken, so in continuous mode the audio flag
+        # and the stream channel do not matter; camera, event, no event
+        # creation and a known format still must match. Each field has its own
+        # message so a refusal names the field.
+        if query["camera"] != body["cameraId"]:
+            raise WorkerError("On-demand export camera does not match")
+        if query["event"] != body["eventId"]:
+            raise WorkerError("On-demand export event does not match")
+        if query["createEvent"] != "false":
+            raise WorkerError("On-demand export must not create an event")
+        if query["format"] not in {"ubv", "mp4"}:
+            raise WorkerError("On-demand export format is not supported")
+        if query["type"] != "rotating":
+            raise WorkerError("On-demand export type is not rotating")
+        if query["channel"] not in ({"0", "1", "2"} if whole_event else {"0"}):
+            raise WorkerError("On-demand export channel is not supported")
+        if query["mute"] not in ({"true", "false"} if whole_event else {"true"}):
+            raise WorkerError("On-demand export must be muted")
         if any(not re.fullmatch(r"[0-9]{1,16}", query[key]) for key in ("start", "end")):
             raise WorkerError("Test scope export timestamps must be integer milliseconds")
         start, end = int(query["start"]), int(query["end"])
