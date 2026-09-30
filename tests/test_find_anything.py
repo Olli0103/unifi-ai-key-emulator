@@ -70,7 +70,8 @@ class Controller:
         self.crop_requests = getattr(self, "crop_requests", []) + [request.match_info["image"]]
         from PIL import Image
         out = io.BytesIO()
-        Image.new("RGB", (96, 160), (90, 90, 90)).save(out, "JPEG" if request.match_info["image"] != "png1" else "PNG")
+        size = (3840, 2160) if request.match_info["image"] == "big4k" else (96, 160)
+        Image.new("RGB", size, (90, 90, 90)).save(out, "JPEG" if request.match_info["image"] != "png1" else "PNG")
         return web.Response(body=out.getvalue(), content_type="image/jpeg")
 
     async def text(self, request):
@@ -87,6 +88,7 @@ class Controller:
 
     async def vision(self, request):
         self.vision_requests.append(True)
+        self.vision_bodies = getattr(self, "vision_bodies", []) + [await request.json()]
         if self.vision_reply is None:
             return web.json_response({}, status=500)
         return web.json_response(self.vision_reply)
@@ -1309,3 +1311,31 @@ async def test_a_continuous_unmetered_key_also_describes_the_audio_thumbnail(con
     assert controller.callbacks[0]["ram"]["description"] == "A synthetic scene."
     assert len(controller.vision_requests) == 1
     assert not (tmp_path / "caption-budget.json").exists()
+
+
+async def test_a_4k_audio_thumbnail_reaches_the_vision_model_at_most_1280_wide(controller, tmp_path):
+    import base64
+
+    from PIL import Image
+
+    class Registry:
+        allowed_ids = frozenset({"audio-camera-fixture"})
+
+        def allows(self, camera_id):
+            return camera_id in self.allowed_ids
+
+    controller.vision_reply = {"choices": [{"finish_reason": "stop",
+                                            "message": {"content": "A synthetic scene."}}]}
+    options = tagged_config(controller)
+    options["worker"]["continuous"] = {"enabled": True, "camera_models": ["Fixture"],
+                                       "unmetered": True}
+    worker = JobProcessor(options, tmp_path, camera_registry=Registry())
+    try:
+        await worker.handle(audio_image(imageId="big4k", reqUrl="/internal/aiprocessors/image/big4k"))
+    finally:
+        await worker.stop()
+    [body] = controller.vision_bodies
+    url = next(part["image_url"]["url"] for part in body["messages"][0]["content"]
+               if part.get("type") == "image_url")
+    with Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))) as picture:
+        assert picture.size == (1280, 720)

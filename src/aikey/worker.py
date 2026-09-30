@@ -125,6 +125,9 @@ _REVERIFICATION_CALLBACK = "/internal/aiprocessors/reverification"
 _ENHANCED_CALLBACK = "/internal/aiprocessors/image/enhanced"
 _ENHANCE_FIELDS = frozenset({"reqUrl", "resUrl", "imageId", "type", "camera", "smartDetectObject"})
 _ENHANCE_MAX_SIDE = 2048
+# Images for the vision model get the same bound as video frames: a 4K
+# snapshot exhausted the iGPU (30 Sep: CL_OUT_OF_RESOURCES in the Model Server).
+_VISION_MAX_SIDE = 1280
 _REVERIFICATION_TARGET = ":7788/v1/models/second_verifier_mlabel/inference"
 # Zero-shot prompts for second-stage verification with the local CLIP encoder.
 _VERIFY_PROMPTS = {
@@ -2358,6 +2361,21 @@ class JobProcessor:
             raise WorkerError("Re-ID server returned an invalid vector")
         return deep_mode.padded_reid([float(v) for v in vector])
 
+    def _vision_image(self, data):
+        """The image, re-encoded as JPEG only when larger than the video frames."""
+        from PIL import Image
+        try:
+            with Image.open(BytesIO(data)) as picture:
+                if max(picture.size) <= _VISION_MAX_SIDE:
+                    return data                       # small images keep their format
+                picture = picture.convert("RGB")
+                picture.thumbnail((_VISION_MAX_SIDE, _VISION_MAX_SIDE))
+                out = BytesIO()
+                picture.save(out, format="JPEG", quality=90)
+                return out.getvalue()
+        except (OSError, ValueError, Image.DecompressionBombError) as exc:
+            raise WorkerError("Unreadable image for the vision model") from exc
+
     def _as_jpeg(self, data):
         if self._image_type(data) == "image/jpeg":
             return data
@@ -2380,7 +2398,7 @@ class JobProcessor:
         if job.payload.get("images"):
             for image, (_, url) in zip(job.payload["images"], job.media):
                 data, _ = await self._fetch(url, "image")
-                crops.append(self._as_jpeg(data))
+                crops.append(self._vision_image(data))
                 types.append(image["objectType"])
         else:
             types = [item["objectType"] for video in job.payload["videos"] for item in video["objects"]]
@@ -2464,7 +2482,7 @@ class JobProcessor:
         tagged = time.monotonic()
         description = ""
         if job.payload.get("_describe"):
-            description = await self._infer([data], priority=1)
+            description = await self._infer([self._vision_image(data)], priority=1)
             self.retroactive["images_described"] += 1
         inferred = time.monotonic()
         if not tags and not description:
@@ -2551,7 +2569,7 @@ class JobProcessor:
             if kind == "video":
                 data = await self._video_frame(data, headers, url, job)
             self._image_type(data)
-            images.append(data)
+            images.append(self._vision_image(data) if kind == "image" else data)
         prepared = time.monotonic()
         # A player summary (on demand) is served before automatic captions.
         description = await self._infer(images, priority=0 if job.operation == "on_demand" else 1)
