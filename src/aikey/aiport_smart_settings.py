@@ -202,21 +202,33 @@ class SmartPolicy:
     # the camera itself. They are kept only for private health, never applied
     # to the primary stream.
     secondary_lens_zones: tuple[SmartZone, ...] = ()
+    # Lower bound of each enabled reverification window (min presence
+    # probability); with the ceiling above it, the window Protect verifies.
+    reverification_floors: tuple[tuple[str, float], ...] = ()
 
     def allows(self, kind: str) -> bool:
         return kind in self.enabled_types
 
     def allows_score(self, kind: str, score: float) -> bool:
-        """Suppress uncertain observations needing a second stage.
+        """Scores below Protect's reverification window are dropped.
 
-        A high score outside Protect's reverification range needs no second
-        stage. This deliberately drops the uncertain range; it does not claim
-        to perform reverification or reproduce Protect's AI Key behavior.
+        Scores inside the window [min, max] pass and are flagged for the AI
+        Key's second stage (``reverify_eligible``); a native camera flags
+        such tracks instead of dropping them (7.3.70 reVerificationPolicy).
         """
         ceiling = dict(self.reverification_ceilings).get(kind)
+        floor = dict(self.reverification_floors).get(kind)
         return (self.allows(kind) and type(score) in (int, float)
                 and math.isfinite(score) and 0 <= score <= 1
-                and (ceiling is None or score > ceiling))
+                and (score >= floor if floor is not None
+                     else ceiling is None or score > ceiling))
+
+    def reverify_eligible(self, kind: str, score: float) -> bool:
+        """Inside the class's reverification window: the AI Key should verify it."""
+        ceiling = dict(self.reverification_ceilings).get(kind)
+        floor = dict(self.reverification_floors).get(kind)
+        return (ceiling is not None and floor is not None and type(score) in (int, float)
+                and math.isfinite(score) and floor <= score <= ceiling)
 
     def zone_ids(self, kind: str,
                  box: tuple[float, float, float, float]) -> tuple[int, ...] | None:
@@ -290,16 +302,12 @@ def _disabled_reverification(value: object) -> bool:
                for kind in ("person", "vehicle", "animal"))
 
 
-def _reverification_ceilings(value: object, requested: list[str]
-                             ) -> tuple[tuple[str, float], ...]:
-    """Validate the old per-class policy and derive conservative event gates.
-
-    Enabled reverification drops uncertain observations for each requested
-    class; it does not perform a second inference pass.
-    """
+def _reverification_windows(value: object, requested: list[str]
+                            ) -> tuple[tuple[tuple[str, float], ...], tuple[tuple[str, float], ...]]:
+    """Validate the per-class policy; return (ceilings, floors) of its windows."""
     if not isinstance(value, dict) or set(value) != _REVERIFY_TYPES:
         raise SmartSettingsError("unsupported_smart_feature:reverification")
-    ceilings = []
+    ceilings, floors = [], []
     for kind, item in value.items():
         if not isinstance(item, dict) or type(item.get("enable")) is not bool:
             raise SmartSettingsError("unsupported_smart_feature:reverification")
@@ -317,7 +325,8 @@ def _reverification_ceilings(value: object, requested: list[str]
             raise SmartSettingsError("unsupported_smart_feature:reverification")
         if kind in requested:
             ceilings.append((kind, maximum / 100))
-    return tuple(sorted(ceilings))
+            floors.append((kind, minimum / 100))
+    return tuple(sorted(ceilings)), tuple(sorted(floors))
 
 
 def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
@@ -403,8 +412,8 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
                 type(value) is dict and not value):
             raise SmartSettingsError("unsupported_smart_feature:advanced")
     reverify = payload.get("reVerificationPolicy")
-    ceilings = (_reverification_ceilings(reverify, requested)
-                if reverify not in (None, {}) else ())
+    ceilings, floors = (_reverification_windows(reverify, requested)
+                        if reverify not in (None, {}) else ((), ()))
     tamper = payload.get("enableTamperDetection")
     if tamper is not None and tamper is not False:
         raise SmartSettingsError("unsupported_smart_feature:tamper")
@@ -425,4 +434,4 @@ def parse_smart_settings(payload: object, *, camera_mac: str) -> SmartPolicy:
                 raise SmartSettingsError("invalid_smart_settings:recognition_accuracy")
     return SmartPolicy(expected, frozenset(requested), start_ms, stop_ms,
                        ceilings, smart_zones, bool(raw_zones), exclude_zones,
-                       secondary_lens_zones)
+                       secondary_lens_zones, floors)

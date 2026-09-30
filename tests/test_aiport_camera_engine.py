@@ -73,8 +73,8 @@ def test_zone_and_reverification_are_applied_before_tracking_per_camera():
     engine.replace_policy(FIRST, policy(FIRST, zone=True, reverify=True))
     engine.replace_policy(SECOND, policy(SECOND))
     assert engine.observe(FIRST, (person(0.95, OUTSIDE),), now=1) == ()
-    assert engine.observe(FIRST, (person(0.7),), now=2) == ()
-    assert engine.observe(FIRST, (person(0.9),), now=3) == ()
+    assert engine.observe(FIRST, (person(0.3),), now=2) == ()          # below the window
+    assert engine.observe(FIRST, (person(0.7),), now=3) == ()          # in it: tracked, flagged
     first, = engine.observe(FIRST, (person(0.91),), now=4)
     assert first.zone_ids == (7,)
     assert engine.observe(SECOND, (person(0.7),), now=1) == ()
@@ -328,8 +328,8 @@ def test_camera_counters_separate_score_zone_and_tracking_gates():
     engine = CameraPolicyEngine([FIRST], max_events_per_camera=2,
                                 event_window_seconds=3600)
     engine.replace_policy(FIRST, policy(FIRST, zone=True, reverify=True))
-    # Below Protect's 80% reverification ceiling.
-    assert engine.observe(FIRST, (person(score=0.7),), now=1) == ()
+    # Below Protect's 40% reverification floor.
+    assert engine.observe(FIRST, (person(score=0.3),), now=1) == ()
     # Above the score gate, outside the validated zone.
     assert engine.observe(FIRST, (person(box=OUTSIDE),), now=2) == ()
     assert engine.observe(FIRST, (person(),), now=3) == ()

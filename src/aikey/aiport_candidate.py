@@ -6,6 +6,7 @@ import argparse
 import asyncio
 from collections import deque
 import contextlib
+import functools
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -107,6 +108,11 @@ _OBSERVABLE_FUNCTIONS = frozenset({
 # ``live_speech_max_events_per_hour`` sets it per AI Port.
 SPEECH_EVENTS_PER_HOUR = 60
 
+
+
+def _certain(policy: SmartPolicy, kind: str, score: float) -> bool:
+    """Diagnostic probes publish only scores that need no second stage."""
+    return policy.allows_score(kind, score) and not policy.reverify_eligible(kind, score)
 
 class CandidateError(ValueError):
     """Unsafe or incomplete isolated AI Port candidate configuration."""
@@ -1246,9 +1252,13 @@ class CandidateService:
                 if frame is not None and len(session["snapshots"]) < 4:
                     try:
                         self._pool_snapshot_number += 1
+                        policy = self._camera_engine.current_policy(camera)
                         session["snapshots"].append(await asyncio.to_thread(
-                            make_smart_snapshot, frame, change, int(time.time() * 1000),
-                            filename_track_id=self._pool_snapshot_number))
+                            functools.partial(
+                                make_smart_snapshot, frame, change, int(time.time() * 1000),
+                                filename_track_id=self._pool_snapshot_number,
+                                reverify_eligible=bool(policy and policy.reverify_eligible(
+                                    change.kind, change.score)))))
                     except SnapshotError:
                         pass
                 edge = "enter" if opening else "moving"
@@ -1723,8 +1733,11 @@ class CandidateService:
                 continue
             if edge == "enter" and frame is not None:
                 try:
-                    self._event_snapshot = await asyncio.to_thread(
-                        make_smart_snapshot, frame, change, payload["clockWall"])
+                    policy = self._smart_policy
+                    self._event_snapshot = await asyncio.to_thread(functools.partial(
+                        make_smart_snapshot, frame, change, payload["clockWall"],
+                        reverify_eligible=bool(policy and policy.reverify_eligible(
+                            change.kind, change.score))))
                     self._event_snapshot_expires = time.monotonic() + 180
                 except SnapshotError:
                     self._event_snapshot = None
@@ -1829,7 +1842,7 @@ class CandidateService:
                 or not self.ingress.list_streams()
                 or time.time() + 4 >= self.config["diagnostic_event_until"]
                 or policy.enabled_types != frozenset({"person"})
-                or not policy.allows_score("person", 0.99)):
+                or not _certain(policy, "person", 0.99)):
             return
         box = tuple(probe["box"])
         if policy.zone_ids("person", box) is None:
@@ -1886,8 +1899,8 @@ class CandidateService:
             if time.time() + frame_gap + 3 >= self.config["diagnostic_event_until"]:
                 self.recorded_probe_phase = "expired_after_inference"
                 return
-            if (not policy.allows_score("person", track.enter.score)
-                    or not policy.allows_score("person", track.moving.score)):
+            if (not _certain(policy, "person", track.enter.score)
+                    or not _certain(policy, "person", track.moving.score)):
                 self.recorded_probe_phase = "score_gate"
                 return
             zone_ids = policy.zone_ids("person", track.enter.box)
@@ -1939,7 +1952,7 @@ class CandidateService:
                     or current_policy.enabled_types != frozenset({"person"})
                     or current_policy.zone_ids("person", track.enter.box) != zone_ids
                     or current_policy.zone_ids("person", track.moving.box) != zone_ids
-                    or not current_policy.allows_score("person", track.moving.score)
+                    or not _certain(current_policy, "person", track.moving.score)
                     or not self.ingress.list_streams()
                     or time.time() + 2 >= self.config["diagnostic_event_until"]):
                 self.recorded_probe_errors += 1
@@ -1953,7 +1966,7 @@ class CandidateService:
             if (self._current_ws is ws and current_policy is not None
                     and current_policy.enabled_types == frozenset({"person"})
                     and current_policy.zone_ids("person", track.moving.box) == zone_ids
-                    and current_policy.allows_score("person", track.moving.score)
+                    and _certain(current_policy, "person", track.moving.score)
                     and self.ingress.list_streams()
                     and time.time() < self.config["diagnostic_event_until"]):
                 if snapshot is not None:

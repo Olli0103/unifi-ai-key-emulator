@@ -44,7 +44,8 @@ class SmartSnapshot:
 
 
 def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int, *,
-                        filename_track_id: int | None = None) -> SmartSnapshot:
+                        filename_track_id: int | None = None,
+                        reverify_eligible: bool = False) -> SmartSnapshot:
     """Keep one cropped JPEG in memory until Protect requests it."""
     if not isinstance(frame, bytes) or len(frame) > 2_000_000 or len(frame) < 16:
         raise SnapshotError("invalid_snapshot_frame")
@@ -99,7 +100,9 @@ def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int, *,
         "confidenceLevel": round(change.score * 100),
         "coord": [round(x1 * 1000), round(y1 * 1000),
                   round((x2 - x1) * 1000), round((y2 - y1) * 1000)],
-        "reVerifyEligible": False,
+        # Inside Protect's reverification window: its detection service then
+        # asks the AI Key to verify the track (7.3.70 reVerificationPolicy).
+        "reVerifyEligible": reverify_eligible is True,
     }
     return SmartSnapshot(filename, jpeg, metadata, full_fov_filename,
                          full_fov_jpeg, full_fov_width, full_fov_height)

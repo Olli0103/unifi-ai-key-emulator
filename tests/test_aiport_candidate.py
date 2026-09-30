@@ -2623,7 +2623,7 @@ async def test_event_probe_drops_outside_zone_and_uncertain_person_before_tracki
     class Detector:
         def __init__(self):
             self.observations = iter(((0.95, (0.01, 0.2, 0.5, 0.8)),
-                                      (0.6, (0.2, 0.2, 0.5, 0.8)),
+                                      (0.3, (0.2, 0.2, 0.5, 0.8)),      # below the window
                                       (0.9, (0.2, 0.2, 0.5, 0.8)),
                                       (0.91, (0.2, 0.2, 0.5, 0.8))))
 

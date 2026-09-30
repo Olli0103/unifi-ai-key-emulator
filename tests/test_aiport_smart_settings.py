@@ -282,7 +282,7 @@ def test_ignores_reverification_for_detection_classes_not_requested():
         parse_smart_settings(raw, camera_mac=CAMERA)
 
 
-def test_person_reverification_suppresses_uncertain_confidence():
+def test_person_reverification_flags_its_window_and_drops_scores_below_it():
     raw = full_frame_policy()
     raw["enableSmartDetect"] = ["person"]
     raw["reVerificationPolicy"] = {
@@ -293,9 +293,12 @@ def test_person_reverification_suppresses_uncertain_confidence():
     }
     policy = parse_smart_settings(raw, camera_mac=CAMERA)
     assert policy.person_reverification_ceiling == 0.8
-    assert not policy.allows_person_score(0.79)
-    assert not policy.allows_person_score(0.8)
-    assert policy.allows_person_score(0.81)
+    # Below the window: dropped. Inside it: kept and flagged for the AI Key.
+    assert not policy.allows_person_score(0.39)
+    assert policy.allows_person_score(0.4) and policy.reverify_eligible("person", 0.4)
+    assert policy.allows_person_score(0.8) and policy.reverify_eligible("person", 0.8)
+    assert policy.allows_person_score(0.81) and not policy.reverify_eligible("person", 0.81)
+    assert not policy.reverify_eligible("vehicle", 0.5)
     assert not policy.allows_person_score(float("nan"))
     for invalid in (True, 80.0, -1, 101):
         raw["reVerificationPolicy"]["person"]["maxPresenceProbability"] = invalid
@@ -315,8 +318,9 @@ def test_vehicle_zone_and_reverification_gate_do_not_admit_other_classes():
         "animal": {"enable": False},
     }
     policy = parse_smart_settings(raw, camera_mac=CAMERA)
-    assert not policy.allows_score("vehicle", 0.8)
-    assert policy.allows_score("vehicle", 0.81)
+    assert not policy.allows_score("vehicle", 0.39)
+    assert policy.allows_score("vehicle", 0.8) and policy.reverify_eligible("vehicle", 0.8)
+    assert policy.allows_score("vehicle", 0.81) and not policy.reverify_eligible("vehicle", 0.81)
     assert policy.zone_ids("vehicle", (0.2, 0.2, 0.5, 0.8)) == (9,)
     assert policy.zone_ids("vehicle", (0.05, 0.2, 0.5, 0.8)) is None
     assert policy.zone_ids("person", (0.2, 0.2, 0.5, 0.8)) is None
