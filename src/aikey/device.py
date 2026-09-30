@@ -143,6 +143,31 @@ _SPEECH_REJECTION_REASONS = {
     "speechToText export query is malformed": "export_query",
     "speechToText export must exactly match the command": "export_query_match",
 }
+# RequestAI (the player's on-demand summary) refusals by fixed reason.
+_REQUEST_AI_REJECTION_REASONS = {
+    "Continuous mode accepts only automatic video captions": "target_not_served",
+    "Unsupported RequestAI targetUri": "target_not_served",
+    "RequestAI payload must be an object": "payload_shape",
+    "timestamp must be nonnegative milliseconds": "timestamp",
+    "On-demand callbacks must use the controller upload route": "callback_path",
+    "On-demand summary camera is not in the caption scope": "camera_scope",
+    "Camera inventory changed before admission": "camera_scope",
+    "Test scope requires one video export": "export_count",
+    "Test scope requires the AI processor video export route": "export_route",
+    "Test scope export query is malformed": "export_query",
+    "Test scope export query has missing, repeated, or unknown fields": "export_fields",
+    "Test scope export does not match the permitted camera, channel, event, or format": "export_mismatch",
+    "Test scope export timestamps must be integer milliseconds": "export_timestamps",
+    "Test scope export must contain the requested timestamp and span at most 10 seconds": "export_span",
+    "timeoutMs must be positive": "timeout",
+    "Invalid media URL": "media_url", "Invalid callback URL": "callback_url",
+    "media URL is outside configured controller origins": "media_origin",
+    "callback URL is outside configured controller origins": "callback_origin",
+    "Worker queue is full": "queue_full", "Worker has stopped": "worker_stopped",
+    "Task identity reused with different input": "job_identity_conflict",
+}
+
+
 _SPEECH_SHARED_REASONS = ("command_size_or_shape", "invalid_json", "job_failed", "callback_url",
                           "media_url", "http_origin", "callback_origin", "media_origin",
                           "job_identity_conflict", "callback_uncertain", "queue_full",
@@ -423,6 +448,8 @@ class DeviceService:
             "worker_rejection_counts": dict.fromkeys(
                 sorted(set(_WORKER_REJECTION_REASONS.values()) | {"unclassified_worker_error"}), 0),
         }
+        self._request_ai_rejections = dict.fromkeys(
+            sorted(set(_REQUEST_AI_REJECTION_REASONS.values()) | {"unclassified_worker_error"}), 0)
         self._speech_diagnostics = {"admitted": 0, "rejection_counts": dict.fromkeys(
             sorted(set(_SPEECH_REJECTION_REASONS.values()) | set(_SPEECH_SHARED_REASONS)
                    | {"unclassified_worker_error"}), 0)}
@@ -455,6 +482,7 @@ class DeviceService:
                 "sync_shapes": deepcopy(self._sync_shapes),
                 "recognize_key_frames": deepcopy(self._recognize_diagnostics),
                 "speech_to_text": deepcopy(self._speech_diagnostics),
+                "request_ai_rejection_counts": deepcopy(self._request_ai_rejections),
                 "clock_offset_ms": self._clock_offset_ms, "discovery": "unsupported",
                 "compatibility": self._compatibility_status(),
                 "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "updateLcmSettings", "diskInfo", "changeAiInferAgentSettings", "changeUserPassword", "RequestAI"]
@@ -1201,6 +1229,8 @@ class DeviceService:
                 if str(exc) == "Unsupported RequestAI targetUri":
                     self._record_unlisted("request_ai_target", target)
                     raise CommandFailure(95, "Unsupported RequestAI targetUri") from None
+                _increment(self._request_ai_rejections, _REQUEST_AI_REJECTION_REASONS.get(
+                    str(exc), "unclassified_worker_error"))
                 raise
             finally:
                 self._active_admissions -= 1

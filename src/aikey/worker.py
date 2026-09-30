@@ -926,8 +926,15 @@ class JobProcessor:
         if any(not re.fullmatch(r"[0-9]{1,16}", query[key]) for key in ("start", "end")):
             raise WorkerError("Test scope export timestamps must be integer milliseconds")
         start, end = int(query["start"]), int(query["end"])
-        if not (0 <= start < end <= 2 ** 53 - 1 and end - start <= 10000
-                and start <= body["timestamp"] < end):
+        # A one-use test permit keeps its 10 s export. In continuous mode the
+        # player asks for a summary of a whole event (30 Sep: a manual summary
+        # on a longer event was refused); only one frame at the timestamp is
+        # used, so the export may be as long as a caption export.
+        whole_event = self.continuous and not self.test_scopes
+        span = self.max_video_duration_ms if whole_event else 10000
+        inside = (start <= body["timestamp"] <= end if whole_event
+                  else start <= body["timestamp"] < end)
+        if not (0 <= start < end <= 2 ** 53 - 1 and end - start <= span and inside):
             raise WorkerError("Test scope export must contain the requested timestamp and span at most 10 seconds")
 
     def _normalize_recognize_key_frames(self, command):

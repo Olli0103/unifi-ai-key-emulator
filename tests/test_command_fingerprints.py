@@ -161,3 +161,14 @@ async def test_ai_infer_agent_settings_are_stored_and_malformed_ones_refused(tmp
     for bad in ({**settings, "enableSTT": "yes"}, {**settings, "extra": 1}, {**settings, "region": "Germany"},
                 {k: v for k, v in settings.items() if k != "enableRAM"}):
         assert await send(service, "changeAiInferAgentSettings", bad, f"b-{len(json.dumps(bad))}") != 0
+
+
+async def test_request_ai_refusals_are_counted_by_fixed_reason(tmp_path):
+    async def refuse(body):
+        raise WorkerError("Test scope export must contain the requested timestamp and span at most 10 seconds")
+    service = device(tmp_path, handler=refuse)
+    body = {"targetUri": ":7968/on_demand_inference", "timeoutMs": 30000,
+            "payload": {"cameraId": "c", "eventId": "e", "timestamp": 1, "videoUrl": "/x"}}
+    assert await send(service, "RequestAI", body, "a") == 5
+    counts = service.status["request_ai_rejection_counts"]
+    assert {k: v for k, v in counts.items() if v} == {"export_span": 1}
