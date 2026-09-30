@@ -683,7 +683,7 @@ class CandidateService:
         self._sounds: dict[str, SoundEvents] = {}
         self._audio_flags: dict[str, dict[str, bool]] = {}
         self._sound_open: dict[str, str] = {}
-        self._sound_enter_times: dict[str, list[float]] = {}
+        self._sound_enter_times: dict[tuple[str, bool], list[float]] = {}
         self.sound_events_entered: dict[str, int] = {}
         self.sound_events_left = 0
         self.sound_rate_limited = 0
@@ -999,16 +999,17 @@ class CandidateService:
                 if self._sound_open.get(camera_mac) == edge.kind:
                     await self._send_sound_edge(ws, camera_mac, edge.kind, "leave", edge.level_db)
                 continue
-            recent = [t for t in self._sound_enter_times.get(camera_mac, ()) if now - t < 3600]
-            # Smoke and CO alarms get four times the budget: they matter most
-            # and a real alarm repeats for minutes.
-            limit = self._sound_limit * (4 if edge.kind in ("alrmSmoke", "alrmCmonx") else 1)
-            if len(recent) >= limit:
-                self._sound_enter_times[camera_mac] = recent
+            # Smoke and CO alarms have their own budget, four times the other
+            # sounds', so a barking dog never uses up the alarms' share.
+            alarm = edge.kind in ("alrmSmoke", "alrmCmonx")
+            key = (camera_mac, alarm)
+            recent = [t for t in self._sound_enter_times.get(key, ()) if now - t < 3600]
+            if len(recent) >= self._sound_limit * (4 if alarm else 1):
+                self._sound_enter_times[key] = recent
                 self.sound_rate_limited += 1
                 sounds.close()
                 continue
-            self._sound_enter_times[camera_mac] = recent + [now]
+            self._sound_enter_times[key] = recent + [now]
             if camera_mac in self._speech_open:
                 await self._send_speech_edge(ws, camera_mac, "leave", edge.level_db)
                 detector.reset()

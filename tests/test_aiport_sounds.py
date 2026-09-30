@@ -214,3 +214,27 @@ def test_the_classifier_is_pinned_and_maps_audioset_names_to_protect_types(tmp_p
     class_map.write_text("index,mid,display_name\n0,/m/0,Speech\n")
     with pytest.raises(SoundError, match="incomplete"):
         SoundClassifier(model, digest(model), class_map, digest(class_map))
+
+
+async def test_sounds_are_capped_per_camera_and_hour_and_alarms_get_four_times_the_budget(tmp_path):
+    clock, scores = Clock(), Scores()
+    service, sink = await sound_service(tmp_path, scores, clock)
+    service._sound_limit = 2
+    try:
+        await audio_settings(service, sink, 60, enableAlrmBark=1, enableAlrmSmoke=1)
+
+        async def episode(kind_scores):
+            scores.value = kind_scores
+            await feed(service, noise(1.5, amplitude=6000), clock)
+            scores.value = {}
+            await feed(service, noise(8, amplitude=6000), clock)
+
+        for _ in range(3):
+            await episode({"alrmBark": 0.9})
+        for _ in range(9):
+            await episode({"alarm": 0.9})
+        entered = (await health(service))["sounds"]["entered"]
+        assert entered == {"alrmBark": 2, "alrmSmoke": 8}
+        assert service.sound_rate_limited >= 2
+    finally:
+        await service.stop()
