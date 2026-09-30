@@ -356,3 +356,18 @@ async def test_a_padded_export_past_the_audio_bound_is_transcribed_up_to_the_bou
     assert result["result"] == {"segments": 1}
     assert controller.transcriptions[0]["audio_bytes"] <= 4 * 32000 + 4096
     assert worker.status()["speech"] == {"clipped": 1}
+
+
+async def test_a_restart_lets_an_accepted_job_finish_and_refuses_new_ones(controller, tmp_path):
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        running = asyncio.create_task(worker.handle(task()))
+        while not worker._pending:
+            await asyncio.sleep(0.01)
+        assert await worker.drain() == 0
+        assert (await running)["result"] == {"segments": 1}
+        with pytest.raises(WorkerError, match="stopped"):
+            await worker.handle(task(body={"event": "another-event"}, query={"event": "another-event"}))
+    finally:
+        await worker.stop()
+    assert len(controller.callbacks) == 1

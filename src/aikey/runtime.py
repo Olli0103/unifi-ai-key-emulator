@@ -1,6 +1,7 @@
 """Assemble the device, job worker and optional search responder."""
 
 import asyncio
+import logging
 from pathlib import Path
 
 from aiohttp import web
@@ -78,6 +79,10 @@ class Application:
             "native_compatibility": "needs_evidence"})
 
     async def stop(self):
+        # Finish accepted jobs while the controller link and callbacks still work.
+        unfinished = await self.worker.drain()
+        if unfinished:
+            logging.getLogger("aikey").warning("Stopping with %d unfinished jobs", unfinished)
         outcomes = await asyncio.gather(self.device.stop(), self.search.stop(), self.discovery.stop(),
                                          self.worker.stop(),
                                          self.camera_registry.stop() if self.camera_registry is not None

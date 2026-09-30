@@ -417,6 +417,10 @@ class JobProcessor:
         # model reading several frames needs longer (28 Sep: about 25 s per
         # frame on the NAS iGPU), so the owner can raise it.
         self.caption_timeout_s = min(self._positive("caption_timeout_s", 30), 600)
+        # A restart lets queued and running jobs finish for this long first;
+        # continuous captions keep jobs in flight, so there is rarely an idle gap.
+        self.drain_s = min(self._positive("drain_s", 90), 600)
+        self._draining = False
         self.faces = self._face_config(self.config.get("face_recognition"), Path(state_dir))
         self.enhance = self._enhance_config(self.config.get("face_enhancement"))
         self.find_anything, self.index_cameras, self._clip = None, frozenset(), None
@@ -1455,6 +1459,8 @@ class JobProcessor:
         self._rollover_history()
         if job_id not in self._history and len(self._history.keys() | self._pending.keys()) >= self.max_jobs:
             raise WorkerError("Worker journal is full; archive reviewed entries")
+        if self._draining:
+            raise WorkerError("Worker has stopped")
         if self._queue.full():
             raise WorkerError("Worker queue is full")
         future = asyncio.get_running_loop().create_future()
@@ -2143,6 +2149,17 @@ class JobProcessor:
             raise
         return {"status": "processed", "jobId": job.job_id, "callback": "http_accepted",
                 "callbackStatus": callback_status, "result": payload}
+
+    async def drain(self) -> int:
+        """Admit no new jobs and wait, at most drain_s, for accepted ones to finish.
+
+        Returns how many were still unfinished; stop() then cancels them.
+        """
+        self._draining = True
+        deadline = time.monotonic() + self.drain_s
+        while self._pending and time.monotonic() < deadline:
+            await asyncio.sleep(0.25)
+        return len(self._pending)
 
     async def stop(self):
         self._stopping = True
