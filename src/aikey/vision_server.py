@@ -143,7 +143,8 @@ class Models:
     """The compiled models; any of them may be absent."""
 
     def __init__(self, *, tags_dir: str | None, face_dir: str | None, text_dir: str | None,
-                 devices: list[str], cache_dir: str | None):
+                 devices: list[str], cache_dir: str | None,
+                 text_devices: list[str] | None = None):
         import openvino as ov
         core = ov.Core()
         if cache_dir:
@@ -172,7 +173,8 @@ class Models:
             for length in _TEXT_BUCKETS:
                 model = core.read_model(Path(text_dir) / "e5.xml")
                 model.reshape({port.any_name: [1, length] for port in model.inputs})
-                self.encoders[length], self.devices["embeddings"] = _compile(core, model, devices)
+                self.encoders[length], self.devices["embeddings"] = _compile(
+                    core, model, text_devices or devices)
 
     def tags(self, jpeg: bytes) -> list[dict[str, Any]]:
         probabilities = self.tagger(tag_pixels(_picture(jpeg)))[0][0]
@@ -187,9 +189,9 @@ class Models:
             ids = self.tokenizer.encode(text).ids
             length, input_ids, mask = text_inputs(ids, self.pad_id)
             compiled = self.encoders[length]
-            names = [port.any_name for port in compiled.inputs]
-            feed = {name: (mask if "mask" in name else input_ids) for name in names}
-            vectors.append([round(float(v), 6) for v in compiled(feed)[0][0]])
+            # Inputs in export order: token IDs, then the attention mask (its
+            # tensor name does not survive conversion).
+            vectors.append([round(float(v), 6) for v in compiled([input_ids, mask])[0][0]])
         return vectors
 
 
@@ -302,13 +304,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--embeddings", help="directory with e5.xml and tokenizer.json")
     parser.add_argument("--device", default="NPU,GPU,CPU",
                         help="comma-separated OpenVINO devices, tried in order per model")
+    parser.add_argument("--embeddings-device",
+                        help="devices for E5 only; the NPU's FP16 attention masks overflow, so CPU")
     parser.add_argument("--cache-dir", help="writable OpenVINO compile cache")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8190)
     args = parser.parse_args(argv)
+    def devices(value):
+        return [d.strip().upper() for d in value.split(",") if d.strip()] if value else None
+
     models = Models(tags_dir=args.tags, face_dir=args.enhance, text_dir=args.embeddings,
-                    devices=[d.strip().upper() for d in args.device.split(",") if d.strip()],
-                    cache_dir=args.cache_dir)
+                    devices=devices(args.device), cache_dir=args.cache_dir,
+                    text_devices=devices(args.embeddings_device))
     web.run_app(build_app(models), host=args.host, port=args.port, access_log=None, print=None)
     return 0
 

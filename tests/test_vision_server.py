@@ -45,7 +45,9 @@ class _Fake(Models):
             inputs = [Port("input_ids"), Port("attention_mask")]
 
             def __call__(self, feed):
-                length = int(feed["attention_mask"].sum())
+                ids, mask = feed                      # positional: IDs, then the mask
+                assert ids.shape == mask.shape and set(mask.ravel().tolist()) <= {0, 1}
+                length = int(mask.sum())
                 return [numpy.full((1, 384), length / 1000.0)]
         return Compiled()
 
