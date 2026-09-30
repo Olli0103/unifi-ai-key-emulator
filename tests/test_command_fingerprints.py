@@ -128,13 +128,23 @@ def test_a_window_within_fourteen_days_is_accepted(tmp_path):
 
 
 async def test_connect_time_sync_commands_keep_only_their_field_shape(tmp_path):
-    # Protect 7.3.68/7.3.70 send diskInfo and updateLcmSettings on every connect.
+    # Protect 7.3.68/7.3.70 send diskInfo (an empty query) and
+    # updateLcmSettings (display settings) on every connect.
     service = device(tmp_path)
-    assert await send(service, "diskInfo", {"size": 123, "detail": {"token": SECRET, "used": 1.5}}, "a") == 95
-    assert await send(service, "updateLcmSettings", {"brightness": 40, "enabled": True}, "b") == 95
+    assert await send(service, "diskInfo", {"detail": {"token": SECRET, "used": 1.5}}, "a") == 95
+    lcm = {"brightness": 40, "nightMode": {"onMinute": 1320, "offMinute": 420}}
+    assert await send(service, "updateLcmSettings", lcm, "b") == 0
     assert service.status["sync_shapes"] == {
-        "diskInfo": {"detail": "object", "detail.token": "string", "detail.used": "number", "size": "number"},
-        "updateLcmSettings": {"brightness": "number", "enabled": "boolean"}}
+        "diskInfo": {"detail": "object", "detail.token": "string", "detail.used": "number"},
+        "updateLcmSettings": {"brightness": "number", "nightMode": "object",
+                              "nightMode.offMinute": "number", "nightMode.onMinute": "number"}}
     assert service.status["control_commands"]["diskInfo"]["count"] == 1
     assert service.status["control_commands"]["unknown"]["count"] == 0
     assert SECRET not in json.dumps(service.status)
+    assert json.loads((tmp_path / "device-state.json").read_text())["display"] == lcm
+
+
+@pytest.mark.parametrize("bad", [{"brightness": 101}, {"brightness": "40"}, {"extra": 1},
+                                 {"nightMode": {"onMinute": 1440}}, {"nightMode": []}])
+async def test_display_settings_outside_the_observed_shape_are_refused(tmp_path, bad):
+    assert await send(device(tmp_path), "updateLcmSettings", bad, "a") != 0

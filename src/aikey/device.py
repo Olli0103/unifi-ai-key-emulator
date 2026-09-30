@@ -426,7 +426,7 @@ class DeviceService:
                 "recognize_key_frames": deepcopy(self._recognize_diagnostics),
                 "clock_offset_ms": self._clock_offset_ms, "discovery": "unsupported",
                 "compatibility": self._compatibility_status(),
-                "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "changeUserPassword", "RequestAI"]
+                "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "updateLcmSettings", "changeUserPassword", "RequestAI"]
                     + (["recognizeKeyFrames"] if basic_enabled else [])
                     + (["speechToText"] if self._speech_cameras() else [])
                     + (["enhanceImage"] if self._face_enhancement_configured() else [])}
@@ -1254,6 +1254,22 @@ class DeviceService:
                 _increment(phases, "invalid_admission_result")
                 raise ContractError("Job admission must return an object")
             _increment(phases, "admitted")
+            return body
+        if action == "updateLcmSettings":
+            # Front-display settings Protect pushes on connect (7.3.68/7.3.70):
+            # {brightness, nightMode: {onMinute, offMinute}}. Stored, no display.
+            night = body.get("nightMode")
+            if (set(body) - {"brightness", "nightMode"}
+                    or ("brightness" in body and (type(body["brightness"]) is not int
+                                                  or not 0 <= body["brightness"] <= 100))
+                    or ("nightMode" in body and (not isinstance(night, dict)
+                                                 or set(night) - {"onMinute", "offMinute"}
+                                                 or any(type(v) is not int or not 0 <= v < 1440
+                                                        for v in night.values())))):
+                raise ContractError("Unsupported display settings")
+            async with self._lock:
+                self._state["display"] = deepcopy(body)
+                self._save_state()
             return body
         if action in {"setConsoleInfo", "setInfo", "updateTimezone", "changeUserPassword"}:
             if action == "changeUserPassword":

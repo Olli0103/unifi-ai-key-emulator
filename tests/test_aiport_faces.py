@@ -144,8 +144,8 @@ def test_face_records_match_protects_own_face_attribute_names():
     assert attrs["objectType"] == "face" and len(attrs["faceEmbed"]) == 512
     assert attrs["faceMask"]["val"] in {"face", "face_mask"}                # Protect's vocabulary
     assert type(attrs["qualityScore"]) is int and attrs["qualityScore"] == 80
-    assert type(attrs["faceMask"]["confidence"]) is int == type(
-        result().descriptor(1, (1,))["attributes"]["faceMask"]["confidence"])
+    assert type(attrs["faceMask"]["confidence"]) is int
+    assert type(result().descriptor(1, (1,))["attributes"]["faceMask"]["confidence"]) is int
     assert result().descriptor(900_001, (1,))["attributes"]["faceMask"]["val"] == "face"
     assert len(attrs["faceLandmarks"]) == 10 and all(0 <= v <= 1000 for v in attrs["faceLandmarks"])
     descriptor = result().descriptor(1_000_000_001, (1,))
