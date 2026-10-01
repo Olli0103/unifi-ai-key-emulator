@@ -172,6 +172,11 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - Büro 17:04: 27 of 27 analyses on full resolution (16 ready, 11 after waiting for the twin), 26 faces, 9 sent.
 - *Two fixes on the way:* a 4 s pairing window (r48 widened it to 15 s), and twins still encoding when faces were scheduled (r49 waits up to 1.5 s).
 - *Open:* the outdoor cameras saw no person during the readback, so their face yield stays needs_evidence.
+- *Start-up race (r50, 4a732a0):* a slot restart sometimes refused one camera's UiStreamControl, and Protect never repeats it, so the camera stayed off until a second restart.
+  - Transient start failures (no first frame within 7 s, a decoder exit without a known reason, invalid data, RTSP 5xx) are now accepted and retried by the watch loop, as a refused relay connection already was. Clear refusals (access denied, not found, protocol rejected, RTSP 4xx) still return to Protect.
+  - Refusal reasons are counted (`stream_control_rejection_reasons`).
+  - The r50 rollout at 19:03 started every stream on the first try, so the fix is test-backed but not yet observed live.
+- *AdaFace comparison (paused):* the owner named 5 people; the 3 larger groups give a 150-face labelled sample (ids only, kept privately). AdaFace IR101 WebFace12M was downloaded (safetensors sha256 2ea535a4…; weights follow the WebFace dataset's non-commercial terms) and converted to ONNX (sha256 1bffc499…, within 8e-6 of PyTorch). Fetching the face thumbnails through the Key's own media credentials needs the owner's explicit go-ahead, so no images were fetched and no results exist yet.
 
 **Deep mode replaces the basic per-event path.**
 - From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
