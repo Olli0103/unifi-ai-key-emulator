@@ -128,6 +128,19 @@ Closing this gap needs a search-host image with those extensions and a local cro
 - r20 caps the crops of one describe request at 1 MP in total. Up to eight 768 px crops had left OVMS failing with CL_OUT_OF_RESOURCES at 06:39; it was restarted at 06:49.
 - Between 07:30 and 08:40, close-pass describes timed out at about 30 per 10 minutes, against 12–29 completions. The Key cut deep tasks off after 60 s while Protect waits 180 s (`resolveTaskTimeoutMs`), and close passes first wait for Protect's HIGH-channel session export. r21 (09:09) uses 170 s and names close-pass export refusals; 14 had been `unclassified_worker_error`.
 
+**Describe optimization (09:53–10:54, r22–r25).**
+- *Measurement:* per-stage timing counters in r22 showed the time going to waits, not work:
+  - export fetch 0.3 s, frame extraction 0.8 s, inference about 5 s;
+  - waiting for the single iGPU gate: avg 16–19 s, max 86 s;
+  - waiting for a worker slot: avg 19–78 s, max 154 s.
+- *Cause:* about 17 % of answers ran away. Protect's describe schema leaves `labels` unbounded and samples greedily, so Qwen3-VL kept adding labels until the token cap and the JSON never closed. Normal answers use about 40 tokens. Each runaway held the gate for up to a minute, and the queue backed up behind it.
+- *Fixes:*
+  - r23: a 90 s bound per describe inference and 10 worker slots;
+  - r24: `maxItems` 32 on the label list sent to the Model Server (`deep_mode.bounded_schema`, Protect's stored schema untouched) and a 384-token cap;
+  - r25: admits Protect's retry of a failed local deep task (it re-sends the same task ID) and names the remaining admission refusals.
+- *Result (r24/r25, 10:29–10:54):* 36 of 36 describes saved; 0 cut-off answers (largest 207 tokens); 0 timeouts; 0 refusals; gate wait avg 0.7–2.7 s; queue wait avg 0.3–2.6 s.
+- *Protect readback (10:54):* 190 sessions, 184 described, 6 pending, 502 detections.
+
 **Deep mode replaces the basic per-event path.**
 - From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
 - From 05:14 to 08:40, 0 of 140 smart events and 0 of 291 audio events did, and no new Find Anything (`ramDetections`) rows were written (last at 05:12). The Key received no `recognizeKeyFrames` task.
