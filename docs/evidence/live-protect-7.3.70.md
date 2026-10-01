@@ -160,7 +160,7 @@ Closing this gap needs a search-host image with those extensions and a local cro
 **Deep mode replaces the basic per-event path.**
 - From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
 - From 05:14 to 08:40, 0 of 140 smart events and 0 of 291 audio events did, and no new Find Anything (`ramDetections`) rows were written (last at 05:12). The Key received no `recognizeKeyFrames` task.
-- Speech transcripts continued. Deep mode currently trades per-event captions, tags and image-similarity search for session descriptions and session search. Choosing between them is the owner's decision.
+- Speech transcripts continued. Deep mode currently trades per-event captions, tags and image-similarity search for session descriptions and session search. The owner decided on 1 Oct to keep deep mode, and will name faces himself; the AdaFace comparison follows once named groups exist.
 
 ## Limits
 
