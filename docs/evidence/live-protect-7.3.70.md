@@ -35,7 +35,7 @@ The values below are content-free device health counters, worker journal states 
 - Protect's own view after the connect-time replies. The replies are now known statically from the owner-copied 7.3.70 `service.js` (`static-protect-7.3.70-bundle`): `diskInfo` expects `{storageSize: "<GB>"}` and `changeAiInferAgentSettings` carries `deepModeSupported`, `enableFaceEnhance`, `enableFaceRecognize`, `enableLprRecognize`, `enableRAM`, `enableSTT` and `region`. Both are answered in code (fixture-tested); the Key's `featureFlags.storageSize` and the absence of Protect's failure log lines were not read back.
 - Deep mode or `/describe` tasks on 7.3.70 (observed from 1 Oct; see the owner-approved tests below).
 - A reverified event.
-- A session search result: needs hybrid-search objects on the search host (1 Oct).
+- A session search result before the search host gained hybrid objects (observed from 08:36, 1 Oct).
 
 ## Static findings from the owner-copied 7.3.70 service.js (30 Sep)
 
@@ -99,6 +99,39 @@ Closing this gap needs a search-host image with those extensions and a local cro
 - 05:50:45: the bounded automatic restore ran. The config and compose file are byte-identical to their backups, the image is `deep-r43-20260930`, threshold 0.8 with no override, and the slot reads 3/3 streams with speech on.
 - During the window Büro had 0 observations and almost no motion (early morning), so no track entered the reverification window. The Key counted 0 reverification requests and 0 refusals; no problems arose with events, notifications or NAS load.
 - Result: inconclusive. A reverified event stays needs_evidence.
+
+## Owner-approved follow-ups (1 Oct 2026, 07:50–09:10 Europe/Berlin)
+
+**Session search works natively (closes the gap above).**
+- *Search host:* a new image `local-postgres-search:nas-amd64-bm25-20261001` adds:
+  - VectorChord-bm25 0.3.0 (deb sha256 0631499a…);
+  - pg_tokenizer 0.1.1 (468b0316…);
+  - plpython3u at the same PostgreSQL 14.24;
+  - the E5 `tokenizer.json` at `/usr/local/lib/e5-small/`;
+  - `shared_preload_libraries=vchord_bm25,pg_tokenizer`, with `mem_limit` 2g.
+- *Before the change:* a verified backup (search-20261001T081906, 125 session rows, 5612 Find Anything vectors) and a rehearsal of Protect's own setup SQL on a throwaway instance. The rehearsal showed one trap: Protect sets `search_path` with `ALTER DATABASE` and runs the BM25 block in the same session, where `bm25vector` is not yet visible. Protect's identical `ALTER DATABASE` statement was therefore applied once beforehand.
+- *Provisioning:* on the Key's reconnect (08:33), Protect provisioned everything itself: the extensions, `bert_local`, `session_tok`, the `descBm25` column, the BM25 index and its `rerank()` function.
+- *Rerank sidecar:* the Key answers `127.0.0.1:8123/rerank` (`rerank_relay.py`) and relays to the vision server's new `/v1/rerank`. That endpoint runs `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` (Apache-2.0, revision 1427fd65, converted FP32; rerank.bin sha256 89b93bdf…) on the NPU, within 0.018 logits of the CPU.
+- *Native readback:* four queries in the owner's browser each returned 30 ranked sessions in 0.26–1.05 s with Protect's rerank confidence:
+  - "white cat on a table": the animal session at 99, the rest near 0;
+  - "person sleeping in bed": 99 and 99;
+  - "schlafende Person": 97, 96, 96;
+  - "car in the driveway": vehicle sessions first, at 5–7.
+
+  Relay and vision counters: 4 requests, 120 documents, 0 failures, no PostgreSQL errors.
+
+**Face enhancement saves natively.**
+- The first attempt (07:53) ran GFPGAN on the NPU and uploaded, but Protect refused the upload. Protect's multipart parser keeps only parts typed exactly `text/plain`, and aiohttp labels plain fields `text/plain; charset=utf-8`, so `camera`, `type` and `smartDetectObject` were dropped. The detection stayed `faceEnhanceState: queued`.
+- With r20 (fields typed `text/plain`), Protect's native enhance route on a fresh face detection (08:36) gave `faceEnhanceState: done` and an `enhancedImageId`, and Protect counted `recentProcessedFaceEnhanceTasks` 1. It was triggered the way the app's Enhance action does it; Protect only sends `enhanceImage` on that request.
+
+**Describe load.**
+- r20 caps the crops of one describe request at 1 MP in total. Up to eight 768 px crops had left OVMS failing with CL_OUT_OF_RESOURCES at 06:39; it was restarted at 06:49.
+- Between 07:30 and 08:40, close-pass describes timed out at about 30 per 10 minutes, against 12–29 completions. The Key cut deep tasks off after 60 s while Protect waits 180 s (`resolveTaskTimeoutMs`), and close passes first wait for Protect's HIGH-channel session export. r21 (09:09) uses 170 s and names close-pass export refusals; 14 had been `unclassified_worker_error`.
+
+**Deep mode replaces the basic per-event path.**
+- From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
+- From 05:14 to 08:40, 0 of 140 smart events and 0 of 291 audio events did, and no new Find Anything (`ramDetections`) rows were written (last at 05:12). The Key received no `recognizeKeyFrames` task.
+- Speech transcripts continued. Deep mode currently trades per-event captions, tags and image-similarity search for session descriptions and session search. Choosing between them is the owner's decision.
 
 ## Limits
 
