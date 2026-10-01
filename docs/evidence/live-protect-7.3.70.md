@@ -157,6 +157,22 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - Synthetic benchmark on the NPU (same random image, 10 calls each): 40.2 ms per detector call before, 9.1 ms after.
   - First 4 minutes live: 8 re-ID and 12 embedding requests, 0 failed. No Enhance has run on the new image yet, so its saved Protect outcome stays needs_evidence.
 
+**Faces on every camera (15:15–17:05).**
+- *Why only Büro and Wohnzimmer:* faces are analysed only for detected people, and in that hour only Büro (272 person observations) and Flur saw people. Wohnzimmer is the native G6. History shows faces from 8 cameras.
+- *What was wrong:* the 50° angle gate held back 70 of 98 Büro faces, and every frame was decoded at no more than 1280 px wide, so a 4K camera's faces shrank threefold.
+- *AI Ports r46–r49 (44c7b30, fffb392, 09474db, fe44d7f, 50882ec):*
+  - the angle gate holds back only clear profiles (65°);
+  - a person without a sendable face gets up to 8 tries;
+  - faces are counted per camera, with angle and size bands per slot;
+  - each face camera's FFmpeg splits its 2 fps frames into the 1280 px detection output and a twin of up to 2688 px on a second pipe; face analysis and crops use the twin of the same frame.
+- *Readback:*
+  - all 9 paired cameras: face listed, enabled by Protect, engine loaded, twins at 2 fps; Protect has face detection on for all 10 connected cameras;
+  - real FFmpeg on a 4K test pattern: 20 + 20 frames in 10 s for 1.8 CPU s;
+  - slot CPU 20–39 % of a core, NAS load about 3;
+  - Büro 17:04: 27 of 27 analyses on full resolution (16 ready, 11 after waiting for the twin), 26 faces, 9 sent.
+- *Two fixes on the way:* a 4 s pairing window (r48 widened it to 15 s), and twins still encoding when faces were scheduled (r49 waits up to 1.5 s).
+- *Open:* the outdoor cameras saw no person during the readback, so their face yield stays needs_evidence.
+
 **Deep mode replaces the basic per-event path.**
 - From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
 - From 05:14 to 08:40, 0 of 140 smart events and 0 of 291 audio events did, and no new Find Anything (`ramDetections`) rows were written (last at 05:12). The Key received no `recognizeKeyFrames` task.
