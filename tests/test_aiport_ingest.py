@@ -562,3 +562,17 @@ def test_a_twin_stays_available_for_fifteen_seconds_of_frames():
     assert _FULL_PAIRS >= 30                                            # 15 s at 2 fps
     assert session.full_frame_for(frames[-_FULL_PAIRS + 1]) == b"full-%d" % (len(frames) - _FULL_PAIRS + 2)
     assert session.full_frame_for(frames[0]) is None                    # older frames are released
+
+
+
+def test_a_twin_reports_whether_it_is_ready_still_encoding_or_gone():
+    from aikey.aiport_ingest import _Session
+    session = _Session(None, "/usr/bin/ffmpeg", full_frames=True)
+    first, second = b"\xff\xd8a\xff\xd9", b"\xff\xd8b\xff\xd9"
+    session._pairs.extend([(first, 1), (second, 2)])
+    session._full, session._full_index = {1: b"full-a"}, 1
+    assert session.full_frame_state(first) == ("ready", b"full-a")
+    assert session.full_frame_state(second) == ("pending", None)        # twin still encoding
+    assert session.full_frame_state(b"\xff\xd8c\xff\xd9") == ("gone", None)
+    session._full_index = 2                                              # twin 2 was dropped
+    assert session.full_frame_state(second) == ("gone", None)

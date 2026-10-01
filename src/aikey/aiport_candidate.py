@@ -109,6 +109,7 @@ _OBSERVABLE_FUNCTIONS = frozenset({
 # ``live_speech_max_events_per_hour`` sets it per AI Port.
 SPEECH_EVENTS_PER_HOUR = 60
 FACE_TRIES_WITHOUT_FACE = 8
+FULL_FRAME_WAIT_S = 1.5
 
 
 
@@ -1334,10 +1335,30 @@ class CandidateService:
             else:
                 self.smart_events_left += 1
 
+    async def _full_resolution(self, camera: str, frame: bytes, stats: dict) -> bytes:
+        """The same frame at full resolution; its twin may still be encoding."""
+        if not isinstance(self.ingress, AiPortIngressPool):
+            return frame
+        deadline = time.monotonic() + FULL_FRAME_WAIT_S
+        waited = False
+        while True:
+            state, twin = self.ingress.full_frame_state(camera, frame)
+            if state == "ready":
+                stats["full_resolution"] += 1
+                stats["twin"]["waited" if waited else "ready"] += 1
+                return twin
+            if state != "pending" or time.monotonic() >= deadline:
+                if state in ("gone", "pending"):
+                    stats["twin"]["timeout" if state == "pending" else "gone"] += 1
+                return frame
+            waited = True
+            await asyncio.sleep(0.1)
+
     def _face_camera_health(self, camera: str) -> dict:
         """Per camera: listed for faces, enabled by Protect, and what happened."""
         stats = self._face_camera_stats.get(camera) or {
-            "analyses": 0, "full_resolution": 0, "detected": 0, "kept": 0, "sent": 0, "gated": {}}
+            "analyses": 0, "full_resolution": 0, "detected": 0, "kept": 0, "sent": 0, "gated": {},
+            "twin": {"ready": 0, "waited": 0, "gone": 0, "timeout": 0}}
         return {"listed": camera in self._face_cameras,
                 "enabled": bool(self._face_enabled.get(camera)),
                 "engine": self._face_engine is not None,
@@ -1356,10 +1377,6 @@ class CandidateService:
         running = self._face_tasks.get(camera)
         if running is not None and not running.done():
             return
-        # The same frame at full resolution when the decoder still holds it.
-        full = (self.ingress.full_frame_for(camera, frame)
-                if isinstance(self.ingress, AiPortIngressPool) else None)
-        frame = full or frame
         faces = session.setdefault("faces", {})
         tries = session.setdefault("face_tries", {})
         last = session.setdefault("face_last", {})
@@ -1369,15 +1386,13 @@ class CandidateService:
             return
         tries[change.track_id] = tries.get(change.track_id, 0) + 1
         last[change.track_id] = now
-        if full is not None:
-            self._face_stats(camera)["full_resolution"] += 1
         self._face_tasks[camera] = asyncio.create_task(
             self._analyse_face(camera, faces, change, frame), name="aiport-face")
 
     def _face_stats(self, camera: str) -> dict:
         return self._face_camera_stats.setdefault(
             camera, {"analyses": 0, "full_resolution": 0, "detected": 0, "kept": 0, "sent": 0,
-             "gated": {}})
+             "gated": {}, "twin": {"ready": 0, "waited": 0, "gone": 0, "timeout": 0}})
 
     async def _analyse_face(self, camera: str, faces: dict, change, frame: bytes) -> None:
         engine = self._face_engine
@@ -1386,6 +1401,7 @@ class CandidateService:
         self.face_analyses += 1
         stats = self._face_stats(camera)
         stats["analyses"] += 1
+        frame = await self._full_resolution(camera, frame, stats)
         try:
             result = await asyncio.to_thread(engine.analyse, frame, change.box)
         except FaceError as exc:

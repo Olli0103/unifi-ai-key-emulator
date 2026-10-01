@@ -368,22 +368,26 @@ def test_a_person_without_a_sendable_face_gets_more_tries(tmp_path, monkeypatch)
     assert len(scheduled) == candidate.FACE_TRIES_WITHOUT_FACE == 8
 
 
-async def test_face_analysis_uses_the_full_resolution_twin_of_the_frame(tmp_path, monkeypatch):
+async def test_face_analysis_waits_briefly_for_the_full_resolution_twin(tmp_path, monkeypatch):
     from aikey.aiport_candidate import CandidateService
     from aikey.aiport_ingest import AiPortIngressPool
     service = CandidateService(pool_config(tmp_path), tmp_path)
     assert isinstance(service.ingress, AiPortIngressPool)
-    service._face_engine, _ = engine(yunet_outputs())
-    low, full, seen = b"low", b"full-resolution", []
-    monkeypatch.setattr(service.ingress, "full_frame_for",
-                        lambda camera, frame: full if frame is low else None)
+    seen, states = [], iter([("pending", None), ("pending", None), ("ready", b"full")])
 
-    async def analyse(camera, faces, change, frame):
-        seen.append(frame)
-    monkeypatch.setattr(service, "_analyse_face", analyse)
+    class Engine:
+        def analyse(self, frame, box):
+            seen.append(frame)
+            return None
+    service._face_engine = Engine()
+    monkeypatch.setattr(service.ingress, "full_frame_state", lambda camera, frame: next(states))
     try:
-        service._schedule_face(CAMERA, {}, change("enter"), low)
-        await service._face_tasks[CAMERA]
-        assert seen == [full] and service._face_camera_health(CAMERA)["full_resolution"] == 1
+        await service._analyse_face(CAMERA, {}, change("enter"), b"low")
+        health = service._face_camera_health(CAMERA)
+        assert seen == [b"full"] and health["full_resolution"] == 1
+        assert health["twin"] == {"ready": 0, "waited": 1, "gone": 0, "timeout": 0}
+        monkeypatch.setattr(service.ingress, "full_frame_state", lambda camera, frame: ("gone", None))
+        await service._analyse_face(CAMERA, {}, change("enter"), b"low")
+        assert seen[-1] == b"low" and service._face_camera_health(CAMERA)["twin"]["gone"] == 1
     finally:
         await service.stop()

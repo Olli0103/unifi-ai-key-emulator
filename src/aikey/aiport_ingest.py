@@ -350,10 +350,18 @@ class _Session:
 
     def full_frame_for(self, frame: bytes) -> bytes | None:
         """The full-resolution twin of a recent detection frame, if still held."""
+        return self.full_frame_state(frame)[1]
+
+    def full_frame_state(self, frame: bytes) -> tuple[str, bytes | None]:
+        """("ready", twin), ("pending", None) while its twin is still being
+        encoded, or ("gone", None) once the frame left the window."""
         for low, index in reversed(self._pairs):
             if low is frame:
-                return self._full.get(index)
-        return None
+                twin = self._full.get(index)
+                if twin is not None:
+                    return "ready", twin
+                return ("pending", None) if index > self._full_index else ("gone", None)
+        return "gone", None
 
     async def _observe_frames(self) -> None:
         assert self.frame_observer is not None
@@ -703,6 +711,10 @@ class AiPortIngress:
         session = self._session
         return session.full_frame_for(frame) if session is not None else None
 
+    def full_frame_state(self, frame: bytes) -> tuple[str, bytes | None]:
+        session = self._session
+        return session.full_frame_state(frame) if session is not None else ("gone", None)
+
     @property
     def full_frame_count(self) -> int:
         session = self._session
@@ -836,6 +848,12 @@ class AiPortIngressPool:
         """The full-resolution twin of one of the camera's recent frames, or None."""
         ingress = self._ingresses.get(camera_mac)
         return ingress.full_frame_for(frame) if ingress is not None else None
+
+    def full_frame_state(self, camera_mac: str, frame: bytes) -> tuple[str, bytes | None]:
+        ingress = self._ingresses.get(camera_mac)
+        if ingress is None or not getattr(ingress, "full_frames", False):
+            return "off", None
+        return ingress.full_frame_state(frame)
 
     def latest_frame(self, camera_mac: str, *, max_age: float) -> bytes | None:
         """The camera's newest decoded JPEG, or None if unknown, down or stale."""
