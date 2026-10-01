@@ -147,7 +147,7 @@ class VisionProvider:
         return self.url, dict(self.headers), payload
 
     def build_structured_request(self, images: list[bytes], system: str, user: str, schema: dict,
-                                 sampling: dict) -> tuple[str, dict, dict]:
+                                 sampling: dict, max_tokens: int | None = None) -> tuple[str, dict, dict]:
         """A JSON-schema-constrained chat request (deep-mode session describe).
 
         Only OpenAI-compatible servers (the local OpenVINO Model Server) take
@@ -162,7 +162,7 @@ class VisionProvider:
             for image in images]
         content.append({"type": "text", "text": user})
         payload = {"model": self.model, "stream": False,
-                   "max_tokens": max(self.max_output_tokens, 512),
+                   "max_tokens": max_tokens or max(self.max_output_tokens, 512),
                    "messages": [{"role": "system", "content": system},
                                 {"role": "user", "content": content}],
                    "response_format": {"type": "json_schema", "json_schema": {

@@ -163,6 +163,7 @@ class Controller:
     def __init__(self):
         self.callbacks, self.reid_calls, self.chat_requests, self.embed_requests = [], 0, [], []
         self.crop_size = (80, 160)
+        self.finish = "stop"
         self.reid_status, self.chat_content = 200, json.dumps(
             {"description": "A person in a red hoodie walks to the door.",
              "labels": ["top:hoodie", "topColor:red"]})
@@ -180,8 +181,9 @@ class Controller:
 
     async def chat(self, request):
         self.chat_requests.append(await request.json())
-        return web.json_response({"choices": [{"finish_reason": "stop", "message": {
-            "role": "assistant", "content": self.chat_content}}]})
+        return web.json_response({"choices": [{"finish_reason": self.finish, "message": {
+            "role": "assistant", "content": self.chat_content}}],
+            "usage": {"prompt_tokens": 900, "completion_tokens": 120}})
 
     async def embeddings(self, request):
         body = await request.json()
@@ -340,6 +342,23 @@ async def test_describe_time_is_counted_per_stage_without_content(controller, tm
     assert all(v["n"] == 0 for v in timing["close"].values())
     assert worker.status()["deep_timeouts"] == dict.fromkeys(
         ("queued", "fetch", "frames", "gate", "infer", "callback"), 0)
+
+
+async def test_describe_answers_get_room_and_are_counted_by_finish_reason(controller, tmp_path):
+    deep_mode.save_prompts(tmp_path, *deep_mode.validate_prompts(prompts_body()))
+    worker = JobProcessor(worker_config(controller), tmp_path, camera_registry=Registry())
+    try:
+        await worker.handle(describe_request())
+        controller.finish, controller.chat_content = "length", '{"description": "A person in a', 
+        with pytest.raises(WorkerError):
+            await worker.handle(describe_request(task="task-3"))
+        answers = worker.status()["deep_answers"]
+    finally:
+        await worker.stop()
+    assert [r["max_tokens"] for r in controller.chat_requests] == [1024, 1024]
+    assert answers["finish"] == {"stop": 1, "length": 1, "other": 0}
+    assert answers["unparsed"] == {"truncated": 1, "not_json": 0, "no_description": 0, "provider": 0}
+    assert answers["completion_tokens_max"] == 120 and answers["with_usage"] == 2
 
 
 async def test_all_crops_of_one_describe_request_share_a_pixel_budget(controller, tmp_path):

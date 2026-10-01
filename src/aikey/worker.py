@@ -131,6 +131,11 @@ _VISION_MAX_SIDE = 1280
 # All crops of one deep-mode describe request together: up to eight 768 px
 # crops left the Model Server failing with CL_OUT_OF_RESOURCES (1 Oct 06:39).
 _DESCRIBE_MAX_PIXELS = 1_000_000
+# Protect's describe schema does not bound the label list, and 512 tokens cut
+# answers off mid-JSON (1 Oct: 4 of 24 describes unparseable). A stalled
+# request must free the single inference gate long before the job deadline.
+_DESCRIBE_MAX_TOKENS = 1024
+_DESCRIBE_INFER_TIMEOUT_S = 90
 _REVERIFICATION_TARGET = ":7788/v1/models/second_verifier_mlabel/inference"
 # Zero-shot prompts for second-stage verification with the local CLIP encoder.
 _VERIFY_PROMPTS = {
@@ -568,6 +573,9 @@ class JobProcessor:
         self.deep_timing = {kind: {stage: {"n": 0, "total_ms": 0, "max_ms": 0} for stage in _DESCRIBE_STAGES}
                             for kind in ("open", "close")}
         self.deep_timeouts = {stage: 0 for stage in _DESCRIBE_STAGES}
+        self.deep_answers = {"finish": {"stop": 0, "length": 0, "other": 0}, "unparsed": {
+            "truncated": 0, "not_json": 0, "no_description": 0, "provider": 0},
+            "completion_tokens_total": 0, "completion_tokens_max": 0, "with_usage": 0}
         self.find_anything, self.index_cameras, self._clip = None, frozenset(), None
         search = self.config.get("search", {})
         if (self.config.get("find_anything") is not None and search.get("enabled") is True
@@ -1799,7 +1807,8 @@ class JobProcessor:
                 **({"deep": dict(self.deep_counts),
                     "deep_timing": {kind: {stage: dict(v) for stage, v in stages.items()}
                                     for kind, stages in self.deep_timing.items()},
-                    "deep_timeouts": dict(self.deep_timeouts)} if self.deep else {}),
+                    "deep_timeouts": dict(self.deep_timeouts),
+                    "deep_answers": json.loads(json.dumps(self.deep_answers))} if self.deep else {}),
                 **({"faces": dict(self.faces["counts"], native_face_cameras=len(self.faces["native"]))}
                    if self.faces else {}),
                 **({"enhance": dict(self.enhance["counts"])} if self.enhance else {}),
@@ -2496,7 +2505,8 @@ class JobProcessor:
         mark = self._describe_stage(job, "gate", mark)
         try:
             url, headers, request = self.provider.build_structured_request(
-                crops, prompt["system"], prompt["user"], prompt["schema"], prompt["sampling"])
+                crops, prompt["system"], prompt["user"], prompt["schema"], prompt["sampling"],
+                max_tokens=_DESCRIBE_MAX_TOKENS)
         except ProviderError as exc:
             raise WorkerError(str(exc)) from exc
         gate = self._inference_gate
@@ -2504,18 +2514,38 @@ class JobProcessor:
             await gate.acquire(1)
         try:
             mark = self._describe_stage(job, "infer", mark)
-            async with self._inference_session.post(url, json=request, headers=headers,
-                                                    allow_redirects=False) as response:
+            async with self._inference_session.post(
+                    url, json=request, headers=headers, allow_redirects=False,
+                    timeout=aiohttp.ClientTimeout(total=_DESCRIBE_INFER_TIMEOUT_S)) as response:
                 if response.status != 200:
                     raise WorkerError(f"Inference returned HTTP {response.status}")
                 raw = await self._read_response(response, 1024 * 1024)
+        except TimeoutError as exc:
+            raise WorkerError("The describer did not answer in time") from exc
         finally:
             if gate is not None:
                 gate.release()
+        answers = self.deep_answers
         try:
-            text = self.provider.parse_response(json.loads(raw))
+            reply = json.loads(raw)
+        except ValueError:
+            reply = None
+        choices = reply.get("choices") if isinstance(reply, dict) else None
+        finish = (choices[0].get("finish_reason") if isinstance(choices, list) and choices
+                  and isinstance(choices[0], dict) else None)
+        answers["finish"][finish if finish in ("stop", "length") else "other"] += 1
+        used = (reply.get("usage") or {}).get("completion_tokens") if isinstance(reply, dict) else None
+        if type(used) is int and used >= 0:
+            answers["with_usage"] += 1
+            answers["completion_tokens_total"] += used
+            answers["completion_tokens_max"] = max(answers["completion_tokens_max"], used)
+        try:
+            text = self.provider.parse_response(reply)
             description, labels = deep_mode.parse_description(text)
         except (ValueError, ProviderError, deep_mode.DeepModeError) as exc:
+            reason = ("truncated" if finish == "length" else "provider" if isinstance(exc, ProviderError)
+                      else "not_json" if "JSON" in str(exc) and "lacks" not in str(exc) else "no_description")
+            answers["unparsed"][reason] += 1
             raise WorkerError("The describer did not return a description and labels") from exc
         inferred = time.monotonic()
         if self._embedding_service is None:
