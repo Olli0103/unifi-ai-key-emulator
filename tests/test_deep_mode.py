@@ -327,6 +327,21 @@ def test_deep_tasks_get_protects_full_wait_not_their_timeout_ms(tmp_path):
         worker._deep_budget({"timeoutMs": 0})
 
 
+async def test_describe_time_is_counted_per_stage_without_content(controller, tmp_path):
+    deep_mode.save_prompts(tmp_path, *deep_mode.validate_prompts(prompts_body()))
+    worker = JobProcessor(worker_config(controller), tmp_path, camera_registry=Registry())
+    try:
+        await worker.handle(describe_request())
+        timing = worker.status()["deep_timing"]
+    finally:
+        await worker.stop()
+    assert [timing["open"][stage]["n"] for stage in ("queued", "fetch", "frames", "gate", "infer", "callback")] \
+        == [1, 1, 1, 1, 1, 1]
+    assert all(v["n"] == 0 for v in timing["close"].values())
+    assert worker.status()["deep_timeouts"] == dict.fromkeys(
+        ("queued", "fetch", "frames", "gate", "infer", "callback"), 0)
+
+
 async def test_all_crops_of_one_describe_request_share_a_pixel_budget(controller, tmp_path):
     controller.crop_size = (720, 1280)            # eight of these exhausted the iGPU (1 Oct)
     deep_mode.save_prompts(tmp_path, *deep_mode.validate_prompts(prompts_body()))

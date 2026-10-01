@@ -364,6 +364,9 @@ def _clean_enhanced_jpeg(data, source_size):
     except (OSError, ValueError, Image.DecompressionBombError):
         return b""
 
+_DESCRIBE_STAGES = ("queued", "fetch", "frames", "gate", "infer", "callback")
+
+
 def _fit_area(images, budget):
     """JPEGs scaled by one common factor so their pixels sum to at most budget."""
     from PIL import Image
@@ -404,6 +407,8 @@ class _Job:
     media: list[tuple[str, str]]
     deadline: float
     future: asyncio.Future
+    admitted: float = 0.0
+    stage: str = "queued"
 
 
 class JobProcessor:
@@ -558,6 +563,11 @@ class JobProcessor:
         # Deep-mode work; counts only, no identifiers or text.
         self.deep_counts = {"embed_tasks": 0, "crops_embedded": 0, "crops_failed": 0,
                             "describe_tasks": 0, "described": 0, "labels": 0}
+        # Where describe time goes, per pass and stage (n, total and max ms), and
+        # the stage a describe was in when its deadline passed.
+        self.deep_timing = {kind: {stage: {"n": 0, "total_ms": 0, "max_ms": 0} for stage in _DESCRIBE_STAGES}
+                            for kind in ("open", "close")}
+        self.deep_timeouts = {stage: 0 for stage in _DESCRIBE_STAGES}
         self.find_anything, self.index_cameras, self._clip = None, frozenset(), None
         search = self.config.get("search", {})
         if (self.config.get("find_anything") is not None and search.get("enabled") is True
@@ -1733,7 +1743,7 @@ class JobProcessor:
         future = asyncio.get_running_loop().create_future()
         future.add_done_callback(lambda value: value.exception() if not value.cancelled() else None)
         job = _Job(job_id, fingerprint, operation, body, callback, kind, media,
-                   time.monotonic() + budget, future)
+                   time.monotonic() + budget, future, admitted=time.monotonic())
         try:
             self._reserve_test_scope(job)
             if self.caption_budget is not None and operation not in _LOCAL_OPERATIONS:
@@ -1786,7 +1796,10 @@ class JobProcessor:
                 "ledger": len(self._history), "retroactive": dict(self.retroactive),
                 "speech": dict(self.speech_counts),
                 **({"ram_tagging": dict(self.ram_tagging)} if self._tag_server() else {}),
-                **({"deep": dict(self.deep_counts)} if self.deep else {}),
+                **({"deep": dict(self.deep_counts),
+                    "deep_timing": {kind: {stage: dict(v) for stage, v in stages.items()}
+                                    for kind, stages in self.deep_timing.items()},
+                    "deep_timeouts": dict(self.deep_timeouts)} if self.deep else {}),
                 **({"faces": dict(self.faces["counts"], native_face_cameras=len(self.faces["native"]))}
                    if self.faces else {}),
                 **({"enhance": dict(self.enhance["counts"])} if self.enhance else {}),
@@ -1825,6 +1838,8 @@ class JobProcessor:
 
     async def _run_job(self, job):
         try:
+            if job.operation == "sessionDescribe":
+                self._describe_stage(job, "fetch", job.admitted)
             async with asyncio.timeout(max(0, job.deadline - time.monotonic())):
                 result = await self._execute(job)
             self._record(job, "completed", result=result)
@@ -1838,6 +1853,8 @@ class JobProcessor:
             raise
         except Exception as exc:
             message = "Job timed out" if isinstance(exc, TimeoutError) else str(exc)
+            if isinstance(exc, TimeoutError) and job.operation == "sessionDescribe":
+                self.deep_timeouts[job.stage] += 1
             if job.operation == "indexImages":
                 self.retroactive["failed"] += 1
             current = self._history.get(job.job_id, {})
@@ -2416,9 +2433,22 @@ class JobProcessor:
             picture.convert("RGB").save(out, format="JPEG", quality=92)
             return out.getvalue()
 
+    def _describe_stage(self, job, stage, since):
+        """Close the current stage's timing and enter the next one."""
+        now = time.monotonic()
+        kind = "close" if job.payload.get("videos") else "open"
+        stats = self.deep_timing[kind][job.stage]
+        elapsed = round((now - since) * 1000)
+        stats["n"] += 1
+        stats["total_ms"] += elapsed
+        stats["max_ms"] = max(stats["max_ms"], elapsed)
+        job.stage = stage
+        return now
+
     async def _execute_session_describe(self, job):
         from PIL import Image
         started = time.monotonic()
+        mark = started
         try:
             prompts = deep_mode.load_prompts(self.state_dir.parent)
         except deep_mode.DeepModeError as exc:
@@ -2439,6 +2469,8 @@ class JobProcessor:
             raise WorkerError(str(exc)) from exc
         for video, (_, url) in zip(job.payload.get("videos", []), job.media):
             data, headers = await self._fetch(url, "video")
+            if job.stage == "fetch":
+                mark = self._describe_stage(job, "frames", mark)
             for item in video["objects"]:
                 frame = await self._video_frame(data, headers, url, job, timestamp=item["ts"])
                 with Image.open(BytesIO(frame)) as picture:
@@ -2459,6 +2491,9 @@ class JobProcessor:
         except (OSError, ValueError, Image.DecompressionBombError) as exc:
             raise WorkerError("Unreadable crop for the describer") from exc
         prepared = time.monotonic()
+        if job.stage == "fetch":                      # open pass: crops fetched, no frames
+            mark = self._describe_stage(job, "frames", mark)
+        mark = self._describe_stage(job, "gate", mark)
         try:
             url, headers, request = self.provider.build_structured_request(
                 crops, prompt["system"], prompt["user"], prompt["schema"], prompt["sampling"])
@@ -2468,6 +2503,7 @@ class JobProcessor:
         if gate is not None:
             await gate.acquire(1)
         try:
+            mark = self._describe_stage(job, "infer", mark)
             async with self._inference_session.post(url, json=request, headers=headers,
                                                     allow_redirects=False) as response:
                 if response.status != 200:
@@ -2493,12 +2529,14 @@ class JobProcessor:
                    "descEmbedding": vectors[0], "model": self.model, "version": "session-v1"}
         self.deep_counts["described"] += 1
         self.deep_counts["labels"] += len(labels)
+        mark = self._describe_stage(job, "callback", mark)
         summary = {"pass": job.payload["pass"], "crops": len(crops), "labels": len(labels),
                    "inferMs": round((inferred - prepared) * 1000),
                    "timeElapsedMs": round((time.monotonic() - started) * 1000)}
         if self.callback_mode == "disabled":
             return {"status": "processed", "jobId": job.job_id, "callback": "disabled", "result": summary}
         result = await self._post_callback(job, payload)
+        self._describe_stage(job, "callback", mark)   # closes the callback stage
         result["result"] = summary                    # text and vectors stay out of the journal
         return result
 
