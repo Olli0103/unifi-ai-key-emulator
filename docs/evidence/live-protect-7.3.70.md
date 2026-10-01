@@ -176,7 +176,18 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - Transient start failures (no first frame within 7 s, a decoder exit without a known reason, invalid data, RTSP 5xx) are now accepted and retried by the watch loop, as a refused relay connection already was. Clear refusals (access denied, not found, protocol rejected, RTSP 4xx) still return to Protect.
   - Refusal reasons are counted (`stream_control_rejection_reasons`).
   - The r50 rollout at 19:03 started every stream on the first try, so the fix is test-backed but not yet observed live.
-- *AdaFace comparison (paused):* the owner named 5 people; the 3 larger groups give a 150-face labelled sample (ids only, kept privately). AdaFace IR101 WebFace12M was downloaded (safetensors sha256 2ea535a4…; weights follow the WebFace dataset's non-commercial terms) and converted to ONNX (sha256 1bffc499…, within 8e-6 of PyTorch). Fetching the face thumbnails through the Key's own media credentials needs the owner's explicit go-ahead, so no images were fetched and no results exist yet.
+- *AdaFace comparison (owner-approved, 1 Oct evening):*
+  - *Data:* 150 thumbnails from the owner's three larger named groups (50 each; two G6-only groups, one AI Port-only group), fetched through the Key's media route into RAM and deleted when the session ended.
+  - *Method:* AI Port pipeline (YuNet, ArcFace 5-point alignment to 112 px); 149 faces aligned. The two models embed the same crops; 3,626 same-person and 7,400 different-person pairs.
+  - *Results, all pairs:*
+    - EER: ArcFace R100 (current) 10.5 %, AdaFace IR101 5.7 %;
+    - true accepts at 1 % false accepts: 62.9 % vs 88.9 %;
+    - true accepts at 0.1 % false accepts: 36.3 % vs 77.8 %;
+    - d′: 2.48 vs 2.99.
+  - *G6 faces only:* EER 15.7 % vs 6.2 %; true accepts at 1 % false accepts 40.4 % vs 83.3 %.
+  - *Rank-1:* 99.3 % for both.
+  - *Caveats:* three identities, and the cross-group pairs also cross cameras.
+  - *Not yet switched:* new AI Port embeddings would no longer match existing AI Port face groups; that is the owner's decision.
 
 **Deep mode replaces the basic per-event path.**
 - From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
