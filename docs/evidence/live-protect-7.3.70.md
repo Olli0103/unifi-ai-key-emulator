@@ -33,8 +33,9 @@ The values below are content-free device health counters, worker journal states 
 - Transcription rows or face thumbnails read back per event on 7.3.70.
 - A successful player AI summary on 7.3.70.
 - Protect's own view after the connect-time replies. The replies are now known statically from the owner-copied 7.3.70 `service.js` (`static-protect-7.3.70-bundle`): `diskInfo` expects `{storageSize: "<GB>"}` and `changeAiInferAgentSettings` carries `deepModeSupported`, `enableFaceEnhance`, `enableFaceRecognize`, `enableLprRecognize`, `enableRAM`, `enableSTT` and `region`. Both are answered in code (fixture-tested); the Key's `featureFlags.storageSize` and the absence of Protect's failure log lines were not read back.
-- Deep mode or `/describe` tasks on 7.3.70.
+- Deep mode or `/describe` tasks on 7.3.70 (observed from 1 Oct; see the owner-approved tests below).
 - A reverified event.
+- A session search result: needs hybrid-search objects on the search host (1 Oct).
 
 ## Static findings from the owner-copied 7.3.70 service.js (30 Sep)
 
@@ -59,6 +60,45 @@ Read with the Protect web app's own API client in the owner's signed-in browser;
 - **Transcripts:** 96 events in one hour carry `sttSearchable`, so they get Protect's transcript filter label.
 - **Second-stage verification:** all three reverification policies (person, vehicle, animal) exist and are enabled at 40 to 80 %. The settings page hid Person because no AI Key reported `supportPersonReId`; with Key r16 the console's `aiFeatureFlag` lists it and the Person row is shown and ticked.
 - **Deep understanding:** the Key reads as `supportDeepMode: true`, `aiMode: basic`. Protect 7.3.70 offers the switch only in an internal QA window; the setting itself is the standard `deepUnderstanding` AI policy (disabled).
+
+## Owner-approved tests (1 Oct 2026, Europe/Berlin)
+
+Olli approved three gates. Each one was read back natively, in the owner's browser or on the NAS. The results below separate what was saved from what was only counted.
+
+**Slot 4 stream recovery.**
+- Garage dropped out after a DISCONNECTED state, and Protect never re-sent the stream start.
+- Restarting only `aiport_slot_4` at 05:11:29 brought the slot back to `streams_with_decoded_frames` 2/2 by 05:12:14, with 0 rejected stream controls. Garage resumed.
+
+**Deep Understanding on all cameras (enabled 05:14:07).**
+- *Saved settings:* the `deepUnderstanding` AI policy reads `enabled: true` with `cameras: []`. The NVR's `deepUnderstandingSettings` reads `{enabled: true, allCameras: true}`. The Key reports `aiMode: deep` and `describeConfigHash` 9fec385b7771.
+  - Rollback: `PATCH ai-policies/deepUnderstanding {"enabled": false}`, with the baseline kept in the private rollback directory.
+- *Saved by Protect:*
+  - `detection-sessions/stats` reads 9 sessions, 9 described, 0 pending and 17 detections at 05:34.
+  - The session feed carries a description and labels.
+  - At 05:53 the search host held 15 `smartDetectSessionsSearch` rows, all with a 384-wide, unit-norm `descEmbedding`, and 29 `smartDetectSessionObjects` rows, 20 of them with a `reidEmbedding`.
+- *Key counters:* 24 describe tasks, all described with 110 labels in total; 15 embed tasks covering 20 crops, 0 failed.
+- *Latency:* describe median 5.4 s and maximum 13.7 s, measured on the first tasks; a live check with Protect's own prompt took 6.9 s.
+- *NAS during the test:* load 0.9 to 2.5, about 28 GB available. OVMS used about 7.5 GiB, the vision server about 2.2 GiB.
+
+**Session search returns nothing (needs_evidence).** `GET detection-sessions/search` answers in about 35 ms with 0 sessions, for every query. What was ruled out:
+- The Key answers every E5 `NL_PARSE` query with a 384-value vector that passes Protect's schema.
+- Matching description/query pairs score cosine 0.85 to 0.93, which is inside Protect's distance cut-off.
+- Protect's dense query, replayed read-only on the search host, returns all 9 sessions.
+
+What actually happens:
+- The table's scan counters do not move during a Protect search, so Protect stops before querying the table.
+- On connect, Protect provisions hybrid search on an external search host: the `pg_tokenizer` and `vchord_bm25` extensions, an E5 `tokenizer.json` at `/usr/local/lib/e5-small/`, the `descBm25` column, and a `plpython3u` `rerank()` function that calls `http://127.0.0.1:8123/rerank`.
+- The Key's PostgreSQL has none of these, so `hybridSearchAvailable` is false.
+- With `featureFlags.deepUnderstandingHybridRerank` set, `readRankedSessionIds` then fails closed with 0 results by design. That flag is server configuration and could not be read.
+
+Closing this gap needs a search-host image with those extensions and a local cross-encoder rerank service. That is a new service and was not deployed.
+
+**Büro second-stage verification test.**
+- Baseline: slot threshold 0.8 with no per-camera override, verified before the change.
+- 05:20:42: Büro alone was lowered to 0.4 with image r44 (`camera_thresholds`, 2efc5ba).
+- 05:50:45: the bounded automatic restore ran. The config and compose file are byte-identical to their backups, the image is `deep-r43-20260930`, threshold 0.8 with no override, and the slot reads 3/3 streams with speech on.
+- During the window Büro had 0 observations and almost no motion (early morning), so no track entered the reverification window. The Key counted 0 reverification requests and 0 refusals; no problems arose with events, notifications or NAS load.
+- Result: inconclusive. A reverified event stays needs_evidence.
 
 ## Limits
 
