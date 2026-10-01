@@ -28,7 +28,9 @@ _MAX_FRAME = 1024 * 1024
 # threefold below the size YuNet can use (1 Oct). Detection keeps 1280 px.
 _FULL_MAX_WIDTH = 2688
 _MAX_FULL_FRAME = 6 * 1024 * 1024
-_FULL_PAIRS = 8
+# A face is scheduled after the detector answers, which can take several
+# seconds; 8 pairs (4 s) found the twin for only 9 of 45 analyses (1 Oct).
+_FULL_PAIRS = 30
 _MAX_DECODER_DIAGNOSTIC = 8192
 _DECODER_MARKERS = (
     (b"error opening input", "input_open_failed"),

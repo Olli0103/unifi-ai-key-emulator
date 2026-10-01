@@ -549,3 +549,16 @@ async def test_the_full_resolution_pipe_keeps_draining_and_positions_aligned():
     await asyncio.wait_for(session._read_full_frames(reader), timeout=2)
     assert session._full == {1: good1, 4: good2}
     assert session.full_frame_count == 2 and session.full_frames_dropped == 2
+
+
+def test_a_twin_stays_available_for_fifteen_seconds_of_frames():
+    from aikey.aiport_ingest import _FULL_PAIRS, _Session
+    session = _Session(None, "/usr/bin/ffmpeg", full_frames=True)
+    frames = [bytes([0xFF, 0xD8, n % 256, 0xFF, 0xD9]) for n in range(_FULL_PAIRS + 5)]
+    for index, frame in enumerate(frames, start=1):
+        session._pairs.append((frame, index))
+        session._full[index] = b"full-%d" % index
+        session._full.pop(index - _FULL_PAIRS, None)
+    assert _FULL_PAIRS >= 30                                            # 15 s at 2 fps
+    assert session.full_frame_for(frames[-_FULL_PAIRS + 1]) == b"full-%d" % (len(frames) - _FULL_PAIRS + 2)
+    assert session.full_frame_for(frames[0]) is None                    # older frames are released
