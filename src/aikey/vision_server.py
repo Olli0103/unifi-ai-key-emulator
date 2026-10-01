@@ -7,7 +7,9 @@ CPU):
 - ``POST /v1/tags``: one JPEG, answered with RAM++ tags above their per-class
   thresholds, as ``{"tags": [{"tag", "confScore"}], "model"}``.
 - ``POST /v1/enhance``: one JPEG face crop, answered with a GFPGAN-restored
-  JPEG at least as large as the crop, or 204 to decline.
+  JPEG at least as large as the crop, or 204 to decline. With ``--face-detector``
+  (YuNet) the face is aligned to GFPGAN's FFHQ template first and pasted back;
+  crops too small to show a face are declined.
 - ``POST /v1/embeddings``: OpenAI-compatible multilingual-e5-small vectors
   (384 values, mean-pooled and L2-normalized). Callers add E5's ``query:`` or
   ``passage:`` prefix themselves.
@@ -42,6 +44,10 @@ _TAG_MEAN = (0.485, 0.456, 0.406)
 _TAG_STD = (0.229, 0.224, 0.225)
 _FACE_SIZE = 512
 _MIN_FACE_SIDE = 24
+# A crop is the face plus 1.6x context; under 64 px the face is below about
+# 40 px and any restorer invents it (1 Oct). Applies with the aligned path.
+_MIN_ALIGNED_CROP_SIDE = 64
+_YUNET_THRESHOLD = 0.6
 _TEXT_BUCKETS = (128, 512)
 _RERANK_BUCKETS = (128, 256)
 _MAX_DOCUMENTS = 32                       # Protect reranks at most 30 sessions
@@ -112,6 +118,70 @@ def face_square(picture):
     return Image.fromarray(padded), (left, top, left + width, top + height), side
 
 
+def detect_landmarks(run: Callable[[Any], Any], picture):
+    """YuNet's five landmarks of the strongest face in the crop, or None."""
+    import numpy
+    from PIL import Image
+    from .face_geometry import YUNET_SIZE, decode_yunet
+    scale = YUNET_SIZE / max(picture.size)
+    canvas = Image.new("RGB", (YUNET_SIZE, YUNET_SIZE))
+    canvas.paste(picture.resize((max(1, round(picture.width * scale)),
+                                 max(1, round(picture.height * scale))), Image.Resampling.BILINEAR))
+    pixels = numpy.asarray(canvas, dtype=numpy.float32)[:, :, ::-1]          # YuNet wants BGR
+    faces = decode_yunet(run(numpy.ascontiguousarray(pixels.transpose(2, 0, 1)[None])),
+                         threshold=_YUNET_THRESHOLD)
+    if not faces:
+        return None
+    return tuple((x / scale, y / scale) for x, y in faces[0][2])
+
+
+def restore_aligned_face(run: Callable[[Any], Any], detect: Callable[[Any], Any], picture):
+    """GFPGAN on the face aligned to its FFHQ template, pasted back into the crop.
+
+    Returns (jpeg, aligned) where aligned says whether landmarks were found; the
+    square method is the fallback. None declines a crop too small for a face.
+    """
+    import numpy
+    from PIL import Image, ImageFilter
+    from .face_geometry import FFHQ_TEMPLATE_512, FaceError, similarity_transform
+    width, height = picture.size
+    if min(width, height) < _MIN_ALIGNED_CROP_SIDE:
+        return None
+    landmarks = detect_landmarks(detect, picture)
+    if landmarks is None:
+        restored = restore_face(run, picture)
+        return (restored, False) if restored else None
+    try:
+        a, b, tx, c, d, ty = similarity_transform(landmarks, FFHQ_TEMPLATE_512)
+    except FaceError:
+        restored = restore_face(run, picture)
+        return (restored, False) if restored else None
+    det = a * d - b * c
+    # PIL maps output to input: crop -> template is inverted to warp the crop.
+    ia, ib, ic, id_ = d / det, -b / det, -c / det, a / det
+    aligned = picture.transform((_FACE_SIZE, _FACE_SIZE), Image.Transform.AFFINE,
+                                (ia, ib, -(ia * tx + ib * ty), ic, id_, -(ic * tx + id_ * ty)),
+                                resample=Image.Resampling.BICUBIC)
+    pixels = numpy.asarray(aligned, dtype=numpy.float32) / 255.0
+    output = run(((pixels - 0.5) / 0.5).transpose(2, 0, 1)[None])
+    output = numpy.clip((numpy.asarray(output)[0].transpose(1, 2, 0) + 1) / 2, 0, 1)
+    face = Image.fromarray((output * 255 + 0.5).astype(numpy.uint8))
+    # Enlarge the crop until the face reaches the restorer's resolution (at most 4x).
+    k = max(1.0, min(4.0, (a * a + c * c) ** 0.5))
+    size = (round(width * k), round(height * k))
+    canvas = picture.resize(size, Image.Resampling.BICUBIC)
+    forward = (a / k, b / k, tx, c / k, d / k, ty)
+    pasted = face.transform(size, Image.Transform.AFFINE, forward, resample=Image.Resampling.BICUBIC)
+    mask = Image.new("L", (_FACE_SIZE, _FACE_SIZE), 0)
+    mask.paste(255, (24, 24, _FACE_SIZE - 24, _FACE_SIZE - 24))
+    mask = mask.filter(ImageFilter.GaussianBlur(16)).transform(
+        size, Image.Transform.AFFINE, forward, resample=Image.Resampling.BILINEAR)
+    canvas.paste(pasted, (0, 0), mask)
+    out = io.BytesIO()
+    canvas.save(out, format="JPEG", quality=92)
+    return out.getvalue(), True
+
+
 def restore_face(run: Callable[[Any], Any], picture):
     """GFPGAN on the padded square; the crop's area scaled to at least its own size."""
     import numpy
@@ -164,13 +234,14 @@ class Models:
     def __init__(self, *, tags_dir: str | None, face_dir: str | None, text_dir: str | None,
                  devices: list[str], cache_dir: str | None,
                  text_devices: list[str] | None = None, reid_dir: str | None = None,
-                 rerank_dir: str | None = None, rerank_devices: list[str] | None = None):
+                 rerank_dir: str | None = None, rerank_devices: list[str] | None = None,
+                 face_detector: str | None = None):
         import openvino as ov
         core = ov.Core()
         if cache_dir:
             core.set_property({"CACHE_DIR": cache_dir})
         self.devices: dict[str, str] = {}
-        self.tagger = self.enhancer = self.reid = None
+        self.tagger = self.enhancer = self.reid = self.face_detector = None
         self.encoders: dict[int, Any] = {}
         self.rerankers: dict[int, Any] = {}
         if tags_dir:
@@ -185,6 +256,12 @@ class Models:
             model = core.read_model(Path(face_dir) / "gfpgan.xml")
             model.reshape({model.inputs[0].any_name: [1, 3, _FACE_SIZE, _FACE_SIZE]})
             self.enhancer, self.devices["enhance"] = _compile(core, model, devices)
+        if face_detector:
+            model = core.read_model(face_detector)
+            model.reshape({model.inputs[0].any_name: [1, 3, 640, 640]})
+            compiled, self.devices["face_detector"] = _compile(core, model, devices)
+            names = [output.any_name for output in compiled.outputs]
+            self.face_detector = lambda pixels: dict(zip(names, (compiled(pixels)[o] for o in compiled.outputs)))
         if reid_dir:
             model = core.read_model(Path(reid_dir) / f"{REID_MODEL}.xml")
             model.reshape({model.inputs[0].any_name: [1, 3, _REID_SIZE[1], _REID_SIZE[0]]})
@@ -217,8 +294,12 @@ class Models:
         probabilities = self.tagger(tag_pixels(_picture(jpeg)))[0][0]
         return select_tags(probabilities, self.tag_names, self.tag_thresholds)
 
-    def enhance(self, jpeg: bytes) -> bytes | None:
-        return restore_face(lambda pixels: self.enhancer(pixels)[0], _picture(jpeg))
+    def enhance(self, jpeg: bytes) -> tuple[bytes, bool] | None:
+        run = lambda pixels: self.enhancer(pixels)[0]          # noqa: E731
+        if self.face_detector is not None:
+            return restore_aligned_face(run, self.face_detector, _picture(jpeg))
+        restored = restore_face(run, _picture(jpeg))
+        return (restored, False) if restored else None
 
     def reidentify(self, jpeg: bytes) -> list[float]:
         import numpy
@@ -257,7 +338,7 @@ def build_app(models: Models) -> web.Application:
                 "embedding_requests": 0, "texts": 0, "rejected": 0, "failed": 0}
     locks = {"tags": asyncio.Lock(), "enhance": asyncio.Lock(), "embeddings": asyncio.Lock(),
              "reid": asyncio.Lock(), "rerank": asyncio.Lock()}
-    counters.update(reid_requests=0, rerank_requests=0, reranked_documents=0)
+    counters.update(reid_requests=0, rerank_requests=0, reranked_documents=0, enhanced_aligned=0)
 
     async def run(role, function, *args):
         async with locks[role]:
@@ -314,8 +395,10 @@ def build_app(models: Models) -> web.Application:
         if not result:
             counters["declined"] += 1
             return web.Response(status=204)
+        jpeg, aligned = result
         counters["enhanced"] += 1
-        return web.Response(body=result, content_type="image/jpeg")
+        counters["enhanced_aligned"] += aligned
+        return web.Response(body=jpeg, content_type="image/jpeg")
 
     async def reid(request: web.Request) -> web.Response:
         counters["reid_requests"] += 1
@@ -402,6 +485,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--embeddings", help="directory with e5.xml and tokenizer.json")
     parser.add_argument("--reid", help=f"directory with {REID_MODEL}.xml")
     parser.add_argument("--rerank", help="directory with rerank.xml and tokenizer.json")
+    parser.add_argument("--face-detector", help="YuNet ONNX file; aligns faces before GFPGAN")
     parser.add_argument("--rerank-device", help="devices for the cross-encoder only")
     parser.add_argument("--device", default="NPU,GPU,CPU",
                         help="comma-separated OpenVINO devices, tried in order per model")
@@ -417,7 +501,8 @@ def main(argv: list[str] | None = None) -> int:
     models = Models(tags_dir=args.tags, face_dir=args.enhance, text_dir=args.embeddings,
                     devices=devices(args.device), cache_dir=args.cache_dir,
                     text_devices=devices(args.embeddings_device), reid_dir=args.reid,
-                    rerank_dir=args.rerank, rerank_devices=devices(args.rerank_device))
+                    rerank_dir=args.rerank, rerank_devices=devices(args.rerank_device),
+                    face_detector=args.face_detector)
     web.run_app(build_app(models), host=args.host, port=args.port, access_log=None, print=None)
     return 0
 

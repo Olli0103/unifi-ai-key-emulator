@@ -1,6 +1,7 @@
 """Local face embeddings for paired AI Port cameras (#20, #28). Synthetic images and fake models."""
 
 import asyncio
+from dataclasses import replace
 import hashlib
 import json
 import math
@@ -11,8 +12,8 @@ import pytest
 from PIL import Image, ImageDraw
 
 from aikey.aiport_faces import (EMBEDDING_SIZE, FaceEngine, FaceError, FaceResult, decode_yunet,
-                                estimate_pose, make_face_snapshot, similarity_transform,
-                                verify_model, _TEMPLATE)
+                                estimate_pose, make_face_snapshot, mean_embedding, send_gate,
+                                similarity_transform, verify_model, _TEMPLATE)
 from aikey.aiport_candidate import CandidateError, load_config
 from aikey.aiport_tracking import TrackChange
 from test_aiport_candidate import fixture_state, private_file
@@ -218,7 +219,7 @@ async def test_a_found_face_joins_the_event_as_its_own_linked_tracker(tmp_path):
     service = CandidateService(pool_config(tmp_path), tmp_path)
     service._params_agreed = True
     service.ingress.list_streams = lambda: [{"deviceID": CAMERA}, {"deviceID": OTHER}]
-    service._face_engine, _ = engine(yunet_outputs((16, 10, 20)))
+    service._face_engine, _ = engine(yunet_outputs((32, 5, 10)))       # an 80 px face: sendable
     service._face_enabled[CAMERA] = True
     sink = Sink()
     service._current_ws = sink
@@ -300,3 +301,31 @@ def test_the_default_sessions_keep_a_single_copy_of_the_weights(monkeypatch):
     assert len(created) == 2
     assert all(o.graph_optimization_level == "basic" and o.intra_op_num_threads == 2
                and o.entries == {"session.disable_prepacking": "1"} for o in created)
+
+
+def test_only_faces_that_can_identify_someone_are_sent():
+    good = result()
+    assert send_gate(replace(good, face_px=80.0)) is None
+    assert send_gate(replace(good, face_px=30.0)) == "small"
+    assert send_gate(replace(good, face_px=80.0, pose={"yaw": -70.0, "pitch": 0.0, "roll": 0.0})) == "turned"
+    assert send_gate(replace(good, face_px=80.0, blurness=0.95)) == "blurred"
+
+
+def test_a_track_sends_the_normalised_mean_of_its_best_embeddings():
+    a = tuple([1.0] + [0.0] * (EMBEDDING_SIZE - 1))
+    b = tuple([0.0, 1.0] + [0.0] * (EMBEDDING_SIZE - 2))
+    mean = mean_embedding([a, b])
+    assert mean[0] == pytest.approx(mean[1]) == pytest.approx(1 / math.sqrt(2))
+    assert sum(v * v for v in mean) == pytest.approx(1.0)
+    with pytest.raises(FaceError):
+        mean_embedding([])
+
+
+def test_face_snapshots_keep_up_to_512_pixels():
+    frame = BytesIO()
+    Image.new("RGB", (3840, 2160), (120, 110, 100)).save(frame, format="JPEG")
+    face = replace(result(), box=(0.4, 0.2, 0.55, 0.45))                # a 576 px face in 4K
+    snapshot = make_face_snapshot(frame.getvalue(), face, 1_000_000_001, 1_700_000_000_000,
+                                  filename_id=7)
+    assert max(snapshot.metadata["smartDetectSnapshotWidth"],
+               snapshot.metadata["smartDetectSnapshotHeight"]) == 512

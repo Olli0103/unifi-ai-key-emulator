@@ -7,7 +7,7 @@ import asyncio
 from collections import deque
 import contextlib
 import functools
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import ipaddress
@@ -32,7 +32,8 @@ from .aiport_ingest import (
 )
 from .aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
 from .aiport_api_detection import ApiObjectDetector, _frame_mode
-from .aiport_faces import FaceEngine, FaceError, make_face_snapshot, verify_model
+from .aiport_faces import (EMBEDDINGS_PER_TRACK, FaceEngine, FaceError, make_face_snapshot,
+                           mean_embedding, send_gate, verify_model)
 from .aiport_audio import (MAX_EVENT_S, SPEECH, AudioSettingsError, SpeechActivity,
                            audio_state_payload, parse_audio_flags)
 from .aiport_motion import (MotionDetector, MotionSettingsError, MotionTimeline,
@@ -743,6 +744,7 @@ class CandidateService:
         self.face_analyses = 0
         self.faces_found = 0
         self.faces_sent = 0
+        self.faces_gated: dict[str, int] = {}
         self.face_errors: dict[str, int] = {}
         self.speech_settings_acks = 0
         self.speech_settings_rejected = 0
@@ -1364,8 +1366,17 @@ class CandidateService:
             return
         if result is None:
             return
+        held = send_gate(result)
+        if held is not None:
+            self.faces_gated[held] = self.faces_gated.get(held, 0) + 1
+            return
         previous = faces.get(change.track_id)
+        # The track's best embeddings, averaged when the face is sent.
+        embeddings = sorted(((previous[3] if previous is not None else ())
+                             + ((result.quality, result.embedding),)),
+                            key=lambda item: item[0], reverse=True)[:EMBEDDINGS_PER_TRACK]
         if previous is not None and previous[1].quality >= result.quality:
+            faces[change.track_id] = (*previous[:3], tuple(embeddings))
             return
         if previous is None:
             # Camera tracker IDs are small integers; keep face IDs in a range
@@ -1382,7 +1393,7 @@ class CandidateService:
         except SnapshotError:
             snapshot = None
         self.faces_found += 1
-        faces[change.track_id] = (face_id, result, snapshot)
+        faces[change.track_id] = (face_id, result, snapshot, tuple(embeddings))
 
     def _add_faces(self, payload: dict, session: dict, edge: str, tracks: tuple) -> None:
         """Add each found face as its own tracker, linked from its person."""
@@ -1392,9 +1403,11 @@ class CandidateService:
         stage = (self.config.get("live_face") or {}).get("payload", "full")
         zones = {change.track_id: zone_ids for change, zone_ids in tracks}
         added = False
-        for person_id, (face_id, result, _snapshot) in faces.items():
+        for person_id, (face_id, result, _snapshot, embeddings) in faces.items():
             if person_id not in zones:
                 continue
+            if len(embeddings) > 1:
+                result = replace(result, embedding=mean_embedding([e for _, e in embeddings]))
             payload["descriptors"].append(result.descriptor(face_id, zones[person_id]))
             added = True
             if edge == "leave":
@@ -2066,7 +2079,8 @@ class CandidateService:
                           "engine": self._face_engine is not None,
                           "enabled": sum(self._face_enabled.get(c, False) for c in self._face_cameras),
                           "analyses": self.face_analyses, "found": self.faces_found,
-                          "sent": self.faces_sent, "errors": dict(self.face_errors)}}
+                          "sent": self.faces_sent, "gated": dict(self.faces_gated),
+                          "errors": dict(self.face_errors)}}
                if self._face_cameras else {}),
             **({"sounds": {"cameras": len(self._sound_cameras),
                            "classifier": self._sound_classifier is not None,

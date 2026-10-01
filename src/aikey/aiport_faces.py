@@ -29,17 +29,39 @@ from PIL import Image, ImageFilter, UnidentifiedImageError
 
 from .aiport_snapshots import SmartSnapshot, SnapshotError
 
-# ArcFace's canonical five-point template for a 112x112 crop, in image order:
-# eye on the left, eye on the right, nose, mouth corner left, mouth corner right.
-_TEMPLATE = ((38.2946, 51.6963), (73.5318, 51.5014), (56.0252, 71.7366),
-             (41.5493, 92.3655), (70.7299, 92.2041))
-_YUNET_SIZE = 640
-_STRIDES = (8, 16, 32)
+from .face_geometry import (ARCFACE_TEMPLATE as _TEMPLATE, YUNET_SIZE as _YUNET_SIZE,
+                            FaceError, decode_yunet, similarity_transform, _iou)  # noqa: F401
 EMBEDDING_SIZE = 512
+FACE_SNAPSHOT_SIDE = 512
+# A face is sent to Protect's face grouping only when it can identify someone:
+# small, turned-away or flat faces made stray single-face groups (1 Oct: 22 of
+# 50 groups held one face).
+SEND_MIN_FACE_PX = 40
+SEND_MAX_YAW = 50.0
+SEND_MAX_BLUR = 0.85
+EMBEDDINGS_PER_TRACK = 3
 
 
-class FaceError(ValueError):
-    """Fixed-code face failure; never carries image content."""
+def send_gate(face: "FaceResult") -> str | None:
+    """None when the face may be sent, otherwise the fixed reason it is held back."""
+    if face.face_px < SEND_MIN_FACE_PX:
+        return "small"
+    if abs(face.pose.get("yaw", 0.0)) > SEND_MAX_YAW:
+        return "turned"
+    if face.blurness > SEND_MAX_BLUR:
+        return "blurred"
+    return None
+
+
+def mean_embedding(embeddings) -> tuple[float, ...]:
+    """The L2-normalised mean of a track's best embeddings; steadier than one frame."""
+    if not embeddings:
+        raise FaceError("invalid_face_embedding")
+    sums = [sum(values) for values in zip(*embeddings)]
+    norm = math.sqrt(sum(value * value for value in sums))
+    if not math.isfinite(norm) or norm <= 0:
+        raise FaceError("invalid_face_embedding")
+    return tuple(value / norm for value in sums)
 
 
 @dataclass(frozen=True)
@@ -51,6 +73,7 @@ class FaceResult:
     quality: float                                    # 0..1
     blurness: float                                   # 0 (sharp) .. 1 (blurred)
     pose: dict
+    face_px: float = 0.0                              # shorter face side in frame pixels
 
     def attributes(self, track_id: int, zone_ids: tuple[int, ...]) -> dict:
         """The face tracker's attributes, shaped like Protect's own face records."""
@@ -102,30 +125,6 @@ def verify_model(path: str, sha256: str) -> str:
     return str(file)
 
 
-def similarity_transform(source, target) -> tuple[float, float, float, float, float, float]:
-    """Least-squares similarity (Umeyama) mapping source points onto target.
-
-    Returns (a, b, tx, c, d, ty) with x' = a*x + b*y + tx and y' = c*x + d*y + ty.
-    """
-    n = len(source)
-    if n < 2 or n != len(target):
-        raise FaceError("invalid_landmarks")
-    mx = sum(p[0] for p in source) / n
-    my = sum(p[1] for p in source) / n
-    ux = sum(p[0] for p in target) / n
-    uy = sum(p[1] for p in target) / n
-    sxx = sxy = norm = 0.0
-    for (x, y), (u, v) in zip(source, target):
-        x, y, u, v = x - mx, y - my, u - ux, v - uy
-        sxx += x * u + y * v
-        sxy += x * v - y * u
-        norm += x * x + y * y
-    if norm <= 1e-9:
-        raise FaceError("invalid_landmarks")
-    a, b = sxx / norm, sxy / norm            # scale*cos, scale*sin
-    return (a, -b, ux - a * mx + b * my, b, a, uy - b * mx - a * my)
-
-
 def estimate_pose(landmarks) -> dict:
     """Coarse yaw, pitch and roll in degrees from five landmarks."""
     (lx, ly), (rx, ry), (nx, ny), (mlx, mly), (mrx, mry) = landmarks
@@ -138,42 +137,6 @@ def estimate_pose(landmarks) -> dict:
     height = math.hypot(mouth_mid[0] - eye_mid[0], mouth_mid[1] - eye_mid[1]) or 1e-6
     pitch = max(-90.0, min(90.0, ((ny - eye_mid[1]) / height - 0.55) * 120))
     return {"yaw": round(yaw, 1), "pitch": round(pitch, 1), "roll": round(roll, 1)}
-
-
-def decode_yunet(outputs: dict, *, threshold: float) -> list[tuple[float, tuple, tuple]]:
-    """(score, box xywh, five landmarks) in 640x640 input pixels, after NMS."""
-    found = []
-    for stride in _STRIDES:
-        cols = _YUNET_SIZE // stride
-        cls, obj = outputs[f"cls_{stride}"][0], outputs[f"obj_{stride}"][0]
-        bbox, kps = outputs[f"bbox_{stride}"][0], outputs[f"kps_{stride}"][0]
-        for index in range(len(cls)):
-            score = math.sqrt(max(0.0, min(1.0, float(cls[index][0])))
-                              * max(0.0, min(1.0, float(obj[index][0]))))
-            if score < threshold:
-                continue
-            row, col = divmod(index, cols)
-            box = bbox[index]
-            cx, cy = (col + float(box[0])) * stride, (row + float(box[1])) * stride
-            w, h = math.exp(float(box[2])) * stride, math.exp(float(box[3])) * stride
-            points = tuple(((float(kps[index][2 * k]) + col) * stride,
-                            (float(kps[index][2 * k + 1]) + row) * stride) for k in range(5))
-            found.append((score, (cx - w / 2, cy - h / 2, w, h), points))
-    found.sort(key=lambda item: item[0], reverse=True)
-    kept = []
-    for item in found:
-        if all(_iou(item[1], other[1]) < 0.3 for other in kept):
-            kept.append(item)
-    return kept
-
-
-def _iou(a, b) -> float:
-    ax2, ay2, bx2, by2 = a[0] + a[2], a[1] + a[3], b[0] + b[2], b[1] + b[3]
-    iw = max(0.0, min(ax2, bx2) - max(a[0], b[0]))
-    ih = max(0.0, min(ay2, by2) - max(a[1], b[1]))
-    inter = iw * ih
-    union = a[2] * a[3] + b[2] * b[3] - inter
-    return inter / union if union > 0 else 0.0
 
 
 def _blurness(face: Image.Image) -> float:
@@ -276,7 +239,7 @@ class FaceEngine:
         norm_box = (max(0.0, box_px[0] / width), max(0.0, box_px[1] / height),
                     min(1.0, box_px[2] / width), min(1.0, box_px[3] / height))
         return FaceResult(norm_box, tuple((px / width, py / height) for px, py in landmarks_px),
-                          score, embedding, quality, blur, estimate_pose(landmarks_px))
+                          score, embedding, quality, blur, estimate_pose(landmarks_px), face_px)
 
 
 def make_face_snapshot(frame: bytes, face: FaceResult, track_id: int, wall_ms: int, *,
@@ -294,9 +257,11 @@ def make_face_snapshot(frame: bytes, face: FaceResult, track_id: int, wall_ms: i
             left = max(0, min(image.width - side, cx - side / 2))
             top = max(0, min(image.height - side, cy - side / 2))
             crop = image.crop((round(left), round(top), round(left + side), round(top + side)))
-            crop.thumbnail((256, 256))
+            # Protect enhances and shows this crop: keep up to 512 px at high
+            # quality (256 px at 85 left GFPGAN mostly inventing detail, 1 Oct).
+            crop.thumbnail((FACE_SNAPSHOT_SIDE, FACE_SNAPSHOT_SIDE))
             output = BytesIO()
-            crop.convert("RGB").save(output, format="JPEG", quality=85)
+            crop.convert("RGB").save(output, format="JPEG", quality=92)
             full = BytesIO()
             image.convert("RGB").save(full, format="JPEG", quality=85)
             full_size = image.size

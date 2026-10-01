@@ -8,8 +8,8 @@ from aiohttp.test_utils import TestClient, TestServer
 from PIL import Image
 import pytest
 
-from aikey.vision_server import (Models, build_app, restore_face, select_tags, tag_pixels,
-                                 text_inputs)
+from aikey.vision_server import (Models, build_app, restore_aligned_face, restore_face,
+                                 select_tags, tag_pixels, text_inputs)
 
 
 def _jpeg(width=64, height=48, color=(120, 90, 60)):
@@ -32,6 +32,7 @@ class _Fake(Models):
         self.tag_names, self.tag_thresholds = ["dog", "grass", "car"], [0.6, 0.7, 0.9]
         self.tagger = (lambda pixels: [numpy.array([[0.95, 0.72, 0.5]])]) if tagger else None
         self.enhancer = (lambda pixels: [numpy.zeros_like(pixels)]) if enhancer else None
+        self.face_detector = None
         self.pad_id = 1
         self.tokenizer = type("T", (), {"encode": staticmethod(
             lambda text: type("E", (), {"ids": list(range(len(text)))})())})()
@@ -180,3 +181,43 @@ async def test_malformed_rerank_requests_are_refused(client):
 async def test_rerank_without_the_model_answers_404():
     async with TestClient(TestServer(build_app(_Fake(rerank=False)))) as c:
         assert (await c.post("/v1/rerank", json={"query": "q", "documents": ["a"]})).status == 404
+
+
+def _yunet(face=True):
+    """Fake YuNet outputs: one face whose landmarks sit in the crop's middle."""
+    def run(pixels):
+        assert pixels.shape == (1, 3, 640, 640)
+        out = {}
+        for stride in (8, 16, 32):
+            n = (640 // stride) ** 2
+            out[f"cls_{stride}"] = numpy.zeros((1, n, 1), numpy.float32)
+            out[f"obj_{stride}"] = numpy.zeros((1, n, 1), numpy.float32)
+            out[f"bbox_{stride}"] = numpy.zeros((1, n, 4), numpy.float32)
+            out[f"kps_{stride}"] = numpy.zeros((1, n, 10), numpy.float32)
+        if face:
+            index = 10 * 20 + 10                                       # stride 32, row 10, col 10
+            out["cls_32"][0, index, 0] = out["obj_32"][0, index, 0] = 0.95
+            out["bbox_32"][0, index] = [0.5, 0.5, 1.6, 1.8]
+            out["kps_32"][0, index] = [-1.0, -1.2, 2.0, -1.2, 0.5, 0.2, -0.6, 1.4, 1.6, 1.4]
+        return out
+    return run
+
+
+def test_an_aligned_face_is_restored_and_pasted_back_at_least_crop_size():
+    calls = []
+
+    def run(pixels):
+        calls.append(pixels.shape)
+        return numpy.zeros_like(pixels)
+    picture = Image.new("RGB", (160, 200), (200, 150, 100))
+    jpeg, aligned = restore_aligned_face(run, _yunet(), picture)
+    assert aligned and calls == [(1, 3, 512, 512)]
+    with Image.open(io.BytesIO(jpeg)) as result:
+        assert result.format == "JPEG" and result.size[0] >= 160 and result.size[1] >= 200
+
+
+def test_without_landmarks_the_square_method_is_used_and_tiny_crops_decline():
+    run = lambda pixels: numpy.zeros_like(pixels)                          # noqa: E731
+    jpeg, aligned = restore_aligned_face(run, _yunet(face=False), Image.new("RGB", (120, 120)))
+    assert not aligned and jpeg.startswith(b"\xff\xd8")
+    assert restore_aligned_face(run, _yunet(), Image.new("RGB", (60, 90))) is None
