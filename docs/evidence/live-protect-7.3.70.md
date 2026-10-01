@@ -141,6 +141,18 @@ Closing this gap needs a search-host image with those extensions and a local cro
 - *Result (r24/r25, 10:29–10:54):* 36 of 36 describes saved; 0 cut-off answers (largest 207 tokens); 0 timeouts; 0 refusals; gate wait avg 0.7–2.7 s; queue wait avg 0.3–2.6 s.
 - *Protect readback (10:54):* 190 sessions, 184 described, 6 pending, 502 detections.
 
+**Face pipeline (13:30–14:30, owner-approved).**
+- *Identity reset:* at the owner's request, the 5 named face groups were unnamed and their 308 detections taken out of their groups (`PATCH` name null, then `assign-group` with `groupId: null`). Groups went from 534 to 529 with 0 named. Group and detection ids are backed up privately; names were not recorded.
+- *AI Ports r45 (c9e2046):*
+  - face crops for Protect go up to 512 px at JPEG quality 92 (was 256 px at 85);
+  - a face reaches Protect's grouping only when it is at least 40 px, turned at most 50° and not flat (blurness ≤ 0.85);
+  - the embedding sent is the normalised mean of the track's best three.
+  - First readback on slot 1: 18 analyses, 15 faces, 9 held back as turned, 5 sent.
+- *Vision server (npu-20261001-faces):* YuNet on the NPU finds five landmarks, the face is aligned to GFPGAN's FFHQ 512 template, restored and pasted back with a feathered mask. Crops under 64 px are declined, and the square method is the fallback.
+- *Native readback:* an Enhance on a fresh face (14:28) went through the aligned path (`enhanced_aligned` 1) and Protect saved it (`faceEnhanceState: done`, `enhancedImageId`).
+- *Start-up race:* restarting slot 4 once left Garage unstarted (one `UiStreamControl` refused); a second start gave 2/2. The same code path existed before r45.
+- *Not yet done:* an AdaFace comparison needs named people to measure against; it waits until faces are named again.
+
 **Deep mode replaces the basic per-event path.**
 - From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
 - From 05:14 to 08:40, 0 of 140 smart events and 0 of 291 audio events did, and no new Find Anything (`ramDetections`) rows were written (last at 05:12). The Key received no `recognizeKeyFrames` task.
