@@ -199,6 +199,10 @@ _REQUEST_AI_REJECTION_REASONS = {
     "MP4 adaptation requires a bounded start/end interval": "export_interval",
     "MP4 adaptation requires a literal format=ubv component": "export_query",
     "Invalid media path": "media_url",
+    "Failed automatic job cannot be replayed": "replay_refused",
+    "Callback outcome is uncertain; review journal before retrying": "callback_uncertain",
+    "Worker journal is full; archive reviewed entries": "journal_full",
+    "Invalid or oversized RequestAI command": "payload_shape",
 }
 # RequestAI refusals by fixed target class, so a refusal names what was asked.
 _REQUEST_AI_TARGET_CLASSES = {

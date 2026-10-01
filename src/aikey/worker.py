@@ -371,6 +371,10 @@ def _clean_enhanced_jpeg(data, source_size):
         return b""
 
 _DESCRIBE_STAGES = ("queued", "fetch", "frames", "gate", "infer", "callback")
+# Protect re-sends a failed deep task under the same task ID. These run on local
+# models and a failed one sent no callback, so the retry is admitted; uncertain
+# callbacks still are not.
+_DEEP_RETRYABLE = frozenset({"sessionDescribe", "reidEmbed"})
 
 
 def _fit_area(images, budget):
@@ -1730,7 +1734,8 @@ class JobProcessor:
                 raise WorkerError("Task identity reused with different input")
             if previous["state"] in {"callback_sending", "callback_uncertain"}:
                 raise WorkerError("Callback outcome is uncertain; review journal before retrying")
-            if previous["state"] == "failed" and (self.continuous or "schema" in previous):
+            if (previous["state"] == "failed" and (self.continuous or "schema" in previous)
+                    and operation not in _DEEP_RETRYABLE):
                 raise WorkerError("Failed automatic job cannot be replayed")
             if previous["state"] == "completed":
                 future = asyncio.get_running_loop().create_future()

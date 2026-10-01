@@ -373,6 +373,20 @@ async def test_describe_answers_get_room_and_are_counted_by_finish_reason(contro
     assert answers["completion_tokens_max"] == 120 and answers["with_usage"] == 2
 
 
+async def test_protects_retry_of_a_failed_describe_is_admitted(controller, tmp_path):
+    deep_mode.save_prompts(tmp_path, *deep_mode.validate_prompts(prompts_body()))
+    worker = JobProcessor(worker_config(controller), tmp_path, camera_registry=Registry())
+    try:
+        controller.chat_content = "not json"
+        with pytest.raises(WorkerError):
+            await worker.handle(describe_request(task="retry-1"))
+        controller.chat_content = json.dumps({"description": "A person waits.", "labels": []})
+        result = await worker.handle(describe_request(task="retry-1"))
+    finally:
+        await worker.stop()
+    assert result["callback"] == "http_accepted" and len(controller.callbacks) == 1
+
+
 async def test_all_crops_of_one_describe_request_share_a_pixel_budget(controller, tmp_path):
     controller.crop_size = (720, 1280)            # eight of these exhausted the iGPU (1 Oct)
     deep_mode.save_prompts(tmp_path, *deep_mode.validate_prompts(prompts_body()))
