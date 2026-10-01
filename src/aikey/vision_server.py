@@ -77,6 +77,17 @@ def _compile(core, model, devices: list[str]):
     raise RuntimeError("No device compiled the model (" + "; ".join(failures) + ")")
 
 
+def named_outputs(compiled) -> Callable[[Any], dict]:
+    """One inference per call, its results keyed by output name (YuNet has 12 outputs)."""
+    ports = list(compiled.outputs)
+    names = [port.any_name for port in ports]
+
+    def run(pixels):
+        result = compiled(pixels)
+        return {name: result[port] for name, port in zip(names, ports)}
+    return run
+
+
 def _picture(jpeg: bytes):
     from PIL import Image
     try:
@@ -260,8 +271,7 @@ class Models:
             model = core.read_model(face_detector)
             model.reshape({model.inputs[0].any_name: [1, 3, 640, 640]})
             compiled, self.devices["face_detector"] = _compile(core, model, devices)
-            names = [output.any_name for output in compiled.outputs]
-            self.face_detector = lambda pixels: dict(zip(names, (compiled(pixels)[o] for o in compiled.outputs)))
+            self.face_detector = named_outputs(compiled)
         if reid_dir:
             model = core.read_model(Path(reid_dir) / f"{REID_MODEL}.xml")
             model.reshape({model.inputs[0].any_name: [1, 3, _REID_SIZE[1], _REID_SIZE[0]]})

@@ -8,8 +8,8 @@ from aiohttp.test_utils import TestClient, TestServer
 from PIL import Image
 import pytest
 
-from aikey.vision_server import (Models, build_app, restore_aligned_face, restore_face,
-                                 select_tags, tag_pixels, text_inputs)
+from aikey.vision_server import (Models, build_app, named_outputs, restore_aligned_face,
+                                 restore_face, select_tags, tag_pixels, text_inputs)
 
 
 def _jpeg(width=64, height=48, color=(120, 90, 60)):
@@ -221,3 +221,27 @@ def test_without_landmarks_the_square_method_is_used_and_tiny_crops_decline():
     jpeg, aligned = restore_aligned_face(run, _yunet(face=False), Image.new("RGB", (120, 120)))
     assert not aligned and jpeg.startswith(b"\xff\xd8")
     assert restore_aligned_face(run, _yunet(), Image.new("RGB", (60, 90))) is None
+
+
+def test_the_face_detector_runs_one_inference_per_call_for_all_its_outputs():
+    class Port:
+        def __init__(self, name):
+            self.any_name = name
+
+    class Compiled:
+        outputs = [Port(f"{kind}_{stride}") for kind in ("cls", "obj", "bbox", "kps")
+                   for stride in (8, 16, 32)]
+
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self, pixels):
+            self.calls += 1
+            return {port: (self.calls, port.any_name, float(pixels)) for port in self.outputs}
+
+    compiled = Compiled()
+    detect = named_outputs(compiled)
+    for call in (1, 2, 3):
+        result = detect(call / 10)
+        assert compiled.calls == call                                      # one inference per call
+        assert result == {port.any_name: (call, port.any_name, call / 10) for port in Compiled.outputs}
