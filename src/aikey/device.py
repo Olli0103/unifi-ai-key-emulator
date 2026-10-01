@@ -193,6 +193,12 @@ _REQUEST_AI_REJECTION_REASONS = {
     "Unsupported describe video": "deep_shape",
     "Unsupported describe object": "deep_shape",
     "Too many describe inputs": "deep_shape",
+    # Close-pass video exports adapted from UBV to MP4 (1 Oct: 14 were unattributed).
+    "MP4 adaptation is restricted to the verified AI processor export route": "export_route",
+    "MP4 adaptation cannot rewrite signed or unknown query fields": "export_fields",
+    "MP4 adaptation requires a bounded start/end interval": "export_interval",
+    "MP4 adaptation requires a literal format=ubv component": "export_query",
+    "Invalid media path": "media_url",
 }
 # RequestAI refusals by fixed target class, so a refusal names what was asked.
 _REQUEST_AI_TARGET_CLASSES = {

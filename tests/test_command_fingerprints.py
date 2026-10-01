@@ -184,3 +184,14 @@ async def test_request_ai_refusals_also_name_their_target_class(tmp_path):
     status = service.status
     assert {k: v for k, v in status["request_ai_rejection_counts"].items() if v} == {"reverify_no_regions": 1}
     assert {k: v for k, v in status["request_ai_rejection_targets"].items() if v} == {"reverification": 1}
+
+
+async def test_close_pass_export_refusals_have_their_own_reasons(tmp_path):
+    async def refuse(body):
+        raise WorkerError("MP4 adaptation requires a bounded start/end interval")
+    service = device(tmp_path, handler=refuse)
+    body = {"targetUri": ":7968/describe", "timeoutMs": 30000, "payload": {"camera": "c"}}
+    assert await send(service, "RequestAI", body, "a") == 5
+    status = service.status
+    assert {k: v for k, v in status["request_ai_rejection_counts"].items() if v} == {"export_interval": 1}
+    assert {k: v for k, v in status["request_ai_rejection_targets"].items() if v} == {"describe": 1}

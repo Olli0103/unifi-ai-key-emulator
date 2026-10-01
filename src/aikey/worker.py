@@ -1163,8 +1163,11 @@ class JobProcessor:
         timeout_ms = command.get("timeoutMs", 30000)
         if type(timeout_ms) is not int or timeout_ms <= 0:
             raise WorkerError("timeoutMs must be positive")
-        # Protect fails a deep task after 180 s regardless of timeoutMs.
-        return min(self.timeout_s, 170, max(timeout_ms / 1000, 60))
+        # Protect waits 180 s for a deep task whatever timeoutMs says
+        # (resolveTaskTimeoutMs); a close pass first waits for Protect to build
+        # the session's video export, so 60 s timed out about 30 tasks per
+        # 10 minutes (1 Oct).
+        return min(self.timeout_s, 170)
 
     def _normalize_reid_embed(self, command):
         """``:7445/generate-embeddings``: one re-ID vector per person crop."""

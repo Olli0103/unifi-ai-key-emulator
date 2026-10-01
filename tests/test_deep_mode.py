@@ -315,6 +315,18 @@ async def test_an_open_pass_is_described_with_protects_prompt_and_schema(control
     assert "description" not in result["result"] and result["result"]["labels"] == 2
 
 
+def test_deep_tasks_get_protects_full_wait_not_their_timeout_ms(tmp_path):
+    worker = JobProcessor({"runtime": {"mode": "lab"}, "controller_origins": ["http://127.0.0.1:1"],
+                           "device": {"mac": "02:00:00:00:00:98"},
+                           "inference": {"base_url": "http://127.0.0.1:1/v1", "model": "m"},
+                           "worker": {"timeout_s": 300}}, tmp_path)
+    assert worker._deep_budget({"timeoutMs": 30000}) == 170
+    worker.timeout_s = 90
+    assert worker._deep_budget({"timeoutMs": 30000}) == 90
+    with pytest.raises(WorkerError):
+        worker._deep_budget({"timeoutMs": 0})
+
+
 async def test_all_crops_of_one_describe_request_share_a_pixel_budget(controller, tmp_path):
     controller.crop_size = (720, 1280)            # eight of these exhausted the iGPU (1 Oct)
     deep_mode.save_prompts(tmp_path, *deep_mode.validate_prompts(prompts_body()))
