@@ -747,6 +747,7 @@ class CandidateService:
         self.faces_found = 0
         self.faces_sent = 0
         self.faces_gated: dict[str, int] = {}
+        self.stream_control_rejection_reasons: dict[str, int] = {}
         self.face_yaw_bands: dict[str, int] = {}
         self.face_px_bands: dict[str, int] = {}
         self._face_camera_stats: dict[str, dict] = {}
@@ -2115,6 +2116,7 @@ class CandidateService:
             "stream_controls_started": self.stream_controls_started,
             "stream_controls_stopped": self.stream_controls_stopped,
             "stream_controls_rejected": self.stream_controls_rejected,
+            "stream_control_rejection_reasons": dict(self.stream_control_rejection_reasons),
             "stream_status_events_sent": self.stream_status_events_sent,
             "stream_reconnects_preserved": self.stream_reconnects_preserved,
             "stream_grace_closures": self.stream_grace_closures,
@@ -2823,6 +2825,9 @@ class CandidateService:
                                               {"description": exc.code})
                     self.stream_controls_rejected += 1
                     self.last_stream_error = exc.code
+                    reasons = self.stream_control_rejection_reasons
+                    key = exc.code if exc.code in reasons or len(reasons) < 12 else "other"
+                    reasons[key] = reasons.get(key, 0) + 1
                 else:
                     if (result["status"] == "stopped"
                             and isinstance(self.ingress, AiPortIngress)):

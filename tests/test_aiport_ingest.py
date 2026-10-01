@@ -262,14 +262,17 @@ async def test_ingress_rejects_untrusted_control_before_process(tmp_path, change
 
 
 @pytest.mark.asyncio
-async def test_ingress_never_reports_started_without_a_frame(tmp_path):
+async def test_a_start_without_a_first_frame_is_accepted_but_never_listed_until_it_decodes(tmp_path):
+    # Several streams starting at once can miss the first-frame deadline, and
+    # Protect never repeats a refused UiStreamControl (1 Oct): accept and retry.
     decoder, _ = fake_decoder(tmp_path, emit_frame=False)
     ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
                            ffmpeg_path=decoder, start_timeout=0.1)
-    with pytest.raises(IngressError, match="stream_start_timeout"):
-        await ingress.control(start_payload())
-    assert ingress.list_streams() == []
-    await ingress.close()
+    try:
+        assert (await ingress.control(start_payload()))["status"] == "started"
+        assert ingress.list_streams() == [] and ingress.deferred_starts == 1
+    finally:
+        await ingress.close()
 
 
 @pytest.mark.asyncio
@@ -291,10 +294,15 @@ async def test_decoder_failure_is_classified_without_exposing_private_output(
     decoder, _ = fake_decoder(tmp_path, emit_frame=False, stderr_text=stderr_text)
     ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
                            ffmpeg_path=decoder, start_timeout=2)
-    with pytest.raises(IngressError) as failure:
-        await ingress.control(start_payload())
-    assert failure.value.code == code
-    assert "private-alias-123" not in str(failure.value)
+    if code == "stream_ended":
+        # A failure a later attempt can overcome is accepted and retried.
+        assert (await ingress.control(start_payload()))["status"] == "started"
+        assert ingress.deferred_starts == 1
+    else:
+        with pytest.raises(IngressError) as failure:
+            await ingress.control(start_payload())
+        assert failure.value.code == code
+        assert "private-alias-123" not in str(failure.value)
     assert ingress.last_decoder_exit_code == 0
     assert ingress.last_decoder_stderr_seen
     assert ingress.last_decoder_error_markers == markers
@@ -576,3 +584,14 @@ def test_a_twin_reports_whether_it_is_ready_still_encoding_or_gone():
     assert session.full_frame_state(b"\xff\xd8c\xff\xd9") == ("gone", None)
     session._full_index = 2                                              # twin 2 was dropped
     assert session.full_frame_state(second) == ("gone", None)
+
+
+
+def test_only_transient_start_failures_are_retried():
+    from aikey.aiport_ingest import _retryable_start
+    for code in ("rtsp_connect_failed", "stream_start_timeout", "stream_ended", "rtsp_invalid_data",
+                 "rtsp_status_503"):
+        assert _retryable_start(code), code
+    for code in ("rtsp_access_denied", "rtsp_stream_not_found", "rtsp_protocol_rejected",
+                 "decoder_option_missing", "rtsp_status_454", "stream_capacity_exceeded"):
+        assert not _retryable_start(code), code

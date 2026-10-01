@@ -87,6 +87,13 @@ def _decoder_failure(stderr: bytes) -> str:
     return "stream_ended"
 
 
+def _retryable_start(code: str) -> bool:
+    """A start failure that a later attempt can overcome; refusals stay final."""
+    return (code in {"rtsp_connect_failed", "stream_start_timeout", "stream_ended",
+                     "rtsp_invalid_data"}
+            or re.fullmatch(r"rtsp_status_5[0-9]{2}", code) is not None)
+
+
 def _decoder_markers(stderr: bytes) -> tuple[str, ...]:
     """Expose only hard-coded failure labels, never text from a stream URL."""
     output = stderr.lower()
@@ -592,11 +599,13 @@ class AiPortIngress:
                 self.last_decoder_error_markers = session.error_markers
                 self.last_decoder_error_terms = session.error_terms
                 await session.close()
-                if isinstance(exc, IngressError) and exc.code == "rtsp_connect_failed":
+                if isinstance(exc, IngressError) and _retryable_start(exc.code):
                     # After a Protect restart its RTSP relay can refuse
                     # connections for a while, and Protect does not retry a
                     # failed UiStreamControl. Accept the stream and let the
                     # watch loop connect with backoff, as the relay comes up.
+                    # Several streams starting at once can also miss the first
+                    # frame deadline (1 Oct: Garage stayed off after restarts).
                     self._desired_spec = spec
                     self.deferred_starts += 1
                     self._restart_task = asyncio.create_task(self._watch_decoder())
