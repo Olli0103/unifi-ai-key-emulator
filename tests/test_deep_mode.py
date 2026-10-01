@@ -67,6 +67,18 @@ def test_malformed_prompt_configs_are_refused(change):
         deep_mode.validate_prompts({**prompts_body(), **change})
 
 
+def test_the_label_list_is_bounded_for_guided_decoding_without_touching_protects_schema():
+    schema = {"type": "object", "required": ["description", "labels"], "properties": {
+        "description": {"type": "string"}, "labels": {"type": "array", "items": {"type": "string"}}}}
+    bounded = deep_mode.bounded_schema(schema)
+    assert bounded["properties"]["labels"]["maxItems"] == 32
+    assert "maxItems" not in schema["properties"]["labels"]               # the stored copy is untouched
+    already = {**schema, "properties": {**schema["properties"], "labels": {
+        "type": "array", "items": {"type": "string"}, "maxItems": 10}}}
+    assert deep_mode.bounded_schema(already) == already
+    assert deep_mode.bounded_schema({"type": "object"}) == {"type": "object"}
+
+
 def test_the_model_answer_becomes_a_description_and_clean_labels():
     text = '```json\n{"description": "A person in a red hoodie.", "labels": ' \
            '["top:hoodie", "topColor:red", "top:hoodie", "nonsense", "gender:", 5]}\n```'
@@ -306,7 +318,7 @@ async def test_an_open_pass_is_described_with_protects_prompt_and_schema(control
     [request] = controller.chat_requests
     assert request["messages"][0] == {"role": "system", "content": "You describe ONE person."}
     assert request["messages"][1]["content"][-1] == {"type": "text", "text": "Describe person"}
-    assert request["response_format"]["json_schema"]["schema"] == SCHEMA
+    assert request["response_format"]["json_schema"]["schema"] == deep_mode.bounded_schema(SCHEMA)
     assert request["top_k"] == 20 and request["temperature"] == 0
     [(path, body)] = controller.callbacks
     assert path == "/internal/aiprocessors/descriptions/task-2"
@@ -355,7 +367,7 @@ async def test_describe_answers_get_room_and_are_counted_by_finish_reason(contro
         answers = worker.status()["deep_answers"]
     finally:
         await worker.stop()
-    assert [r["max_tokens"] for r in controller.chat_requests] == [1024, 1024]
+    assert [r["max_tokens"] for r in controller.chat_requests] == [384, 384]
     assert answers["finish"] == {"stop": 1, "length": 1, "other": 0}
     assert answers["unparsed"] == {"truncated": 1, "not_json": 0, "no_description": 0, "provider": 0}
     assert answers["completion_tokens_max"] == 120 and answers["with_usage"] == 2

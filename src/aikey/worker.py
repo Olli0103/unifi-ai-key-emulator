@@ -131,10 +131,11 @@ _VISION_MAX_SIDE = 1280
 # All crops of one deep-mode describe request together: up to eight 768 px
 # crops left the Model Server failing with CL_OUT_OF_RESOURCES (1 Oct 06:39).
 _DESCRIBE_MAX_PIXELS = 1_000_000
-# Protect's describe schema does not bound the label list, and 512 tokens cut
-# answers off mid-JSON (1 Oct: 4 of 24 describes unparseable). A stalled
-# request must free the single inference gate long before the job deadline.
-_DESCRIBE_MAX_TOKENS = 1024
+# Normal describe answers use about 40 tokens; runaway label lists ran to any
+# cap (1 Oct), so the cap stays small and the schema bounds the list
+# (deep_mode.bounded_schema). A stalled request must free the single
+# inference gate long before the job deadline.
+_DESCRIBE_MAX_TOKENS = 384
 _DESCRIBE_INFER_TIMEOUT_S = 90
 _REVERIFICATION_TARGET = ":7788/v1/models/second_verifier_mlabel/inference"
 # Zero-shot prompts for second-stage verification with the local CLIP encoder.
@@ -2505,8 +2506,8 @@ class JobProcessor:
         mark = self._describe_stage(job, "gate", mark)
         try:
             url, headers, request = self.provider.build_structured_request(
-                crops, prompt["system"], prompt["user"], prompt["schema"], prompt["sampling"],
-                max_tokens=_DESCRIBE_MAX_TOKENS)
+                crops, prompt["system"], prompt["user"], deep_mode.bounded_schema(prompt["schema"]),
+                prompt["sampling"], max_tokens=_DESCRIBE_MAX_TOKENS)
         except ProviderError as exc:
             raise WorkerError(str(exc)) from exc
         gate = self._inference_gate

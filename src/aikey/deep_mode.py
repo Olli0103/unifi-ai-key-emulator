@@ -156,6 +156,25 @@ def select_prompt(prompts: dict, types: list[str]) -> dict:
             "margin": float(entry.get("bboxMargin", 0.1))}
 
 
+DESCRIBE_LABEL_ITEMS = 32
+
+
+def bounded_schema(schema: dict) -> dict:
+    """Protect's describe schema with its label list bounded for guided decoding.
+
+    Protect leaves ``labels`` unbounded and samples greedily, so Qwen3-VL can
+    keep emitting labels until the token cap and the JSON never closes (1 Oct:
+    3 of 22 answers hit 1024 tokens while normal ones used about 40). A bound
+    already present is kept.
+    """
+    labels = (schema.get("properties") or {}).get("labels") if isinstance(schema, dict) else None
+    if not isinstance(labels, dict) or labels.get("type") != "array" or "maxItems" in labels:
+        return schema
+    bounded = json.loads(json.dumps(schema))
+    bounded["properties"]["labels"]["maxItems"] = DESCRIBE_LABEL_ITEMS
+    return bounded
+
+
 def parse_description(text: str) -> tuple[str, list[str]]:
     """The model's JSON answer as (description, labels); labels are key:value."""
     try:
