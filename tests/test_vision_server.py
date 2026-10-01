@@ -25,8 +25,9 @@ def _form(data):
 
 
 class _Fake(Models):
-    def __init__(self, *, tagger=True, enhancer=True, encoders=True, reid=True):
-        self.devices = {"tags": "NPU", "enhance": "NPU", "embeddings": "NPU", "reid": "NPU"}
+    def __init__(self, *, tagger=True, enhancer=True, encoders=True, reid=True, rerank=True):
+        self.devices = {"tags": "NPU", "enhance": "NPU", "embeddings": "NPU", "reid": "NPU",
+                        "rerank": "NPU"}
         self.reid = (lambda pixels: [numpy.arange(1, 257, dtype=numpy.float32)[None]]) if reid else None
         self.tag_names, self.tag_thresholds = ["dog", "grass", "car"], [0.6, 0.7, 0.9]
         self.tagger = (lambda pixels: [numpy.array([[0.95, 0.72, 0.5]])]) if tagger else None
@@ -35,6 +36,18 @@ class _Fake(Models):
         self.tokenizer = type("T", (), {"encode": staticmethod(
             lambda text: type("E", (), {"ids": list(range(len(text)))})())})()
         self.encoders = ({128: self._encoder(), 512: self._encoder()} if encoders else {})
+        self.rerank_pad_id = 1
+        self.pair_tokenizer = type("P", (), {"encode": staticmethod(
+            lambda query, document: type("E", (), {"ids": list(range(len(query) + len(document)))})())})()
+        self.rerankers = ({128: self._reranker(), 256: self._reranker()} if rerank else {})
+
+    @staticmethod
+    def _reranker():
+        def run(feed):
+            ids, mask = feed
+            assert ids.shape == mask.shape and ids.shape[1] in (128, 256)
+            return [numpy.array([int(mask.sum()) / 10.0 - 3.0], dtype=numpy.float32)]
+        return run
 
     @staticmethod
     def _encoder():
@@ -128,7 +141,8 @@ async def test_a_missing_model_answers_404_and_health_lists_devices():
         assert (await c.post("/v1/embeddings", json={"input": ["x"]})).status == 404
         health = await (await c.get("/healthz")).json()
         assert health["models"] == {"tags": None, "enhance": "gfpgan-1.4", "embeddings": None,
-                                    "reid": "person-reidentification-retail-0288"}
+                                    "reid": "person-reidentification-retail-0288",
+                                    "rerank": "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"}
         assert health["devices"]["enhance"] == "NPU"
 
 
@@ -145,3 +159,24 @@ def test_reid_input_is_bgr_128_by_256():
     pixels = reid_pixels(Image.new("RGB", (40, 90), (255, 0, 0)))
     assert pixels.shape == (1, 3, 256, 128)
     assert pixels[0, 2].max() == 255 and pixels[0, 0].max() == 0          # red lands in channel 2
+
+
+async def test_rerank_scores_every_document_in_order_including_empty_ones(client):
+    response = await client.post("/v1/rerank", json={"query": "cat", "documents": ["a cat", "", "x" * 200]})
+    body = await response.json()
+    assert response.status == 200 and body["model"] == "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+    assert body["scores"] == [round(8 / 10 - 3, 5), round(3 / 10 - 3, 5), round(203 / 10 - 3, 5)]
+    health = await (await client.get("/healthz")).json()
+    assert health["rerank_requests"] == 1 and health["reranked_documents"] == 3
+
+
+async def test_malformed_rerank_requests_are_refused(client):
+    for bad in ({"query": "", "documents": ["a"]}, {"query": "q", "documents": []},
+                {"query": "q", "documents": ["a"] * 33}, {"query": "q", "documents": [None]},
+                {"query": "q"}, ["q"]):
+        assert (await client.post("/v1/rerank", json=bad)).status == 400
+
+
+async def test_rerank_without_the_model_answers_404():
+    async with TestClient(TestServer(build_app(_Fake(rerank=False)))) as c:
+        assert (await c.post("/v1/rerank", json={"query": "q", "documents": ["a"]})).status == 404

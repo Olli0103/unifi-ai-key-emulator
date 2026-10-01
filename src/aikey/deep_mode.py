@@ -53,23 +53,28 @@ class DeepModeError(ValueError):
 
 
 def validate_config(value: Any) -> dict | None:
-    """``deep_understanding: {"reid_server": "http://<local>:<port>"}`` or None."""
+    """``deep_understanding: {"reid_server", "rerank_server"?}`` (local HTTP) or None.
+
+    ``rerank_server`` serves ``/v1/rerank`` for Protect's hybrid session search
+    (rerank_relay.py); without it the relay stays off.
+    """
     if value is None:
         return None
-    if not isinstance(value, dict) or set(value) != {"reid_server"}:
-        raise DeepModeError("deep_understanding needs only reid_server")
-    server = value["reid_server"]
-    parsed = urlsplit(server) if isinstance(server, str) else None
-    try:
-        address = ipaddress.ip_address(parsed.hostname or "") if parsed else None
-    except ValueError:
-        address = None
-    if (parsed is None or parsed.scheme != "http" or address is None
-            or not (address.is_loopback or address.is_private) or parsed.path not in {"", "/"}
-            or parsed.query or parsed.fragment or parsed.username or parsed.password):
-        # Person crops never leave this host or its container network.
-        raise DeepModeError("deep_understanding.reid_server must be a local HTTP server")
-    return {"reid_server": server.rstrip("/")}
+    if not isinstance(value, dict) or not {"reid_server"} <= set(value) <= {"reid_server", "rerank_server"}:
+        raise DeepModeError("deep_understanding needs reid_server and optionally rerank_server")
+    for key in value:
+        server = value[key]
+        parsed = urlsplit(server) if isinstance(server, str) else None
+        try:
+            address = ipaddress.ip_address(parsed.hostname or "") if parsed else None
+        except ValueError:
+            address = None
+        if (parsed is None or parsed.scheme != "http" or address is None
+                or not (address.is_loopback or address.is_private) or parsed.path not in {"", "/"}
+                or parsed.query or parsed.fragment or parsed.username or parsed.password):
+            # Person crops and session texts never leave this host or its container network.
+            raise DeepModeError(f"deep_understanding.{key} must be a local HTTP server")
+    return {key: server.rstrip("/") for key, server in value.items()}
 
 
 def combo_key(types: list[str]) -> str:

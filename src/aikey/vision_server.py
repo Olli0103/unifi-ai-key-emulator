@@ -14,6 +14,9 @@ CPU):
 - ``POST /v1/reid``: one JPEG person crop, answered with Intel's
   person-reidentification-retail-0288 vector (256 values, L2-normalized) for
   deep-mode session grouping.
+- ``POST /v1/rerank``: ``{"query", "documents"}``, answered with one
+  cross-encoder relevance logit per document as ``{"scores", "model"}``; the
+  Key relays Protect's hybrid session-search rerank sidecar here.
 
 Images and texts are never logged or stored; only counters are kept. The
 server listens on a container network address.
@@ -40,10 +43,13 @@ _TAG_STD = (0.229, 0.224, 0.225)
 _FACE_SIZE = 512
 _MIN_FACE_SIDE = 24
 _TEXT_BUCKETS = (128, 512)
+_RERANK_BUCKETS = (128, 256)
+_MAX_DOCUMENTS = 32                       # Protect reranks at most 30 sessions
 TAG_MODEL = "ram-plus-swin-large-14m"
 FACE_MODEL = "gfpgan-1.4"
 TEXT_MODEL = "intfloat/multilingual-e5-small"
 REID_MODEL = "person-reidentification-retail-0288"
+RERANK_MODEL = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
 _REID_SIZE = (128, 256)                   # width, height
 
 
@@ -141,11 +147,11 @@ def reid_pixels(picture):
     return pixels[:, :, ::-1].transpose(2, 0, 1)[None].copy()
 
 
-def text_inputs(ids: list[int], pad_id: int):
+def text_inputs(ids: list[int], pad_id: int, buckets=_TEXT_BUCKETS):
     """Token IDs padded to the smallest static bucket, with the attention mask."""
     import numpy
-    length = next(b for b in _TEXT_BUCKETS if len(ids) <= b) if len(ids) <= _TEXT_BUCKETS[-1] \
-        else _TEXT_BUCKETS[-1]
+    length = next(b for b in buckets if len(ids) <= b) if len(ids) <= buckets[-1] \
+        else buckets[-1]
     ids = ids[:length]
     mask = [1] * len(ids) + [0] * (length - len(ids))
     ids = ids + [pad_id] * (length - len(ids))
@@ -157,7 +163,8 @@ class Models:
 
     def __init__(self, *, tags_dir: str | None, face_dir: str | None, text_dir: str | None,
                  devices: list[str], cache_dir: str | None,
-                 text_devices: list[str] | None = None, reid_dir: str | None = None):
+                 text_devices: list[str] | None = None, reid_dir: str | None = None,
+                 rerank_dir: str | None = None, rerank_devices: list[str] | None = None):
         import openvino as ov
         core = ov.Core()
         if cache_dir:
@@ -165,6 +172,7 @@ class Models:
         self.devices: dict[str, str] = {}
         self.tagger = self.enhancer = self.reid = None
         self.encoders: dict[int, Any] = {}
+        self.rerankers: dict[int, Any] = {}
         if tags_dir:
             model = core.read_model(Path(tags_dir) / "ram_plus.xml")
             model.reshape({model.inputs[0].any_name: [1, 3, _TAG_SIZE, _TAG_SIZE]})
@@ -192,6 +200,18 @@ class Models:
                 model.reshape({port.any_name: [1, length] for port in model.inputs})
                 self.encoders[length], self.devices["embeddings"] = _compile(
                     core, model, text_devices or devices)
+        if rerank_dir:
+            from tokenizers import Tokenizer
+            self.pair_tokenizer = Tokenizer.from_file(str(Path(rerank_dir) / "tokenizer.json"))
+            self.pair_tokenizer.no_padding()
+            # Long descriptions lose their tail, never the query.
+            self.pair_tokenizer.enable_truncation(_RERANK_BUCKETS[-1], strategy="only_second")
+            self.rerank_pad_id = self.pair_tokenizer.token_to_id("<pad>") or 0
+            for length in _RERANK_BUCKETS:
+                model = core.read_model(Path(rerank_dir) / "rerank.xml")
+                model.reshape({port.any_name: [1, length] for port in model.inputs})
+                self.rerankers[length], self.devices["rerank"] = _compile(
+                    core, model, rerank_devices or devices)
 
     def tags(self, jpeg: bytes) -> list[dict[str, Any]]:
         probabilities = self.tagger(tag_pixels(_picture(jpeg)))[0][0]
@@ -220,12 +240,24 @@ class Models:
         return vectors
 
 
+    def rerank(self, query: str, documents: list[str]) -> list[float]:
+        scores = []
+        for document in documents:
+            ids = self.pair_tokenizer.encode(query, document).ids
+            length, input_ids, mask = text_inputs(ids, self.rerank_pad_id, _RERANK_BUCKETS)
+            score = float(self.rerankers[length]([input_ids, mask])[0].reshape(-1)[0])
+            if score != score or score in (float("inf"), float("-inf")):
+                raise RuntimeError("non-finite rerank score")
+            scores.append(round(score, 5))
+        return scores
+
+
 def build_app(models: Models) -> web.Application:
     counters = {"tag_requests": 0, "enhance_requests": 0, "enhanced": 0, "declined": 0,
                 "embedding_requests": 0, "texts": 0, "rejected": 0, "failed": 0}
     locks = {"tags": asyncio.Lock(), "enhance": asyncio.Lock(), "embeddings": asyncio.Lock(),
-             "reid": asyncio.Lock()}
-    counters["reid_requests"] = 0
+             "reid": asyncio.Lock(), "rerank": asyncio.Lock()}
+    counters.update(reid_requests=0, rerank_requests=0, reranked_documents=0)
 
     async def run(role, function, *args):
         async with locks[role]:
@@ -322,12 +354,35 @@ def build_app(models: Models) -> web.Application:
                                   "data": [{"object": "embedding", "index": i, "embedding": v}
                                            for i, v in enumerate(vectors)]})
 
+    async def rerank(request: web.Request) -> web.Response:
+        counters["rerank_requests"] += 1
+        if not models.rerankers:
+            return unavailable()
+        try:
+            body = await request.json()
+            query = body.get("query") if isinstance(body, dict) else None
+            documents = body.get("documents") if isinstance(body, dict) else None
+            # Protect sends '' for a session without a description; it still gets a score.
+            if (not isinstance(query, str) or not query.strip() or len(query) > _MAX_TEXT_CHARS
+                    or not isinstance(documents, list) or not 1 <= len(documents) <= _MAX_DOCUMENTS
+                    or any(not isinstance(d, str) or len(d) > _MAX_TEXT_CHARS for d in documents)):
+                raise InputError("query and 1 to 32 documents required")
+        except (InputError, ValueError):
+            counters["rejected"] += 1
+            return web.json_response({"error": "invalid_request"}, status=400)
+        scores, error = await run("rerank", models.rerank, query, documents)
+        if error is not None:
+            return error
+        counters["reranked_documents"] += len(documents)
+        return web.json_response({"scores": scores, "model": RERANK_MODEL})
+
     async def health(_request: web.Request) -> web.Response:
         return web.json_response({"status": "ok", "devices": models.devices,
                                   "models": {"tags": TAG_MODEL if models.tagger else None,
                                              "enhance": FACE_MODEL if models.enhancer else None,
                                              "embeddings": TEXT_MODEL if models.encoders else None,
-                                             "reid": REID_MODEL if models.reid else None},
+                                             "reid": REID_MODEL if models.reid else None,
+                                             "rerank": RERANK_MODEL if models.rerankers else None},
                                   **counters})
 
     app = web.Application(client_max_size=_MAX_IMAGE_BYTES + 131072)
@@ -335,6 +390,7 @@ def build_app(models: Models) -> web.Application:
     app.router.add_post("/v1/enhance", enhance)
     app.router.add_post("/v1/embeddings", embeddings)
     app.router.add_post("/v1/reid", reid)
+    app.router.add_post("/v1/rerank", rerank)
     app.router.add_get("/healthz", health)
     return app
 
@@ -345,6 +401,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--enhance", help="directory with gfpgan.xml")
     parser.add_argument("--embeddings", help="directory with e5.xml and tokenizer.json")
     parser.add_argument("--reid", help=f"directory with {REID_MODEL}.xml")
+    parser.add_argument("--rerank", help="directory with rerank.xml and tokenizer.json")
+    parser.add_argument("--rerank-device", help="devices for the cross-encoder only")
     parser.add_argument("--device", default="NPU,GPU,CPU",
                         help="comma-separated OpenVINO devices, tried in order per model")
     parser.add_argument("--embeddings-device",
@@ -358,7 +416,8 @@ def main(argv: list[str] | None = None) -> int:
 
     models = Models(tags_dir=args.tags, face_dir=args.enhance, text_dir=args.embeddings,
                     devices=devices(args.device), cache_dir=args.cache_dir,
-                    text_devices=devices(args.embeddings_device), reid_dir=args.reid)
+                    text_devices=devices(args.embeddings_device), reid_dir=args.reid,
+                    rerank_dir=args.rerank, rerank_devices=devices(args.rerank_device))
     web.run_app(build_app(models), host=args.host, port=args.port, access_log=None, print=None)
     return 0
 

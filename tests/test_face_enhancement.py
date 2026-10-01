@@ -20,6 +20,10 @@ def jpeg(size, fmt="JPEG"):
     return out.getvalue()
 
 
+_PROTECT_PART_TYPES = {"text/plain", "application/json", "application/octet-stream",
+                       "image/jpeg", "image/jpg"}
+
+
 class Controller:
     def __init__(self):
         self.original = jpeg((64, 64))
@@ -40,7 +44,14 @@ class Controller:
         reader = await request.multipart()
         parts = {}
         while (part := await reader.next()) is not None:
+            # Protect's multipartParser keeps only parts whose type is exactly
+            # one of these; "text/plain; charset=utf-8" is skipped (1 Oct).
+            if part.headers.get("Content-Type", "application/octet-stream") not in _PROTECT_PART_TYPES:
+                await part.read(decode=False)
+                continue
             parts[part.name] = await part.read(decode=False)
+        if "smartDetectObject" not in parts or parts.get("type") != b"face" or "file" not in parts:
+            return web.Response(status=400)
         self.uploads.append(parts)
         return web.json_response({"bytes": len(parts.get("file", b""))})
 

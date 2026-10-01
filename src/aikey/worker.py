@@ -128,6 +128,9 @@ _ENHANCE_MAX_SIDE = 2048
 # Images for the vision model get the same bound as video frames: a 4K
 # snapshot exhausted the iGPU (30 Sep: CL_OUT_OF_RESOURCES in the Model Server).
 _VISION_MAX_SIDE = 1280
+# All crops of one deep-mode describe request together: up to eight 768 px
+# crops left the Model Server failing with CL_OUT_OF_RESOURCES (1 Oct 06:39).
+_DESCRIBE_MAX_PIXELS = 1_000_000
 _REVERIFICATION_TARGET = ":7788/v1/models/second_verifier_mlabel/inference"
 # Zero-shot prompts for second-stage verification with the local CLIP encoder.
 _VERIFY_PROMPTS = {
@@ -360,6 +363,28 @@ def _clean_enhanced_jpeg(data, source_size):
             return out.getvalue()
     except (OSError, ValueError, Image.DecompressionBombError):
         return b""
+
+def _fit_area(images, budget):
+    """JPEGs scaled by one common factor so their pixels sum to at most budget."""
+    from PIL import Image
+    sizes = []
+    for data in images:
+        with Image.open(BytesIO(data)) as picture:
+            sizes.append(picture.size)
+    total = sum(width * height for width, height in sizes)
+    if total <= budget:
+        return list(images)
+    factor = math.sqrt(budget / total)
+    fitted = []
+    for data, (width, height) in zip(images, sizes):
+        with Image.open(BytesIO(data)) as picture:
+            picture = picture.convert("RGB").resize(
+                (max(1, int(width * factor)), max(1, int(height * factor))), Image.LANCZOS)
+            out = BytesIO()
+            picture.save(out, format="JPEG", quality=90)
+            fitted.append(out.getvalue())
+    return fitted
+
 
 def _padded(coord, fraction):
     x, y, w, h = (v / 1000 for v in coord)
@@ -2426,6 +2451,10 @@ class JobProcessor:
                     crops.append(out.getvalue())
         if not crops:
             raise WorkerError("No crops to describe")
+        try:
+            crops = _fit_area(crops, _DESCRIBE_MAX_PIXELS)
+        except (OSError, ValueError, Image.DecompressionBombError) as exc:
+            raise WorkerError("Unreadable crop for the describer") from exc
         prepared = time.monotonic()
         try:
             url, headers, request = self.provider.build_structured_request(
@@ -2644,10 +2673,12 @@ class JobProcessor:
                 kwargs = {"data": form}
             elif job.callback_kind == "enhanced":
                 # The enhanced-image route parses camera, type, smartDetectObject
-                # and file; an empty file means "no modification" (7.3.60).
+                # and file; an empty file means "no modification" (7.3.60). Its
+                # parser keeps only parts typed exactly text/plain, so the
+                # fields must not carry aiohttp's default "; charset=utf-8".
                 form = aiohttp.FormData()
                 for name in ("camera", "type", "smartDetectObject"):
-                    form.add_field(name, payload[name])
+                    form.add_field(name, payload[name], content_type="text/plain")
                 (_, image), = images
                 form.add_field("file", image, filename="enhanced.jpg", content_type="image/jpeg")
                 kwargs = {"data": form}

@@ -8,6 +8,7 @@ from aiohttp import web
 
 from .camera_registry import CameraRegistry
 from .device import DeviceService
+from .deep_mode import validate_config as deep_config
 from .discovery import DiscoveryService
 from .search import SearchService
 from .tls import client_context, server_context
@@ -38,6 +39,11 @@ class Application:
                                     media_ssl_context=outbound)
         self.discovery = DiscoveryService(config, info_provider=self.device.get_info,
                                            adopted_provider=lambda: self.device.status["adopted"])
+        deep = deep_config(config.get("deep_understanding"))
+        self.rerank = None
+        if deep and "rerank_server" in deep:
+            from .rerank_relay import RerankRelay
+            self.rerank = RerankRelay(deep["rerank_server"])
         self.runner = None
         self.https_port = None
 
@@ -63,6 +69,8 @@ class Application:
                 if options["mode"] != "lab":
                     raise ValueError("Plain HTTP management is restricted to the local lab")
                 await web.TCPSite(self.runner, options["bind"], options["http_port"]).start()
+            if self.rerank is not None:
+                await self.rerank.start()
             await self.discovery.start()
             await self.device.start()
             await self.search.start()
@@ -76,6 +84,7 @@ class Application:
             "camera_registry": (self.camera_registry.status() if self.camera_registry is not None
                                 else {"enabled": False}),
             "search": self.search.status, "discovery": self.discovery.status,
+            "rerank": self.rerank.status if self.rerank is not None else {"enabled": False},
             "native_compatibility": "needs_evidence"})
 
     async def stop(self):
@@ -86,7 +95,9 @@ class Application:
         outcomes = await asyncio.gather(self.device.stop(), self.search.stop(), self.discovery.stop(),
                                          self.worker.stop(),
                                          self.camera_registry.stop() if self.camera_registry is not None
-                                         else asyncio.sleep(0), return_exceptions=True)
+                                         else asyncio.sleep(0),
+                                         self.rerank.stop() if self.rerank is not None else asyncio.sleep(0),
+                                         return_exceptions=True)
         if self.runner is not None:
             await self.runner.cleanup()
             self.runner = None

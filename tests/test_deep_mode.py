@@ -91,9 +91,14 @@ def test_deep_config_needs_a_local_reid_server():
         "reid_server": "http://172.30.50.14:8190"}
     assert deep_mode.validate_config(None) is None
     for bad in ({"reid_server": "https://reid.example.com"}, {"reid_server": "http://8.8.8.8"},
-                {"reid_server": "http://10.0.0.1:1/x"}, {}, {"reid_server": "http://10.0.0.1", "x": 1}):
+                {"reid_server": "http://10.0.0.1:1/x"}, {}, {"reid_server": "http://10.0.0.1", "x": 1},
+                {"rerank_server": "http://10.0.0.1"},
+                {"reid_server": "http://10.0.0.1", "rerank_server": "https://rerank.example.com"}):
         with pytest.raises(deep_mode.DeepModeError):
             deep_mode.validate_config(bad)
+    assert deep_mode.validate_config({"reid_server": "http://10.0.0.1:1",
+                                      "rerank_server": "http://10.0.0.1:1/"}) == {
+        "reid_server": "http://10.0.0.1:1", "rerank_server": "http://10.0.0.1:1"}
 
 
 # --- device: capability, mode switch and prompt sync --------------------------
@@ -157,13 +162,14 @@ async def test_a_key_without_deep_models_stays_basic(tmp_path):
 class Controller:
     def __init__(self):
         self.callbacks, self.reid_calls, self.chat_requests, self.embed_requests = [], 0, [], []
+        self.crop_size = (80, 160)
         self.reid_status, self.chat_content = 200, json.dumps(
             {"description": "A person in a red hoodie walks to the door.",
              "labels": ["top:hoodie", "topColor:red"]})
 
     async def crop(self, request):
         out = io.BytesIO()
-        Image.new("RGB", (80, 160), (200, 40, 40)).save(out, "JPEG")
+        Image.new("RGB", self.crop_size, (200, 40, 40)).save(out, "JPEG")
         return web.Response(body=out.getvalue(), content_type="image/jpeg")
 
     async def reid(self, request):
@@ -307,6 +313,27 @@ async def test_an_open_pass_is_described_with_protects_prompt_and_schema(control
     assert len(body["descEmbedding"]) == 384 and body["version"] == "session-v1"
     assert controller.embed_requests == [["passage: A person in a red hoodie walks to the door."]]
     assert "description" not in result["result"] and result["result"]["labels"] == 2
+
+
+async def test_all_crops_of_one_describe_request_share_a_pixel_budget(controller, tmp_path):
+    controller.crop_size = (720, 1280)            # eight of these exhausted the iGPU (1 Oct)
+    deep_mode.save_prompts(tmp_path, *deep_mode.validate_prompts(prompts_body()))
+    images = [{"reqUrl": f"/internal/aiprocessors/image/th{n}", "thumbnailId": f"th{n}",
+               "objectId": f"obj{n}", "objectType": "person"} for n in range(8)]
+    worker = JobProcessor(worker_config(controller), tmp_path, camera_registry=Registry())
+    try:
+        await worker.handle(describe_request(images=images))
+    finally:
+        await worker.stop()
+    [request] = controller.chat_requests
+    urls = [part["image_url"]["url"] for part in request["messages"][1]["content"]
+            if part["type"] == "image_url"]
+    sizes = []
+    for url in urls:
+        with Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))) as picture:
+            sizes.append(picture.size)
+    assert len(sizes) == 8 and sum(w * h for w, h in sizes) <= 1_000_000
+    assert all(abs(w / h - 720 / 1280) < 0.02 for w, h in sizes)    # shape kept
 
 
 async def test_describing_before_protect_synced_prompts_fails(controller, tmp_path):
