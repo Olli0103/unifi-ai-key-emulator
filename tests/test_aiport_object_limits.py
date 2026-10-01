@@ -82,3 +82,14 @@ def test_a_speech_limit_needs_speech_cameras(tmp_path):
     config["live_speech_max_events_per_hour"] = 60
     with pytest.raises(CandidateError):
         load(tmp_path, config)
+
+
+def test_camera_thresholds_are_validated_for_paired_cameras_only(tmp_path):
+    config = pool_config(tmp_path)
+    config["live_pool_detector"]["camera_thresholds"] = {CAMERA: 0.4}
+    loaded = load(tmp_path, config)
+    assert list(loaded["live_pool_detector"]["camera_thresholds"].values()) == [0.4]
+    for bad in ({CAMERA: 0}, {CAMERA: 2}, {CAMERA: True}, {"2A9988776655": 0.4}, {}):
+        config["live_pool_detector"]["camera_thresholds"] = bad
+        with pytest.raises(CandidateError):
+            load(tmp_path, config, name="bad.json")

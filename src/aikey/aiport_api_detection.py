@@ -538,8 +538,11 @@ class ApiObjectDetector:
                  plate_cameras: frozenset[str] = frozenset(),
                  fallback: dict[str, Any] | None = None,
                  fallback_transport: Callable[..., dict] | None = None,
+                 camera_thresholds: dict[str, float] | None = None,
                  clock: Callable[[], float] = time.time):
         if (type(threshold) not in (float, int) or not 0 < threshold <= 1
+                or any(type(value) not in (float, int) or not 0 < value <= 1
+                       for value in (camera_thresholds or {}).values())
                 or max_requests_per_hour is not None
                 and (type(max_requests_per_hour) is not int
                      or not 2 <= max_requests_per_hour <= 3600)):
@@ -559,6 +562,10 @@ class ApiObjectDetector:
                 or endpoint.hostname in {"localhost", "127.0.0.1", "::1"}):
             raise ApiDetectionError("api_detection_endpoint_not_approved")
         self.threshold = float(threshold)
+        # Owner-set per-camera score gates (e.g. a bounded reverification
+        # test on one camera); every other camera keeps the slot threshold.
+        self.camera_thresholds = {camera: float(value)
+                                  for camera, value in (camera_thresholds or {}).items()}
         # Room for the schema's largest valid reply, whatever was configured.
         if self.provider.max_output_tokens < _DETECTION_OUTPUT_TOKENS:
             self.provider.max_output_tokens = _DETECTION_OUTPUT_TOKENS
@@ -768,8 +775,8 @@ class ApiObjectDetector:
             except ApiDetectionError:
                 self._count_failure(camera_mac, _parse_failure(text))
                 raise
-            accepted = tuple(item for item in reported
-                             if item.score >= self.threshold)
+            threshold = self.camera_thresholds.get(camera_mac, self.threshold)
+            accepted = tuple(item for item in reported if item.score >= threshold)
             if used_fallback:
                 self.fallback_counts["objects" if accepted else "empty"] += 1
             counts = self._camera_counts.setdefault(camera_mac, {
@@ -795,7 +802,7 @@ class ApiObjectDetector:
                 "near_threshold": dict.fromkeys(_LABELS, 0),
                 "rejected_items": dict.fromkeys(_ITEM_REJECTIONS, 0)})
             for item in reported:
-                if item.score < self.threshold:
+                if item.score < threshold:
                     kinds["below_threshold"][item.kind] += 1
                     # Score evidence for the threshold without keeping scores.
                     kinds["near_threshold"][item.kind] += item.score >= 0.5

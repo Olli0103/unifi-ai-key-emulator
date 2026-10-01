@@ -850,3 +850,18 @@ def test_rejected_categories_reach_health_without_raw_values(tmp_path):
     assert counts["rejected_categories"] == {"kind:plate": 1}
     text = json.dumps(counts)
     assert "license_plate" not in text and "ABC123" not in text
+
+
+def test_a_camera_threshold_overrides_the_slot_gate_for_that_camera_only(tmp_path):
+    reply = '{"detections":[{"kind":"person","label":"person","score":0.6,"box":[0.1,0.2,0.4,0.8]}]}'
+    detector = ApiObjectDetector(
+        _ollama_config(), tmp_path, threshold=0.8, camera_thresholds={FIRST: 0.4},
+        transport=lambda *_args: _response(reply))
+    detector.detect_for_camera(FIRST, _frame("red"))
+    detector.detect_for_camera(SECOND, _frame("red"))
+    assert detector.diagnostic_counts(FIRST)["accepted_objects"] == 1      # 0.6 >= 0.4
+    assert detector.diagnostic_counts(SECOND)["accepted_objects"] == 0     # slot gate 0.8
+    for bad in ({FIRST: 0}, {FIRST: 1.5}, {FIRST: "0.4"}):
+        with pytest.raises(ApiDetectionError):
+            ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.8, camera_thresholds=bad,
+                              transport=lambda *_args: _response(reply))

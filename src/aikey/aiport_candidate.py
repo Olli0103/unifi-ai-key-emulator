@@ -276,7 +276,8 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
                         or is_api and (api_fields - {"max_requests_per_hour"}
                                        <= set(detector) - legacy
                                        <= api_fields | {"held_package_followup",
-                                                        "plate_cameras", "fallback"}))
+                                                        "plate_cameras", "fallback",
+                                                        "camera_thresholds"}))
                 or detector.get("held_package_followup", "shadow") not in {"shadow", "announce"}
                 or backend is not None and not (is_api or is_onnx)
                 or not is_api and (
@@ -322,6 +323,20 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
                     or not set(normalized) <= seen):
                 raise CandidateError("Invalid live pool detector policy")
             detector["plate_cameras"] = normalized
+        if "camera_thresholds" in detector:
+            # Owner-set score gates for listed paired cameras (API backend).
+            gates = detector["camera_thresholds"]
+            try:
+                normalized_gates = ({normalize_mac(mac): value for mac, value in gates.items()}
+                                    if isinstance(gates, dict) and gates else None)
+            except ValueError:
+                normalized_gates = None
+            if (not is_api or not normalized_gates or len(normalized_gates) != len(gates)
+                    or not set(normalized_gates) <= seen
+                    or any(type(value) not in (int, float) or isinstance(value, bool)
+                           or not 0 < value <= 1 for value in normalized_gates.values())):
+                raise CandidateError("Invalid live pool detector policy")
+            detector["camera_thresholds"] = normalized_gates
         try:
             RFDetrNanoDetector(object(), threshold=detector["threshold"])
         except DetectionError as exc:
@@ -860,7 +875,8 @@ class CandidateService:
                         max_requests_per_hour=detector.get("max_requests_per_hour"),
                         package_lens_owned=self._package_lens_owned,
                         plate_cameras=frozenset(detector.get("plate_cameras", ())),
-                        fallback=detector.get("fallback")))
+                        fallback=detector.get("fallback"),
+                        camera_thresholds=detector.get("camera_thresholds")))
                     if live_pool and detector.get("inference_backend") == "vision_api" else
                     (lambda: OnnxRFDetrNanoDetector.from_model(
                         detector["model_path"], detector["model_sha256"],
