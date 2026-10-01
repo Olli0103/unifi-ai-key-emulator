@@ -238,6 +238,11 @@ async def test_a_found_face_joins_the_event_as_its_own_linked_tracker(tmp_path):
         assert len(attrs[str(face_id)]["faceEmbed"]) == 512
         assert any(s["smartDetectSnapshotType"] == "face" for s in leave["smartDetectSnapshots"])
         assert service.faces_sent == 1 and 900_000 < face_id < 1_000_000
+        health = service._face_camera_health(CAMERA)
+        assert health["listed"] and health["enabled"] and health["engine"]
+        assert (health["analyses"], health["detected"], health["kept"], health["sent"]) == (1, 1, 1, 1)
+        assert sum(service.face_yaw_bands.values()) == sum(service.face_px_bands.values()) == 1
+        assert service._face_camera_health(OTHER)["analyses"] == 0
     finally:
         await service.stop()
 
@@ -307,6 +312,7 @@ def test_only_faces_that_can_identify_someone_are_sent():
     good = result()
     assert send_gate(replace(good, face_px=80.0)) is None
     assert send_gate(replace(good, face_px=30.0)) == "small"
+    assert send_gate(replace(good, face_px=80.0, pose={"yaw": -60.0, "pitch": 0.0, "roll": 0.0})) is None
     assert send_gate(replace(good, face_px=80.0, pose={"yaw": -70.0, "pitch": 0.0, "roll": 0.0})) == "turned"
     assert send_gate(replace(good, face_px=80.0, blurness=0.95)) == "blurred"
 
@@ -329,3 +335,34 @@ def test_face_snapshots_keep_up_to_512_pixels():
                                   filename_id=7)
     assert max(snapshot.metadata["smartDetectSnapshotWidth"],
                snapshot.metadata["smartDetectSnapshotHeight"]) == 512
+
+
+def test_face_angles_and_sizes_fall_into_fixed_bands():
+    from aikey.aiport_faces import FACE_PX_BANDS, YAW_BANDS, band
+    assert [band(v, YAW_BANDS) for v in (0, 30, 49.9, 64, 90)] == [
+        "under_30", "30_to_50", "30_to_50", "50_to_65", "over_65"]
+    assert [band(v, FACE_PX_BANDS) for v in (12, 40, 120, 600)] == [
+        "under_40", "40_to_80", "80_to_160", "over_160"]
+
+
+def test_a_person_without_a_sendable_face_gets_more_tries(tmp_path, monkeypatch):
+    import aikey.aiport_candidate as candidate
+    service = candidate.CandidateService(pool_config(tmp_path), tmp_path)
+    service._face_engine, _ = engine(yunet_outputs())                     # finds no face
+    clock, scheduled = [1000.0], []
+
+    class Done:
+        def done(self):
+            return True
+
+    def fake_task(coro, name=None):
+        coro.close()
+        scheduled.append(name)
+        return Done()
+    monkeypatch.setattr(candidate.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(candidate.asyncio, "create_task", fake_task)
+    session = {}
+    for _ in range(12):
+        service._schedule_face(CAMERA, session, change("enter"), b"")
+        clock[0] += 3
+    assert len(scheduled) == candidate.FACE_TRIES_WITHOUT_FACE == 8

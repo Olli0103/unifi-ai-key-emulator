@@ -37,9 +37,20 @@ FACE_SNAPSHOT_SIDE = 512
 # small, turned-away or flat faces made stray single-face groups (1 Oct: 22 of
 # 50 groups held one face).
 SEND_MIN_FACE_PX = 40
-SEND_MAX_YAW = 50.0
+# The yaw estimate from five landmarks is coarse; 50 held back 70 of 98 Büro
+# faces in an hour (1 Oct), so the bound only drops clear profiles.
+SEND_MAX_YAW = 65.0
 SEND_MAX_BLUR = 0.85
 EMBEDDINGS_PER_TRACK = 3
+
+
+YAW_BANDS = ((30.0, "under_30"), (50.0, "30_to_50"), (65.0, "50_to_65"), (91.0, "over_65"))
+FACE_PX_BANDS = ((40.0, "under_40"), (80.0, "40_to_80"), (160.0, "80_to_160"), (1e9, "over_160"))
+
+
+def band(value: float, bands) -> str:
+    """The first band whose upper bound exceeds the value."""
+    return next(name for bound, name in bands if value < bound)
 
 
 def send_gate(face: "FaceResult") -> str | None:

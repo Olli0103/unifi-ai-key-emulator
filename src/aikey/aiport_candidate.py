@@ -32,8 +32,8 @@ from .aiport_ingest import (
 )
 from .aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
 from .aiport_api_detection import ApiObjectDetector, _frame_mode
-from .aiport_faces import (EMBEDDINGS_PER_TRACK, FaceEngine, FaceError, make_face_snapshot,
-                           mean_embedding, send_gate, verify_model)
+from .aiport_faces import (EMBEDDINGS_PER_TRACK, FACE_PX_BANDS, YAW_BANDS, FaceEngine, FaceError,
+                           band, make_face_snapshot, mean_embedding, send_gate, verify_model)
 from .aiport_audio import (MAX_EVENT_S, SPEECH, AudioSettingsError, SpeechActivity,
                            audio_state_payload, parse_audio_flags)
 from .aiport_motion import (MotionDetector, MotionSettingsError, MotionTimeline,
@@ -108,6 +108,7 @@ _OBSERVABLE_FUNCTIONS = frozenset({
 # about ten times faster than real time (30 Sep), so the default allows 60 and
 # ``live_speech_max_events_per_hour`` sets it per AI Port.
 SPEECH_EVENTS_PER_HOUR = 60
+FACE_TRIES_WITHOUT_FACE = 8
 
 
 
@@ -745,6 +746,9 @@ class CandidateService:
         self.faces_found = 0
         self.faces_sent = 0
         self.faces_gated: dict[str, int] = {}
+        self.face_yaw_bands: dict[str, int] = {}
+        self.face_px_bands: dict[str, int] = {}
+        self._face_camera_stats: dict[str, dict] = {}
         self.face_errors: dict[str, int] = {}
         self.speech_settings_acks = 0
         self.speech_settings_rejected = 0
@@ -1306,7 +1310,7 @@ class CandidateService:
                     camera, edge, tracks, clock_wall_ms=int(time.time() * 1000))
             except SmartEventError:
                 continue
-            self._add_faces(payload, session, edge, tracks)
+            self._add_faces(payload, session, edge, tracks, camera)
             if edge == "leave":
                 face_snapshots = ((self.config.get("live_face") or {}).get("payload", "full")
                                   != "descriptor_only")
@@ -1329,6 +1333,15 @@ class CandidateService:
             else:
                 self.smart_events_left += 1
 
+    def _face_camera_health(self, camera: str) -> dict:
+        """Per camera: listed for faces, enabled by Protect, and what happened."""
+        stats = self._face_camera_stats.get(camera) or {
+            "analyses": 0, "detected": 0, "kept": 0, "sent": 0, "gated": {}}
+        return {"listed": camera in self._face_cameras,
+                "enabled": bool(self._face_enabled.get(camera)),
+                "engine": self._face_engine is not None,
+                **{k: (dict(v) if isinstance(v, dict) else v) for k, v in stats.items()}}
+
     def _count_face_error(self, code: str) -> None:
         key = code if len(code) <= 48 else "other"
         if key in self.face_errors or len(self.face_errors) < 12:
@@ -1336,7 +1349,9 @@ class CandidateService:
 
     def _schedule_face(self, camera: str, session: dict, change, frame: bytes) -> None:
         """Analyse a person's face in the background: one at a time per camera,
-        up to three tries per person, keeping the best-quality face."""
+        keeping the best-quality face. A person gets three tries once a face is
+        kept and up to eight while none has passed the send gate, because a
+        seated person often turns towards the camera only later."""
         running = self._face_tasks.get(camera)
         if running is not None and not running.done():
             return
@@ -1344,18 +1359,25 @@ class CandidateService:
         tries = session.setdefault("face_tries", {})
         last = session.setdefault("face_last", {})
         now = time.monotonic()
-        if tries.get(change.track_id, 0) >= 3 or now - last.get(change.track_id, -1e9) < 2:
+        limit = 3 if change.track_id in faces else FACE_TRIES_WITHOUT_FACE
+        if tries.get(change.track_id, 0) >= limit or now - last.get(change.track_id, -1e9) < 2:
             return
         tries[change.track_id] = tries.get(change.track_id, 0) + 1
         last[change.track_id] = now
         self._face_tasks[camera] = asyncio.create_task(
             self._analyse_face(camera, faces, change, frame), name="aiport-face")
 
+    def _face_stats(self, camera: str) -> dict:
+        return self._face_camera_stats.setdefault(
+            camera, {"analyses": 0, "detected": 0, "kept": 0, "sent": 0, "gated": {}})
+
     async def _analyse_face(self, camera: str, faces: dict, change, frame: bytes) -> None:
         engine = self._face_engine
         if engine is None:
             return
         self.face_analyses += 1
+        stats = self._face_stats(camera)
+        stats["analyses"] += 1
         try:
             result = await asyncio.to_thread(engine.analyse, frame, change.box)
         except FaceError as exc:
@@ -1366,9 +1388,15 @@ class CandidateService:
             return
         if result is None:
             return
+        stats["detected"] += 1
+        yaw = band(abs(result.pose.get("yaw", 0.0)), YAW_BANDS)
+        size = band(result.face_px, FACE_PX_BANDS)
+        self.face_yaw_bands[yaw] = self.face_yaw_bands.get(yaw, 0) + 1
+        self.face_px_bands[size] = self.face_px_bands.get(size, 0) + 1
         held = send_gate(result)
         if held is not None:
             self.faces_gated[held] = self.faces_gated.get(held, 0) + 1
+            stats["gated"][held] = stats["gated"].get(held, 0) + 1
             return
         previous = faces.get(change.track_id)
         # The track's best embeddings, averaged when the face is sent.
@@ -1393,9 +1421,11 @@ class CandidateService:
         except SnapshotError:
             snapshot = None
         self.faces_found += 1
+        stats["kept"] += 1
         faces[change.track_id] = (face_id, result, snapshot, tuple(embeddings))
 
-    def _add_faces(self, payload: dict, session: dict, edge: str, tracks: tuple) -> None:
+    def _add_faces(self, payload: dict, session: dict, edge: str, tracks: tuple,
+                   camera: str | None = None) -> None:
         """Add each found face as its own tracker, linked from its person."""
         faces = session.get("faces") or {}
         if not faces:
@@ -1420,6 +1450,8 @@ class CandidateService:
                     if str(person_id) in attrs:
                         attrs[str(person_id)]["associatedFaceTrackerID"] = face_id
                 self.faces_sent += 1
+                if camera is not None:
+                    self._face_stats(camera)["sent"] += 1
         if added and "face" not in payload["objectTypes"]:
             payload["objectTypes"].append("face")
 
@@ -2080,6 +2112,8 @@ class CandidateService:
                           "enabled": sum(self._face_enabled.get(c, False) for c in self._face_cameras),
                           "analyses": self.face_analyses, "found": self.faces_found,
                           "sent": self.faces_sent, "gated": dict(self.faces_gated),
+                          "yaw_bands": dict(self.face_yaw_bands),
+                          "face_px_bands": dict(self.face_px_bands),
                           "errors": dict(self.face_errors)}}
                if self._face_cameras else {}),
             **({"sounds": {"cameras": len(self._sound_cameras),
@@ -2211,6 +2245,7 @@ class CandidateService:
                                         self._pool_camera_order[index]].snapshot()
                                         if self._pool_camera_order[index]
                                         in self._pool_motion_timeline else []),
+                                    face=self._face_camera_health(self._pool_camera_order[index]),
                                     **self._speech_camera_health(
                                         self._pool_camera_order[index]))
                               for index, (inference, policy, stream) in enumerate(zip(
