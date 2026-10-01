@@ -180,6 +180,7 @@ class _Session:
         self._full: dict[int, bytes] = {}
         self._low_index = self._full_index = 0
         self.full_frame_count = 0
+        self.full_frames_dropped = 0
         self.ffmpeg_path = ffmpeg_path
         self.process: asyncio.subprocess.Process | None = None
         self.reader: asyncio.Task | None = None
@@ -315,18 +316,35 @@ class _Session:
             self.first_frame.set()
 
     async def _read_full_frames(self, reader: asyncio.StreamReader) -> None:
-        """Keep the newest full-resolution twins; a failure here never stops detection."""
+        """Keep the newest full-resolution twins.
+
+        The pipe is always drained, even past a malformed or oversized frame:
+        a full pipe would block FFmpeg and stall the detection output too.
+        """
         try:
             while True:
-                frame = await reader.readuntil(b"\xff\xd9")
-                if not frame.startswith(b"\xff\xd8") or len(frame) > _MAX_FULL_FRAME:
-                    return
-                self._full_index += 1
+                try:
+                    frame = await reader.readuntil(b"\xff\xd9")
+                except asyncio.LimitOverrunError as exc:
+                    # Discard the whole oversized frame through its own end marker,
+                    # so it still counts as exactly one position.
+                    await reader.readexactly(exc.consumed)
+                    while True:
+                        try:
+                            await reader.readuntil(b"\xff\xd9")
+                            break
+                        except asyncio.LimitOverrunError as more:
+                            await reader.readexactly(more.consumed)
+                    frame = None
+                self._full_index += 1          # keep positions aligned with the detection frames
+                if frame is None or not frame.startswith(b"\xff\xd8"):
+                    self.full_frames_dropped += 1
+                    continue
                 self.full_frame_count += 1
                 self._full[self._full_index] = frame
                 self._full.pop(self._full_index - _FULL_PAIRS, None)
-        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, OSError):
-            return
+        except (asyncio.IncompleteReadError, OSError):
+            return                              # FFmpeg exited; the session restarts it
 
     def full_frame_for(self, frame: bytes) -> bytes | None:
         """The full-resolution twin of a recent detection frame, if still held."""

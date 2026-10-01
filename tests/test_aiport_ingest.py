@@ -535,3 +535,17 @@ async def test_only_listed_pool_cameras_decode_a_full_resolution_twin(tmp_path):
         assert rows[0]["stream_full_frames"] is None and rows[1]["stream_full_frames"] == 0
     finally:
         await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_the_full_resolution_pipe_keeps_draining_and_positions_aligned():
+    from aikey.aiport_ingest import _Session
+    session = _Session(None, "/usr/bin/ffmpeg", full_frames=True)
+    reader = asyncio.StreamReader(limit=64)
+    good1, good2 = b"\xff\xd8first\xff\xd9", b"\xff\xd8fourth\xff\xd9"
+    reader.feed_data(good1 + b"garbage-not-a-jpeg\xff\xd9"
+                     + b"\xff\xd8" + b"x" * 300 + b"\xff\xd9" + good2)   # 2: malformed, 3: oversized
+    reader.feed_eof()
+    await asyncio.wait_for(session._read_full_frames(reader), timeout=2)
+    assert session._full == {1: good1, 4: good2}
+    assert session.full_frame_count == 2 and session.full_frames_dropped == 2
