@@ -152,7 +152,10 @@ Closing this gap needs a search-host image with those extensions and a local cro
 - *Native readback:* an Enhance on a fresh face (14:28) went through the aligned path (`enhanced_aligned` 1) and Protect saved it (`faceEnhanceState: done`, `enhancedImageId`).
 - *Start-up race:* restarting slot 4 once left Garage unstarted (one `UiStreamControl` refused); a second start gave 2/2. The same code path existed before r45.
 - *Not yet done:* an AdaFace comparison needs named people to measure against; it waits until faces are named again.
-- *Code fix, not deployed:* the deployed `npu-20261001-faces` image ran YuNet once per output (12 inferences per detector call) because its output mapping called the compiled model inside a generator. `named_outputs` now runs one inference and maps all 12 names. Runtime gain, saved Protect outcomes and NAS load stay needs_evidence until a later, separately approved vision deploy.
+- *Detector fix, deployed 14:39:54:*
+  - The `npu-20261001-faces` image ran YuNet once per output (12 inferences per detector call), because its output mapping called the compiled model inside a generator. `named_outputs` (07ddb6c) runs one inference and maps all 12 names; it ships as `npu-20261001-faces2`, with the previous container kept stopped.
+  - Synthetic benchmark on the NPU (same random image, 10 calls each): 40.2 ms per detector call before, 9.1 ms after.
+  - First 4 minutes live: 8 re-ID and 12 embedding requests, 0 failed. No Enhance has run on the new image yet, so its saved Protect outcome stays needs_evidence.
 
 **Deep mode replaces the basic per-event path.**
 - From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
