@@ -469,3 +469,69 @@ async def test_a_stop_ends_the_retries_of_a_deferred_start(tmp_path):
         assert ingress.reserved_points == 0 and ingress._restart_task is None
     finally:
         await ingress.close()
+
+
+FULL_FRAME = b"\xff\xd8synthetic-full-resolution-frame\xff\xd9"
+
+
+def twin_decoder(tmp_path: Path) -> tuple[str, Path]:
+    """Writes the detection frame to stdout and its twin to the pipe named last."""
+    executable = tmp_path / "twin-decoder"
+    script = tmp_path / "twin-decoder.py"
+    args_file = tmp_path / "decoder-args.json"
+    script.write_text(
+        "import json, os, sys, time\n"
+        "from pathlib import Path\n"
+        f"Path({str(args_file)!r}).write_text(json.dumps(sys.argv[1:]))\n"
+        "fd = int([a for a in sys.argv[1:] if a.startswith('pipe:') and a != 'pipe:1'][0][5:])\n"
+        f"os.write(fd, {FULL_FRAME!r})\n"
+        f"sys.stdout.buffer.write({FRAME!r})\nsys.stdout.buffer.flush()\n"
+        "time.sleep(30)\n")
+    executable.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+                          + shlex.quote(str(script)) + ' "$@"\n')
+    executable.chmod(0o700)
+    return str(executable), args_file
+
+
+@pytest.mark.asyncio
+async def test_a_face_camera_gets_each_frame_at_full_resolution_on_a_second_pipe(tmp_path):
+    decoder, args_file = twin_decoder(tmp_path)
+    ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP, ffmpeg_path=decoder,
+                            start_timeout=2, full_frames=True)
+    try:
+        await ingress.control(start_payload(width=2688, height=1512))
+        frame = ingress.latest_frame()
+        for _ in range(40):
+            if ingress.full_frame_for(frame) is not None:
+                break
+            await asyncio.sleep(0.05)
+        assert frame == FRAME and ingress.full_frame_for(frame) == FULL_FRAME
+        assert ingress.full_frame_for(b"\xff\xd8other\xff\xd9") is None    # only held frames pair
+        assert ingress.full_frame_count == 1
+        args = json.loads(args_file.read_text())
+        graph = args[args.index("-filter_complex") + 1]
+        assert "fps=2,split=2" in graph and "min(iw,1280)" in graph and "min(iw,2688)" in graph
+        assert "-vf" not in args and args.count("image2pipe") == 2
+        await ingress.control({"streaming": False, "deviceID": CAMERA_MAC})
+        assert ingress.full_frame_for(frame) is None
+    finally:
+        await ingress.close()
+
+
+@pytest.mark.asyncio
+async def test_only_listed_pool_cameras_decode_a_full_resolution_twin(tmp_path):
+    decoder, args_file = fake_decoder(tmp_path)
+    other_mac = "2A1122334466"
+    pool = AiPortIngressPool([
+        {"camera_mac": CAMERA_MAC, "source_ip": SOURCE_IP, "ffmpeg_path": decoder},
+        {"camera_mac": other_mac, "source_ip": SOURCE_IP, "ffmpeg_path": decoder}],
+        full_frame_cameras=frozenset({other_mac}))
+    try:
+        await pool.control(start_payload())
+        args = json.loads(args_file.read_text())
+        assert "-vf" in args and "-filter_complex" not in args          # detection-only camera
+        assert pool._ingresses[other_mac].full_frames and not pool._ingresses[CAMERA_MAC].full_frames
+        rows = pool.camera_diagnostics((CAMERA_MAC, other_mac))
+        assert rows[0]["stream_full_frames"] is None and rows[1]["stream_full_frames"] == 0
+    finally:
+        await pool.close()

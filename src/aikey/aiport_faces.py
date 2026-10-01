@@ -273,9 +273,13 @@ def make_face_snapshot(frame: bytes, face: FaceResult, track_id: int, wall_ms: i
             crop.thumbnail((FACE_SNAPSHOT_SIDE, FACE_SNAPSHOT_SIDE))
             output = BytesIO()
             crop.convert("RGB").save(output, format="JPEG", quality=92)
+            # The whole view rides along; a full-resolution face frame keeps it
+            # at a sensible size.
+            view = image.convert("RGB")
+            view.thumbnail((1920, 1920))
             full = BytesIO()
-            image.convert("RGB").save(full, format="JPEG", quality=85)
-            full_size = image.size
+            view.save(full, format="JPEG", quality=85)
+            full_size = view.size
     except (OSError, UnidentifiedImageError) as exc:
         raise SnapshotError("invalid_snapshot_frame") from exc
     filename = f"smartdetectsnap_face_{filename_id}{wall_ms}.jpg"

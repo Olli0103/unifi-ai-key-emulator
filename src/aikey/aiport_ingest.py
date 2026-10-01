@@ -8,6 +8,7 @@ source address. Frames stay in memory and this module sends no detections.
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 from dataclasses import dataclass
 import ipaddress
@@ -22,6 +23,12 @@ from typing import Awaitable, Callable
 _MAC = re.compile(r"(?:[0-9A-Fa-f]{12}|(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\Z")
 _ALIAS = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _MAX_FRAME = 1024 * 1024
+# Face cameras also get each decoded frame at up to this width on a second
+# pipe: faces were analysed on 1280 px frames, so a 4K camera's faces shrank
+# threefold below the size YuNet can use (1 Oct). Detection keeps 1280 px.
+_FULL_MAX_WIDTH = 2688
+_MAX_FULL_FRAME = 6 * 1024 * 1024
+_FULL_PAIRS = 8
 _MAX_DECODER_DIAGNOSTIC = 8192
 _DECODER_MARKERS = (
     (b"error opening input", "input_open_failed"),
@@ -162,8 +169,17 @@ def _stream_spec(payload: object, *, camera_mac: str, source_ip: str) -> StreamS
 
 class _Session:
     def __init__(self, spec: StreamSpec, ffmpeg_path: str,
-                 frame_observer: Callable[[bytes], Awaitable[None]] | None = None):
+                 frame_observer: Callable[[bytes], Awaitable[None]] | None = None,
+                 full_frames: bool = False):
         self.spec = spec
+        self.full_frames = full_frames
+        self.full_reader: asyncio.Task | None = None
+        self._full_transport: asyncio.BaseTransport | None = None
+        # Detection frame -> its full-resolution twin, by position in the split.
+        self._pairs: collections.deque = collections.deque(maxlen=_FULL_PAIRS)
+        self._full: dict[int, bytes] = {}
+        self._low_index = self._full_index = 0
+        self.full_frame_count = 0
         self.ffmpeg_path = ffmpeg_path
         self.process: asyncio.subprocess.Process | None = None
         self.reader: asyncio.Task | None = None
@@ -197,18 +213,45 @@ class _Session:
         # retaining only a short in-memory excerpt for fixed-code classification.
         # The tracker needs two overlapping sightings. One frame per second
         # can miss a person crossing a short camera view between samples.
-        self.process = await asyncio.create_subprocess_exec(
-            self.ffmpeg_path, "-hide_banner", "-nostdin", "-loglevel", "error",
-            "-rtsp_transport", "tcp", "-timeout", "5000000", "-i", self.spec.url,
-            "-map", "0:v:0", "-an", "-sn", "-dn", "-filter_threads", "1",
-            # Up to 1280 px wide (native when smaller). 320 px left a cat in a
-            # night IR frame a few dozen pixels, which vision replies saw as empty.
-            "-vf", "fps=2,scale=w='min(iw,1280)':h=-2", "-threads", "1", "-f", "image2pipe",
-            "-vcodec", "mjpeg", "-q:v", "5", "pipe:1",
-            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE, limit=_MAX_FRAME + 2,
-            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
-        )
+        source = [self.ffmpeg_path, "-hide_banner", "-nostdin", "-loglevel", "error",
+                  "-rtsp_transport", "tcp", "-timeout", "5000000", "-i", self.spec.url]
+        full_read = full_write = None
+        if self.full_frames:
+            full_read, full_write = os.pipe()
+            # One split after the frame-rate step, so the two outputs carry the
+            # same frames in the same order.
+            outputs = [
+                "-filter_complex_threads", "1", "-filter_complex",
+                "[0:v:0]fps=2,split=2[d][f];[d]scale=w='min(iw,1280)':h=-2[dout];"
+                f"[f]scale=w='min(iw,{_FULL_MAX_WIDTH})':h=-2[fout]",
+                "-map", "[dout]", "-an", "-sn", "-dn", "-threads", "1", "-f", "image2pipe",
+                "-vcodec", "mjpeg", "-q:v", "5", "pipe:1",
+                "-map", "[fout]", "-an", "-sn", "-dn", "-threads", "1", "-f", "image2pipe",
+                "-vcodec", "mjpeg", "-q:v", "4", f"pipe:{full_write}"]
+        else:
+            outputs = [
+                "-map", "0:v:0", "-an", "-sn", "-dn", "-filter_threads", "1",
+                # Up to 1280 px wide (native when smaller). 320 px left a cat in a
+                # night IR frame a few dozen pixels, which vision replies saw as empty.
+                "-vf", "fps=2,scale=w='min(iw,1280)':h=-2", "-threads", "1", "-f", "image2pipe",
+                "-vcodec", "mjpeg", "-q:v", "5", "pipe:1"]
+        try:
+            self.process = await asyncio.create_subprocess_exec(
+                *source, *outputs,
+                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, limit=_MAX_FRAME + 2,
+                env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+                pass_fds=(full_write,) if full_write is not None else (),
+            )
+        finally:
+            if full_write is not None:
+                os.close(full_write)
+        if full_read is not None:
+            reader = asyncio.StreamReader(limit=_MAX_FULL_FRAME + 2)
+            self._full_transport, _ = await asyncio.get_running_loop().connect_read_pipe(
+                lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(full_read, "rb", buffering=0))
+            self.full_reader = asyncio.create_task(self._read_full_frames(reader),
+                                                   name="aiport-rtsp-full-frames")
         self.reader = asyncio.create_task(self._read_frames(), name="aiport-rtsp-frames")
         self.stderr_reader = asyncio.create_task(self._drain_stderr(), name="aiport-rtsp-stderr")
         if self.frame_observer is not None:
@@ -254,6 +297,9 @@ class _Session:
                     return
                 self.latest_frame = frame
                 self.frame_count += 1
+                if self.full_frames:
+                    self._low_index += 1
+                    self._pairs.append((frame, self._low_index))
                 self.last_frame_at = time.monotonic()
                 self.first_frame.set()
                 if self.frame_observer is not None and not self.observer_failed:
@@ -267,6 +313,27 @@ class _Session:
             raise
         finally:
             self.first_frame.set()
+
+    async def _read_full_frames(self, reader: asyncio.StreamReader) -> None:
+        """Keep the newest full-resolution twins; a failure here never stops detection."""
+        try:
+            while True:
+                frame = await reader.readuntil(b"\xff\xd9")
+                if not frame.startswith(b"\xff\xd8") or len(frame) > _MAX_FULL_FRAME:
+                    return
+                self._full_index += 1
+                self.full_frame_count += 1
+                self._full[self._full_index] = frame
+                self._full.pop(self._full_index - _FULL_PAIRS, None)
+        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, OSError):
+            return
+
+    def full_frame_for(self, frame: bytes) -> bytes | None:
+        """The full-resolution twin of a recent detection frame, if still held."""
+        for low, index in reversed(self._pairs):
+            if low is frame:
+                return self._full.get(index)
+        return None
 
     async def _observe_frames(self) -> None:
         assert self.frame_observer is not None
@@ -310,11 +377,20 @@ class _Session:
         if self.observer_task is not None:
             self.observer_task.cancel()
             await asyncio.gather(self.observer_task, return_exceptions=True)
+        if self.full_reader is not None:
+            self.full_reader.cancel()
+            await asyncio.gather(self.full_reader, return_exceptions=True)
+        if self._full_transport is not None:
+            self._full_transport.close()
         self.reader = None
         self.stderr_reader = None
         self.observer_task = None
+        self.full_reader = None
+        self._full_transport = None
         self.process = None
         self.latest_frame = None
+        self._pairs.clear()
+        self._full.clear()
         self._stderr.clear()
 
 
@@ -412,8 +488,10 @@ class AiPortIngress:
     def __init__(self, *, camera_mac: str, source_ip: str, ffmpeg_path: str,
                  start_timeout: float = 7,
                  frame_observer: Callable[[bytes], Awaitable[None]] | None = None,
-                 audio_observer: Callable[[bytes], Awaitable[None]] | None = None):
+                 audio_observer: Callable[[bytes], Awaitable[None]] | None = None,
+                 full_frames: bool = False):
         self.camera_mac = normalize_mac(camera_mac)
+        self.full_frames = full_frames
         self.source_ip = private_source_ip(source_ip)
         self.ffmpeg_path = executable_path(ffmpeg_path)
         if not 0 < start_timeout < 10:
@@ -477,7 +555,7 @@ class AiPortIngress:
             if self._session is not None:
                 await self._close_locked()
             self._desired_spec = None
-            session = _Session(spec, self.ffmpeg_path, self.frame_observer)
+            session = _Session(spec, self.ffmpeg_path, self.frame_observer, self.full_frames)
             try:
                 await session.start(self.start_timeout)
             except (OSError, IngressError) as exc:
@@ -534,7 +612,7 @@ class AiPortIngress:
                              "no_recent_frame")
                     self.restart_observed_states[state] += 1
                 await self._close_locked()
-                session = _Session(spec, self.ffmpeg_path, self.frame_observer)
+                session = _Session(spec, self.ffmpeg_path, self.frame_observer, self.full_frames)
                 self.restart_attempts += 1
                 try:
                     await session.start(self.start_timeout)
@@ -600,6 +678,15 @@ class AiPortIngress:
         if session is None or not session.healthy:
             return []
         return [{"deviceID": session.spec.device_id, "points": session.spec.points}]
+
+    def full_frame_for(self, frame: bytes) -> bytes | None:
+        session = self._session
+        return session.full_frame_for(frame) if session is not None else None
+
+    @property
+    def full_frame_count(self) -> int:
+        session = self._session
+        return session.full_frame_count if session is not None else 0
 
     def latest_frame(self, *, max_age: float | None = None) -> bytes | None:
         session = self._session
@@ -682,7 +769,8 @@ class AiPortIngressPool:
                  frame_observer_factory: Callable[
                      [str], Callable[[bytes], Awaitable[None]] | None] | None = None,
                  audio_observer_factory: Callable[
-                     [str], Callable[[bytes], Awaitable[None]] | None] | None = None):
+                     [str], Callable[[bytes], Awaitable[None]] | None] | None = None,
+                 full_frame_cameras: frozenset[str] = frozenset()):
         if not isinstance(policies, list) or not 1 <= len(policies) <= 5:
             raise IngressError("invalid_camera_pool")
         self._ingresses: dict[str, AiPortIngress] = {}
@@ -700,6 +788,7 @@ class AiPortIngressPool:
             self._ingresses[camera_mac] = AiPortIngress(
                 camera_mac=camera_mac, source_ip=policy["source_ip"],
                 ffmpeg_path=policy["ffmpeg_path"], frame_observer=observer,
+                **({"full_frames": True} if camera_mac in full_frame_cameras else {}),
                 **({"audio_observer": audio} if audio is not None else {}))
         self._lock = asyncio.Lock()
 
@@ -722,6 +811,11 @@ class AiPortIngressPool:
     def list_streams(self) -> list[dict]:
         return [stream for _, ingress in sorted(self._ingresses.items())
                 for stream in ingress.list_streams()]
+
+    def full_frame_for(self, camera_mac: str, frame: bytes) -> bytes | None:
+        """The full-resolution twin of one of the camera's recent frames, or None."""
+        ingress = self._ingresses.get(camera_mac)
+        return ingress.full_frame_for(frame) if ingress is not None else None
 
     def latest_frame(self, camera_mac: str, *, max_age: float) -> bytes | None:
         """The camera's newest decoded JPEG, or None if unknown, down or stale."""
@@ -748,6 +842,8 @@ class AiPortIngressPool:
                     ingress.restart_observed_states),
                 "stream_restart_failures": dict(ingress.restart_failures),
                 "stream_deferred_starts": ingress.deferred_starts,
+                "stream_full_frames": (ingress.full_frame_count
+                                       if getattr(ingress, "full_frames", False) else None),
             }
             if getattr(ingress, "audio_observer", None) is not None:
                 row["audio"] = {"ready": ingress.audio_ready, "starts": ingress.audio_starts,

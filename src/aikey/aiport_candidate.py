@@ -922,7 +922,8 @@ class CandidateService:
                     lambda frame: self._observe_pool_frame(camera, frame)),
                 audio_observer_factory=lambda camera: (
                     (lambda pcm: self._observe_pool_audio(camera, pcm))
-                    if camera in self._speech else None))
+                    if camera in self._speech else None),
+                full_frame_cameras=self._face_cameras)
         elif config.get("diagnostic_hello_until", 0) > time.time():
             if "diagnostic_stream" in config:
                 self.ingress = AiPortIngress(
@@ -1336,7 +1337,7 @@ class CandidateService:
     def _face_camera_health(self, camera: str) -> dict:
         """Per camera: listed for faces, enabled by Protect, and what happened."""
         stats = self._face_camera_stats.get(camera) or {
-            "analyses": 0, "detected": 0, "kept": 0, "sent": 0, "gated": {}}
+            "analyses": 0, "full_resolution": 0, "detected": 0, "kept": 0, "sent": 0, "gated": {}}
         return {"listed": camera in self._face_cameras,
                 "enabled": bool(self._face_enabled.get(camera)),
                 "engine": self._face_engine is not None,
@@ -1355,6 +1356,10 @@ class CandidateService:
         running = self._face_tasks.get(camera)
         if running is not None and not running.done():
             return
+        # The same frame at full resolution when the decoder still holds it.
+        full = (self.ingress.full_frame_for(camera, frame)
+                if isinstance(self.ingress, AiPortIngressPool) else None)
+        frame = full or frame
         faces = session.setdefault("faces", {})
         tries = session.setdefault("face_tries", {})
         last = session.setdefault("face_last", {})
@@ -1364,12 +1369,15 @@ class CandidateService:
             return
         tries[change.track_id] = tries.get(change.track_id, 0) + 1
         last[change.track_id] = now
+        if full is not None:
+            self._face_stats(camera)["full_resolution"] += 1
         self._face_tasks[camera] = asyncio.create_task(
             self._analyse_face(camera, faces, change, frame), name="aiport-face")
 
     def _face_stats(self, camera: str) -> dict:
         return self._face_camera_stats.setdefault(
-            camera, {"analyses": 0, "detected": 0, "kept": 0, "sent": 0, "gated": {}})
+            camera, {"analyses": 0, "full_resolution": 0, "detected": 0, "kept": 0, "sent": 0,
+             "gated": {}})
 
     async def _analyse_face(self, camera: str, faces: dict, change, frame: bytes) -> None:
         engine = self._face_engine

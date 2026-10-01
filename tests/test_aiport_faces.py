@@ -366,3 +366,24 @@ def test_a_person_without_a_sendable_face_gets_more_tries(tmp_path, monkeypatch)
         service._schedule_face(CAMERA, session, change("enter"), b"")
         clock[0] += 3
     assert len(scheduled) == candidate.FACE_TRIES_WITHOUT_FACE == 8
+
+
+async def test_face_analysis_uses_the_full_resolution_twin_of_the_frame(tmp_path, monkeypatch):
+    from aikey.aiport_candidate import CandidateService
+    from aikey.aiport_ingest import AiPortIngressPool
+    service = CandidateService(pool_config(tmp_path), tmp_path)
+    assert isinstance(service.ingress, AiPortIngressPool)
+    service._face_engine, _ = engine(yunet_outputs())
+    low, full, seen = b"low", b"full-resolution", []
+    monkeypatch.setattr(service.ingress, "full_frame_for",
+                        lambda camera, frame: full if frame is low else None)
+
+    async def analyse(camera, faces, change, frame):
+        seen.append(frame)
+    monkeypatch.setattr(service, "_analyse_face", analyse)
+    try:
+        service._schedule_face(CAMERA, {}, change("enter"), low)
+        await service._face_tasks[CAMERA]
+        assert seen == [full] and service._face_camera_health(CAMERA)["full_resolution"] == 1
+    finally:
+        await service.stop()
