@@ -887,7 +887,8 @@ class CandidateService:
                         package_lens_owned=self._package_lens_owned,
                         plate_cameras=frozenset(detector.get("plate_cameras", ())),
                         fallback=detector.get("fallback"),
-                        camera_thresholds=detector.get("camera_thresholds")))
+                        camera_thresholds=detector.get("camera_thresholds"),
+                        full_frame=self._full_frame_blocking))
                     if live_pool and detector.get("inference_backend") == "vision_api" else
                     (lambda: OnnxRFDetrNanoDetector.from_model(
                         detector["model_path"], detector["model_sha256"],
@@ -928,7 +929,9 @@ class CandidateService:
                 audio_observer_factory=lambda camera: (
                     (lambda pcm: self._observe_pool_audio(camera, pcm))
                     if camera in self._speech else None),
-                full_frame_cameras=self._face_cameras)
+                full_frame_cameras=self._face_cameras,
+                native_frame_cameras=frozenset(
+                    (config.get("live_pool_detector") or {}).get("plate_cameras", ())))
         elif config.get("diagnostic_hello_until", 0) > time.time():
             if "diagnostic_stream" in config:
                 self.ingress = AiPortIngress(
@@ -1338,6 +1341,18 @@ class CandidateService:
                 self.smart_events_moved += 1
             else:
                 self.smart_events_left += 1
+
+    def _full_frame_blocking(self, camera: str, frame: bytes) -> bytes | None:
+        """For detector threads: the frame's full-resolution twin, waiting
+        briefly while it is still being encoded."""
+        if not isinstance(self.ingress, AiPortIngressPool):
+            return None
+        deadline = time.monotonic() + FULL_FRAME_WAIT_S
+        while True:
+            state, twin = self.ingress.full_frame_state(camera, frame)
+            if state != "pending" or time.monotonic() >= deadline:
+                return twin
+            time.sleep(0.1)
 
     async def _full_resolution(self, camera: str, frame: bytes, stats: dict) -> bytes:
         """The same frame at full resolution; its twin may still be encoding."""

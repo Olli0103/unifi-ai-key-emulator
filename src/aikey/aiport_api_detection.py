@@ -23,7 +23,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 from PIL import Image, UnidentifiedImageError
 
 from .aiport_detection import ObjectObservation
-from .aiport_plates import normalize_plate
+from .aiport_plates import merge_plates, normalize_plate
 from .aiport_event_budget import EventBudget
 from .aiport_timeline import MinuteHistory
 from .aiport_tracking import TrackingError, validate_observation
@@ -292,6 +292,22 @@ _FAILURE_REASONS = (
     "status_failed", "status_cancelled", "status_other", "error", "refusal", "shape",
     "stop_max_tokens", "fenced", "not_json", "not_object", "extra_fields", "too_many_entries")
 _PACKAGE_CHECK_KEYS = ("confirmed", "relabelled_animal", "rejected", "failed", "lens_owned")
+# Second plate read on a full-resolution vehicle crop (1 Oct: plates read from
+# the 1280 px detection frame came back as "H?K? 3058" and "L?S RH ?7").
+_PLATE_CROP_KEYS = ("requests", "read", "complete", "improved", "reused", "no_plate",
+                    "failed", "budget_denied", "full_resolution")
+_PLATE_CROP_LONG_SIDE = 1536
+_PLATE_CROP_MIN_LONG_SIDE = 768
+_PLATE_CROP_INTERVAL_S = 2.0
+_PLATE_REUSE_S = 120.0
+_PLATE_PROMPT_CROP = (
+    "This is a full-resolution close-up crop of one vehicle from a home security camera. "
+    "Read its license plate characters exactly as printed, left to right, with a single space "
+    "where the plate shows a gap. Ignore the country strip, stickers, seals and dealer frames. "
+    "Use ? for every character you cannot read with certainty and never guess a character. "
+    "Return only compact JSON: {\"plate\":\"AB CD 1234\"}, or {\"plate\":null} when no "
+    "plate is visible."
+)
 _VERIFY_SIDE = 512
 _VERIFY_PROMPT = (
     "This is a close-up crop around one object reported as a delivery package by a home "
@@ -522,6 +538,14 @@ def _post(url: str, headers: dict, payload: dict, *, timeout: float = 15) -> dic
         raise ApiDetectionError("api_detection_request_failed") from exc
 
 
+def _box_iou(a: tuple, b: tuple) -> float:
+    left, top = max(a[0], b[0]), max(a[1], b[1])
+    right, bottom = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, right - left) * max(0.0, bottom - top)
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
 class ApiObjectDetector:
     """One paid request per motion-sampled frame.
 
@@ -539,6 +563,7 @@ class ApiObjectDetector:
                  fallback: dict[str, Any] | None = None,
                  fallback_transport: Callable[..., dict] | None = None,
                  camera_thresholds: dict[str, float] | None = None,
+                 full_frame: Callable[[str, bytes], bytes | None] | None = None,
                  clock: Callable[[], float] = time.time):
         if (type(threshold) not in (float, int) or not 0 < threshold <= 1
                 or any(type(value) not in (float, int) or not 0 < value <= 1
@@ -576,6 +601,11 @@ class ApiObjectDetector:
         # Opt-in cameras whose vehicles also get plate text; counts only.
         self.plate_cameras = frozenset(plate_cameras)
         self._plate_counts: dict[str, dict[str, int]] = {}
+        # The same frame at full resolution, when the decoder holds it.
+        self._full_frame = full_frame or (lambda _camera, _frame: None)
+        self._plate_crop_counts: dict[str, dict[str, int]] = {}
+        self._plate_crop_at: dict[str, float] = {}
+        self._plate_reads: dict[str, list[tuple[float, tuple, str]]] = {}
         self.budget = (EventBudget(state_dir, limit=max_requests_per_hour,
                                    namespace="vision-request")
                        if max_requests_per_hour is not None else None)
@@ -824,6 +854,8 @@ class ApiObjectDetector:
                     for verified in ((self._verify_package(camera_mac, frame, item),)
                                      if item.kind == "package" else (item,))
                     if verified is not None)
+            if plates and any(item.kind == "vehicle" for item in accepted):
+                accepted = self._read_plates(camera_mac, frame, accepted)
             if plates:
                 read = self._plate_counts.setdefault(camera_mac, dict.fromkeys(
                     ("vehicles", "plates_read", "plates_partial"), 0))
@@ -901,6 +933,88 @@ class ApiObjectDetector:
     def _count_failure(self, camera_mac: str, reason: str) -> None:
         counts = self._failure_reasons.setdefault(camera_mac, dict.fromkeys(_FAILURE_REASONS, 0))
         counts[reason] = counts.get(reason, 0) + 1
+
+    def _read_plates(self, camera_mac: str, frame: bytes,
+                     items: tuple[ObjectObservation, ...]) -> tuple[ObjectObservation, ...]:
+        """A plate-only read of one vehicle on a full-resolution crop.
+
+        A complete reading of an overlapping box in the last two minutes is
+        reused; otherwise at most one crop per call and per two seconds is
+        read. The crop reading is merged with the scene reading, so an
+        uncertain character stays "?" (aiport_plates).
+        """
+        counts = self._plate_crop_counts.setdefault(camera_mac, dict.fromkeys(_PLATE_CROP_KEYS, 0))
+        now = time.monotonic()
+        recent = [entry for entry in self._plate_reads.get(camera_mac, ())
+                  if now - entry[0] < _PLATE_REUSE_S]
+        self._plate_reads[camera_mac] = recent
+        out, crop_done = [], now - self._plate_crop_at.get(camera_mac, -1e9) < _PLATE_CROP_INTERVAL_S
+        for item in items:
+            if item.kind != "vehicle" or (item.plate is not None and "?" not in item.plate):
+                out.append(item)
+                continue
+            known = next((plate for _, box, plate in recent if _box_iou(box, item.box) > 0.5), None)
+            if known is not None:
+                counts["reused"] += 1
+                out.append(ObjectObservation(item.kind, item.label, item.score, item.box, known))
+                continue
+            if crop_done:
+                out.append(item)
+                continue
+            crop_done = True
+            self._plate_crop_at[camera_mac] = now
+            if self.budget is not None and not self.budget.claim(camera_mac):
+                counts["budget_denied"] += 1
+                out.append(item)
+                continue
+            source = self._full_frame(camera_mac, frame)
+            counts["full_resolution"] += source is not None
+            reading = self._plate_from_crop(camera_mac, source or frame, item.box, counts)
+            merged = merge_plates(item.plate, reading) if reading is not None else item.plate
+            if reading is not None and (item.plate is None
+                                        or (merged or "").count("?") < item.plate.count("?")):
+                counts["improved"] += 1
+            if merged is not None and "?" not in merged:
+                counts["complete"] += 1
+                recent.append((now, item.box, merged))
+            out.append(ObjectObservation(item.kind, item.label, item.score, item.box, merged))
+        return tuple(out)
+
+    def _plate_from_crop(self, camera_mac: str, frame: bytes, box: tuple, counts: dict) -> str | None:
+        counts["requests"] += 1
+        try:
+            with Image.open(BytesIO(frame)) as image:
+                width, height = image.size
+                x1, y1, x2, y2 = box
+                margin_x, margin_y = (x2 - x1) * 0.1, (y2 - y1) * 0.1
+                left = max(0, int((x1 - margin_x) * width))
+                top = max(0, int((y1 - margin_y) * height))
+                right = min(width, max(left + 16, int((x2 + margin_x) * width)))
+                bottom = min(height, max(top + 16, int((y2 + margin_y) * height)))
+                crop = image.convert("RGB").crop((left, top, right, bottom))
+            long_side = max(crop.size)
+            target = (_PLATE_CROP_LONG_SIDE if long_side > _PLATE_CROP_LONG_SIDE
+                      else min(long_side * 2, _PLATE_CROP_MIN_LONG_SIDE)
+                      if long_side < _PLATE_CROP_MIN_LONG_SIDE else long_side)
+            if target != long_side:
+                scale = target / long_side
+                crop = crop.resize((max(1, round(crop.width * scale)),
+                                    max(1, round(crop.height * scale))), Image.Resampling.LANCZOS)
+            out = BytesIO()
+            crop.save(out, format="JPEG", quality=92)
+            url, headers, payload = self.provider.build_request([out.getvalue()], _PLATE_PROMPT_CROP)
+            if self.provider.provider == "openai" and self.provider.model == "gpt-6-luna":
+                payload["reasoning"] = {"effort": "none"}
+            answer = json.loads(self.provider.parse_response(self.transport(url, headers, payload)))
+            if not isinstance(answer, dict) or set(answer) != {"plate"}:
+                raise ValueError
+        except (ApiDetectionError, ProviderError, OSError, TypeError, ValueError,
+                UnidentifiedImageError):
+            counts["failed"] += 1
+            return None
+        reading = normalize_plate(answer["plate"])
+        counts["read" if reading is not None else "no_plate"] += 1
+        return reading
 
     def _verify_package(self, camera_mac: str, frame: bytes,
                         item: ObjectObservation) -> ObjectObservation | None:
@@ -1024,4 +1138,6 @@ class ApiObjectDetector:
         if camera_mac in self.plate_cameras:
             result["plates"] = dict(self._plate_counts.get(camera_mac, dict.fromkeys(
                 ("vehicles", "plates_read", "plates_partial"), 0)))
+            result["plate_crops"] = dict(self._plate_crop_counts.get(
+                camera_mac, dict.fromkeys(_PLATE_CROP_KEYS, 0)))
         return result

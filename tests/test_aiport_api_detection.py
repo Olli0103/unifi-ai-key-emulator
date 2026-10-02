@@ -813,9 +813,11 @@ def test_only_plate_cameras_ask_for_plates_and_count_them_without_values(tmp_pat
     [plated] = detector.detect_for_camera(FIRST, STILL)
     [other] = detector.detect_for_camera(SECOND, STILL)
     assert plated.plate == "SYN 12?" and other.plate is None
-    assert "license plate" in prompts[0] and "license plate" not in prompts[1]
+    scene = [p for p in prompts if "full-resolution close-up crop" not in p]
+    assert "license plate" in scene[0] and "license plate" not in scene[1]
     counts = detector.diagnostic_counts(FIRST)
     assert counts["plates"] == {"vehicles": 1, "plates_read": 1, "plates_partial": 1}
+    assert counts["plate_crops"]["requests"] == 1 and counts["plate_crops"]["failed"] == 1
     assert "SYN" not in json.dumps(counts)
     assert "plates" not in detector.diagnostic_counts(SECOND)
 
@@ -865,3 +867,70 @@ def test_a_camera_threshold_overrides_the_slot_gate_for_that_camera_only(tmp_pat
         with pytest.raises(ApiDetectionError):
             ApiObjectDetector(_ollama_config(), tmp_path, threshold=0.8, camera_thresholds=bad,
                               transport=lambda *_args: _response(reply))
+
+
+def _plate_detector(tmp_path, transport, full_frame=None):
+    key = tmp_path / "openai-key"
+    key.write_text("synthetic-test-key\n")
+    key.chmod(0o600)
+    return ApiObjectDetector(
+        {"provider": "openai", "model": "gpt-6-luna", "base_url": "https://api.openai.com/v1",
+         "allow_remote": True, "api_key_file": str(key)},
+        tmp_path, threshold=0.8, transport=transport, plate_cameras=frozenset({FIRST}),
+        full_frame=full_frame)
+
+
+def test_an_uncertain_plate_is_read_again_on_a_full_resolution_vehicle_crop(tmp_path):
+    crops, frames = [], []
+
+    def transport(_url, _headers, payload):
+        text = json.dumps(payload)
+        if "full-resolution close-up crop" in text:
+            crops.append(text)
+            return _reply(json.dumps({"plate": "SYN 123"}))
+        car = {"kind": "vehicle", "label": "car", "score": 0.93, "box": [0.1, 0.2, 0.5, 0.6],
+               "plate": "S?N 1?3"}
+        return _reply(json.dumps({"detections": [car]}))
+
+    def full_frame(camera, frame):
+        frames.append((camera, frame))
+        return STILL                                             # stands in for the twin
+    detector = _plate_detector(tmp_path, transport, full_frame)
+    [car] = detector.detect_for_camera(FIRST, STILL)
+    assert car.plate == "SYN 123" and len(crops) == 1 and frames == [(FIRST, STILL)]
+    counts = detector.diagnostic_counts(FIRST)["plate_crops"]
+    assert (counts["requests"], counts["read"], counts["complete"], counts["improved"],
+            counts["full_resolution"]) == (1, 1, 1, 1, 1)
+    assert "SYN" not in json.dumps(detector.diagnostic_counts(FIRST))
+
+
+def test_a_complete_plate_is_reused_for_the_same_vehicle_without_another_crop(tmp_path, monkeypatch):
+    import aikey.aiport_api_detection as module
+    crops = []
+
+    def transport(_url, _headers, payload):
+        text = json.dumps(payload)
+        if "full-resolution close-up crop" in text:
+            crops.append(text)
+            return _reply(json.dumps({"plate": "SYN 123"}))
+        car = {"kind": "vehicle", "label": "car", "score": 0.93, "box": [0.1, 0.2, 0.5, 0.6]}
+        return _reply(json.dumps({"detections": [car]}))
+    detector = _plate_detector(tmp_path, transport)
+    [first] = detector._read_plates(FIRST, STILL, (module.ObjectObservation(
+        "vehicle", "car", 0.93, (0.1, 0.2, 0.5, 0.6)),))
+    [again] = detector._read_plates(FIRST, STILL, (module.ObjectObservation(
+        "vehicle", "car", 0.93, (0.12, 0.2, 0.52, 0.6)),))
+    assert first.plate == again.plate == "SYN 123" and len(crops) == 1
+    assert detector.diagnostic_counts(FIRST)["plate_crops"]["reused"] == 1
+
+
+def test_a_crop_that_shows_no_plate_never_invents_one(tmp_path):
+    def transport(_url, _headers, payload):
+        if "full-resolution close-up crop" in json.dumps(payload):
+            return _reply(json.dumps({"plate": None}))
+        car = {"kind": "vehicle", "label": "car", "score": 0.93, "box": [0.1, 0.2, 0.5, 0.6]}
+        return _reply(json.dumps({"detections": [car]}))
+    detector = _plate_detector(tmp_path, transport)
+    [car] = detector.detect_for_camera(FIRST, STILL)
+    assert car.plate is None
+    assert detector.diagnostic_counts(FIRST)["plate_crops"]["no_plate"] == 1

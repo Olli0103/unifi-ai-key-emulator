@@ -595,3 +595,18 @@ def test_only_transient_start_failures_are_retried():
     for code in ("rtsp_access_denied", "rtsp_stream_not_found", "rtsp_protocol_rejected",
                  "decoder_option_missing", "rtsp_status_454", "stream_capacity_exceeded"):
         assert not _retryable_start(code), code
+
+
+@pytest.mark.asyncio
+async def test_a_plate_camera_decodes_its_twin_at_native_width(tmp_path):
+    decoder, args_file = twin_decoder(tmp_path)
+    pool = AiPortIngressPool([{"camera_mac": CAMERA_MAC, "source_ip": SOURCE_IP,
+                               "ffmpeg_path": decoder}],
+                             native_frame_cameras=frozenset({CAMERA_MAC}))
+    try:
+        await pool.control(start_payload(width=3840, height=2160))
+        graph = json.loads(args_file.read_text())
+        graph = graph[graph.index("-filter_complex") + 1]
+        assert "min(iw,3840)" in graph and "min(iw,1280)" in graph
+    finally:
+        await pool.close()

@@ -27,6 +27,8 @@ _MAX_FRAME = 1024 * 1024
 # pipe: faces were analysed on 1280 px frames, so a 4K camera's faces shrank
 # threefold below the size YuNet can use (1 Oct). Detection keeps 1280 px.
 _FULL_MAX_WIDTH = 2688
+# Plate cameras get their native width: a plate needs every pixel (4K Einfahrt).
+NATIVE_MAX_WIDTH = 3840
 _MAX_FULL_FRAME = 6 * 1024 * 1024
 # A face is scheduled after the detector answers, which can take several
 # seconds; 8 pairs (4 s) found the twin for only 9 of 45 analyses (1 Oct).
@@ -179,9 +181,10 @@ def _stream_spec(payload: object, *, camera_mac: str, source_ip: str) -> StreamS
 class _Session:
     def __init__(self, spec: StreamSpec, ffmpeg_path: str,
                  frame_observer: Callable[[bytes], Awaitable[None]] | None = None,
-                 full_frames: bool = False):
+                 full_frames: bool = False, full_max_width: int = _FULL_MAX_WIDTH):
         self.spec = spec
         self.full_frames = full_frames
+        self.full_max_width = full_max_width
         self.full_reader: asyncio.Task | None = None
         self._full_transport: asyncio.BaseTransport | None = None
         # Detection frame -> its full-resolution twin, by position in the split.
@@ -233,7 +236,7 @@ class _Session:
             outputs = [
                 "-filter_complex_threads", "1", "-filter_complex",
                 "[0:v:0]fps=2,split=2[d][f];[d]scale=w='min(iw,1280)':h=-2[dout];"
-                f"[f]scale=w='min(iw,{_FULL_MAX_WIDTH})':h=-2[fout]",
+                f"[f]scale=w='min(iw,{self.full_max_width})':h=-2[fout]",
                 "-map", "[dout]", "-an", "-sn", "-dn", "-threads", "1", "-f", "image2pipe",
                 "-vcodec", "mjpeg", "-q:v", "5", "pipe:1",
                 "-map", "[fout]", "-an", "-sn", "-dn", "-threads", "1", "-f", "image2pipe",
@@ -524,9 +527,10 @@ class AiPortIngress:
                  start_timeout: float = 7,
                  frame_observer: Callable[[bytes], Awaitable[None]] | None = None,
                  audio_observer: Callable[[bytes], Awaitable[None]] | None = None,
-                 full_frames: bool = False):
+                 full_frames: bool = False, full_max_width: int = _FULL_MAX_WIDTH):
         self.camera_mac = normalize_mac(camera_mac)
         self.full_frames = full_frames
+        self.full_max_width = full_max_width
         self.source_ip = private_source_ip(source_ip)
         self.ffmpeg_path = executable_path(ffmpeg_path)
         if not 0 < start_timeout < 10:
@@ -590,7 +594,8 @@ class AiPortIngress:
             if self._session is not None:
                 await self._close_locked()
             self._desired_spec = None
-            session = _Session(spec, self.ffmpeg_path, self.frame_observer, self.full_frames)
+            session = _Session(spec, self.ffmpeg_path, self.frame_observer, self.full_frames,
+                               self.full_max_width)
             try:
                 await session.start(self.start_timeout)
             except (OSError, IngressError) as exc:
@@ -649,7 +654,8 @@ class AiPortIngress:
                              "no_recent_frame")
                     self.restart_observed_states[state] += 1
                 await self._close_locked()
-                session = _Session(spec, self.ffmpeg_path, self.frame_observer, self.full_frames)
+                session = _Session(spec, self.ffmpeg_path, self.frame_observer, self.full_frames,
+                               self.full_max_width)
                 self.restart_attempts += 1
                 try:
                     await session.start(self.start_timeout)
@@ -811,7 +817,8 @@ class AiPortIngressPool:
                      [str], Callable[[bytes], Awaitable[None]] | None] | None = None,
                  audio_observer_factory: Callable[
                      [str], Callable[[bytes], Awaitable[None]] | None] | None = None,
-                 full_frame_cameras: frozenset[str] = frozenset()):
+                 full_frame_cameras: frozenset[str] = frozenset(),
+                 native_frame_cameras: frozenset[str] = frozenset()):
         if not isinstance(policies, list) or not 1 <= len(policies) <= 5:
             raise IngressError("invalid_camera_pool")
         self._ingresses: dict[str, AiPortIngress] = {}
@@ -829,7 +836,9 @@ class AiPortIngressPool:
             self._ingresses[camera_mac] = AiPortIngress(
                 camera_mac=camera_mac, source_ip=policy["source_ip"],
                 ffmpeg_path=policy["ffmpeg_path"], frame_observer=observer,
-                **({"full_frames": True} if camera_mac in full_frame_cameras else {}),
+                **({"full_frames": True} if camera_mac in full_frame_cameras | native_frame_cameras
+                   else {}),
+                **({"full_max_width": NATIVE_MAX_WIDTH} if camera_mac in native_frame_cameras else {}),
                 **({"audio_observer": audio} if audio is not None else {}))
         self._lock = asyncio.Lock()
 
