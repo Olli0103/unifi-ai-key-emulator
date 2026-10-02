@@ -187,7 +187,10 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - *G6 faces only:* EER 15.7 % vs 6.2 %; true accepts at 1 % false accepts 40.4 % vs 83.3 %.
   - *Rank-1:* 99.3 % for both.
   - *Caveats:* three identities, and the cross-group pairs also cross cameras.
-  - *Not yet switched:* new AI Port embeddings would no longer match existing AI Port face groups; that is the owner's decision.
+  - *Switched (owner decision, 2 Oct 06:46–06:50):* AI Ports r51 (22c7dca) take `live_face.embedder_input: adaface`, scaling aligned RGB crops to -1…1 (ArcFace keeps raw 0…255). All four slots use `/models/adaface-ir101/adaface_ir101.onnx` (pinned sha256 1bffc499…).
+    - Slot configs and compose were backed up as `*.before-adaface-20261002`.
+    - All streams came up on the first start, with no face-engine errors; slot memory is unchanged (about 1–1.3 GiB).
+    - *Readback by 06:58:* 9 AI Port faces were saved, in 2 new groups and none in the older ArcFace groups, as expected. Named AI Port groups need renaming once new faces collect. The G6 keeps Protect's own model.
 
 **Deep mode replaces the basic per-event path.**
 - From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
