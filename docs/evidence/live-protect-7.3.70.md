@@ -192,6 +192,18 @@ Closing this gap needs a search-host image with those extensions and a local cro
     - All streams came up on the first start, with no face-engine errors; slot memory is unchanged (about 1–1.3 GiB).
     - *Readback by 06:58:* 9 AI Port faces were saved, in 2 new groups and none in the older ArcFace groups, as expected. Named AI Port groups need renaming once new faces collect. The G6 keeps Protect's own model.
 
+**Parity checks (2 Oct, Europe/Berlin).**
+- *Manifest:* brought up to the 1 Oct readbacks (`ai-key/2026-10-02.2`). Deep mode, describe tasks and their callback, E5 session search, the description embedding, hybrid BM25/rerank search, enhanced-face callbacks and emulator upgrades are now native-verified. Capability flags stay fixture-tested with an `indirect` live result, because a flag is never evidence on its own.
+- *Plates:* Einfahrt saved 6 licence-plate events in 7 days, the last on 1 Oct at 17:13. Garage had 97 vehicle events and no plate; most likely no plate is visible from its view (inference). The AI Ports acknowledge Protect's LPR settings (`smart_settings_lpr_acks` 2 per slot).
+- *Search recovery drill:* the 07:11 backup (871 sessions, 1,841 members, 5,612 CLIP vectors) restored into a network-less throwaway container on the bm25 image; the counts matched the live database and dense queries served. BM25 queries failed until Protect's own hybrid setup SQL ran, because the tokenizer catalog lives in extension tables that the dump does not carry. Protect runs that SQL on every Key connect, so the restore path is complete. A live restore through Protect stays needs_evidence.
+- *Emulator upgrades:* seven Key image replacements on 1 Oct kept adoption and identity (same AI Key, adopted, no re-adoption). A rollback and a real state migration stay needs_evidence.
+- *Faces after the AdaFace switch (06:50–07:32):* Flur, Schlafzimmer, Büro, Esszimmer and Haustür sent faces; the four outdoor cameras saw no person. Esszimmer recovered one dropped stream on its own.
+- *AI Port firmware:*
+  - Protect lists the four AI Ports at 5.1.12 with 5.1.16 available, an early-access build that is not in the public catalog, whose newest release is 5.1.12. Device auto-update is on at 03:00.
+  - An update sends `UpdateFirmwareRequest` (download link, timeout) over the AI Port control socket, and the AI Ports used to leave it unanswered. r52 (c3b69ac, live 07:36) refuses it at once with status 501 `firmware_update_unsupported`, counts it and never fetches the link.
+  - Protect 7.3.70 gates no AI Port behaviour on firmware versions above `minFirmwareVersion` 5.0.6, so the version string only drives the update badge (static).
+- *Second-stage verification:* this needs real confidence scores, and the AI Port's vision-language detector reports 0.98–0.99. A separate detector that gives real confidence scores (for example Intel Open Model Zoo person/vehicle detectors on the NPU, Apache-2.0) could score each track for the verification window only. Not started.
+
 **Deep mode replaces the basic per-event path.**
 - From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
 - From 05:14 to 08:40, 0 of 140 smart events and 0 of 291 audio events did, and no new Find Anything (`ramDetections`) rows were written (last at 05:12). The Key received no `recognizeKeyFrames` task.

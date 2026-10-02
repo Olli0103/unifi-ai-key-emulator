@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-10-02.1",
+ "manifest_version": "ai-key/2026-10-02.2",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -770,8 +770,10 @@
    "id": "lifecycle.emulator_upgrade",
    "area": "lifecycle",
    "title": "Adoption and identity survive an emulator version upgrade",
-   "status": "needs_evidence",
-   "live": {},
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.70": "native-verified"
+   },
    "static": [],
    "tests": [
     "tests/test_config_tls.py::test_incomplete_identity_is_not_regenerated",
@@ -787,9 +789,10 @@
    ],
    "activation": "default",
    "missing_evidence": [
-    "A planned live upgrade drill: Protect readback of adoption and AI Key identity before and after replacing the release, and after a rollback",
-    "The migration layer is fixture-tested with a synthetic schema 0; the current release is schema 1 with no migrations, so no real migration has run"
-   ]
+    "A rollback to the previous release, read back in Protect",
+    "A release with a real state migration (current releases are schema 1 with no migrations)"
+   ],
+   "notes": " 1 Oct 2026 (7.3.70): seven Key image replacements (r19 to r25) on the same state files kept adoption and identity; Protect showed the same AI Key connected and adopted after each, with no re-adoption (readback 2 Oct)."
   },
   {
    "id": "control.get_info",
@@ -2466,10 +2469,11 @@
    "activation": "default",
    "missing_evidence": [
     "Controller reconciliation writes null embeddings and does not regenerate them (7.2.105 static)",
-    "Live recovery test after a controller restart (only the Mac relay restart was tested on 7.3.68)",
     "A live staged rebuild needs an approved object-crop source; the AI Key receives crops only inside Protect tasks",
-    "Native validation of a rebuilt index is possible only after cutover (Protect searches only public.ramDetections)"
-   ]
+    "Native validation of a rebuilt index is possible only after cutover (Protect searches only public.ramDetections)",
+    "A live restore into the running search host read back through Protect search (the 2 Oct drill restored into a throwaway container only)"
+   ],
+   "notes": " 2 Oct 2026 drill: a search_backup dump restored into a network-less container with the bm25 search-host image matched the live counts (5,612 CLIP vectors, 871 sessions) and served dense queries; BM25 queries worked after Protect's own hybrid setup SQL was re-run, as Protect does on every connect (the tokenizer catalog is not part of the dump)."
   },
   {
    "id": "index.face_task_search_tags",

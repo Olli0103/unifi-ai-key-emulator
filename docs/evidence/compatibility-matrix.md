@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-10-02.1). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-10-02.2). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-10-02.1` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-10-02.2` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -35,7 +35,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `lifecycle.protocol_violation_close`: Malformed or unsupported frames close the control socket with 1002 (1003 for text) without changing adoption | fixture-tested | not_observed | not_observed | not_observed | — | — | default |
 | `lifecycle.unknown_controller_version`: Unknown or unrecognized Protect versions in setConsoleInfo are reported as fixed categories; adoption and the baseline continue | native-verified | not_observed | not_observed | native-verified | — | — | default |
 | `lifecycle.controller_upgrade`: Adoption survives an in-place Protect upgrade | needs_evidence | not_observed | not_observed | not_observed | — | — | default |
-| `lifecycle.emulator_upgrade`: Adoption and identity survive an emulator version upgrade | needs_evidence | — | — | — | — | — | default |
+| `lifecycle.emulator_upgrade`: Adoption and identity survive an emulator version upgrade | native-verified | — | — | — | native-verified | — | default |
 | **control** | |  |  |  |  | | |
 | `control.get_info`: getInfo returns type, sysid, version, MAC, uptime, poeType, storageSize and featureFlags | native-verified | indirect | indirect | native-verified | — | Protect 7.2.105, AI Key 2.2.8 | default |
 | `control.get_task_queue_info`: getTaskQueueInfo reports the six observed queue fields | native-verified | not_observed | not_observed | native-verified | — | Protect 7.2.105, AI Key 2.2.8 | default |
@@ -149,8 +149,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `lifecycle.unknown_controller_version`: The exact protectVersion value, if any, sent by 7.3.56 or 7.3.60 in setConsoleInfo was not recorded
 - `lifecycle.controller_upgrade` (needs_evidence): The public records do not state whether the 7.3.60 trial used an adoption carried over from 7.3.56 or a fresh adoption
 - `lifecycle.controller_upgrade` (needs_evidence): A deliberate upgrade test with before/after adoption state
-- `lifecycle.emulator_upgrade` (needs_evidence): A planned live upgrade drill: Protect readback of adoption and AI Key identity before and after replacing the release, and after a rollback
-- `lifecycle.emulator_upgrade` (needs_evidence): The migration layer is fixture-tested with a synthetic schema 0; the current release is schema 1 with no migrations, so no real migration has run
+- `lifecycle.emulator_upgrade`: A rollback to the previous release, read back in Protect
+- `lifecycle.emulator_upgrade`: A release with a real state migration (current releases are schema 1 with no migrations)
 - `control.get_info`: The getInfo exchange body was not recorded on any live version; the stored capability state is recorded for 7.3.68 only
 - `control.get_task_queue_info`: Whether Protect schedules differently from these counts
 - `control.set_console_info`: The 7.3.56 and 7.3.60 body shapes were not recorded; a controller sending an extra field would receive errorCode 22
@@ -237,9 +237,9 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `index.search_snapshots`: Effect of extra snapshot thumbnails on event presentation is not reviewed by the owner
 - `index.thumbnail_tags`: A live task with in-export thumbnailMeta objects or a retroactive multipleImages task
 - `search.index_recovery` (needs_evidence): Controller reconciliation writes null embeddings and does not regenerate them (7.2.105 static)
-- `search.index_recovery` (needs_evidence): Live recovery test after a controller restart (only the Mac relay restart was tested on 7.3.68)
 - `search.index_recovery` (needs_evidence): A live staged rebuild needs an approved object-crop source; the AI Key receives crops only inside Protect tasks
 - `search.index_recovery` (needs_evidence): Native validation of a rebuilt index is possible only after cutover (Protect searches only public.ramDetections)
+- `search.index_recovery` (needs_evidence): A live restore into the running search host read back through Protect search (the 2 Oct drill restored into a throwaway container only)
 - `index.face_task_search_tags`: Native search hits for a native face camera's objects indexed through a face task (a row-count increase alone does not attribute rows)
 - `control.update_lcm_settings`: Protect's own view after the reply (its aiprocessors log no longer reporting the failure) was not read back
 
