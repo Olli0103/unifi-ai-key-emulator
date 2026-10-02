@@ -215,6 +215,11 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - *Key r26 (a5cc171, 12:26):* a zero-length window now exports the second that starts at the thumbnail.
   - *Open:* in the next 20 minutes no new request arrived (RequestAI unrefused, no reverify job). Whether Protect retries after the earlier failures, and a saved verdict (`preReverificationObjectType`), stay needs_evidence.
 
+**Outage and deep-mode reset (2 Oct, 11:25–14:31).**
+- The Model Server was stuck in `CL_OUT_OF_RESOURCES` from 11:25:50 until a restart at 14:25: every caption, describe and player summary failed (HTTP 400; 162 `describeImage` failures alone). The triggering request had already rotated out of the job journal. Since the restart: captions, session describes and re-ID run with 0 failures, and a player summary (`POST /aiprocessors/vlm/analyze`) answered in 7 s with a saved description.
+- Between about 12:47 and 13:20 the Protect app reconnected to the Key several times (5 credential rotations since 12:26). On each Protect start, `enforceDeepUnderstandingInternalOnly` disables the Deep Understanding policy when the console owner is not an internal account (static, 7.3.70 bundle), so the Key fell back to basic mode. At 14:27 the policy was re-enabled at the owner's standing request (keep deep); the Key reports `aiMode: deep` again.
+- The NAS monitor now reads the Key's `ai_mode` and raises `deep_mode_off` (local overlay, not in the repository). Its `ovms_failing` alert existed, but no tick ran during the outage.
+
 **Deep mode replaces the basic per-event path.**
 - From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
 - From 05:14 to 08:40, 0 of 140 smart events and 0 of 291 audio events did, and no new Find Anything (`ramDetections`) rows were written (last at 05:12). The Key received no `recognizeKeyFrames` task.
