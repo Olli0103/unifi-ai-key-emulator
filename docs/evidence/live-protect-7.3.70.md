@@ -208,7 +208,12 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - Protect lists the four AI Ports at 5.1.12 with 5.1.16 available, an early-access build that is not in the public catalog, whose newest release is 5.1.12. Device auto-update is on at 03:00.
   - An update sends `UpdateFirmwareRequest` (download link, timeout) over the AI Port control socket, and the AI Ports used to leave it unanswered. r52 (c3b69ac, live 07:36) refuses it at once with status 501 `firmware_update_unsupported`, counts it and never fetches the link.
   - Protect 7.3.70 gates no AI Port behaviour on firmware versions above `minFirmwareVersion` 5.0.6, so the version string only drives the update badge (static).
-- *Second-stage verification:* this needs real confidence scores, and the AI Port's vision-language detector reports 0.98–0.99. A separate detector that gives real confidence scores (for example Intel Open Model Zoo person/vehicle detectors on the NPU, Apache-2.0) could score each track for the verification window only. Not started.
+- *Second-stage verification with real confidences (started 2 Oct, owner-approved):*
+  - *Score detector:* YOLOX-S (Megvii, Apache-2.0, COCO; release 0.1.1rc0, sha256 c5c2d13e…) serves `/v1/detect` on the NAS NPU in 32 ms per frame (CPU 52 ms). On YOLOX's own sample image it gives the reference result: bicycle 0.95, dog 0.91, truck 0.61.
+  - *AI Port r55 (b1de9ee), slot 1 only from 12:09:* the vision model still decides what exists. Each person, vehicle or animal takes the confidence of an overlapping same-kind YOLOX box; a weak or missing match is reported as 0.5, inside the reverification window, instead of being dropped. Packages keep their score, and the vision scores are kept when the score detector fails.
+  - *Readback:* Protect saved real confidences on Flur (92, 86, 88, 70, 89, 77 %). For the first time Protect sent second-stage requests to the Key (11). The Key refused all 11 (`export_interval`): Protect spans the export from the first to the last thumbnail, an AI Port track has one thumbnail, and the MP4 adaptation required start < end.
+  - *Key r26 (a5cc171, 12:26):* a zero-length window now exports the second that starts at the thumbnail.
+  - *Open:* in the next 20 minutes no new request arrived (RequestAI unrefused, no reverify job). Whether Protect retries after the earlier failures, and a saved verdict (`preReverificationObjectType`), stay needs_evidence.
 
 **Deep mode replaces the basic per-event path.**
 - From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
