@@ -904,24 +904,92 @@ def test_an_uncertain_plate_is_read_again_on_a_full_resolution_vehicle_crop(tmp_
     assert "SYN" not in json.dumps(detector.diagnostic_counts(FIRST))
 
 
-def test_a_complete_plate_is_reused_for_the_same_vehicle_without_another_crop(tmp_path, monkeypatch):
+class _Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def _crop_reader(tmp_path, monkeypatch, plates):
+    """A detector whose crop reads return the given plates in order, on a fake clock."""
     import aikey.aiport_api_detection as module
-    crops = []
+    clock, crops = _Clock(), []
 
     def transport(_url, _headers, payload):
-        text = json.dumps(payload)
-        if "full-resolution close-up crop" in text:
-            crops.append(text)
-            return _reply(json.dumps({"plate": "SYN 123"}))
-        car = {"kind": "vehicle", "label": "car", "score": 0.93, "box": [0.1, 0.2, 0.5, 0.6]}
-        return _reply(json.dumps({"detections": [car]}))
+        assert "full-resolution close-up crop" in json.dumps(payload)
+        crops.append(1)
+        return _reply(json.dumps({"plate": plates[len(crops) - 1]}))
+    monkeypatch.setattr(module.time, "monotonic", clock)
     detector = _plate_detector(tmp_path, transport)
-    [first] = detector._read_plates(FIRST, STILL, (module.ObjectObservation(
-        "vehicle", "car", 0.93, (0.1, 0.2, 0.5, 0.6)),))
-    [again] = detector._read_plates(FIRST, STILL, (module.ObjectObservation(
-        "vehicle", "car", 0.93, (0.12, 0.2, 0.52, 0.6)),))
-    assert first.plate == again.plate == "SYN 123" and len(crops) == 1
-    assert detector.diagnostic_counts(FIRST)["plate_crops"]["reused"] == 1
+
+    def read(plate, box=(0.1, 0.2, 0.5, 0.6)):
+        [car] = detector._read_plates(FIRST, STILL, (module.ObjectObservation(
+            "vehicle", "car", 0.93, box, plate),))
+        return car.plate
+    return detector, read, clock, crops
+
+
+def test_an_agreeing_partial_reading_of_the_same_spot_reuses_the_complete_plate(tmp_path, monkeypatch):
+    detector, read, clock, crops = _crop_reader(tmp_path, monkeypatch, ["SYN 123"])
+    assert read(None) == "SYN 123"
+    clock.now += 10
+    assert read("SYN 1?3", box=(0.12, 0.2, 0.52, 0.6)) == "SYN 123"   # every legible character agrees
+    assert len(crops) == 1 and detector.diagnostic_counts(FIRST)["plate_crops"]["reused"] == 1
+
+
+def test_a_replacement_vehicle_without_its_own_reading_never_inherits_the_old_plate(tmp_path, monkeypatch):
+    detector, read, clock, crops = _crop_reader(tmp_path, monkeypatch, ["SYN 123"])
+    assert read(None) == "SYN 123"
+    clock.now += 10
+    assert read(None) is None                         # geometry alone asserts nothing
+    assert len(crops) == 1                            # and the same spot is not cropped again
+    assert detector.diagnostic_counts(FIRST)["plate_crops"]["recently_read"] == 1
+
+
+def test_a_conflicting_partial_reading_is_kept_apart_and_read_on_its_own(tmp_path, monkeypatch):
+    detector, read, clock, crops = _crop_reader(tmp_path, monkeypatch, ["SYN 123", "ABC 919"])
+    assert read(None) == "SYN 123"
+    clock.now += 10
+    assert read("ABC 9?9") == "ABC 919"               # its own crop, never SYN 123
+    counts = detector.diagnostic_counts(FIRST)["plate_crops"]
+    assert len(crops) == 2 and counts["conflicts"] == 1 and counts["reused"] == 0
+    clock.now += 10
+    assert read("ABC 9?9") == "ABC 919"               # the new vehicle's plate is the one reused
+
+
+def test_a_conflicting_reading_inside_the_crop_interval_stays_uncertain(tmp_path, monkeypatch):
+    detector, read, clock, crops = _crop_reader(tmp_path, monkeypatch, ["SYN 123"])
+    assert read(None) == "SYN 123"
+    clock.now += 1                                    # under the two-second crop interval
+    assert read("ABC 9?9") == "ABC 9?9" and len(crops) == 1
+
+
+def test_a_complete_new_plate_in_the_same_spot_is_kept_without_a_crop(tmp_path, monkeypatch):
+    detector, read, clock, crops = _crop_reader(tmp_path, monkeypatch, ["SYN 123"])
+    assert read(None) == "SYN 123"
+    clock.now += 10
+    assert read("XYZ 789") == "XYZ 789" and len(crops) == 1
+
+
+def test_an_old_plate_expires_and_the_spot_is_read_again(tmp_path, monkeypatch):
+    detector, read, clock, crops = _crop_reader(tmp_path, monkeypatch, ["SYN 123", None])
+    assert read(None) == "SYN 123"
+    clock.now += 121                                  # past the two-minute window
+    assert read("SYN 1?3") == "SYN 1?3"               # no reuse; a fresh crop shows no plate
+    assert len(crops) == 2
+
+
+def test_the_paid_budget_still_gates_crop_reads(tmp_path, monkeypatch):
+    detector, read, clock, crops = _crop_reader(tmp_path, monkeypatch, ["SYN 123"])
+
+    class Denied:
+        def claim(self, _camera):
+            return False
+    detector.budget = Denied()
+    assert read("S?N 1?3") == "S?N 1?3" and crops == []
+    assert detector.diagnostic_counts(FIRST)["plate_crops"]["budget_denied"] == 1
 
 
 def test_a_crop_that_shows_no_plate_never_invents_one(tmp_path):

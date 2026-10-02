@@ -295,7 +295,7 @@ _PACKAGE_CHECK_KEYS = ("confirmed", "relabelled_animal", "rejected", "failed", "
 # Second plate read on a full-resolution vehicle crop (1 Oct: plates read from
 # the 1280 px detection frame came back as "H?K? 3058" and "L?S RH ?7").
 _PLATE_CROP_KEYS = ("requests", "read", "complete", "improved", "reused", "no_plate",
-                    "failed", "budget_denied", "full_resolution")
+                    "failed", "budget_denied", "full_resolution", "recently_read", "conflicts")
 _PLATE_CROP_LONG_SIDE = 1536
 _PLATE_CROP_MIN_LONG_SIDE = 768
 _PLATE_CROP_INTERVAL_S = 2.0
@@ -536,6 +536,12 @@ def _post(url: str, headers: dict, payload: dict, *, timeout: float = 15) -> dic
         raise ApiDetectionError(code) from exc
     except Exception as exc:
         raise ApiDetectionError("api_detection_request_failed") from exc
+
+
+def _plate_agrees(partial: str, complete: str) -> bool:
+    """Every legible character of a reading matches the other, gaps included."""
+    return len(partial) == len(complete) and all(
+        p == c or p == "?" and c != " " for p, c in zip(partial, complete))
 
 
 def _box_iou(a: tuple, b: tuple) -> float:
@@ -938,10 +944,15 @@ class ApiObjectDetector:
                      items: tuple[ObjectObservation, ...]) -> tuple[ObjectObservation, ...]:
         """A plate-only read of one vehicle on a full-resolution crop.
 
-        A complete reading of an overlapping box in the last two minutes is
-        reused; otherwise at most one crop per call and per two seconds is
-        read. The crop reading is merged with the scene reading, so an
-        uncertain character stays "?" (aiport_plates).
+        The detector sees no track identity, so a box alone never asserts a
+        plate: another vehicle can stand in the same spot. A complete crop
+        reading of an overlapping box from the last two minutes completes the
+        scene reading only when that reading agrees with it character by
+        character. An overlapping box read recently is not cropped again
+        (bounded requests) but keeps its own reading. A contradicting reading
+        drops the old entry and may be cropped. At most one crop per call and
+        per two seconds; the crop reading is merged with the scene reading,
+        so an uncertain character stays "?" (aiport_plates).
         """
         counts = self._plate_crop_counts.setdefault(camera_mac, dict.fromkeys(_PLATE_CROP_KEYS, 0))
         now = time.monotonic()
@@ -953,10 +964,22 @@ class ApiObjectDetector:
             if item.kind != "vehicle" or (item.plate is not None and "?" not in item.plate):
                 out.append(item)
                 continue
-            known = next((plate for _, box, plate in recent if _box_iou(box, item.box) > 0.5), None)
-            if known is not None:
-                counts["reused"] += 1
-                out.append(ObjectObservation(item.kind, item.label, item.score, item.box, known))
+            match = next((entry for entry in reversed(recent)
+                          if _box_iou(entry[1], item.box) > 0.5), None)
+            if match is not None and item.plate is not None and match[2] is not None:
+                if _plate_agrees(item.plate, match[2]):
+                    if "?" not in match[2]:
+                        counts["reused"] += 1
+                        out.append(ObjectObservation(item.kind, item.label, item.score,
+                                                     item.box, match[2]))
+                        continue
+                else:
+                    counts["conflicts"] += 1          # a different vehicle in the same spot
+                    recent.remove(match)
+                    match = None
+            if match is not None:
+                counts["recently_read"] += 1
+                out.append(item)
                 continue
             if crop_done:
                 out.append(item)
@@ -976,7 +999,7 @@ class ApiObjectDetector:
                 counts["improved"] += 1
             if merged is not None and "?" not in merged:
                 counts["complete"] += 1
-                recent.append((now, item.box, merged))
+            recent.append((now, item.box, merged))
             out.append(ObjectObservation(item.kind, item.label, item.score, item.box, merged))
         return tuple(out)
 
