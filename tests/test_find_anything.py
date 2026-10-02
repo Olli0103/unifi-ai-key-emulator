@@ -52,6 +52,7 @@ class Controller:
             {"tag": "bicycle", "confScore": 0.74}]})
 
     async def export(self, request):
+        self.export_queries = getattr(self, "export_queries", []) + [dict(request.query)]
         return web.Response(body=self.video, content_type="video/mp4",
                             headers={"x-start-timestamp": str(START)})
 
@@ -769,8 +770,9 @@ def mix(**weights):
     return [v / norm for v in values]
 
 
-def reverification_request(service, meta):
-    query = {"camera": CAMERA, "event": EVENT, "channel": "0", "start": str(START), "end": str(END),
+def reverification_request(service, meta, start=None, end=None):
+    query = {"camera": CAMERA, "event": EVENT, "channel": "0", "start": str(START if start is None else start),
+             "end": str(END if end is None else end),
              "type": "rotating", "mute": "true", "format": "ubv", "createEvent": "false"}
     return {"targetUri": ":7788/v1/models/second_verifier_mlabel/inference", "timeoutMs": 30000,
             "resUrl": service.origin + "/internal/aiprocessors/reverification",
@@ -1339,3 +1341,20 @@ async def test_a_4k_audio_thumbnail_reaches_the_vision_model_at_most_1280_wide(c
                if part.get("type") == "image_url")
     with Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))) as picture:
         assert picture.size == (1280, 720)
+
+
+async def test_a_single_thumbnail_reverification_exports_the_second_after_it(controller, tmp_path):
+    # An AI Port track has one thumbnail, so Protect sends start == end (live, 2 Oct).
+    controller.region_vectors = [mix(person=1.0)]
+    ts = START + 1500
+    meta = [{"ts": ts, "roi": [verify_roi(1, "person")]}]
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        await worker.handle(reverification_request(controller, meta, start=ts, end=ts))
+    finally:
+        await worker.stop()
+    [posted] = controller.reverifications
+    verdicts = {r["trackerID"]: r["detectedAs"] for r in posted["result"]["verificationResults"]}
+    assert verdicts == {1: "person"}
+    [query] = controller.export_queries
+    assert (query["start"], query["end"], query["format"]) == (str(ts), str(ts + 1000), "mp4")

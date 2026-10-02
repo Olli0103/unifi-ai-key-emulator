@@ -371,6 +371,7 @@ def _clean_enhanced_jpeg(data, source_size):
         return b""
 
 _DESCRIBE_STAGES = ("queued", "fetch", "frames", "gate", "infer", "callback")
+_SINGLE_FRAME_EXPORT_MS = 1000
 # Protect re-sends a failed deep task under the same task ID. These run on local
 # models and a failed one sent no callback, so the retry is admitted; uncertain
 # callbacks still are not.
@@ -1706,14 +1707,23 @@ class JobProcessor:
         values = dict(pairs)
         try:
             start, end = int(values["start"]), int(values["end"])
-            if not 0 <= start < end or end - start > 3600 * 1000:
+            if not 0 <= start <= end or end - start > 3600 * 1000:
                 raise ValueError
         except (KeyError, TypeError, ValueError) as exc:
             raise WorkerError("MP4 adaptation requires a bounded start/end interval") from exc
         components = parsed.query.split("&")
         if components.count("format=ubv") != 1:
             raise WorkerError("MP4 adaptation requires a literal format=ubv component")
-        query = "&".join("format=mp4" if part == "format=ubv" else part for part in components)
+        replace = {"format=ubv": "format=mp4"}
+        if start == end:
+            # Protect spans a reverification export from the first to the last
+            # thumbnail; an AI Port track has one, so start equals end (live,
+            # 2 Oct: 11 refused). An empty export holds no frame: take the
+            # second that starts at the thumbnail.
+            if components.count(f"end={values['end']}") != 1:
+                raise WorkerError("MP4 adaptation requires a bounded start/end interval")
+            replace[f"end={values['end']}"] = f"end={end + _SINGLE_FRAME_EXPORT_MS}"
+        query = "&".join(replace.get(part, part) for part in components)
         return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, ""))
 
     async def _admit(self, command):
