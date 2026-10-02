@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-09-30.16). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-10-02.1). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-09-30.16` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-10-02.1` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -43,7 +43,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `control.set_info`: setInfo accepts only {hostname} as logical metadata | fixture-tested | not_observed | not_observed | not_observed | — | AI Key 2.2.8 | default |
 | `control.update_timezone`: updateTimezone accepts only {timezone} as logical metadata | native-verified | not_observed | not_observed | native-verified | — | AI Key 2.2.8 | default |
 | `control.request_ai.on_demand_inference`: RequestAI :7968/on_demand_inference, admitted before inference | native-verified | not_observed | native-verified | not_observed | — | Protect 7.2.105, AI Key 2.2.8 | experimental_opt_in |
-| `control.request_ai.describe`: RequestAI :7968/describe session task with image or video inputs | fixture-tested | not_observed | not_observed | not_observed | — | Protect 7.2.105 | default |
+| `control.request_ai.describe`: RequestAI :7968/describe session task with image or video inputs | native-verified | not_observed | not_observed | not_observed | native-verified | Protect 7.2.105 | default |
 | `control.request_ai.unknown_target`: RequestAI with an unimplemented or malformed targetUri | fixture-tested | not_observed | not_observed | not_observed | — | Protect 7.2.105, AI Key 2.2.8 | default |
 | `control.request_ai.second_stage_verification`: RequestAI second_verifier_mlabel classify (Second Stage Verification) answered by local CLIP zero-shot | fixture-tested | — | — | not_observed | — | Protect 7.3.60 bundle | explicit_opt_in |
 | `control.recognize_key_frames`: recognizeKeyFrames video caption command within explicit one-use camera scopes | native-verified | not_observed | native-verified | native-verified | — | Protect 7.2.105, AI Key 2.2.8 | experimental_opt_in |
@@ -56,12 +56,12 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `control.host_management`: reboot, factoryReset, firmware install, SSH management, support upload and hardware statistics | unsupported | — | — | — | — | AI Key 2.2.8 | default |
 | `control.ai_settings_commands`: networkStatus and sshService | unsupported | — | — | indirect | — | — | default |
 | `control.change_ai_infer_agent_settings`: changeAiInferAgentSettings stored and answered 0 | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | default |
-| `control.deep_mode`: Deep understanding: supportDeepMode, aiMode switch and describe prompt sync | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | explicit_opt_in |
+| `control.deep_mode`: Deep understanding: supportDeepMode, aiMode switch and describe prompt sync | native-verified | — | — | — | native-verified | Protect 7.3.70 bundle | explicit_opt_in |
 | **worker** | |  |  |  |  | | |
-| `worker.deep_reid_embeddings`: generate-embeddings: person re-ID vectors for dedup sessions | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | explicit_opt_in |
-| `worker.deep_session_describe`: session-v1 describe: open and close passes with Protect's prompts and schema | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | explicit_opt_in |
+| `worker.deep_reid_embeddings`: generate-embeddings: person re-ID vectors for dedup sessions | native-verified | — | — | — | native-verified | Protect 7.3.70 bundle | explicit_opt_in |
+| `worker.deep_session_describe`: session-v1 describe: open and close passes with Protect's prompts and schema | native-verified | — | — | — | native-verified | Protect 7.3.70 bundle | explicit_opt_in |
 | **search** | |  |  |  |  | | |
-| `search.e5_session_query`: E5 session search queries next to basic CLIP search | fixture-tested | — | — | — | not_observed | Protect 7.3.70 bundle | explicit_opt_in |
+| `search.e5_session_query`: E5 session search queries next to basic CLIP search | native-verified | — | — | — | native-verified | Protect 7.3.70 bundle | explicit_opt_in |
 | **callbacks** | |  |  |  |  | | |
 | `callbacks.audio_image_tagging`: Audio-event thumbnails (ramType image) answered with event-level tags and a local description | native-verified | — | — | — | native-verified | Protect 7.3.70 bundle | explicit_opt_in |
 | **search** | |  |  |  |  | | |
@@ -84,17 +84,20 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `callback.on_demand_camera_upload`: On-demand result JSON at /internal/camera-upload/<token> | native-verified | not_observed | native-verified | not_observed | — | Protect 7.2.105, AI Key 2.2.8 | default |
 | `callback.ram_full_event_tagging`: Full RAM event-tagging multipart callback with keyMomentsTags [] | native-verified | not_observed | native-verified | native-verified | — | Protect 7.2.105, AI Key 2.2.8 | default |
 | `callback.ram_description_only`: Legacy description-only multipart profiles key-2.2.8 and protect-7.2.105 | unsupported | not_observed | not_observed | not_observed | — | Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
-| `callback.task_description`: Session description JSON at /internal/aiprocessors/descriptions/<taskId> | fixture-tested | not_observed | not_observed | not_observed | — | Protect 7.2.105 | default |
+| `callback.task_description`: Session description JSON at /internal/aiprocessors/descriptions/<taskId> | native-verified | not_observed | not_observed | not_observed | native-verified | Protect 7.2.105 | default |
 | `callback.origin_allowlist`: Callbacks only to configured controller origins and known routes | fixture-tested | — | — | — | — | — | default |
 | `callback.journal_and_uncertain_delivery`: Private job journal; completed callbacks deduplicated and uncertain callbacks never replayed | fixture-tested | — | — | — | — | — | default |
 | **capabilities** | |  |  |  |  | | |
 | `capability.explicit_disabled_flags`: Capability flags derived from served features; unserved ones sent explicitly disabled | fixture-tested | — | — | indirect | — | Protect 7.2.105 | default |
 | `capability.ai_mode_basic`: aiMode reported as basic | fixture-tested | — | — | — | — | Protect 7.2.105 | default |
 | `capability.support_ai_summary`: supportAiSummary advertised only with explicit opt-in and a configured caption path | fixture-tested | not_observed | not_observed | indirect | — | Protect 7.2.105 | experimental_opt_in |
-| `capability.deep_mode_vlm`: supportDeepMode / supportVlm | unsupported | — | — | — | — | Protect 7.2.105 | default |
+| `capability.deep_mode_vlm`: supportDeepMode / supportVlm | fixture-tested | — | — | — | indirect | Protect 7.2.105 | default |
 | `capability.face_recognition`: supportFaceRecognition advertised with local face recognition | fixture-tested | — | — | indirect | — | Protect 7.2.105 | explicit_opt_in |
 | `capability.license_plate_recognition`: License-plate recognition | unsupported | — | — | indirect | — | Protect 7.2.105 | default |
-| `capability.face_enhancement`: Automatic and manual face enhancement | unsupported | — | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `capability.face_enhancement`: Manual face enhancement (enhanceImage) | fixture-tested | — | — | — | indirect | Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
+| **callbacks** | |  |  |  |  | | |
+| `callback.enhanced_face_image`: enhanceImage answered with an enhanced face derivative at /internal/aiprocessors/image/enhanced | native-verified | — | — | — | native-verified | Protect 7.3.70 bundle | explicit_opt_in |
+| **capabilities** | |  |  |  |  | | |
 | `capability.retroactive_processing`: supportRetroactiveProcessing opt-in for Find Anything backfill | fixture-tested | — | — | indirect | — | Protect 7.3.60 bundle | explicit_opt_in |
 | `capability.recognize_anything_tagging`: Recognize Anything tags, detections and key-moment snapshots | unsupported | — | — | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
 | `capability.audio_speech`: Speech transcription (speechToText) | fixture-tested | — | — | indirect | — | Protect 7.3.60 bundle, AI Key 2.2.8 | explicit_opt_in |
@@ -107,10 +110,10 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `database.credential_rotation_hook`: PostgreSQL unifi-protect role rotated before management-password rotation | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
 | `database.supports_db_credential_handoff`: supportsDbCredential console capability and controller access-rule update | needs_evidence | — | — | indirect | — | Protect 7.2.105, AI Key 2.2.8 | default |
 | `database.controller_migrations`: Protect migrations and extensions applied to the processor database | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle, Protect 7.2.105 | explicit_opt_in |
-| `database.bm25_rerank`: pg_tokenizer, vchord_bm25 and rerank function | unsupported | — | — | — | — | Protect 7.2.105 | default |
+| `database.bm25_rerank`: pg_tokenizer, vchord_bm25 and rerank function | native-verified | — | — | — | native-verified | Protect 7.2.105 | explicit_opt_in |
 | **search** | |  |  |  |  | | |
-| `search.e5_nl_parse`: NL_PARSE with multilingual-e5-small returns a 384-value query embedding | fixture-tested | not_observed | not_observed | not_observed | — | Protect 7.2.105 | explicit_opt_in |
-| `search.description_embedding`: 384-value passage embedding attached to task descriptions | fixture-tested | — | — | — | — | Protect 7.2.105 | explicit_opt_in |
+| `search.e5_nl_parse`: NL_PARSE with multilingual-e5-small returns a 384-value query embedding | native-verified | not_observed | not_observed | not_observed | native-verified | Protect 7.2.105 | explicit_opt_in |
+| `search.description_embedding`: 384-value passage embedding attached to task descriptions | native-verified | — | — | — | native-verified | Protect 7.2.105 | explicit_opt_in |
 | `search.legacy_clip_image`: 768-value CLIP ViT-L/14 NL_PARSE text vectors and IMAGE_SEARCH image vectors (basic Find Anything) | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
 | `search.tags_and_time_filters`: NL_PARSE objectTypes and time window from the query text (keyTags stay empty) | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle, Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
 | `search.native_retrieval`: Find Anything retrieval of processor results in Protect | native-verified | — | — | native-verified | — | Protect 7.3.60 bundle, Protect 7.2.105 | explicit_opt_in |
@@ -156,8 +159,6 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `control.request_ai.on_demand_inference`: Unscoped or repeated on-demand operation
 - `control.request_ai.on_demand_inference`: Other camera families
 - `control.request_ai.on_demand_inference`: A successful player AI summary after 7.3.60: it failed natively on 7.3.68 (28 Sep, owner report of "Failed to generate" summaries) and all 4 on-demand jobs on 7.3.70 timed out (30 Sep) behind a speech backlog
-- `control.request_ai.describe`: Whether 7.3.60 dispatches /describe at all (issue #10)
-- `control.request_ai.describe`: promptProfile session-v1 behavior is not reproduced
 - `control.request_ai.unknown_target`: Protect's retry treatment of errorCode 95 versus 5 for RequestAI
 - `control.request_ai.second_stage_verification`: A live reverification task and its saved result: enabling it changes live event classification (saveReverification retypes matched thumbnails and objects), so it needs the owner's approval
 - `control.request_ai.second_stage_verification`: Zero-shot accuracy on real low-confidence crops is not measured
@@ -174,13 +175,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `control.recognize_key_frames.multiple_images`: 39 events whose tasks were dropped at a mid-run Key swap stay unindexed; Protect does not retry timed-out tasks
 - `control.ai_settings_commands`: These names appear in the device diagnostic allowlist, but no public record states their source or when Protect sends them
 - `control.change_ai_infer_agent_settings`: Protect's aiprocessors log no longer reporting "Failed to updateAiSettings" after a connect (not read back)
-- `control.deep_mode`: Protect showing the Key as deep-capable and switching it with changeAiInferAgentSettings {modelMode: deep}
-- `control.deep_mode`: Protect's reconcile tick confirming featureFlags.aiMode and describeConfigHash after the switch
-- `worker.deep_reid_embeddings`: A generate-embeddings task from Protect with deep understanding enabled
-- `worker.deep_reid_embeddings`: Session grouping quality: Protect joins at cosine 0.75 by default, tuned for its native 512-value model; this Key uses Intel's 256-value person-reidentification-retail-0288 zero-padded to 512
-- `worker.deep_session_describe`: A describe task from Protect and the session's description and labels read back in Protect
-- `worker.deep_session_describe`: The unit of detectedThumbnails coord in close-pass video objects is assumed to be x, y, w, h in 0..1000 like smart-detect coords
-- `search.e5_session_query`: A deep session search in Protect returning sessions
+- `worker.deep_reid_embeddings`: Grouping quality against Protect's native 512-value model
 - `index.ram_open_vocabulary_tags`: Protect's ramTags table was not read; tags it does not know are skipped with a warning (saveEventTagging)
 - `control.disk_info`: featureFlags.storageSize read back from Protect after a connect
 - `framing.ucp_two_record`: No raw native frame capture or independently recorded two-record layout
@@ -194,20 +189,20 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `callback.ram_full_event_tagging`: Repeated or simultaneous jobs under continuous operation
 - `callback.ram_full_event_tagging`: Effect on events that already carry native tags
 - `callback.ram_full_event_tagging`: Persistence for events whose smart detection is supplied by a paired AI Port
-- `callback.task_description`: A live controller task ledger entry; unknown task IDs are dropped after HTTP 200
 - `callback.journal_and_uncertain_delivery`: Exactly-once delivery is not claimed
 - `callback.journal_and_uncertain_delivery`: Controller-side retry behavior for AI Key tasks
 - `capability.explicit_disabled_flags`: The capability state Protect stored on 7.3.56 and 7.3.60 was not recorded
 - `capability.ai_mode_basic`: How 7.3.x interprets aiMode
 - `capability.support_ai_summary`: Whether supportAiSummary was advertised as enabled during the 7.3.60 caption trial is not in the public records
-- `capability.deep_mode_vlm`: Whether 7.3.x still couples the two flags
+- `capability.deep_mode_vlm`: Whether 7.3.x still couples supportDeepMode and supportVlm
 - `capability.face_recognition`: Fresh native readback after the native-face skip (27 Sep 00:21 UTC): new Wohnzimmer events with camera faces and no new AI Key faces
 - `capability.face_recognition`: AI Key faces carry no faceEmbed, so Protect puts each in its own group (65 singleton groups on 26 Sep); grouping needs Protect's camera-model embedding, which the Key cannot produce
 - `capability.face_recognition`: Named recognition needs an owner-named group and an eligible legacy camera; none is eligible today
 - `capability.license_plate_recognition`: The Protect 7.3.68 AI Key plate task, result shape and save callback (LPR_LEGACY dispatch); the backend source is not available locally (issue #19)
 - `capability.license_plate_recognition`: An approved local plate reader on the host; the AI Port reads plates only through the external vision provider (issue #19)
 - `capability.license_plate_recognition`: A connected, unpaired legacy camera offered under Legacy Camera Enhancement, and an owner decision (issues #2, #19)
-- `capability.face_enhancement`: Native contract (issue #23)
+- `capability.face_enhancement`: Whether Protect ever dispatches enhanceImage automatically
+- `callback.enhanced_face_image`: Whether Protect ever dispatches enhanceImage automatically
 - `capability.retroactive_processing`: The stored run completed on an empty batch query at an 18 Sep 19:10 cursor although 2109 older tracker-crop events have no RAM task state; the cause needs Protect's aiprocessorTasks rows or 7.3.68 runner source
 - `capability.retroactive_processing`: Protect does not allow continuing older events once a run is completed without re-adopting the AI Key (start requires not_started on every processor; nothing resets it)
 - `capability.recognize_anything_tagging`: Structured object results (issue #14)
@@ -225,13 +220,9 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `database.supports_db_credential_handoff` (needs_evidence): setConsoleInfo stored supportsDbCredential true on 7.3.68, but the access-rule behavior 7.3.x expects from it is not established
 - `database.controller_migrations`: Migration replay after a controller upgrade or restart
 - `database.controller_migrations`: Hybrid search objects (pg_tokenizer, vchord_bm25) are not installed
-- `database.bm25_rerank`: Whether 7.3.x requires hybrid search
-- `search.e5_nl_parse`: On 7.3.68 basic Find Anything uses CLIP (verified); E5 is used only by deep session search (encodeSessionSearchQuery), not observed live
+- `database.bm25_rerank`: Rerank calibration against the vendor cross-encoder
 - `search.e5_nl_parse`: Encoder compatibility with vendor vectors
-- `search.e5_nl_parse`: Deep Understanding is internal-only in Protect 7.3.x (enforceDeepUnderstandingInternalOnly); on this console it is off, /detection-sessions/search returns 0 sessions and smartDetectSessionsSearch is empty (27 Sep)
 - `search.description_embedding`: Document preprocessing used by the vendor
-- `search.description_embedding`: Native retrieval with positive and negative examples
-- `search.description_embedding`: Deep Understanding is internal-only in Protect 7.3.x (enforceDeepUnderstandingInternalOnly); on this console it is off, /detection-sessions/search returns 0 sessions and smartDetectSessionsSearch is empty (27 Sep)
 - `search.legacy_clip_image`: Vectors come from the project's own local CLIP ViT-L/14 export; equivalence with the vendor encoder is not established, so only indexes built by this Key are compatible
 - `search.legacy_clip_image`: Protect 7.3.56 and 7.3.60 not observed
 - `search.legacy_clip_image`: Tag extraction and time filters remain unsupported

@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-30.16",
+ "manifest_version": "ai-key/2026-10-02.1",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -141,7 +141,8 @@
     "worker journal only: postVLM tasks were refused as video_contract while the registry was stale; afterwards 9 recognizeKeyFrames caption jobs reached completed, which means Protect answered each callback 2xx, and one failed on a persistent media 503",
     "worker journal only: speechToText and recognizeFaces jobs reached completed (callback answered 2xx)",
     "the unhandled connect-time commands are diskInfo and updateLcmSettings (bounded fingerprint window, matched against Protect's AI processor log); updateLcmSettings answered 0 after the Key stored it",
-    "search index row counts grew on the Key's PostgreSQL, including 2 rows for the native face camera after the face-task search tags change; counts do not attribute rows to that change"
+    "search index row counts grew on the Key's PostgreSQL, including 2 rows for the native face camera after the face-task search tags change; counts do not attribute rows to that change",
+    "1 Oct 2026: deep understanding enabled on all cameras; session descriptions, re-ID vectors and descriptions saved natively; hybrid session search (BM25 plus rerank) returns ranked sessions; a manual face enhancement saved natively"
    ],
    "not_observed": [
     "a caption read back from the exact-event record (metadata.ramDescription) on 7.3.70",
@@ -958,11 +959,12 @@
    "id": "control.request_ai.describe",
    "area": "control",
    "title": "RequestAI :7968/describe session task with image or video inputs",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
     "live-protect-7.3.60": "not_observed",
-    "live-protect-7.3.68": "not_observed"
+    "live-protect-7.3.68": "not_observed",
+    "live-protect-7.3.70": "native-verified"
    },
    "static": [
     "static-protect-7.2.105"
@@ -977,10 +979,8 @@
     "src/aikey/worker.py"
    ],
    "activation": "default",
-   "missing_evidence": [
-    "Whether 7.3.60 dispatches /describe at all (issue #10)",
-    "promptProfile session-v1 behavior is not reproduced"
-   ]
+   "missing_evidence": [],
+   "notes": "1 Oct 2026 (7.3.70): RequestAI :7968/describe with promptProfile session-v1 dispatched and answered."
   },
   {
    "id": "control.request_ai.unknown_target",
@@ -1258,9 +1258,9 @@
    "id": "control.deep_mode",
    "area": "control",
    "title": "Deep understanding: supportDeepMode, aiMode switch and describe prompt sync",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
-    "live-protect-7.3.70": "not_observed"
+    "live-protect-7.3.70": "native-verified"
    },
    "static": [
     "static-protect-7.3.70-bundle"
@@ -1275,19 +1275,16 @@
     "src/aikey/deep_mode.py"
    ],
    "activation": "explicit_opt_in",
-   "missing_evidence": [
-    "Protect showing the Key as deep-capable and switching it with changeAiInferAgentSettings {modelMode: deep}",
-    "Protect's reconcile tick confirming featureFlags.aiMode and describeConfigHash after the switch"
-   ],
-   "notes": "getInfo reports supportDeepMode/supportVlm only with deep_understanding.reid_server, an http E5 backend and an OpenAI-compatible describer. aiMode and describeConfigHash echo what Protect last set; changeDescribePrompts is stored privately in describe-prompts.json."
+   "missing_evidence": [],
+   "notes": "getInfo reports supportDeepMode/supportVlm only with deep_understanding.reid_server, an http E5 backend and an OpenAI-compatible describer. aiMode and describeConfigHash echo what Protect last set; changeDescribePrompts is stored privately in describe-prompts.json. 1 Oct 2026 (7.3.70): with the deepUnderstanding policy enabled, Protect switched the Key with changeAiInferAgentSettings {modelMode: deep}; getInfo echoes aiMode deep and describeConfigHash 9fec385b7771."
   },
   {
    "id": "worker.deep_reid_embeddings",
    "area": "worker",
    "title": "generate-embeddings: person re-ID vectors for dedup sessions",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
-    "live-protect-7.3.70": "not_observed"
+    "live-protect-7.3.70": "native-verified"
    },
    "static": [
     "static-protect-7.3.70-bundle"
@@ -1305,18 +1302,17 @@
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "A generate-embeddings task from Protect with deep understanding enabled",
-    "Session grouping quality: Protect joins at cosine 0.75 by default, tuned for its native 512-value model; this Key uses Intel's 256-value person-reidentification-retail-0288 zero-padded to 512"
+    "Grouping quality against Protect's native 512-value model"
    ],
-   "notes": "RequestAI :7445/generate-embeddings; callback /internal/aiprocessors/embeddings/{taskId} with {camera, event, embeddings:[{objectId, objectType, reidEmbed, model, dim}], failed}. smartDetectSessionObjects.reidEmbedding on the Key's search host is vector(512) (read back 30 Sep)."
+   "notes": "RequestAI :7445/generate-embeddings; callback /internal/aiprocessors/embeddings/{taskId} with {camera, event, embeddings:[{objectId, objectType, reidEmbed, model, dim}], failed}. smartDetectSessionObjects.reidEmbedding on the Key's search host is vector(512) (read back 30 Sep). 1 Oct 2026: generate-embeddings tasks answered with NPU re-ID vectors; the search host stored them in smartDetectSessionObjects.reidEmbedding (213 tasks, 271 crops, 1 failed by 14:44)."
   },
   {
    "id": "worker.deep_session_describe",
    "area": "worker",
    "title": "session-v1 describe: open and close passes with Protect's prompts and schema",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
-    "live-protect-7.3.70": "not_observed"
+    "live-protect-7.3.70": "native-verified"
    },
    "static": [
     "static-protect-7.3.70-bundle"
@@ -1333,19 +1329,16 @@
     "src/aikey/providers.py"
    ],
    "activation": "explicit_opt_in",
-   "missing_evidence": [
-    "A describe task from Protect and the session's description and labels read back in Protect",
-    "The unit of detectedThumbnails coord in close-pass video objects is assumed to be x, y, w, h in 0..1000 like smart-detect coords"
-   ],
-   "notes": "The prompt for the sorted object-type combination (describeComboKey) is sent with its sampling and describeSchema as response_format json_schema to the local OpenAI-compatible model; the reply {description, labels} gets an E5 passage descEmbedding (384 values) and goes to /internal/aiprocessors/descriptions/{taskId}."
+   "missing_evidence": [],
+   "notes": "The prompt for the sorted object-type combination (describeComboKey) is sent with its sampling and describeSchema as response_format json_schema to the local OpenAI-compatible model; the reply {description, labels} gets an E5 passage descEmbedding (384 values) and goes to /internal/aiprocessors/descriptions/{taskId}. 1 Oct 2026: open and close passes described with Protect's prompts and schema; Protect read back 184 of 190 sessions described. Label lists are bounded (maxItems 32) for guided decoding; 391 of 391 described after r24/r25."
   },
   {
    "id": "search.e5_session_query",
    "area": "search",
    "title": "E5 session search queries next to basic CLIP search",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
-    "live-protect-7.3.70": "not_observed"
+    "live-protect-7.3.70": "native-verified"
    },
    "static": [
     "static-protect-7.3.70-bundle"
@@ -1357,10 +1350,8 @@
     "src/aikey/search.py"
    ],
    "activation": "explicit_opt_in",
-   "missing_evidence": [
-    "A deep session search in Protect returning sessions"
-   ],
-   "notes": "7.3.70 encodeSessionSearchQuery sends NL_PARSE with model multilingual-e5-small and requires a 384-value txtEmbed; the clip-basic-v1 profile now answers it from the configured E5 backend."
+   "missing_evidence": [],
+   "notes": "7.3.70 encodeSessionSearchQuery sends NL_PARSE with model multilingual-e5-small and requires a 384-value txtEmbed; the clip-basic-v1 profile now answers it from the configured E5 backend. 1 Oct 2026: session NLS search returns ranked sessions natively (e.g. 30 results, top confidence 99 for a matching description) once the search host has the hybrid objects."
   },
   {
    "id": "callbacks.audio_image_tagging",
@@ -1733,11 +1724,12 @@
    "id": "callback.task_description",
    "area": "callbacks",
    "title": "Session description JSON at /internal/aiprocessors/descriptions/<taskId>",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
     "live-protect-7.3.60": "not_observed",
-    "live-protect-7.3.68": "not_observed"
+    "live-protect-7.3.68": "not_observed",
+    "live-protect-7.3.70": "native-verified"
    },
    "static": [
     "static-protect-7.2.105"
@@ -1751,9 +1743,8 @@
     "src/aikey/worker.py"
    ],
    "activation": "default",
-   "missing_evidence": [
-    "A live controller task ledger entry; unknown task IDs are dropped after HTTP 200"
-   ]
+   "missing_evidence": [],
+   "notes": "1 Oct 2026 (7.3.70): descriptions posted to /internal/aiprocessors/descriptions/<taskId> were saved as session descriptions and labels (readback, not HTTP 200)."
   },
   {
    "id": "callback.origin_allowlist",
@@ -1835,7 +1826,8 @@
    "activation": "default",
    "missing_evidence": [
     "How 7.3.x interprets aiMode"
-   ]
+   ],
+   "notes": " Since 1 Oct 2026 the live Key runs aiMode deep at Protect's request; basic stays the default without a deep configuration."
   },
   {
    "id": "capability.support_ai_summary",
@@ -1866,23 +1858,25 @@
    "id": "capability.deep_mode_vlm",
    "area": "capabilities",
    "title": "supportDeepMode / supportVlm",
-   "status": "unsupported",
-   "live": {},
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "indirect"
+   },
    "static": [
     "static-protect-7.2.105"
    ],
    "tests": [
-    "tests/test_device.py::test_info_reports_observed_fields_and_explicit_disabled_capabilities"
+    "tests/test_device.py::test_info_reports_observed_fields_and_explicit_disabled_capabilities",
+    "tests/test_deep_mode.py::test_a_deep_capable_key_switches_mode_and_echoes_it"
    ],
    "implementation": [
     "src/aikey/device.py"
    ],
    "activation": "default",
    "missing_evidence": [
-    "Whether 7.3.x still couples the two flags"
+    "Whether 7.3.x still couples supportDeepMode and supportVlm"
    ],
-   "rejection": "Both false. Protect 7.2.105 couples them (supportDeepMode ?? supportVlm), so they cannot be advertised independently.",
-   "notes": "27 Sep 7.3.68: Protect stored supportVlm false, supportDeepMode false and aiMode basic (N2)."
+   "notes": "The flag is advertised with deep models configured; the behavior behind it is control.deep_mode (native-verified on 7.3.70)."
   },
   {
    "id": "capability.face_recognition",
@@ -1935,22 +1929,55 @@
   {
    "id": "capability.face_enhancement",
    "area": "capabilities",
-   "title": "Automatic and manual face enhancement",
-   "status": "unsupported",
-   "live": {},
+   "title": "Manual face enhancement (enhanceImage)",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "indirect"
+   },
    "static": [
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
    ],
-   "tests": [],
+   "tests": [
+    "tests/test_face_enhancement.py::test_an_enhanced_face_is_uploaded_as_a_separate_derivative",
+    "tests/test_vision_server.py::test_an_aligned_face_is_restored_and_pasted_back_at_least_crop_size"
+   ],
    "implementation": [
-    "src/aikey/device.py"
+    "src/aikey/device.py",
+    "src/aikey/worker.py",
+    "src/aikey/vision_server.py"
    ],
-   "activation": "default",
+   "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Native contract (issue #23)"
+    "Whether Protect ever dispatches enhanceImage automatically"
    ],
-   "rejection": "supportFaceEnhancement disabled."
+   "notes": "The flag is advertised with a configured local enhancer; the behavior behind it is callback.enhanced_face_image."
+  },
+  {
+   "id": "callback.enhanced_face_image",
+   "area": "callbacks",
+   "title": "enhanceImage answered with an enhanced face derivative at /internal/aiprocessors/image/enhanced",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.70": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_face_enhancement.py::test_an_enhanced_face_is_uploaded_as_a_separate_derivative",
+    "tests/test_face_enhancement.py::test_declined_or_unsafe_output_uploads_no_modification",
+    "tests/test_vision_server.py::test_an_aligned_face_is_restored_and_pasted_back_at_least_crop_size"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/vision_server.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Whether Protect ever dispatches enhanceImage automatically"
+   ],
+   "notes": "1 Oct 2026 (7.3.70): Protect's Enhance action sent enhanceImage; GFPGAN on the NPU (aligned to its FFHQ template) produced a derivative that Protect saved (faceEnhanceState done, enhancedImageId set; readback, not HTTP 200). Protect's multipart parser keeps only parts typed exactly text/plain."
   },
   {
    "id": "capability.retroactive_processing",
@@ -2193,28 +2220,37 @@
    "id": "database.bm25_rerank",
    "area": "database",
    "title": "pg_tokenizer, vchord_bm25 and rerank function",
-   "status": "unsupported",
-   "live": {},
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.70": "native-verified"
+   },
    "static": [
     "static-protect-7.2.105"
    ],
-   "tests": [],
-   "implementation": [],
-   "activation": "default",
-   "missing_evidence": [
-    "Whether 7.3.x requires hybrid search"
+   "tests": [
+    "tests/test_rerank_relay.py::test_protects_request_is_relayed_and_scores_come_back_in_order",
+    "tests/test_vision_server.py::test_rerank_scores_every_document_in_order_including_empty_ones"
    ],
-   "rejection": "Not provisioned; controllers expecting hybrid search may return no results."
+   "implementation": [
+    "src/aikey/rerank_relay.py",
+    "src/aikey/vision_server.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Rerank calibration against the vendor cross-encoder"
+   ],
+   "notes": "1 Oct 2026: search-host image with vchord_bm25 0.3.0, pg_tokenizer 0.1.1, plpython3u and the E5 tokenizer; Protect provisioned descBm25, its BM25 index and rerank() itself, and rerank() reaches the Key relay on 127.0.0.1:8123 (mmarco-mMiniLMv2-L12 cross-encoder on the NPU)."
   },
   {
    "id": "search.e5_nl_parse",
    "area": "search",
    "title": "NL_PARSE with multilingual-e5-small returns a 384-value query embedding",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
     "live-protect-7.3.60": "not_observed",
-    "live-protect-7.3.68": "not_observed"
+    "live-protect-7.3.68": "not_observed",
+    "live-protect-7.3.70": "native-verified"
    },
    "static": [
     "static-protect-7.2.105"
@@ -2229,17 +2265,18 @@
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "On 7.3.68 basic Find Anything uses CLIP (verified); E5 is used only by deep session search (encodeSessionSearchQuery), not observed live",
-    "Encoder compatibility with vendor vectors",
-    "Deep Understanding is internal-only in Protect 7.3.x (enforceDeepUnderstandingInternalOnly); on this console it is off, /detection-sessions/search returns 0 sessions and smartDetectSessionsSearch is empty (27 Sep)"
-   ]
+    "Encoder compatibility with vendor vectors"
+   ],
+   "notes": "1 Oct 2026 (7.3.70): E5 NL_PARSE queries answered for session search with 0 failures."
   },
   {
    "id": "search.description_embedding",
    "area": "search",
    "title": "384-value passage embedding attached to task descriptions",
-   "status": "fixture-tested",
-   "live": {},
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.70": "native-verified"
+   },
    "static": [
     "static-protect-7.2.105"
    ],
@@ -2252,10 +2289,9 @@
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Document preprocessing used by the vendor",
-    "Native retrieval with positive and negative examples",
-    "Deep Understanding is internal-only in Protect 7.3.x (enforceDeepUnderstandingInternalOnly); on this console it is off, /detection-sessions/search returns 0 sessions and smartDetectSessionsSearch is empty (27 Sep)"
-   ]
+    "Document preprocessing used by the vendor"
+   ],
+   "notes": "1 Oct 2026: the 384-value passage embedding sent with each session description is stored in smartDetectSessionsSearch.descEmbedding and used by Protect's dense retrieval."
   },
   {
    "id": "search.legacy_clip_image",

@@ -1,7 +1,7 @@
 {
   "fixture_schema": "aikey-ucp-fixture/1",
   "id": "ucp4-control-v1",
-  "manifest": "ai-key/2026-09-30.16",
+  "manifest": "ai-key/2026-10-02.1",
   "provenance": {
     "kind": "synthetic",
     "sanitized": true,
