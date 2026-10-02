@@ -2763,6 +2763,18 @@ async def test_hello_diagnostic_answers_minimal_provisioning_queries(tmp_path):
     assert sink.messages[-1]["payload"] == {"description": "ssh_unavailable"}
     assert service.ssh_start_rejections == 1
 
+    # A firmware update (manual or Protect's nightly auto-update) is refused at
+    # once; the download link is never fetched or echoed.
+    link = "https://fw-download.example/synthetic-ai-port.bin?token=synthetic"
+    await service._handle_diagnostic_frame(sink, json.dumps({
+        "functionName": "UpdateFirmwareRequest", "messageId": 35,
+        "payload": {"uri": link, "timeoutMs": 900000}}).encode())
+    assert (sink.messages[-1]["functionName"], sink.messages[-1]["inResponseTo"],
+            sink.messages[-1]["statusCode"]) == ("UpdateFirmwareRequest", 35, 501)
+    assert sink.messages[-1]["payload"] == {"description": "firmware_update_unsupported"}
+    assert service.firmware_update_refusals == 1 and link not in json.dumps(sink.messages)
+    assert service.observed_function_counts["UpdateFirmwareRequest"] == 1
+
     secret = "synthetic-private-camera-setting"
     await service._handle_diagnostic_frame(sink, json.dumps({
         "functionName": "ChangeVideoSettings", "messageId": 32,

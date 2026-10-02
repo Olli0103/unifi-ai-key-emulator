@@ -101,7 +101,7 @@ _OBSERVABLE_FUNCTIONS = frozenset({
     "ChangeAnalyticsSettings", "ChangeAudioEventsSettings",
     "ChangeEventSettings", "ChangeAvclientEventSettings",
     "UpdateFeatureFlags", "EventFeatureFlagsUpdated", "EventAIPortStatus",
-    "UpdateFaceDBRequest",
+    "UpdateFaceDBRequest", "UpdateFirmwareRequest",
 })
 
 
@@ -696,6 +696,7 @@ class CandidateService:
         self.provision_isp_replies = 0
         self.ssh_stop_replies = 0
         self.ssh_start_rejections = 0
+        self.firmware_update_refusals = 0
         self.credential_rotations = 0
         self.credential_rotations_rejected = 0
         self.sound_led_replies = 0
@@ -2128,6 +2129,7 @@ class CandidateService:
             "provision_isp_replies": self.provision_isp_replies,
             "ssh_stop_replies": self.ssh_stop_replies,
             "ssh_start_rejections": self.ssh_start_rejections,
+            "firmware_update_refusals": self.firmware_update_refusals,
             "credential_rotations": self.credential_rotations,
             "credential_rotations_rejected": self.credential_rotations_rejected,
             "sound_led_replies": self.sound_led_replies,
@@ -2855,6 +2857,16 @@ class CandidateService:
                 await self._reply_control(ws, function, request_id, 501,
                                           {"description": "stream_ingest_unavailable"})
                 self.stream_controls_rejected += 1
+            return
+        if function == "UpdateFirmwareRequest":
+            # Protect (manual Update or the nightly auto-update) sends a firmware
+            # download link. This AI Port runs no UniFi firmware: refuse at once
+            # rather than let Protect wait for its timeout; the link is never fetched.
+            request_id = message.get("messageId")
+            if self._params_agreed and type(request_id) is int and request_id >= 0:
+                await self._reply_control(ws, function, request_id, 501,
+                                          {"description": "firmware_update_unsupported"})
+                self.firmware_update_refusals += 1
             return
         if function == "GetRequest":
             self.last_control_command = function
