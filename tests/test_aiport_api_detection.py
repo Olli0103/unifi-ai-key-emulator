@@ -1002,3 +1002,55 @@ def test_a_crop_that_shows_no_plate_never_invents_one(tmp_path):
     [car] = detector.detect_for_camera(FIRST, STILL)
     assert car.plate is None
     assert detector.diagnostic_counts(FIRST)["plate_crops"]["no_plate"] == 1
+
+
+def _scored_detector(tmp_path, detections, score_reply):
+    key = tmp_path / "openai-key"
+    key.write_text("synthetic-test-key\n")
+    key.chmod(0o600)
+    sent = []
+
+    def score_transport(url, jpeg):
+        sent.append(url)
+        if isinstance(score_reply, Exception):
+            raise score_reply
+        return score_reply
+    detector = ApiObjectDetector(
+        {"provider": "openai", "model": "gpt-6-luna", "base_url": "https://api.openai.com/v1",
+         "allow_remote": True, "api_key_file": str(key)},
+        tmp_path, threshold=0.8, transport=lambda *_: _reply(json.dumps({"detections": detections})),
+        score_server="http://172.30.50.14:8190/", score_transport=score_transport)
+    return detector, sent
+
+
+def test_the_score_detector_gives_real_confidences_and_uncertain_objects_stay_in_the_window(tmp_path):
+    person = {"kind": "person", "label": "person", "score": 0.98, "box": [0.1, 0.1, 0.3, 0.8]}
+    cat = {"kind": "animal", "label": "cat", "score": 0.97, "box": [0.6, 0.6, 0.7, 0.7]}
+    reply = {"detections": [{"kind": "person", "label": "person", "score": 0.91, "box": [0.11, 0.1, 0.3, 0.79]},
+                            {"kind": "animal", "label": "dog", "score": 0.22, "box": [0.6, 0.6, 0.7, 0.71]}]}
+    detector, sent = _scored_detector(tmp_path, [person, cat], reply)
+    scored = {o.kind: o.score for o in detector.detect_for_camera(FIRST, STILL)}
+    assert sent == ["http://172.30.50.14:8190/v1/detect"]
+    assert scored == {"person": 0.91, "animal": 0.5}          # weak match: uncertain, not dropped
+    counts = detector.diagnostic_counts(FIRST)["scores"]
+    assert (counts["matched"], counts["certain"], counts["uncertain"]) == (2, 1, 1)
+
+
+def test_an_object_the_score_detector_misses_is_uncertain_and_a_package_keeps_its_score(tmp_path):
+    person = {"kind": "person", "label": "person", "score": 0.98, "box": [0.1, 0.1, 0.3, 0.8]}
+    detector, _ = _scored_detector(tmp_path, [person], {"detections": []})
+    [only] = detector.detect_for_camera(FIRST, STILL)
+    assert only.score == 0.5 and detector.diagnostic_counts(FIRST)["scores"]["unmatched"] == 1
+    from aikey.aiport_detection import ObjectObservation
+    scored = detector._score(FIRST, STILL, (ObjectObservation("package", "package", 0.95, (0.4, 0.8, 0.5, 0.9)),))
+    assert scored[0].score == 0.95
+
+
+def test_a_failing_score_detector_keeps_the_vision_scores(tmp_path):
+    from aikey.aiport_api_detection import ApiDetectionError
+    person = {"kind": "person", "label": "person", "score": 0.98, "box": [0.1, 0.1, 0.3, 0.8]}
+    for reply in (ApiDetectionError("score_unavailable"), {"detections": [{"kind": "person"}]},
+                  {"detections": [{"kind": "person", "box": [0, 0, 1, 1], "score": 3}]}):
+        detector, _ = _scored_detector(tmp_path, [person], reply)
+        [only] = detector.detect_for_camera(FIRST, STILL)
+        assert only.score == 0.98 and detector.diagnostic_counts(FIRST)["scores"]["failed"] == 1

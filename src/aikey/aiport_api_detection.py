@@ -6,6 +6,7 @@ until measured against camera footage; configuration alone is not parity proof.
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import re
@@ -296,6 +297,15 @@ _PACKAGE_CHECK_KEYS = ("confirmed", "relabelled_animal", "rejected", "failed", "
 # the 1280 px detection frame came back as "H?K? 3058" and "L?S RH ?7").
 _PLATE_CROP_KEYS = ("requests", "read", "complete", "improved", "reused", "no_plate",
                     "failed", "budget_denied", "full_resolution", "recently_read", "conflicts")
+# Real confidences from a local COCO detector (YOLOX-S on the NAS NPU). The
+# vision model reports 0.98-0.99 for everything, so Protect's second-stage
+# window never saw a track (two Büro trials, 1 Oct). The vision model still
+# decides what exists; the score detector only says how sure that is.
+SCORE_KINDS = frozenset({"person", "vehicle", "animal"})
+SCORE_UNCONFIRMED = 0.5
+_SCORE_MATCH_IOU = 0.3
+_SCORE_TIMEOUT_S = 5.0
+_SCORE_KEYS = ("requests", "failed", "matched", "unmatched", "certain", "uncertain")
 _PLATE_CROP_LONG_SIDE = 1536
 _PLATE_CROP_MIN_LONG_SIDE = 768
 _PLATE_CROP_INTERVAL_S = 2.0
@@ -538,6 +548,31 @@ def _post(url: str, headers: dict, payload: dict, *, timeout: float = 15) -> dic
         raise ApiDetectionError("api_detection_request_failed") from exc
 
 
+def _post_jpeg(url: str, jpeg: bytes, *, timeout: float = _SCORE_TIMEOUT_S) -> dict:
+    """One JPEG as multipart ``image`` to a local server; its JSON reply."""
+    boundary = "aiport-" + hashlib.sha256(jpeg[:64] + str(time.monotonic()).encode()).hexdigest()[:24]
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"frame.jpg\"\r\n"
+            "Content-Type: image/jpeg\r\n\r\n").encode() + jpeg + f"\r\n--{boundary}--\r\n".encode()
+    request = Request(url, data=body, method="POST",
+                      headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    opener = build_opener(ProxyHandler({}), _NoRedirect())
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            if response.status != 200:
+                raise ApiDetectionError("score_http_failure")
+            raw = response.read(_MAX_REPLY_BYTES + 1)
+            if len(raw) > _MAX_REPLY_BYTES:
+                raise ApiDetectionError("score_response_too_large")
+            result = json.loads(raw)
+            if not isinstance(result, dict):
+                raise ValueError
+            return result
+    except ApiDetectionError:
+        raise
+    except (HTTPError, URLError, OSError, ValueError) as exc:
+        raise ApiDetectionError("score_unavailable") from exc
+
+
 def _plate_agrees(partial: str, complete: str) -> bool:
     """Every legible character of a reading matches the other, gaps included."""
     return len(partial) == len(complete) and all(
@@ -570,6 +605,8 @@ class ApiObjectDetector:
                  fallback_transport: Callable[..., dict] | None = None,
                  camera_thresholds: dict[str, float] | None = None,
                  full_frame: Callable[[str, bytes], bytes | None] | None = None,
+                 score_server: str | None = None,
+                 score_transport: Callable[[str, bytes], dict] | None = None,
                  clock: Callable[[], float] = time.time):
         if (type(threshold) not in (float, int) or not 0 < threshold <= 1
                 or any(type(value) not in (float, int) or not 0 < value <= 1
@@ -612,6 +649,9 @@ class ApiObjectDetector:
         self._plate_crop_counts: dict[str, dict[str, int]] = {}
         self._plate_crop_at: dict[str, float] = {}
         self._plate_reads: dict[str, list[tuple[float, tuple, str]]] = {}
+        self.score_url = score_server.rstrip("/") + "/v1/detect" if score_server else None
+        self._score_transport = score_transport or _post_jpeg
+        self._score_counts: dict[str, dict[str, int]] = {}
         self.budget = (EventBudget(state_dir, limit=max_requests_per_hour,
                                    namespace="vision-request")
                        if max_requests_per_hour is not None else None)
@@ -862,6 +902,8 @@ class ApiObjectDetector:
                     if verified is not None)
             if plates and any(item.kind == "vehicle" for item in accepted):
                 accepted = self._read_plates(camera_mac, frame, accepted)
+            if self.score_url and any(item.kind in SCORE_KINDS for item in accepted):
+                accepted = self._score(camera_mac, frame, accepted)
             if plates:
                 read = self._plate_counts.setdefault(camera_mac, dict.fromkeys(
                     ("vehicles", "plates_read", "plates_partial"), 0))
@@ -1001,6 +1043,40 @@ class ApiObjectDetector:
                 counts["complete"] += 1
             recent.append((now, item.box, merged))
             out.append(ObjectObservation(item.kind, item.label, item.score, item.box, merged))
+        return tuple(out)
+
+    def _score(self, camera_mac: str, frame: bytes,
+               items: tuple[ObjectObservation, ...]) -> tuple[ObjectObservation, ...]:
+        """Each person, vehicle or animal gets the score detector's confidence.
+
+        A same-kind box overlapping it (IoU >= 0.3) gives its score; a weak or
+        missing match becomes SCORE_UNCONFIRMED, inside Protect's reverification
+        window, so the AI Key's second stage decides instead of the object being
+        dropped. When the score detector fails, the vision scores are kept.
+        """
+        counts = self._score_counts.setdefault(camera_mac, dict.fromkeys(_SCORE_KEYS, 0))
+        counts["requests"] += 1
+        try:
+            reply = self._score_transport(self.score_url, frame)
+            found = [(str(item["kind"]), tuple(float(v) for v in item["box"]), float(item["score"]))
+                     for item in reply["detections"]]
+            if any(len(box) != 4 or not 0 <= score <= 1 for _, box, score in found):
+                raise ValueError
+        except (ApiDetectionError, KeyError, TypeError, ValueError):
+            counts["failed"] += 1
+            return items
+        out = []
+        for item in items:
+            if item.kind not in SCORE_KINDS:
+                out.append(item)
+                continue
+            best = max((score for kind, box, score in found
+                        if kind == item.kind and _box_iou(box, item.box) >= _SCORE_MATCH_IOU),
+                       default=None)
+            counts["matched" if best is not None else "unmatched"] += 1
+            score = round(max(best or 0.0, SCORE_UNCONFIRMED), 4)
+            counts["certain" if score > 0.8 else "uncertain"] += 1
+            out.append(ObjectObservation(item.kind, item.label, score, item.box, item.plate))
         return tuple(out)
 
     def _plate_from_crop(self, camera_mac: str, frame: bytes, box: tuple, counts: dict) -> str | None:
@@ -1163,4 +1239,6 @@ class ApiObjectDetector:
                 ("vehicles", "plates_read", "plates_partial"), 0)))
             result["plate_crops"] = dict(self._plate_crop_counts.get(
                 camera_mac, dict.fromkeys(_PLATE_CROP_KEYS, 0)))
+        if self.score_url:
+            result["scores"] = dict(self._score_counts.get(camera_mac, dict.fromkeys(_SCORE_KEYS, 0)))
         return result

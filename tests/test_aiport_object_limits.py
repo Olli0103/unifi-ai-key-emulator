@@ -93,3 +93,14 @@ def test_camera_thresholds_are_validated_for_paired_cameras_only(tmp_path):
         config["live_pool_detector"]["camera_thresholds"] = bad
         with pytest.raises(CandidateError):
             load(tmp_path, config, name="bad.json")
+
+
+def test_a_score_server_must_be_a_local_http_server_on_the_api_backend(tmp_path):
+    config = pool_config(tmp_path)
+    for good in ("http://172.30.50.14:8190", "http://127.0.0.1:8190/"):
+        config["live_pool_detector"]["score_server"] = good
+        assert load(tmp_path, config, name="good.json")["live_pool_detector"]["score_server"] == good
+    for bad in ("https://detect.example.com", "http://8.8.8.8:8190", "http://172.30.50.14:8190/x", 7):
+        config["live_pool_detector"]["score_server"] = bad
+        with pytest.raises(CandidateError):
+            load(tmp_path, config, name="bad.json")

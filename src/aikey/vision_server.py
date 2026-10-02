@@ -16,6 +16,11 @@ CPU):
 - ``POST /v1/reid``: one JPEG person crop, answered with Intel's
   person-reidentification-retail-0288 vector (256 values, L2-normalized) for
   deep-mode session grouping.
+- ``POST /v1/detect``: one JPEG, answered with YOLOX-S (Megvii, Apache-2.0,
+  COCO) person, vehicle and animal boxes and their confidences as
+  ``{"detections": [{"kind", "label", "score", "box"}], "model"}``. The AI
+  Ports use it only to score what their vision detector found, so Protect's
+  second-stage window sees real confidences.
 - ``POST /v1/rerank``: ``{"query", "documents"}``, answered with one
   cross-encoder relevance logit per document as ``{"scores", "model"}``; the
   Key relays Protect's hybrid session-search rerank sidecar here.
@@ -56,6 +61,15 @@ FACE_MODEL = "gfpgan-1.4"
 TEXT_MODEL = "intfloat/multilingual-e5-small"
 REID_MODEL = "person-reidentification-retail-0288"
 RERANK_MODEL = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+DETECT_MODEL = "yolox-s"
+_DETECT_SIZE = 640
+_DETECT_MIN_SCORE = 0.05
+_DETECT_MAX = 50
+# COCO indices of the classes an AI Port reports, by Protect kind and label.
+DETECT_CLASSES = {0: ("person", "person"), 1: ("vehicle", "bicycle"), 2: ("vehicle", "car"),
+                  3: ("vehicle", "motorcycle"), 5: ("vehicle", "bus"), 7: ("vehicle", "truck"),
+                  14: ("animal", "bird"), 15: ("animal", "cat"), 16: ("animal", "dog"),
+                  17: ("animal", "horse"), 18: ("animal", "sheep"), 19: ("animal", "cow")}
 _REID_SIZE = (128, 256)                   # width, height
 
 
@@ -228,6 +242,58 @@ def reid_pixels(picture):
     return pixels[:, :, ::-1].transpose(2, 0, 1)[None].copy()
 
 
+def detect_pixels(picture):
+    """YOLOX's own preprocessing: letterbox into 640 x 640 over grey 114, BGR, 0..255."""
+    import numpy
+    from PIL import Image
+    ratio = min(_DETECT_SIZE / picture.width, _DETECT_SIZE / picture.height)
+    resized = picture.resize((max(1, int(picture.width * ratio)), max(1, int(picture.height * ratio))),
+                             Image.Resampling.BILINEAR)
+    canvas = numpy.full((_DETECT_SIZE, _DETECT_SIZE, 3), 114, dtype=numpy.uint8)
+    canvas[:resized.height, :resized.width] = numpy.asarray(resized)
+    return canvas[:, :, ::-1].transpose(2, 0, 1)[None].astype(numpy.float32), ratio
+
+
+def decode_yolox(raw, ratio: float, width: int, height: int) -> list[dict[str, Any]]:
+    """Grid-decode raw YOLOX output (1, 8400, 85) into normalised boxes after class-wise NMS."""
+    import numpy
+    grids, strides = [], []
+    for stride in (8, 16, 32):
+        side = _DETECT_SIZE // stride
+        ys, xs = numpy.meshgrid(numpy.arange(side), numpy.arange(side), indexing="ij")
+        grids.append(numpy.stack((xs, ys), -1).reshape(-1, 2))
+        strides.append(numpy.full((side * side, 1), stride))
+    grid, stride = numpy.concatenate(grids), numpy.concatenate(strides)
+    out = numpy.asarray(raw, dtype=numpy.float32).reshape(-1, 85)
+    centres = (out[:, :2] + grid) * stride
+    sizes = numpy.exp(numpy.clip(out[:, 2:4], -10, 10)) * stride
+    found = []
+    for index, (kind, label) in DETECT_CLASSES.items():
+        scores = out[:, 4] * out[:, 5 + index]
+        keep = numpy.nonzero(scores >= _DETECT_MIN_SCORE)[0]
+        candidates = sorted(keep, key=lambda i: -scores[i])
+        chosen = []
+        for i in candidates:
+            box = numpy.concatenate((centres[i] - sizes[i] / 2, centres[i] + sizes[i] / 2)) / ratio
+            if all(_iou(box, other) < 0.45 for other, _ in chosen):
+                chosen.append((box, float(scores[i])))
+        for box, score in chosen:
+            x1, y1 = max(0.0, box[0] / width), max(0.0, box[1] / height)
+            x2, y2 = min(1.0, box[2] / width), min(1.0, box[3] / height)
+            if x2 > x1 and y2 > y1:
+                found.append({"kind": kind, "label": label, "score": round(score, 4),
+                              "box": [round(float(v), 4) for v in (x1, y1, x2, y2)]})
+    found.sort(key=lambda item: -item["score"])
+    return found[:_DETECT_MAX]
+
+
+def _iou(a, b) -> float:
+    left, top, right, bottom = max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, right - left) * max(0.0, bottom - top)
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return float(inter / union) if union > 0 else 0.0
+
+
 def text_inputs(ids: list[int], pad_id: int, buckets=_TEXT_BUCKETS):
     """Token IDs padded to the smallest static bucket, with the attention mask."""
     import numpy
@@ -246,13 +312,13 @@ class Models:
                  devices: list[str], cache_dir: str | None,
                  text_devices: list[str] | None = None, reid_dir: str | None = None,
                  rerank_dir: str | None = None, rerank_devices: list[str] | None = None,
-                 face_detector: str | None = None):
+                 face_detector: str | None = None, object_detector: str | None = None):
         import openvino as ov
         core = ov.Core()
         if cache_dir:
             core.set_property({"CACHE_DIR": cache_dir})
         self.devices: dict[str, str] = {}
-        self.tagger = self.enhancer = self.reid = self.face_detector = None
+        self.tagger = self.enhancer = self.reid = self.face_detector = self.detector = None
         self.encoders: dict[int, Any] = {}
         self.rerankers: dict[int, Any] = {}
         if tags_dir:
@@ -272,6 +338,10 @@ class Models:
             model.reshape({model.inputs[0].any_name: [1, 3, 640, 640]})
             compiled, self.devices["face_detector"] = _compile(core, model, devices)
             self.face_detector = named_outputs(compiled)
+        if object_detector:
+            model = core.read_model(object_detector)
+            model.reshape({model.inputs[0].any_name: [1, 3, _DETECT_SIZE, _DETECT_SIZE]})
+            self.detector, self.devices["detect"] = _compile(core, model, devices)
         if reid_dir:
             model = core.read_model(Path(reid_dir) / f"{REID_MODEL}.xml")
             model.reshape({model.inputs[0].any_name: [1, 3, _REID_SIZE[1], _REID_SIZE[0]]})
@@ -331,6 +401,11 @@ class Models:
         return vectors
 
 
+    def detect(self, jpeg: bytes) -> list[dict[str, Any]]:
+        picture = _picture(jpeg)
+        pixels, ratio = detect_pixels(picture)
+        return decode_yolox(self.detector(pixels)[0], ratio, picture.width, picture.height)
+
     def rerank(self, query: str, documents: list[str]) -> list[float]:
         scores = []
         for document in documents:
@@ -347,8 +422,9 @@ def build_app(models: Models) -> web.Application:
     counters = {"tag_requests": 0, "enhance_requests": 0, "enhanced": 0, "declined": 0,
                 "embedding_requests": 0, "texts": 0, "rejected": 0, "failed": 0}
     locks = {"tags": asyncio.Lock(), "enhance": asyncio.Lock(), "embeddings": asyncio.Lock(),
-             "reid": asyncio.Lock(), "rerank": asyncio.Lock()}
-    counters.update(reid_requests=0, rerank_requests=0, reranked_documents=0, enhanced_aligned=0)
+             "reid": asyncio.Lock(), "rerank": asyncio.Lock(), "detect": asyncio.Lock()}
+    counters.update(reid_requests=0, rerank_requests=0, reranked_documents=0, enhanced_aligned=0,
+                    detect_requests=0)
 
     async def run(role, function, *args):
         async with locks[role]:
@@ -447,6 +523,18 @@ def build_app(models: Models) -> web.Application:
                                   "data": [{"object": "embedding", "index": i, "embedding": v}
                                            for i, v in enumerate(vectors)]})
 
+    async def detect(request: web.Request) -> web.Response:
+        counters["detect_requests"] += 1
+        if models.detector is None:
+            return unavailable()
+        try:
+            jpeg = await read_image(request)
+        except InputError:
+            counters["rejected"] += 1
+            return web.json_response({"error": "invalid_request"}, status=400)
+        found, error = await run("detect", models.detect, jpeg)
+        return error or web.json_response({"detections": found, "model": DETECT_MODEL})
+
     async def rerank(request: web.Request) -> web.Response:
         counters["rerank_requests"] += 1
         if not models.rerankers:
@@ -475,7 +563,8 @@ def build_app(models: Models) -> web.Application:
                                              "enhance": FACE_MODEL if models.enhancer else None,
                                              "embeddings": TEXT_MODEL if models.encoders else None,
                                              "reid": REID_MODEL if models.reid else None,
-                                             "rerank": RERANK_MODEL if models.rerankers else None},
+                                             "rerank": RERANK_MODEL if models.rerankers else None,
+                                             "detect": DETECT_MODEL if models.detector else None},
                                   **counters})
 
     app = web.Application(client_max_size=_MAX_IMAGE_BYTES + 131072)
@@ -484,6 +573,7 @@ def build_app(models: Models) -> web.Application:
     app.router.add_post("/v1/embeddings", embeddings)
     app.router.add_post("/v1/reid", reid)
     app.router.add_post("/v1/rerank", rerank)
+    app.router.add_post("/v1/detect", detect)
     app.router.add_get("/healthz", health)
     return app
 
@@ -496,6 +586,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reid", help=f"directory with {REID_MODEL}.xml")
     parser.add_argument("--rerank", help="directory with rerank.xml and tokenizer.json")
     parser.add_argument("--face-detector", help="YuNet ONNX file; aligns faces before GFPGAN")
+    parser.add_argument("--object-detector", help="YOLOX-S ONNX file; scores AI Port detections")
     parser.add_argument("--rerank-device", help="devices for the cross-encoder only")
     parser.add_argument("--device", default="NPU,GPU,CPU",
                         help="comma-separated OpenVINO devices, tried in order per model")
@@ -512,7 +603,7 @@ def main(argv: list[str] | None = None) -> int:
                     devices=devices(args.device), cache_dir=args.cache_dir,
                     text_devices=devices(args.embeddings_device), reid_dir=args.reid,
                     rerank_dir=args.rerank, rerank_devices=devices(args.rerank_device),
-                    face_detector=args.face_detector)
+                    face_detector=args.face_detector, object_detector=args.object_detector)
     web.run_app(build_app(models), host=args.host, port=args.port, access_log=None, print=None)
     return 0
 

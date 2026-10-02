@@ -33,6 +33,7 @@ class _Fake(Models):
         self.tagger = (lambda pixels: [numpy.array([[0.95, 0.72, 0.5]])]) if tagger else None
         self.enhancer = (lambda pixels: [numpy.zeros_like(pixels)]) if enhancer else None
         self.face_detector = None
+        self.detector = None
         self.pad_id = 1
         self.tokenizer = type("T", (), {"encode": staticmethod(
             lambda text: type("E", (), {"ids": list(range(len(text)))})())})()
@@ -143,7 +144,8 @@ async def test_a_missing_model_answers_404_and_health_lists_devices():
         health = await (await c.get("/healthz")).json()
         assert health["models"] == {"tags": None, "enhance": "gfpgan-1.4", "embeddings": None,
                                     "reid": "person-reidentification-retail-0288",
-                                    "rerank": "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"}
+                                    "rerank": "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+                                    "detect": None}
         assert health["devices"]["enhance"] == "NPU"
 
 
@@ -245,3 +247,37 @@ def test_the_face_detector_runs_one_inference_per_call_for_all_its_outputs():
         result = detect(call / 10)
         assert compiled.calls == call                                      # one inference per call
         assert result == {port.any_name: (call, port.any_name, call / 10) for port in Compiled.outputs}
+
+
+def _yolox_output(entries):
+    """Raw YOLOX output with given (grid index, stride, dx, dy, log w, log h, obj, class, prob)."""
+    raw = numpy.full((1, 8400, 85), -20.0, dtype=numpy.float32)
+    raw[0, :, 4:] = 0.0
+    for index, dx, dy, lw, lh, obj, cls, prob in entries:
+        raw[0, index, :4] = [dx, dy, lw, lh]
+        raw[0, index, 4] = obj
+        raw[0, index, 5 + cls] = prob
+    return raw
+
+
+def test_yolox_output_is_grid_decoded_scored_and_mapped_to_protect_kinds():
+    from aikey.vision_server import decode_yolox
+    # stride 8 cell (row 10, col 20) is index 820; stride 32 starts at 6400 + 6400/4... = 8000
+    raw = _yolox_output([(820, 0.5, 0.5, 2.0, 3.0, 0.9, 0, 0.8),          # person, 0.72
+                         (821, 0.5, 0.5, 2.0, 3.0, 0.9, 0, 0.7),          # overlapping duplicate
+                         (8000 + 45, 0.5, 0.5, 1.0, 1.0, 0.5, 15, 0.5),   # cat, 0.25
+                         (900, 0.5, 0.5, 1.0, 1.0, 0.9, 60, 0.9)])       # dining table: ignored
+    found = decode_yolox(raw, ratio=0.5, width=1280, height=1280)
+    assert [(f["kind"], f["label"], f["score"]) for f in found] == [
+        ("person", "person", 0.72), ("animal", "cat", 0.25)]
+    x1, y1, x2, y2 = found[0]["box"]
+    cx, cy = (20.5 * 8) / 0.5 / 1280, (10.5 * 8) / 0.5 / 1280
+    assert abs((x1 + x2) / 2 - cx) < 1e-3 and abs((y1 + y2) / 2 - cy) < 1e-3
+
+
+async def test_detect_letterboxes_into_640_and_answers_404_without_the_model(client):
+    from aikey.vision_server import detect_pixels
+    assert (await client.post("/v1/detect", data=_form(_jpeg()))).status == 404
+    pixels, ratio = detect_pixels(Image.new("RGB", (1280, 720), (10, 20, 30)))
+    assert pixels.shape == (1, 3, 640, 640) and ratio == 0.5
+    assert pixels[0, 0, 0, 0] == 30 and pixels[0, 0, 639, 0] == 114        # BGR, grey padding below

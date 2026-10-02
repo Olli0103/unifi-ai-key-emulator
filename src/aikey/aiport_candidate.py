@@ -21,7 +21,7 @@ import signal
 import ssl
 import stat
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import aiohttp
 from aiohttp import web
@@ -281,7 +281,7 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
                                        <= set(detector) - legacy
                                        <= api_fields | {"held_package_followup",
                                                         "plate_cameras", "fallback",
-                                                        "camera_thresholds"}))
+                                                        "camera_thresholds", "score_server"}))
                 or detector.get("held_package_followup", "shadow") not in {"shadow", "announce"}
                 or backend is not None and not (is_api or is_onnx)
                 or not is_api and (
@@ -316,6 +316,19 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
                 validate_inference_config(dict(provider), require_api_key=False)
             except ProviderError as exc:
                 raise CandidateError("Invalid live pool detector fallback") from exc
+        if "score_server" in detector:
+            # Opt-in local score detector (YOLOX-S on the NAS NPU); frames stay local.
+            server = detector["score_server"]
+            parsed = urlsplit(server) if isinstance(server, str) else None
+            try:
+                address = ipaddress.ip_address(parsed.hostname or "") if parsed else None
+            except ValueError:
+                address = None
+            if (not is_api or parsed is None or parsed.scheme != "http" or address is None
+                    or not (address.is_private or address.is_loopback)
+                    or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
+                    or parsed.username or parsed.password):
+                raise CandidateError("Invalid live pool detector score server")
         if "plate_cameras" in detector:
             # Opt-in plate reading (#19): only listed paired cameras, API backend.
             plates = detector["plate_cameras"]
@@ -888,7 +901,8 @@ class CandidateService:
                         plate_cameras=frozenset(detector.get("plate_cameras", ())),
                         fallback=detector.get("fallback"),
                         camera_thresholds=detector.get("camera_thresholds"),
-                        full_frame=self._full_frame_blocking))
+                        full_frame=self._full_frame_blocking,
+                        score_server=detector.get("score_server")))
                     if live_pool and detector.get("inference_backend") == "vision_api" else
                     (lambda: OnnxRFDetrNanoDetector.from_model(
                         detector["model_path"], detector["model_sha256"],
