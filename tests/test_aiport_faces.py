@@ -96,6 +96,7 @@ class Session:
     def run(self, names, feeds):
         tensor = next(iter(feeds.values()))
         self.calls.append(tensor.shape)
+        self.ranges = getattr(self, "ranges", []) + [(float(tensor.min()), float(tensor.max()))]
         if self.kind == "detector":
             return [self.outputs[name] for name in names]
         vector = np.arange(1, EMBEDDING_SIZE + 1, dtype=np.float32)[None]
@@ -190,7 +191,7 @@ def test_face_policy_requires_pinned_models_and_pool_cameras(tmp_path):
     good = pool_config(tmp_path)["live_face"]
     for bad in (dict(good, cameras=["2A99887766AA"]), dict(good, cameras=[]),
                 dict(good, detector_sha256="x"), dict(good, embedder_path="e.onnx"),
-                dict(good, extra=1)):
+                dict(good, extra=1), dict(good, embedder_input="other")):
         path = tmp_path / "bad.json"
         private_file(path, json.dumps(pool_config(tmp_path, face=bad)).encode())
         with pytest.raises(CandidateError):
@@ -391,3 +392,16 @@ async def test_face_analysis_waits_briefly_for_the_full_resolution_twin(tmp_path
         assert seen[-1] == b"low" and service._face_camera_health(CAMERA)["twin"]["gone"] == 1
     finally:
         await service.stop()
+
+
+def test_adaface_gets_pixels_scaled_to_minus_one_to_one_and_arcface_raw_pixels():
+    from aikey.aiport_faces import FaceEngine
+    for kind, low, high in (("arcface", 0.0, 255.0), ("adaface", -1.0, 1.0)):
+        sessions = {"det": Session("detector", yunet_outputs((16, 10, 20))), "emb": Session("embedder")}
+        face_engine = FaceEngine("det", "emb", session_factory=lambda path: sessions[path],
+                                 embedder_input=kind)
+        assert face_engine.analyse(jpeg(), (0.4, 0.1, 0.6, 0.95)) is not None
+        lo, hi = sessions["emb"].ranges[-1]
+        assert low <= lo and hi <= high and (hi > 1.5) == (kind == "arcface"), kind
+    with pytest.raises(FaceError):
+        FaceEngine("det", "emb", session_factory=lambda path: None, embedder_input="other")

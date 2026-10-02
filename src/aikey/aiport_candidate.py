@@ -32,7 +32,8 @@ from .aiport_ingest import (
 )
 from .aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
 from .aiport_api_detection import ApiObjectDetector, _frame_mode
-from .aiport_faces import (EMBEDDINGS_PER_TRACK, FACE_PX_BANDS, YAW_BANDS, FaceEngine, FaceError,
+from .aiport_faces import (EMBEDDER_INPUTS, EMBEDDINGS_PER_TRACK, FACE_PX_BANDS, YAW_BANDS,
+                           FaceEngine, FaceError,
                            band, make_face_snapshot, mean_embedding, send_gate, verify_model)
 from .aiport_audio import (MAX_EVENT_S, SPEECH, AudioSettingsError, SpeechActivity,
                            audio_state_payload, parse_audio_flags)
@@ -394,7 +395,8 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
                 or not {"cameras", "detector_path", "detector_sha256", "embedder_path",
                         "embedder_sha256"} <= set(face) <= {
                             "cameras", "detector_path", "detector_sha256", "embedder_path",
-                            "embedder_sha256", "payload"}
+                            "embedder_sha256", "payload", "embedder_input"}
+                or face.get("embedder_input", "arcface") not in EMBEDDER_INPUTS
                 # Staged payloads isolate what Protect accepts (diagnostic).
                 or face.get("payload", "full") not in {"full", "no_embed", "no_attributes",
                                                        "descriptor_only"}
@@ -3071,7 +3073,8 @@ class CandidateService:
             try:
                 self._face_engine = await asyncio.to_thread(
                     lambda: FaceEngine(verify_model(face["detector_path"], face["detector_sha256"]),
-                                       verify_model(face["embedder_path"], face["embedder_sha256"])))
+                                       verify_model(face["embedder_path"], face["embedder_sha256"]),
+                                       embedder_input=face.get("embedder_input", "arcface")))
             except (FaceError, OSError, ImportError, RuntimeError) as exc:
                 self._count_face_error(str(exc) if isinstance(exc, FaceError) else "face_engine_unavailable")
         if self._sound_cameras and self._sound_classifier is None:

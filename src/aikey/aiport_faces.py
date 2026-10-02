@@ -8,8 +8,9 @@ has none, so the AI Port supplies it:
 * YuNet (OpenCV Zoo, MIT) finds the face and five landmarks inside the upper
   part of a detected person;
 * the face is aligned to the standard 112x112 ArcFace template;
-* ArcFace ResNet100 (ONNX Model Zoo, Apache-2.0) returns a 512-value
-  embedding, L2-normalised.
+* ArcFace ResNet100 (ONNX Model Zoo, Apache-2.0) or AdaFace IR101 (CVLFace
+  WebFace12M) returns a 512-value embedding, L2-normalised. AdaFace halved
+  the error rate on the owner's named faces (1 Oct: EER 5.7 % against 10.5 %).
 
 Both models run locally on the AI Port host; nothing leaves the network and no
 provider is called. The embedding exists only inside the event message that
@@ -32,6 +33,8 @@ from .aiport_snapshots import SmartSnapshot, SnapshotError
 from .face_geometry import (ARCFACE_TEMPLATE as _TEMPLATE, YUNET_SIZE as _YUNET_SIZE,
                             FaceError, decode_yunet, similarity_transform, _iou)  # noqa: F401
 EMBEDDING_SIZE = 512
+# Pixel scaling each embedder was trained with, on aligned RGB 112x112 crops.
+EMBEDDER_INPUTS = ("arcface", "adaface")
 FACE_SNAPSHOT_SIDE = 512
 # A face is sent to Protect's face grouping only when it can identify someone:
 # small, turned-away or flat faces made stray single-face groups (1 Oct: 22 of
@@ -162,9 +165,12 @@ class FaceEngine:
     """Face detection and embedding with two pinned local ONNX models."""
 
     def __init__(self, detector_path: str, embedder_path: str, *,
-                 min_score: float = 0.75, min_face_px: int = 32, session_factory=None):
-        if not 0.3 <= min_score <= 0.99 or not 16 <= min_face_px <= 256:
+                 min_score: float = 0.75, min_face_px: int = 32, session_factory=None,
+                 embedder_input: str = "arcface"):
+        if (not 0.3 <= min_score <= 0.99 or not 16 <= min_face_px <= 256
+                or embedder_input not in EMBEDDER_INPUTS):
             raise FaceError("invalid_face_settings")
+        self.embedder_input = embedder_input
         if session_factory is None:
             import onnxruntime   # optional dependency of the AI Port image
 
@@ -236,8 +242,10 @@ class FaceEngine:
         aligned = image.transform((112, 112), Image.Transform.AFFINE,
                                   (ia, ib, -(ia * tx + ib * ty), ic, id_, -(ic * tx + id_ * ty)),
                                   resample=Image.Resampling.BILINEAR)
-        face_tensor = np.ascontiguousarray(
-            np.asarray(aligned, dtype=np.float32).transpose(2, 0, 1)[None])     # RGB, 0..255
+        pixels = np.asarray(aligned, dtype=np.float32)                       # RGB, 0..255
+        if self.embedder_input == "adaface":
+            pixels = (pixels / 255.0 - 0.5) / 0.5                            # RGB, -1..1
+        face_tensor = np.ascontiguousarray(pixels.transpose(2, 0, 1)[None])
         vector = self._embedder.run(None, {self._embedder.get_inputs()[0].name: face_tensor})[0][0]
         norm = float(np.linalg.norm(vector))
         if vector.shape != (EMBEDDING_SIZE,) or not math.isfinite(norm) or norm <= 0:
