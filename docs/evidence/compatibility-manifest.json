@@ -1031,7 +1031,8 @@
     "tests/test_find_anything.py::test_malformed_verification_requests_are_refused_before_media",
     "tests/test_find_anything.py::test_a_single_thumbnail_reverification_exports_the_second_after_it",
     "tests/test_find_anything.py::test_a_reverification_longer_than_the_video_bound_verifies_its_first_window",
-    "tests/test_find_anything.py::test_a_long_reverification_without_regions_is_still_refused_before_media"
+    "tests/test_find_anything.py::test_a_long_reverification_without_regions_is_still_refused_before_media",
+    "tests/test_find_anything.py::test_a_reverification_thumbnail_at_the_export_end_is_judged_on_the_last_frame"
    ],
    "implementation": [
     "src/aikey/worker.py"

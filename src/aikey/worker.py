@@ -1198,7 +1198,7 @@ class JobProcessor:
             raise WorkerError("Reverification has no person, vehicle or animal regions")
         body["_objects"] = [[tracker, ts, region, kind]
                             for tracker, (ts, region, kind, _) in sorted(chosen.items())[:32]]
-        body["_start"] = start
+        body["_start"], body["_end"] = start, end
         normalized = {"operation": "reverify", "payload": body, "callback": callback,
                       "callbackKind": "reverification", "media": [("video", media_url)]}
         fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
@@ -1979,9 +1979,10 @@ class JobProcessor:
         offset = 0.0
         # A key moment at the interval end is the export's last frame: seeking
         # to the very end yields no frame, so decode the final second instead.
+        # Protect ends a reverification export at its last thumbnail.
+        end = job.payload.get("_end" if job.operation == "reverify" else "end")
         at_end = (job.operation in {"recognizeKeyFrames", "recognizeFaces", "indexKeyFrames", "reverify"}
-                  and timestamp is not None
-                  and timestamp == job.payload.get("end"))
+                  and timestamp is not None and timestamp == end)
         if job.operation == "on_demand" or timestamp is not None:
             lowered = {key.lower(): value for key, value in headers.items()}
             start = lowered.get("x-start-timestamp")

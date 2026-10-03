@@ -1390,3 +1390,19 @@ async def test_a_long_reverification_without_regions_is_still_refused_before_med
     finally:
         await worker.stop()
     assert controller.reverifications == [] and controller.clip_requests == []
+
+
+async def test_a_reverification_thumbnail_at_the_export_end_is_judged_on_the_last_frame(controller, tmp_path):
+    # Protect ends the export at the last thumbnail; seeking to the very end
+    # yields no frame, which failed the whole task (live, 3 Oct 15:08).
+    controller.region_vectors = [mix(person=1.0), mix(person=1.0)]
+    meta = [{"ts": START + 1500, "roi": [verify_roi(1, "person")]},
+            {"ts": END, "roi": [verify_roi(2, "person", confidence=0.7)]}]
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        await worker.handle(reverification_request(controller, meta))
+    finally:
+        await worker.stop()
+    [posted] = controller.reverifications
+    verdicts = {r["trackerID"]: (r["thumbnailMs"], r["detectedAs"]) for r in posted["result"]["verificationResults"]}
+    assert verdicts == {1: (START + 1500, "person"), 2: (END, "person")}

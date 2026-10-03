@@ -237,6 +237,8 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - Protect saved `preReverificationObjectType: animal` and `preReverificationConfidence: 72` and now shows the detection at 99 %.
   - AI Port-sourced verdicts stay needs_evidence.
 - *Long tracks:* one task was refused as `reverify_export`. Protect spans the export from the first to the last thumbnail, and a long G6 track exceeds the 120 s video bound. Since this change (code), the Key verifies the 120 s window from the first person, vehicle or animal thumbnail and counts it as `narrowed`. Later thumbnails keep their saved state. A long task with no such region in its window is still refused before any media.
+- *Thumbnail at the export end:* one task failed at frame extraction (3 Oct, about 15:08). Protect ends the export at the last thumbnail, and the Key seeked to the very end, which holds no frame. A reverification thumbnail at the export end now decodes the final second (code).
+- *Verdicts after the restarts (3 Oct, 15:00–15:40):* three more, all Wohnzimmer G6: person 74 → 86 % and 74 → 89 %, animal 74 → 99 %. In-window AI Port thumbnails existed in the same period (Büro person 56 %, Flur animal 76 % and 50 %) but got no verdict.
 - *Firmware:* every AI Port slot refused Protect's update request at least once (1–2 each, 501 `firmware_update_unsupported`). The 03:00 auto-update leaves 5.1.12 in place.
 - *Plates (counts since the slots started 2 Oct):*
   - Einfahrt: 59 vehicles, 11 plates read, 2 partial; 23 crop re-reads, 6 read, 4 complete, 5 improved, 2 conflicts kept apart.
