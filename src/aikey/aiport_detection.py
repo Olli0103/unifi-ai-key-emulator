@@ -52,6 +52,8 @@ class ObjectObservation:
     score: float
     # Coordinates are fractions of the decoded frame, in xyxy order.
     box: tuple[float, float, float, float]
+    # Vehicle plate text, "?" for uncertain characters (aiport_plates).
+    plate: str | None = None
 
 
 def validate_checkpoint(path: str, expected_sha256: str) -> Path:

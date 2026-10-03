@@ -54,3 +54,13 @@ def test_upload_request_accepts_only_exact_pinned_controller_path():
     with pytest.raises(SnapshotError):
         validated_upload_url({**payload, "filename": "other.jpg"},
                              controller_ip="192.168.10.1", filename=filename)
+
+
+def test_a_track_inside_the_reverification_window_is_flagged_for_the_ai_key():
+    frame = BytesIO()
+    Image.new("RGB", (320, 240), (40, 90, 140)).save(frame, format="JPEG")
+    track = TrackChange("enter", 7, "person", "person", 0.6, (0.2, 0.2, 0.5, 0.8))
+    assert make_smart_snapshot(frame.getvalue(), track, 1_790_000_000_000).metadata[
+        "reVerifyEligible"] is False
+    assert make_smart_snapshot(frame.getvalue(), track, 1_790_000_000_000,
+                               reverify_eligible=True).metadata["reVerifyEligible"] is True

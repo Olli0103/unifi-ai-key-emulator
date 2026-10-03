@@ -67,6 +67,36 @@ jobs:
       - name: Audit locked runtime dependencies
         run: python -m pip_audit -r requirements-runtime.lock --strict
 
+  reproducible-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - name: Install pinned build tools
+        run: python -m pip install --disable-pip-version-check build==1.6.1 setuptools==84.0.0
+      - name: Build twice from isolated clean copies and compare
+        # Credentials-free: nothing is signed, tagged, uploaded or published.
+        run: |
+          epoch="$(git log -1 --format=%ct)"
+          for n in 1 2; do
+            dir="${RUNNER_TEMP}/release-build-${n}"
+            git clone --quiet --no-local "${GITHUB_WORKSPACE}" "${dir}"
+            (cd "${dir}" && SOURCE_DATE_EPOCH="${epoch}" PYTHONHASHSEED=0 \
+              python -m build --no-isolation --outdir dist)
+            python tools/release_check.py verify "${dir}/dist" --epoch "${epoch}" \
+              --forbid "${HOME}" --forbid "${dir}" --forbid "${GITHUB_WORKSPACE}" \
+              --manifest-out "${RUNNER_TEMP}/release-manifest-${n}.json"
+          done
+          python tools/release_check.py compare \
+            "${RUNNER_TEMP}/release-manifest-1.json" "${RUNNER_TEMP}/release-manifest-2.json"
+
   secret-scan:
     runs-on: ubuntu-latest
     timeout-minutes: 10

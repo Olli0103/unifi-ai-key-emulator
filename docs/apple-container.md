@@ -95,6 +95,55 @@ New configurations use management username `ui` with a random password in the pr
 
 Existing configurations retain their explicit username. If an older configuration uses `local-aikey`, align it deliberately before adoption unless the target controller provides a working username override. Keep the generated private password and persistent certificate/key.
 
+## Restart after a reboot or exit
+
+Apple `container` has no restart policy. After a Mac reboot, a crash, or a stopped `container` system service, the AI Key and a Mac AI Port stay down until someone starts them. `local-apple-supervise` fills that gap. It runs from a launchd agent once a minute and at login, and it only ever *starts* an exact pinned container. It never stops, recreates or restarts a running container, so it cannot interrupt a caption request or create a second device identity.
+
+Pin each running service once, then install the agent:
+
+```bash
+local-apple-supervise pin aikey-mac <aikey-container> --state-dir state/supervisor
+local-apple-supervise pin aiport-mac <aiport-container> --state-dir state/supervisor
+local-apple-supervise plist --state-dir state/supervisor > ~/Library/LaunchAgents/com.olli.local-apple-supervise.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.olli.local-apple-supervise.plist
+```
+
+A pin records the container's image, its published host address and port, and its `/state` bind mount. A stopped pinned container is started only when all of these hold:
+
+- it still matches its pin;
+- no other running container publishes that address and port or mounts that state directory;
+- the host address is up on an interface;
+- the service is not on hold;
+- it has been started fewer than three times in the past hour.
+
+Earlier stopped containers of the same identity are never started. Otherwise the tick reports `blocked:missing`, `drift`, `conflict`, `address_absent`, `crash_loop` or `start_failed`, and `local-apple-supervise status` shows the last result. A tick prints only when something is not running. It records only container names, states and those reason codes.
+
+For a manual redeploy, run `hold <service> --minutes 20` first. Once the new container is running, run `pin <service> <new-container>`; pinning also clears the hold. LaunchAgents run only while the user is logged in, so a reboot recovers at login.
+
+### Upgrade a pinned service in place
+
+`local-apple-upgrade` replaces one pinned container with a container from a new image on the same host. It takes the run settings from the live container, never from hand-typed flags: user, read-only root, tmpfs, CPUs, memory, DNS, published address and port, bind-mounted state, entrypoint and arguments.
+
+```bash
+local-apple-upgrade plan --state-dir state/supervisor --service aiport-mac --new-name <new-container> --image <new-image>
+```
+
+```bash
+local-apple-upgrade swap --state-dir state/supervisor --service aiport-mac --new-name <new-container> --image <new-image> --kind aiport --slot-state state/aiport-mac --health-port 8443 --streams 3
+```
+
+`plan` is read-only. It checks that the pin matches the running container, the new name is free, the new image exists for the same platform, and every live setting can be reproduced. Otherwise it refuses with a fixed reason, `unsupported:<list>`. For example, custom environment variables are refused rather than passed on the command line, because they may hold secrets.
+
+`swap` does the following:
+1. It waits until the service is idle. For an AI Port that means connected with no open smart event; for the AI Key, an empty worker queue.
+2. It holds the supervisor, stops the old container and starts the new one.
+3. It waits for readiness. For an AI Port: adopted, connected and every expected stream decoding. For the AI Key: adopted, connected and search connected.
+4. On success it pins the new container. Otherwise it deletes the new container, restarts the old one and pins it again.
+
+The old container stays stopped for a later rollback. The output is only the service name and one result code: `swapped`, `not_idle`, `hold_failed`, `stop_failed`, `rolled_back:run_failed`, `rolled_back:not_ready` or `rollback_not_ready`.
+
+On 26 Sep 2026 at 08:41:14 the pinned Mac AI Port was stopped, with no event open. The agent's next tick started the same container at 08:41:18. Within 12 s its control connection was back and all three streams were decoding. Protect showed the AI Port `CONNECTED` with its three paired cameras unchanged. A native Flur Animal event followed at 08:41:59. The AI Key and the NAS AI Ports were untouched.
+
 ## Networking limits and later search work
 
 Apple's default network uses NAT. Published ports pass through a proxy that opens a separate connection to the container. The application therefore cannot assume it sees the original controller IP. This follows from the 1.4.1 `ConnectHandler.swift` and `UDPForwarder.swift` implementation, reviewed alongside `NetworkMode.swift` in the [release source](https://github.com/apple/container/tree/1.4.1/Sources).

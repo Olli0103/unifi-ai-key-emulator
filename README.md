@@ -1,8 +1,8 @@
 # Local AI processor for Protect
 
-An independent experimental AI processor for UniFi Protect. The implemented profile currently emulates a bounded subset of AI Key. The roadmap also targets a separate AI Port compatibility profile for G3, G4/G5 and ONVIF cameras. Native AI Key adoption has been tested with Protect 7.3.56 on a UDM Pro Max using Apple container 1.4.1 on an Apple silicon Mac. A separate [AI Port candidate](docs/aiport-candidate.md) appeared in Protect 7.3.60, paired one G3 camera, decoded live video, and delivered a Person-class smart event observed through Protect's Integration API. An opt-in, single-camera detector can now run beyond the diagnostic window. Fresh management-token adoption, sustained event indexing, multi-camera pairing, and UGREEN NAS deployment remain open. This is an unofficial project and is not affiliated with Ubiquiti.
+An independent experimental AI processor for UniFi Protect. The implemented profile currently emulates a bounded subset of AI Key. The roadmap also targets a separate AI Port compatibility profile for G3, G4/G5 and ONVIF cameras. Native AI Key adoption has been tested with Protect 7.3.56 on a UDM Pro Max using Apple container 1.4.1 on an Apple silicon Mac. A separate [AI Port candidate](docs/aiport-candidate.md) appeared in Protect 7.3.60. It has paired three G3/G5 cameras simultaneously, decoded all three streams, and produced live Person detections on a G3 that Protect indexed under that camera and linked to its playback. Fresh management-token adoption, sustained multi-camera event indexing, additional camera capacity, and UGREEN NAS deployment remain open. This is an unofficial project and is not affiliated with Ubiquiti.
 
-The local build has device management/adoption, UCP4 control, UDP discovery, a bounded vision worker, version-specific description callbacks and an E5 query responder. Vision providers are configurable: OpenAI Responses, native Ollama and OpenAI-compatible APIs. Search embeddings are configured separately. No vendor firmware or model weights are bundled.
+The local build has device management/adoption, UCP4 control, UDP discovery, a bounded vision worker, version-specific description callbacks and an E5 query responder. Vision providers are configurable: OpenAI Responses, Claude Messages, native Ollama and OpenAI-compatible APIs. Search embeddings are configured separately. No vendor firmware or model weights are bundled.
 
 **Status: native adoption, control and automatic event captions verified on two camera families.** The ARM64 image built and ran under Apple container 1.4.1. Protect 7.3.56 displayed the processor online; local checks confirmed adopted state, control time synchronization, management-password rotation, disabled factory authentication and reconnect after a planned restart. On Protect 7.3.60, an on-demand description and one automatic event each on G5 Flex and G4 Instant completed through OpenAI. Both automatic captions remained visible in Protect after a full page reload. These were separate one-use trials; continuous operation, search and NAS deployment have not been verified.
 
@@ -12,9 +12,9 @@ The inspected controller source is 7.2.105, alongside AI Key firmware 2.2.8. Pub
 
 The [roadmap](PLAN.md) covers native AI Key and AI Port behavior, automatic camera discovery, AI Port processing for legacy and ONVIF cameras, a provider/model control site, security and detection-quality checks, and the path to a maintained open-source product. Work is tracked in the [issue index](docs/planning/issues.md), with [Claude/contributor handoff instructions](docs/planning/claude-handoff.md).
 
-The repository currently has no license. Licensing, provenance and release governance are explicit product work; public source availability alone does not establish an open-source release. Opt-in all-camera admission has synthetic tests, but it has not been deployed or native-verified. The control site is planned.
+The repository currently has no license. Licensing, provenance and release governance are explicit product work; public source availability alone does not establish an open-source release. Opt-in all-camera admission has synthetic tests, but it has not been deployed or native-verified. A [loopback control site](docs/control-site.md) now manages vision provider and model settings for both profiles; broader feature controls remain open.
 
-A [read-only camera inventory preflight](docs/camera-inventory-preflight.md) is available for Protect 7.3.60. It reads the local integration API with a private API-key file and pinned web certificate, then writes a private eligibility report. It does not enable processing. An opt-in continuous policy now refreshes that same inventory and gates automatic jobs by an explicit model-family allowlist and a durable 12-per-hour global limit. The live deployment still uses one-use permits; Protect-side all-camera dispatch, broader model-family validation, legacy event ingress and the control site remain open work.
+A [read-only camera inventory preflight](docs/camera-inventory-preflight.md) is available for Protect 7.3.60. It reads the local integration API with a private API-key file and pinned web certificate, then writes a private eligibility report. It does not enable processing. An opt-in continuous policy now refreshes that same inventory and gates automatic jobs by an explicit model-family allowlist and a durable 12-per-hour global limit. The live AI Key caption deployment still uses one-use permits; Protect-side all-camera dispatch, broader model-family validation and legacy event ingress remain open work.
 
 ## Run the local lab
 
@@ -95,6 +95,7 @@ The Linux ARM64 image was built and run with Apple's container runtime. Docker a
 - [Device/adoption/discovery contract](docs/device-contract.md)
 - [Worker contract](docs/worker-contract.md)
 - [Vision providers](docs/providers.md)
+- [Local control site](docs/control-site.md)
 - [Search contract](docs/search-contract.md)
 - [Database credential contract](docs/database-contract.md)
 - [Security policy](SECURITY.md) and [security contract](docs/security-contract.md)

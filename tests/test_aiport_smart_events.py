@@ -2,7 +2,8 @@
 
 import pytest
 
-from aikey.aiport_smart_events import SmartEventError, smart_event_payload
+from aikey.aiport_smart_events import (SmartEventError, camera_event_payload,
+                                      smart_event_payload)
 from aikey.aiport_tracking import TrackChange
 
 
@@ -112,7 +113,7 @@ def test_other_object_events_never_claim_a_recognized_plate(kind, label, expecte
 
 
 @pytest.mark.parametrize("track,edge,clock", [
-    (TrackChange("enter", 1, "package", "package", 0.9, (0.1, 0.2, 0.4, 0.5)),
+    (TrackChange("enter", 1, "face", "face", 0.9, (0.1, 0.2, 0.4, 0.5)),
      "enter", 1_700_000_000_000),
     (PERSON, "unknown", 1_700_000_000_000),
     (PERSON, "enter", True),
@@ -124,3 +125,49 @@ def test_other_object_events_never_claim_a_recognized_plate(kind, label, expecte
 def test_event_rejects_unsupported_or_invalid_track(track, edge, clock):
     with pytest.raises(SmartEventError):
         smart_event_payload("2A1122334455", track, edge=edge, clock_wall_ms=clock)
+
+
+def test_package_uses_protects_one_shot_package_edge():
+    track = TrackChange("enter", 5, "package", "package", 0.91, (0.1, 0.2, 0.4, 0.5))
+    payload = smart_event_payload("2A1122334455", track, edge="packageDetected",
+                                  clock_wall_ms=1_700_000_000_000, zone_ids=(3,))
+    assert payload["edgeType"] == "packageDetected"
+    assert payload["objectTypes"] == ["package"]
+    assert payload["zonesStatus"] == {"3": {"status": "enter", "level": 91}}
+    with pytest.raises(SmartEventError):
+        smart_event_payload("2A1122334455", track, edge="enter",
+                            clock_wall_ms=1_700_000_000_000, zone_ids=(3,))
+    person = TrackChange("enter", 6, "person", "person", 0.9, (0.1, 0.2, 0.4, 0.5))
+    with pytest.raises(SmartEventError):
+        smart_event_payload("2A1122334455", person, edge="packageDetected",
+                            clock_wall_ms=1_700_000_000_000)
+
+
+def test_camera_event_carries_every_object_and_closes_once():
+    person = TrackChange("moving", 1, "person", "person", 0.9, (0.1, 0.2, 0.3, 0.8))
+    car = TrackChange("enter", 2, "vehicle", "car", 0.8, (0.5, 0.5, 0.9, 0.9))
+    moving = camera_event_payload("2A1122334455", "moving",
+                                  ((person, (3,)), (car, (3, 4))),
+                                  clock_wall_ms=1_700_000_000_000)
+    assert moving["objectTypes"] == ["person", "vehicle"]
+    assert [d["trackerID"] for d in moving["descriptors"]] == [1, 2]
+    assert moving["descriptors"][1]["name"] == ""   # no plate claim
+    assert moving["zonesStatus"] == {} and moving["trackerIDAttrMap"] == {}
+    leave = camera_event_payload("2A1122334455", "leave",
+                                 ((person, (3,)), (car, (3, 4))),
+                                 clock_wall_ms=1_700_000_001_000)
+    assert leave["zonesStatus"] == {"3": {"status": "leave", "level": 90},
+                                    "4": {"status": "leave", "level": 80}}
+    assert leave["trackerIDAttrMap"] == {
+        "1": {"objectType": "person", "zone": [3]},
+        "2": {"objectType": "vehicle", "zone": [3, 4]}}
+    # Protect 7.3.68 routes only this lifecycle by deviceID for an AI Port,
+    # so a package joins the camera's event like any other class.
+    package = TrackChange("enter", 3, "package", "package", 0.9, (0.1, 0.2, 0.3, 0.4))
+    parcel = camera_event_payload("2A1122334455", "enter", ((package, (5,)),),
+                                  clock_wall_ms=1_700_000_000_000)
+    assert (parcel["edgeType"], parcel["objectTypes"],
+            parcel["descriptors"][0]["objectType"]) == ("enter", ["package"], "package")
+    with pytest.raises(SmartEventError):
+        camera_event_payload("2A1122334455", "enter", (),
+                             clock_wall_ms=1_700_000_000_000)

@@ -70,6 +70,33 @@ def test_spatial_jump_needs_new_confirmation_and_expires_old_track():
     assert ("leave", 1) in [(change.edge, change.track_id) for change in left]
 
 
+def test_confirmed_track_survives_slow_inference_when_next_box_matches():
+    tracker = TemporalTracker(max_gap_seconds=3)
+    near = observation(box=(0.1, 0.1, 0.3, 0.7))
+    tracker.update((near,), now=1.0)
+    assert tracker.update((near,), now=2.0)[0].edge == "enter"
+
+    # A delayed frame still proves the same object was present. It must not
+    # consume another native event budget entry just because inference was slow.
+    changes = tracker.update((near,), now=6.0)
+    assert [(change.edge, change.track_id) for change in changes] == [
+        ("moving", 1)]
+    assert [(change.edge, change.track_id) for change in tracker.update((), now=9.1)] == [
+        ("leave", 1)]
+
+
+def test_confirmed_track_does_not_bridge_long_stream_outage():
+    tracker = TemporalTracker(max_gap_seconds=3)
+    near = observation()
+    tracker.update((near,), now=1.0)
+    tracker.update((near,), now=2.0)
+    changes = tracker.update((near,), now=33.0)
+    assert [(change.edge, change.track_id) for change in changes] == [
+        ("leave", 1)]
+    assert [(change.edge, change.track_id) for change in tracker.update((near,), now=34.0)] == [
+        ("enter", 2)]
+
+
 def test_tracker_rejects_invalid_time_boxes_and_unbounded_input():
     tracker = TemporalTracker(max_tracks=2)
     tracker.update((), now=5.0)

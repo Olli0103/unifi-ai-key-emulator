@@ -28,7 +28,8 @@ from urllib.parse import urlsplit
 import aiohttp
 from aiohttp import web
 
-from .protocol import (COMPATIBILITY_MANIFEST_VERSION, ContractError, classify_controller_version,
+from .protocol import (COMPATIBILITY_MANIFEST_VERSION, CONTINUOUS_CAPTION_VERSIONS, ContractError,
+                       classify_controller_version,
                        decode_message, encode_message)
 from .config import validate_factory_enrollment_deadline
 
@@ -49,6 +50,33 @@ _COUNTER_LIMIT = 2 ** 31 - 1
 _JSON_SHAPES = ("missing", "null", "string", "boolean", "number", "array", "object", "other")
 _RAM_TYPES = ("video", "videoWithRecognition", "image", "multipleImages")
 # Exact local validation messages only. Never expose an arbitrary exception string.
+# Names of commands and RequestAI targets that appear in this project's
+# documented evidence but are not handled. A match is reported by name; it
+# says only that the controller sent a documented identifier (#1).
+DOCUMENTED_COMMAND_CANDIDATES = frozenset({
+    "timeSync", "requestAi", "setDbCredential", "getDbCredential", "setClientCertificate"})
+DOCUMENTED_TARGET_CANDIDATES = {
+    ":7968/describe": "describe", ":7968/on_demand_inference": "on_demand_inference",
+    ":7968/vlm_inference": "vlm_inference", ":7968/anything": "anything",
+    ":7788/v1/models/second_verifier_mlabel/inference": "second_verifier"}
+_FINGERPRINT_LIMIT = 8
+_FINGERPRINT_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}\Z")
+_FINGERPRINT_TARGET = re.compile(r":\d{1,5}/[A-Za-z0-9_/-]{1,200}\Z")
+
+
+def command_fingerprint(value: str) -> str:
+    """Stable comparison key: the first 16 hex digits of SHA-256 over the UTF-8 name.
+
+    Compare offline against a documented candidate name; a fingerprint alone
+    identifies nothing.
+    """
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _unlisted_bucket() -> dict:
+    return {"candidates": {}, "fingerprints": {}, "not_recorded": 0, "malformed": 0, "overflow": 0}
+
+
 _WORKER_REJECTION_REASONS = {
     "Invalid or oversized RequestAI command": "command_size_or_shape",
     "Job must contain finite JSON": "invalid_json",
@@ -60,6 +88,10 @@ _WORKER_REJECTION_REASONS = {
     "Camera inventory changed before admission": "inventory_changed",
     "Unsupported recognizeKeyFrames payload fields": "payload_fields",
     "recognizeKeyFrames is limited to captioned, muted target-camera video": "video_contract",
+    # Deliberate refusals before any fetch (#21): audio-event thumbnails and
+    # crops from cameras outside the Find Anything index.
+    "recognizeKeyFrames image tasks are not processed": "image_variant_refused",
+    "multipleImages camera is not a Find Anything index camera": "unindexed_camera",
     "recognizeKeyFrames video must span at most 10 seconds": "video_interval",
     "recognizeKeyFrames video exceeds configured duration bound": "video_interval",
     "recognizeKeyFrames requires bounded distinct timestamps inside the video": "key_moments",
@@ -90,7 +122,108 @@ _WORKER_REJECTION_REASONS = {
     "Worker queue is full": "queue_full",
     "Worker journal is full; archive reviewed entries": "journal_full",
     "Worker has stopped": "worker_stopped",
+    "Region metadata must list at most 256 entries": "region_metadata",
+    "Region metadata entries need a tracker, ts and 0-1000 xywh coord": "region_metadata",
+    "recognizeKeyFrames has no indexable objects": "index_empty",
+    "faceMeta must list 1 to 256 face regions": "face_metadata",
+    "faceMeta has no regions inside the export": "face_outside_export",
 }
+
+
+# speechToText refusals get their own fixed labels; the 28 Sep refusals
+# (16 of 123) could not be told apart from result codes alone.
+_SPEECH_REJECTION_REASONS = {
+    "speechToText requires a configured speech backend": "backend_unconfigured",
+    "Unsupported speechToText payload fields": "payload_fields",
+    "speechToText is outside the configured camera policy": "camera_policy",
+    "speechToText is limited to the audio-only event export": "export_contract",
+    "speechToText audio exceeds configured duration bound": "audio_too_long",
+    "speechToText requires the speech-to-text callback": "callback_path",
+    "speechToText requires the AI processor video export route": "media_path",
+    "speechToText export query is malformed": "export_query",
+    "speechToText export must exactly match the command": "export_query_match",
+}
+# RequestAI (the player's on-demand summary) refusals by fixed reason.
+_REQUEST_AI_REJECTION_REASONS = {
+    "Continuous mode accepts only automatic video captions": "target_not_served",
+    "Unsupported RequestAI targetUri": "target_not_served",
+    "RequestAI payload must be an object": "payload_shape",
+    "timestamp must be nonnegative milliseconds": "timestamp",
+    "On-demand callbacks must use the controller upload route": "callback_path",
+    "On-demand summary camera is not in the caption scope": "camera_scope",
+    "Camera inventory changed before admission": "camera_scope",
+    "Test scope requires one video export": "export_count",
+    "Test scope requires the AI processor video export route": "export_route",
+    "Test scope export query is malformed": "export_query",
+    "Test scope export query has missing, repeated, or unknown fields": "export_fields",
+    "Test scope export does not match the permitted camera, channel, event, or format": "export_mismatch",
+    "On-demand export camera does not match": "export_camera",
+    "On-demand export event does not match": "export_event",
+    "On-demand export must not create an event": "export_create_event",
+    "On-demand export format is not supported": "export_format",
+    "On-demand export type is not rotating": "export_type",
+    "On-demand export channel is not supported": "export_channel",
+    "On-demand export must be muted": "export_mute",
+    "Test scope export timestamps must be integer milliseconds": "export_timestamps",
+    "Test scope export must contain the requested timestamp and span at most 10 seconds": "export_span",
+    "timeoutMs must be positive": "timeout",
+    "Invalid media URL": "media_url", "Invalid callback URL": "callback_url",
+    "media URL is outside configured controller origins": "media_origin",
+    "callback URL is outside configured controller origins": "callback_origin",
+    "Worker queue is full": "queue_full", "Worker has stopped": "worker_stopped",
+    "Task identity reused with different input": "job_identity_conflict",
+    "Unsupported reverification payload": "reverify_shape",
+    "Unsupported reverification fields": "reverify_shape",
+    "Reverification needs a camera and event": "reverify_shape",
+    "Reverification requires the reverification callback": "callback_path",
+    "Reverification export needs a start and end": "reverify_export",
+    "Reverification export must match the camera and a bounded interval": "reverify_export",
+    "Reverification has no person, vehicle or animal regions": "reverify_no_regions",
+    "Unsupported callback path": "callback_path",
+    "Unsupported controller media path": "media_url",
+    "Description callbacks require a task or legacy RAM route": "callback_path",
+    "Exactly one nonempty images or videos list is required": "payload_shape",
+    "Too many media inputs": "payload_shape",
+    "Deep-mode descriptions need an unmetered local model": "target_not_served",
+    "Unsupported generate-embeddings payload": "deep_shape",
+    "Unsupported generate-embeddings image": "deep_shape",
+    "Embeddings callbacks use the task route": "callback_path",
+    "Unsupported describe payload": "deep_shape",
+    "Unsupported describe image": "deep_shape",
+    "Unsupported describe video": "deep_shape",
+    "Unsupported describe object": "deep_shape",
+    "Too many describe inputs": "deep_shape",
+    # Close-pass video exports adapted from UBV to MP4 (1 Oct: 14 were unattributed).
+    "MP4 adaptation is restricted to the verified AI processor export route": "export_route",
+    "MP4 adaptation cannot rewrite signed or unknown query fields": "export_fields",
+    "MP4 adaptation requires a bounded start/end interval": "export_interval",
+    "MP4 adaptation requires a literal format=ubv component": "export_query",
+    "Invalid media path": "media_url",
+    "Failed automatic job cannot be replayed": "replay_refused",
+    "Callback outcome is uncertain; review journal before retrying": "callback_uncertain",
+    "Worker journal is full; archive reviewed entries": "journal_full",
+    "Invalid or oversized RequestAI command": "payload_shape",
+}
+# RequestAI refusals by fixed target class, so a refusal names what was asked.
+_REQUEST_AI_TARGET_CLASSES = {
+    ":7968/on_demand_inference": "on_demand", ":7968/describe": "describe",
+    ":7788/v1/models/second_verifier_mlabel/inference": "reverification",
+    ":7445/generate-embeddings": "generate_embeddings",
+}
+
+
+_SPEECH_SHARED_REASONS = ("command_size_or_shape", "invalid_json", "job_failed", "callback_url",
+                          "media_url", "http_origin", "callback_origin", "media_origin",
+                          "job_identity_conflict", "callback_uncertain", "queue_full",
+                          "journal_full", "worker_stopped")
+
+
+def _speech_rejection_reason(message: str) -> str:
+    reason = _SPEECH_REJECTION_REASONS.get(message)
+    if reason is None:
+        shared = _WORKER_REJECTION_REASONS.get(message)
+        reason = shared if shared in _SPEECH_SHARED_REASONS else "unclassified_worker_error"
+    return reason
 
 
 def _increment(counter, key):
@@ -109,6 +242,33 @@ def _field_shape(body, field):
         return "null"
     return {str: "string", bool: "boolean", int: "number", float: "number",
             list: "array", dict: "object"}.get(type(value), "other")
+
+
+# Connect-time sync commands Protect 7.3.68/7.3.70 send to an AI Key that this
+# project does not answer yet. Only their field names and JSON types are kept,
+# so the reply contract can be established without recording any values.
+SYNC_SHAPE_COMMANDS = ("diskInfo", "updateLcmSettings")
+_SHAPE_FIELD_LIMIT = 24
+
+
+def _body_shape(body) -> dict:
+    """Field name -> JSON type for up to two levels of a command body; never values."""
+    shape: dict[str, str] = {}
+
+    def walk(value, prefix):
+        for name in sorted(value)[:_SHAPE_FIELD_LIMIT]:
+            if len(shape) >= _SHAPE_FIELD_LIMIT:
+                return
+            if not isinstance(name, str) or not _FINGERPRINT_NAME.fullmatch(name):
+                shape[prefix + "<malformed>"] = "other"
+                continue
+            shape[prefix + name] = _field_shape(value, name)
+            if not prefix and isinstance(value[name], dict):
+                walk(value[name], name + ".")
+
+    if isinstance(body, dict):
+        walk(body, "")
+    return shape
 
 
 class CommandFailure(Exception):
@@ -285,29 +445,60 @@ class DeviceService:
         self._control_diagnostics = {name: {"count": 0, "last_result_code": None,
                                            "result_code_counts": _result_counts()} for name in (
             "getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone",
-            "changeUserPassword", "RequestAI", "recognizeKeyFrames", "changeAiInferAgentSettings",
-            "changeDescribePrompts", "networkStatus", "sshService", "unknown")}
+            "changeUserPassword", "RequestAI", "recognizeKeyFrames", "speechToText",
+            "enhanceImage", "changeAiInferAgentSettings",
+            "changeDescribePrompts", "networkStatus", "sshService", *SYNC_SHAPE_COMMANDS, "unknown")}
+        self._sync_shapes: dict[str, dict] = {}
+        self._unlisted = {"command": _unlisted_bucket(), "request_ai_target": _unlisted_bucket()}
         self._recognize_diagnostics = {
             "camera_shape_counts": dict.fromkeys(_JSON_SHAPES, 0),
             "cameraId_shape_counts": dict.fromkeys(_JSON_SHAPES, 0),
             "camera_match_counts": dict.fromkeys(("matches", "different", "not_comparable"), 0),
             "cameraId_match_counts": dict.fromkeys(("matches", "different", "not_comparable"), 0),
             "ram_type_counts": dict.fromkeys((*_RAM_TYPES, "missing", "invalid_type", "other_string"), 0),
-            "metadata_presence_counts": dict.fromkeys(("personMeta", "faceMeta", "vehicleMeta"), 0),
+            "metadata_presence_counts": dict.fromkeys(("personMeta", "faceMeta", "vehicleMeta",
+                                                       "thumbnailMeta"), 0),
             "video_interval_counts": dict.fromkeys(("missing", "invalid_type", "invalid_order_or_range",
                                                     "up_to_10_seconds", "over_10_seconds"), 0),
             "duration_limit_counts": dict.fromkeys(("within", "exceeds", "not_comparable"), 0),
             "key_moments_counts": dict.fromkeys(("missing", "invalid_type", "empty", "at_or_below_sampling_limit",
                 "above_sampling_limit", "over_128_inputs", "duplicates", "non_integer", "outside_interval",
                 "interval_not_comparable"), 0),
+            # Per request, content-free: where key moments fall against the
+            # exported interval, and why an interval is unusable.
+            # Find Anything objects (#2): counts only, never IDs, times or boxes.
+            "thumbnail_meta_counts": dict.fromkeys((
+                "tasks_empty", "tasks_with_objects", "objects_inside", "objects_before_start",
+                "objects_after_end", "objects_invalid", "name_hex24", "name_empty", "name_other",
+                "ts_in_thumbnail_ms", "ts_not_in_thumbnail_ms"), 0),
+            # Region shapes per metadata source (#2, #20): ranges and fit only.
+            "region_shape_counts": {source: dict.fromkeys((
+                "entries", "roi_list", "coord_not4", "max_le_1", "max_le_1000", "max_gt_1000",
+                "xywh_fits_1000", "xyxy_ordered", "type_person", "type_vehicle", "type_animal",
+                "type_package", "type_face", "type_other", "type_missing"), 0)
+                for source in ("thumbnailMeta", "roiMeta", "personMeta", "vehicleMeta", "faceMeta")},
+            "key_moment_position_counts": dict.fromkeys((
+                "all_inside", "some_outside", "all_outside", "any_at_end",
+                "before_start_up_to_1s", "before_start_over_1s",
+                "after_end_up_to_1s", "after_end_over_1s"), 0),
+            "interval_detail_counts": dict.fromkeys((
+                "zero_length", "reversed", "over_limit_up_to_5min", "over_5min"), 0),
             "matching_camera_result_code_counts": _result_counts(),
             "matching_cameraId_result_code_counts": _result_counts(),
-            "phase_counts": dict.fromkeys(("scope_disabled", "camera_mismatch", "worker_admission",
+            "phase_counts": dict.fromkeys(("scope_disabled", "camera_mismatch",
+                "controller_version_unverified", "worker_admission",
                 "admitted", "worker_rejected", "admission_timeout", "admission_cancelled",
                 "admission_exception", "invalid_admission_result"), 0),
             "worker_rejection_counts": dict.fromkeys(
                 sorted(set(_WORKER_REJECTION_REASONS.values()) | {"unclassified_worker_error"}), 0),
         }
+        self._request_ai_rejections = dict.fromkeys(
+            sorted(set(_REQUEST_AI_REJECTION_REASONS.values()) | {"unclassified_worker_error"}), 0)
+        self._request_ai_rejection_targets = dict.fromkeys(
+            sorted(set(_REQUEST_AI_TARGET_CLASSES.values()) | {"other"}), 0)
+        self._speech_diagnostics = {"admitted": 0, "rejection_counts": dict.fromkeys(
+            sorted(set(_SPEECH_REJECTION_REASONS.values()) | set(_SPEECH_SHARED_REASONS)
+                   | {"unclassified_worker_error"}), 0)}
         # Process-local counts only; never retain request bodies or credentials.
         self._management_diagnostics = {
             "info_post_requests": 0, "info_credential_rejections": 0,
@@ -333,11 +524,101 @@ class DeviceService:
                 "last_close_code": self._last_close_code,
                 "management": dict(self._management_diagnostics),
                 "control_commands": deepcopy(self._control_diagnostics),
+                "unlisted": deepcopy(self._unlisted),
+                "sync_shapes": deepcopy(self._sync_shapes),
                 "recognize_key_frames": deepcopy(self._recognize_diagnostics),
+                "speech_to_text": deepcopy(self._speech_diagnostics),
+                "request_ai_rejection_counts": deepcopy(self._request_ai_rejections),
+                "request_ai_rejection_targets": deepcopy(self._request_ai_rejection_targets),
                 "clock_offset_ms": self._clock_offset_ms, "discovery": "unsupported",
                 "compatibility": self._compatibility_status(),
-                "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "changeUserPassword", "RequestAI"]
-                    + (["recognizeKeyFrames"] if basic_enabled else [])}
+                "supported_commands": ["getInfo", "getTaskQueueInfo", "setConsoleInfo", "setInfo", "updateTimezone", "updateLcmSettings", "diskInfo", "changeAiInferAgentSettings", "changeDescribePrompts", "changeUserPassword", "RequestAI"]
+                    + (["recognizeKeyFrames"] if basic_enabled else [])
+                    + (["speechToText"] if self._speech_cameras() else [])
+                    + (["enhanceImage"] if self._face_enhancement_configured() else [])}
+
+    def _served_capabilities(self) -> dict:
+        """Which Protect AI features this configuration actually answers."""
+        search = self.config.get("search", {})
+        find_anything = self.config.get("find_anything")
+        faces = self.config.get("face_recognition")
+        image_search = (search.get("enabled") is True and search.get("profile") == "clip-basic-v1"
+                        and isinstance(find_anything, dict))
+        # Recognize Anything means object indexing; captions are supportAiSummary.
+        indexing = image_search and bool(find_anything.get("index_camera_ids"))
+        face_cameras = faces.get("camera_ids") if isinstance(faces, dict) else None
+        return {
+            "supportImageSearch": image_search,
+            "supportRecognizeAnything": indexing,
+            # Opt-in: Protect then backfills past events as multipleImages tasks.
+            "supportRetroactiveProcessing": indexing and find_anything.get("retroactive") is True,
+            "supportTts": bool(self._speech_cameras()),
+            "supportFaceRecognition": isinstance(face_cameras, list) and bool(face_cameras)
+                                      and isinstance(faces.get("server"), str),
+            # No AI Key plate reader: plates come from paired AI Ports (#19).
+            "supportLicensePlateRecognition": False,
+            # Opt-in local enhancer; Protect stores its output separately (#23).
+            "supportFaceEnhancement": self._face_enhancement_configured(),
+            # The local person re-ID model (deep understanding). Protect 7.3.70
+            # aggregates it into nvr aiFeatureFlag, and its settings page only
+            # shows Person second-stage verification while it is enabled.
+            "supportPersonReId": self._deep_mode_capable(),
+        }
+
+    def _deep_mode_capable(self) -> bool:
+        """Local re-ID, E5 embeddings and an OpenAI-compatible local describer."""
+        from .deep_mode import DeepModeError, validate_config
+        try:
+            deep = validate_config(self.config.get("deep_understanding"))
+        except DeepModeError:
+            return False
+        embeddings = self.config.get("embeddings") or {}
+        inference = self.config.get("inference") or {}
+        return (deep is not None and embeddings.get("backend") == "http"
+                and inference.get("provider", "openai-compatible") == "openai-compatible")
+
+    def _face_enhancement_configured(self) -> bool:
+        value = self.config.get("face_enhancement")
+        return isinstance(value, dict) and isinstance(value.get("server"), str)
+
+    def _speech_cameras(self) -> frozenset:
+        speech = self.config.get("speech_to_text")
+        cameras = speech.get("camera_ids") if isinstance(speech, dict) else None
+        return frozenset(c for c in cameras if isinstance(c, str)) if isinstance(cameras, list) else frozenset()
+
+    def _record_unlisted(self, kind: str, value: str) -> None:
+        """Count one unhandled command name or RequestAI target without keeping it.
+
+        A documented candidate is counted by its fixed name. Anything else is
+        a 16-digit fingerprint, only while the operator's bounded diagnostic
+        window (device.diagnostic_command_fingerprints_until) is open, at most
+        eight distinct ones; never the raw text, the body or the reply.
+        """
+        bucket = self._unlisted[kind]
+        candidate = (value if kind == "command" and value in DOCUMENTED_COMMAND_CANDIDATES
+                     else DOCUMENTED_TARGET_CANDIDATES.get(value) if kind == "request_ai_target" else None)
+        if candidate is not None:
+            bucket["candidates"][candidate] = min(bucket["candidates"].get(candidate, 0) + 1, 1_000_000)
+            return
+        pattern = _FINGERPRINT_NAME if kind == "command" else _FINGERPRINT_TARGET
+        if not isinstance(value, str) or not pattern.fullmatch(value):
+            bucket["malformed"] = min(bucket["malformed"] + 1, 1_000_000)
+            return
+        until = self.config.get("device", {}).get("diagnostic_command_fingerprints_until")
+        if type(until) is not int or time.time() >= until:
+            bucket["not_recorded"] = min(bucket["not_recorded"] + 1, 1_000_000)
+            return
+        key = command_fingerprint(value)
+        if key in bucket["fingerprints"] or len(bucket["fingerprints"]) < _FINGERPRINT_LIMIT:
+            bucket["fingerprints"][key] = min(bucket["fingerprints"].get(key, 0) + 1, 1_000_000)
+        else:
+            bucket["overflow"] = min(bucket["overflow"] + 1, 1_000_000)
+
+    def _continuous_controller_verified(self) -> bool:
+        """The controller itself reported a version with native caption evidence."""
+        console = self._state.get("console_info")
+        version = console.get("protectVersion") if isinstance(console, dict) else None
+        return isinstance(version, str) and version in CONTINUOUS_CAPTION_VERSIONS
 
     def _compatibility_status(self) -> dict:
         """Fixed categories only; never echoes controller-supplied text."""
@@ -349,13 +630,18 @@ class DeviceService:
 
     def _load_state(self) -> dict:
         if not self.state_path.exists():
-            return {"schema": 1, "mac": self.mac, "adopted": False}
+            from .state_schema import CURRENT_SCHEMA
+            return {"schema": CURRENT_SCHEMA, "mac": self.mac, "adopted": False}
         if self.state_path.is_symlink() or not self.state_path.is_file():
             raise ValueError("State must be a regular file")
         if self.state_path.stat().st_size > _MAX_STATE_BYTES:
             raise ValueError("Device state is too large")
+        from .state_schema import CURRENT_SCHEMA, check_schema, upgrade_state_file
         state = _object_json(self.state_path.read_bytes())
-        if state.get("schema") != 1 or state.get("mac") != self.mac or type(state.get("adopted")) is not bool:
+        # A newer release's state is refused with its own message, never read (#24).
+        if check_schema(state) < CURRENT_SCHEMA:
+            state = upgrade_state_file(self.state_path)["state"]
+        if state.get("mac") != self.mac or type(state.get("adopted")) is not bool:
             raise ValueError("Invalid or different device identity in state")
         return state
 
@@ -377,6 +663,12 @@ class DeviceService:
         finally:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(name)
+        # The rename is durable only once the directory entry is on disk.
+        directory = os.open(self.state_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
     def _password_matches(self, username: str, password: str) -> bool:
         if not isinstance(username, str) or not isinstance(password, str):
@@ -468,6 +760,21 @@ class DeviceService:
                           and Path(decoder).is_file() and scope_supported)
             if not configured:
                 flags["supportAiSummary"] = {**summary, "enabled": False}
+        # Capabilities follow what this Key is configured to serve. Protect's
+        # getInfo treats an *absent* face/LPR/RAM flag as enabled but keeps an
+        # explicit false, and shows Speech to Text from supportTts (7.3.60
+        # FEATURE_TYPE_CONFIG); its dispatcher also refuses face and LPR
+        # settings whose flag is off. An explicit false override still wins.
+        for name, available in self._served_capabilities().items():
+            requested = overrides.get(name)
+            if not (isinstance(requested, dict) and requested.get("enabled") is False):
+                flags[name] = {"enabled": available, "version": "v1"}
+        if self._deep_mode_capable():
+            # Deep understanding (7.3.70): a static capability; the mode and
+            # the describe config are Protect's, echoed from what it last set.
+            flags.update({"supportDeepMode": True, "supportVlm": True,
+                          "aiMode": self._state.get("ai_mode", "basic"),
+                          "describeConfigHash": self._state.get("describe_config_hash", "")})
         return {"type": self.device.get("model", "UP-AI-KEY"), "sysid": self.device.get("sysid", "0xa5f0"),
                 "version": self.device.get("firmware_version", "2.2.8"), "mac": self.mac,
                 "uptime": int(time.monotonic() - self._started_at), "poeType": self.device.get("poe_type", "unknown"),
@@ -779,8 +1086,12 @@ class DeviceService:
         future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = (digest, future)
         diagnostic = self._control_diagnostics.get(action, self._control_diagnostics["unknown"])
+        if action not in self._control_diagnostics:
+            self._record_unlisted("command", action)
         _increment(diagnostic, "count")
         matches = self._record_recognize_shape(body) if action == "recognizeKeyFrames" else ()
+        if action in SYNC_SHAPE_COMMANDS:
+            self._sync_shapes[action] = _body_shape(body)
         try:
             try:
                 result = await self._command(action, body, _connection=_connection)
@@ -841,16 +1152,69 @@ class DeviceService:
         start, end = body.get("start"), body.get("end")
         interval_valid = (type(start) is int and type(end) is int
                           and 0 <= start < end <= 2 ** 53 - 1)
+        for source, shapes in self._recognize_diagnostics["region_shape_counts"].items():
+            entries = body.get(source)
+            if not isinstance(entries, list):
+                continue
+            for item in entries[:256]:
+                _increment(shapes, "entries")
+                roi = item.get("roi") if isinstance(item, dict) else None
+                if isinstance(roi, list):
+                    _increment(shapes, "roi_list")
+                    roi = roi[0] if roi and isinstance(roi[0], dict) else None
+                if not isinstance(roi, dict):
+                    continue
+                kind = roi.get("objectType", roi.get("name"))
+                _increment(shapes, "type_missing" if not isinstance(kind, str) or not kind else
+                           f"type_{kind}" if kind in ("person", "vehicle", "animal", "package", "face")
+                           else "type_other")
+                coord = roi.get("coord")
+                if (not isinstance(coord, list) or len(coord) != 4
+                        or any(type(v) not in (int, float) for v in coord)):
+                    _increment(shapes, "coord_not4")
+                    continue
+                top = max(coord)
+                _increment(shapes, "max_le_1" if top <= 1 else "max_le_1000" if top <= 1000 else "max_gt_1000")
+                if coord[0] + coord[2] <= 1000 and coord[1] + coord[3] <= 1000:
+                    _increment(shapes, "xywh_fits_1000")
+                if coord[2] > coord[0] and coord[3] > coord[1]:
+                    _increment(shapes, "xyxy_ordered")
+        meta = body.get("thumbnailMeta")
+        if isinstance(meta, list):
+            counts = self._recognize_diagnostics["thumbnail_meta_counts"]
+            _increment(counts, "tasks_with_objects" if meta else "tasks_empty")
+            thumbnail_ms = body.get("thumbnailMs") if isinstance(body.get("thumbnailMs"), list) else []
+            for item in meta[:256]:
+                roi = item.get("roi") if isinstance(item, dict) else None
+                ts = item.get("ts") if isinstance(item, dict) else None
+                if not isinstance(roi, dict) or type(ts) is not int or not interval_valid:
+                    _increment(counts, "objects_invalid")
+                    continue
+                _increment(counts, "objects_before_start" if ts < start else
+                           "objects_after_end" if ts > end else "objects_inside")
+                name = roi.get("name")
+                _increment(counts, "name_empty" if name == "" else
+                           "name_hex24" if isinstance(name, str) and re.fullmatch(r"[0-9a-f]{24}", name)
+                           else "name_other")
+                _increment(counts, "ts_in_thumbnail_ms" if ts in thumbnail_ms else "ts_not_in_thumbnail_ms")
         interval_category = (
             "missing" if "start" not in body or "end" not in body else
             "invalid_type" if type(start) is not int or type(end) is not int else
             "invalid_order_or_range" if not interval_valid else
             "over_10_seconds" if end - start > 10000 else "up_to_10_seconds")
         _increment(self._recognize_diagnostics["video_interval_counts"], interval_category)
+        details = self._recognize_diagnostics["interval_detail_counts"]
+        if type(start) is int and type(end) is int:
+            if start == end:
+                _increment(details, "zero_length")
+            elif start > end:
+                _increment(details, "reversed")
         duration_limit = self.config.get("worker", {}).get("max_video_duration_ms", 120000)
         duration_limit = duration_limit if type(duration_limit) is int and duration_limit > 0 else 120000
         duration_category = ("not_comparable" if not interval_valid else
                              "exceeds" if end - start > duration_limit else "within")
+        if duration_category == "exceeds":
+            _increment(details, "over_limit_up_to_5min" if end - start <= 300000 else "over_5min")
         _increment(self._recognize_diagnostics["duration_limit_counts"], duration_category)
         moments = body.get("keyMoments")
         moment_counts = self._recognize_diagnostics["key_moments_counts"]
@@ -873,8 +1237,23 @@ class DeviceService:
                     _increment(moment_counts, "duplicates")
                 if not interval_valid:
                     _increment(moment_counts, "interval_not_comparable")
-                elif any(not start <= moment < end for moment in moments):
-                    _increment(moment_counts, "outside_interval")
+                else:
+                    if any(not start <= moment < end for moment in moments):
+                        _increment(moment_counts, "outside_interval")
+                    positions = self._recognize_diagnostics["key_moment_position_counts"]
+                    inside = [start <= moment < end for moment in moments]
+                    _increment(positions, "all_inside" if all(inside) else
+                               "all_outside" if not any(inside) else "some_outside")
+                    if end in moments:
+                        _increment(positions, "any_at_end")
+                    before = [start - moment for moment in moments if moment < start]
+                    after = [moment - end for moment in moments if moment > end]
+                    if before:
+                        _increment(positions, "before_start_up_to_1s" if max(before) <= 1000
+                                   else "before_start_over_1s")
+                    if after:
+                        _increment(positions, "after_end_up_to_1s" if max(after) <= 1000
+                                   else "after_end_over_1s")
         return tuple(matches)
 
     async def _command(self, action: str, body: dict, *, _connection=None) -> dict:
@@ -917,10 +1296,49 @@ class DeviceService:
                 # Exact worker message only: an unimplemented target is an
                 # unsupported feature (ENOTSUP), not a generic processing failure.
                 if str(exc) == "Unsupported RequestAI targetUri":
+                    self._record_unlisted("request_ai_target", target)
                     raise CommandFailure(95, "Unsupported RequestAI targetUri") from None
+                _increment(self._request_ai_rejections, _REQUEST_AI_REJECTION_REASONS.get(
+                    str(exc), "unclassified_worker_error"))
+                _increment(self._request_ai_rejection_targets,
+                           _REQUEST_AI_TARGET_CLASSES.get(target, "other"))
                 raise
             finally:
                 self._active_admissions -= 1
+            return body
+        if action == "enhanceImage":
+            # Face enhancement is opt-in; without a local enhancer it is refused.
+            if not self._face_enhancement_configured():
+                raise CommandFailure(95, "enhanceImage is not configured")
+            self._active_admissions += 1
+            try:
+                async with asyncio.timeout(30):
+                    admitted = await self.job_handler({"command": action, "payload": deepcopy(body)})
+            finally:
+                self._active_admissions -= 1
+            if not isinstance(admitted, dict):
+                raise ContractError("Job admission must return an object")
+            return {}
+        if action == "speechToText":
+            # Protect 7.3.60 dispatches this for an alrmSpeak audio event; the
+            # worker posts the transcript to /internal/aiprocessors/speech-to-text.
+            from .worker import WorkerError
+            if not isinstance(body.get("camera"), str) or body["camera"] not in self._speech_cameras():
+                _increment(self._speech_diagnostics["rejection_counts"], "camera_policy")
+                raise CommandFailure(95, "speechToText is outside the configured camera policy")
+            self._active_admissions += 1
+            try:
+                async with asyncio.timeout(30):
+                    admitted = await self.job_handler({"command": action, "payload": deepcopy(body)})
+            except WorkerError as exc:
+                _increment(self._speech_diagnostics["rejection_counts"], _speech_rejection_reason(str(exc)))
+                raise
+            finally:
+                self._active_admissions -= 1
+            self._speech_diagnostics["admitted"] = min(self._speech_diagnostics["admitted"] + 1,
+                                                       _COUNTER_LIMIT)
+            if not isinstance(admitted, dict):
+                raise ContractError("Job admission must return an object")
             return body
         if action == "recognizeKeyFrames":
             from .worker import WorkerError, configured_test_scopes
@@ -928,7 +1346,22 @@ class DeviceService:
             scopes = configured_test_scopes(self.config.get("worker", {}))
             active = {scope["camera_id"] for scope in scopes if scope.get("kind") == "recognizeKeyFrames"}
             if self.camera_registry is not None and "continuous" in self.config.get("worker", {}):
-                active.update(self.camera_registry.allowed_ids)
+                if self._continuous_controller_verified():
+                    active.update(self.camera_registry.allowed_ids)
+                elif body.get("camera") in self.camera_registry.allowed_ids:
+                    # A config label is not proof of the running controller (#12).
+                    _increment(phases, "controller_version_unverified")
+            faces = self.config.get("face_recognition")
+            if isinstance(faces, dict) and isinstance(faces.get("camera_ids"), list):
+                # Local face recognition answers recognition tasks for these cameras.
+                active.update(c for c in faces["camera_ids"] if isinstance(c, str))
+            search = self.config.get("search", {})
+            find_anything = self.config.get("find_anything")
+            if (search.get("enabled") is True and search.get("profile") == "clip-basic-v1"
+                    and isinstance(find_anything, dict)
+                    and isinstance(find_anything.get("index_camera_ids"), list)):
+                # Local CLIP indexing answers key-moment tasks for these cameras.
+                active.update(c for c in find_anything["index_camera_ids"] if isinstance(c, str))
             if not active:
                 _increment(phases, "scope_disabled")
                 raise CommandFailure(95, "recognizeKeyFrames is outside the configured camera policy")
@@ -960,6 +1393,71 @@ class DeviceService:
                 _increment(phases, "invalid_admission_result")
                 raise ContractError("Job admission must return an object")
             _increment(phases, "admitted")
+            return body
+        if action == "diskInfo":
+            # Protect 7.3.70 syncStorageSize: {storageSize: "<GB>"} parsed with
+            # parseInt into featureFlags.storageSize ("Storage of aiprocessor by
+            # GB", default 128; 128 makes a UP-AI-KEY the UP-AI-KEY-128 platform).
+            size = self.config.get("device", {}).get("storage_size_gb", 128)
+            if type(size) is not int or not 1 <= size <= 65536:
+                raise CommandFailure(22, "Invalid configured storage size")
+            return {"storageSize": str(size)}
+        if action == "changeAiInferAgentSettings" and set(body) == {"modelMode"}:
+            # 7.3.70 syncAiMode switches the global mode; getInfo echoes it as
+            # featureFlags.aiMode, which Protect reads to confirm the switch.
+            mode = body["modelMode"]
+            if mode not in ("basic", "deep") or (mode == "deep" and not self._deep_mode_capable()):
+                raise ContractError("Unsupported AI mode")
+            async with self._lock:
+                self._state["ai_mode"] = mode
+                self._save_state()
+            return body
+        if action == "changeDescribePrompts":
+            # 7.3.70 syncDescribePrompts: per object-type combination, the
+            # session describe prompts, sampling and JSON schema (base64).
+            from .deep_mode import DeepModeError, save_prompts, validate_prompts
+            if not self._deep_mode_capable():
+                raise ContractError("Deep understanding is not configured")
+            try:
+                prompts, config_hash = validate_prompts(body)
+            except (DeepModeError, ValueError) as exc:
+                raise ContractError("Unsupported describe prompts") from exc
+            async with self._lock:
+                save_prompts(self.state_dir, prompts, config_hash)
+                self._state["describe_config_hash"] = config_hash
+                self._save_state()
+            return {"configHash": config_hash}
+        if action == "changeAiInferAgentSettings":
+            # Protect 7.3.70 updateAiSettings pushes which engines the AI Key
+            # should run. They are stored and acknowledged; what this Key
+            # processes stays governed by its own configuration.
+            fields = {"deepModeSupported", "enableFaceEnhance", "enableFaceRecognize",
+                      "enableLprRecognize", "enableRAM", "enableSTT"}
+            region = body.get("region")
+            if (not fields <= set(body) <= fields | {"region"}
+                    or any(type(body[name]) is not bool for name in fields)
+                    or region is not None and (not isinstance(region, str)
+                                               or not re.fullmatch(r"[A-Za-z]{2}", region))):
+                raise ContractError("Unsupported AI infer agent settings")
+            async with self._lock:
+                self._state["ai_infer_agent_settings"] = deepcopy(body)
+                self._save_state()
+            return body
+        if action == "updateLcmSettings":
+            # Front-display settings Protect pushes on connect (7.3.68/7.3.70):
+            # {brightness, nightMode: {onMinute, offMinute}}. Stored, no display.
+            night = body.get("nightMode")
+            if (set(body) - {"brightness", "nightMode"}
+                    or ("brightness" in body and (type(body["brightness"]) is not int
+                                                  or not 0 <= body["brightness"] <= 100))
+                    or ("nightMode" in body and (not isinstance(night, dict)
+                                                 or set(night) - {"onMinute", "offMinute"}
+                                                 or any(type(v) is not int or not 0 <= v < 1440
+                                                        for v in night.values())))):
+                raise ContractError("Unsupported display settings")
+            async with self._lock:
+                self._state["display"] = deepcopy(body)
+                self._save_state()
             return body
         if action in {"setConsoleInfo", "setInfo", "updateTimezone", "changeUserPassword"}:
             if action == "changeUserPassword":

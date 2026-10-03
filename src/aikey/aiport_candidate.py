@@ -6,7 +6,8 @@ import argparse
 import asyncio
 from collections import deque
 import contextlib
-from dataclasses import dataclass
+import functools
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import hashlib
 import ipaddress
@@ -20,7 +21,7 @@ import signal
 import ssl
 import stat
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import aiohttp
 from aiohttp import web
@@ -30,12 +31,28 @@ from .aiport_ingest import (
     normalize_mac, private_source_ip,
 )
 from .aiport_detection import DetectionError, ObjectObservation, RFDetrNanoDetector
-from .aiport_camera_engine import CameraEventCandidate, CameraPolicyEngine
+from .aiport_api_detection import ApiObjectDetector, _frame_mode
+from .aiport_faces import (EMBEDDER_INPUTS, EMBEDDINGS_PER_TRACK, FACE_PX_BANDS, YAW_BANDS,
+                           FaceEngine, FaceError,
+                           band, make_face_snapshot, mean_embedding, send_gate, verify_model)
+from .aiport_audio import (MAX_EVENT_S, SPEECH, AudioSettingsError, SpeechActivity,
+                           audio_state_payload, parse_audio_flags)
+from .aiport_motion import (MotionDetector, MotionSettingsError, MotionTimeline,
+                            motion_event_payload, parse_motion_settings)
+from .aiport_sounds import SOUND_TYPES, SoundClassifier, SoundError, SoundEvents
+from .aiport_onnx_detection import OnnxRFDetrNanoDetector
+from .aiport_camera_engine import (
+    _PACKAGE_COOLDOWN_SECONDS, CameraEventCandidate, CameraPolicyEngine,
+)
+from .aiport_event_budget import EventBudget, EventBudgetError
+from .aiport_held_followup import HeldPackageFollowup
 from .aiport_inference import FairInference
 from .aiport_tracking import TemporalTracker, TrackChange, TrackingError
-from .aiport_smart_events import SmartEventError, smart_event_payload
+from .aiport_smart_events import (SmartEventError, camera_event_payload,
+                                  smart_event_payload)
 from .aiport_snapshots import (
-    SmartSnapshot, SnapshotError, make_smart_snapshot, validated_upload_url,
+    SmartSnapshot, SnapshotError, make_smart_snapshot, validated_live_snapshot_request,
+    validated_upload_url,
 )
 from .aiport_recorded_probe import (
     RecordedProbeError, infer_recorded_person, parse_recorded_probe,
@@ -43,6 +60,7 @@ from .aiport_recorded_probe import (
 )
 from .aiport_smart_settings import (
     SmartPolicy, SmartSettingsError, parse_motion_probe, parse_smart_settings,
+    summarize_recognition_accuracy, summarize_secondary_lens_zones,
     summarize_smart_request,
 )
 from .aiport_credentials import CredentialError, CredentialStore
@@ -51,6 +69,7 @@ from .aiport_virtual_hardware import (
     VirtualHardwareError, VirtualSoundLedStore, VirtualTimezoneStore,
 )
 from .device import VerifiedConnector
+from .providers import ProviderError, validate_inference_config
 
 
 _MAC = re.compile(r"[0-9A-Fa-f]{12}\Z")
@@ -59,6 +78,11 @@ _VERSION = re.compile(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\Z")
 _PROBE_NONCE = re.compile(r"[0-9a-f]{32}\Z")
 _MAX_MANAGE = 8192
 _DISCONNECT_GRACE_SECONDS = 15
+# Bound on closing open native events while stopping (e.g. a redeploy).
+_STOP_CLOSE_SECONDS = 2.0
+# On-demand snapshots from the newest decoded frame (Protect's live view).
+_LIVE_SNAPSHOT_MAX_AGE = 5.0
+_LIVE_SNAPSHOT_CONCURRENCY = 2
 _ALLOWED_TOP_LEVEL = frozenset(("username", "password", "mgmt", "hosts", "protocol", "mode"))
 _ALLOWED_MGMT = frozenset(("token", "hosts", "protocol", "mode", "nvr",
                            "username", "password", "controller", "consoleId",
@@ -77,9 +101,22 @@ _OBSERVABLE_FUNCTIONS = frozenset({
     "ChangeAnalyticsSettings", "ChangeAudioEventsSettings",
     "ChangeEventSettings", "ChangeAvclientEventSettings",
     "UpdateFeatureFlags", "EventFeatureFlagsUpdated", "EventAIPortStatus",
-    "UpdateFaceDBRequest",
+    "UpdateFaceDBRequest", "UpdateFirmwareRequest",
 })
 
+
+# Per camera; each event is one local transcription. Whisper on the NPU runs
+# about ten times faster than real time (30 Sep), so the default allows 60 and
+# ``live_speech_max_events_per_hour`` sets it per AI Port.
+SPEECH_EVENTS_PER_HOUR = 60
+FACE_TRIES_WITHOUT_FACE = 8
+FULL_FRAME_WAIT_S = 1.5
+
+
+
+def _certain(policy: SmartPolicy, kind: str, score: float) -> bool:
+    """Diagnostic probes publish only scores that need no second stage."""
+    return policy.allows_score(kind, score) and not policy.reverify_eligible(kind, score)
 
 class CandidateError(ValueError):
     """Unsafe or incomplete isolated AI Port candidate configuration."""
@@ -116,7 +153,15 @@ def _private_ipv4(value: object) -> str:
     return str(address)
 
 
-def load_config(path: Path) -> dict:
+def _offline_decoder_path(value: object) -> str:
+    """Validate syntax when an admin runs outside the decoder's container."""
+    if (type(value) is not str or not Path(value).is_absolute()
+            or len(value) > 4096 or "\x00" in value):
+        raise IngressError("invalid_decoder")
+    return value
+
+
+def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
     raw = _private_file(path, 4096)
     try:
         value = json.loads(raw)
@@ -125,6 +170,8 @@ def load_config(path: Path) -> dict:
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
     allowed = required | {"paired_stream", "paired_streams", "diagnostic_hello_until",
                           "diagnostic_stream", "live_detector", "live_pool_detector",
+                          "live_speech_cameras", "live_speech_max_events_per_hour",
+                          "live_face", "live_sound",
                           "diagnostic_streams",
                           "diagnostic_detector",
                           "diagnostic_pool_detector", "diagnostic_pool_event_until",
@@ -148,7 +195,9 @@ def load_config(path: Path) -> dict:
         try:
             stream["camera_mac"] = normalize_mac(stream["camera_mac"])
             stream["source_ip"] = private_source_ip(stream["source_ip"])
-            stream["ffmpeg_path"] = executable_path(stream["ffmpeg_path"])
+            stream["ffmpeg_path"] = (executable_path(stream["ffmpeg_path"])
+                                      if check_decoder_executable else
+                                      _offline_decoder_path(stream["ffmpeg_path"]))
         except IngressError as exc:
             raise CandidateError("Invalid paired stream policy") from exc
         live_probe_fields = {"diagnostic_detector", "diagnostic_smart_probe_until",
@@ -197,7 +246,9 @@ def load_config(path: Path) -> dict:
             try:
                 camera_mac = normalize_mac(stream["camera_mac"])
                 stream["source_ip"] = private_source_ip(stream["source_ip"])
-                stream["ffmpeg_path"] = executable_path(stream["ffmpeg_path"])
+                stream["ffmpeg_path"] = (executable_path(stream["ffmpeg_path"])
+                                          if check_decoder_executable else
+                                          _offline_decoder_path(stream["ffmpeg_path"]))
             except IngressError as exc:
                 raise CandidateError("Invalid live camera pool") from exc
             if camera_mac in seen:
@@ -206,42 +257,210 @@ def load_config(path: Path) -> dict:
             stream["camera_mac"] = camera_mac
     if "live_pool_detector" in value:
         detector = value["live_pool_detector"]
+        # No object-event ceiling: the owner rejected per-camera caps on saved
+        # object events. A max_events_per_hour left in an older config is
+        # accepted and ignored (health: legacy_limits_ignored).
+        common = {"threshold", "smart_types"}
+        legacy = {"max_events_per_hour"}
+        pytorch_fields = common | {"checkpoint_path", "checkpoint_sha256"}
+        onnx_fields = common | {"inference_backend", "model_path", "model_sha256"}
+        api_fields = common | {"inference_backend", "provider_config",
+                               "max_requests_per_hour"}
+        backend = detector.get("inference_backend") if isinstance(detector, dict) else None
+        is_api = backend == "vision_api"
+        is_onnx = isinstance(backend, str) and backend in {
+            "onnx_cpu", "onnx_openvino_gpu"}
+        supported_types = ({"person", "vehicle", "animal", "package"} if is_api
+                           else {"person", "vehicle", "animal"})
         if ("paired_streams" not in value or not isinstance(detector, dict)
-                or set(detector) != {"checkpoint_path", "checkpoint_sha256",
-                                     "threshold", "smart_types", "max_events_per_hour"}
-                or not isinstance(detector["checkpoint_path"], str)
-                or not Path(detector["checkpoint_path"]).is_absolute()
-                or not isinstance(detector["checkpoint_sha256"], str)
-                or not _PIN.fullmatch(detector["checkpoint_sha256"])
+                or not (set(detector) - legacy == (api_fields if is_api else
+                                                   onnx_fields if is_onnx else pytorch_fields)
+                        # The API request cap is an optional cost control; the
+                        # held-package follow-up mode is optional (shadow).
+                        or is_api and (api_fields - {"max_requests_per_hour"}
+                                       <= set(detector) - legacy
+                                       <= api_fields | {"held_package_followup",
+                                                        "plate_cameras", "fallback",
+                                                        "camera_thresholds", "score_server"}))
+                or detector.get("held_package_followup", "shadow") not in {"shadow", "announce"}
+                or backend is not None and not (is_api or is_onnx)
+                or not is_api and (
+                    not isinstance(detector["model_path" if is_onnx else
+                                            "checkpoint_path"], str)
+                    or not Path(detector["model_path" if is_onnx else
+                                         "checkpoint_path"]).is_absolute()
+                    or not isinstance(detector["model_sha256" if is_onnx else
+                                               "checkpoint_sha256"], str)
+                    or not _PIN.fullmatch(detector["model_sha256" if is_onnx else
+                                                    "checkpoint_sha256"]))
                 or not isinstance(detector["smart_types"], list)
-                or not 1 <= len(detector["smart_types"]) <= 3
-                or any(type(kind) is not str or kind not in {
-                    "person", "vehicle", "animal"} for kind in detector["smart_types"])
+                or not 1 <= len(detector["smart_types"]) <= len(supported_types)
+                or any(type(kind) is not str or kind not in supported_types
+                       for kind in detector["smart_types"])
                 or len(set(detector["smart_types"])) != len(detector["smart_types"])
-                or type(detector["max_events_per_hour"]) is not int
-                or not 1 <= detector["max_events_per_hour"] <= 3600):
+                or "max_events_per_hour" in detector
+                and (type(detector["max_events_per_hour"]) is not int
+                     or not 1 <= detector["max_events_per_hour"] <= 3600)):
             raise CandidateError("Invalid live pool detector policy")
+        if "fallback" in detector:
+            # Local detection used only while the primary provider fails.
+            fallback = detector["fallback"]
+            provider = fallback.get("provider_config") if isinstance(fallback, dict) else None
+            if (not is_api or not isinstance(provider, dict)
+                    or not set(fallback) <= {"provider_config", "timeout_s", "max_per_hour"}
+                    or provider.get("provider") not in {"ollama", "openai-compatible"}
+                    or "api_key" in provider
+                    or "api_key_file" in provider):
+                raise CandidateError("Invalid live pool detector fallback")
+            try:
+                validate_inference_config(dict(provider), require_api_key=False)
+            except ProviderError as exc:
+                raise CandidateError("Invalid live pool detector fallback") from exc
+        if "score_server" in detector:
+            # Opt-in local score detector (YOLOX-S on the NAS NPU); frames stay local.
+            server = detector["score_server"]
+            parsed = urlsplit(server) if isinstance(server, str) else None
+            try:
+                address = ipaddress.ip_address(parsed.hostname or "") if parsed else None
+            except ValueError:
+                address = None
+            if (not is_api or parsed is None or parsed.scheme != "http" or address is None
+                    or not (address.is_private or address.is_loopback)
+                    or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
+                    or parsed.username or parsed.password):
+                raise CandidateError("Invalid live pool detector score server")
+        if "plate_cameras" in detector:
+            # Opt-in plate reading (#19): only listed paired cameras, API backend.
+            plates = detector["plate_cameras"]
+            try:
+                normalized = [normalize_mac(mac) for mac in plates] if isinstance(plates, list) else None
+            except ValueError:
+                normalized = None
+            if (not is_api or not normalized or len(set(normalized)) != len(normalized)
+                    or not set(normalized) <= seen):
+                raise CandidateError("Invalid live pool detector policy")
+            detector["plate_cameras"] = normalized
+        if "camera_thresholds" in detector:
+            # Owner-set score gates for listed paired cameras (API backend).
+            gates = detector["camera_thresholds"]
+            try:
+                normalized_gates = ({normalize_mac(mac): value for mac, value in gates.items()}
+                                    if isinstance(gates, dict) and gates else None)
+            except ValueError:
+                normalized_gates = None
+            if (not is_api or not normalized_gates or len(normalized_gates) != len(gates)
+                    or not set(normalized_gates) <= seen
+                    or any(type(value) not in (int, float) or isinstance(value, bool)
+                           or not 0 < value <= 1 for value in normalized_gates.values())):
+                raise CandidateError("Invalid live pool detector policy")
+            detector["camera_thresholds"] = normalized_gates
         try:
             RFDetrNanoDetector(object(), threshold=detector["threshold"])
         except DetectionError as exc:
             raise CandidateError("Invalid live pool detector threshold") from exc
+        if is_api:
+            provider = detector["provider_config"]
+            allowed_provider_fields = {"provider", "model", "base_url", "api_key_file",
+                                       "allow_remote", "allow_insecure_http",
+                                       "max_output_tokens"}
+            if (not isinstance(provider, dict) or not set(provider) <= allowed_provider_fields
+                    or "api_key" in provider
+                    or detector.get("max_requests_per_hour") is not None
+                    and (type(detector["max_requests_per_hour"]) is not int
+                         or not 2 <= detector["max_requests_per_hour"] <= 3600)
+                    or type(provider.get("max_output_tokens", 256)) is not int
+                    or not 1 <= provider.get("max_output_tokens", 256) <= 512):
+                raise CandidateError("Invalid live API detector policy")
+            try:
+                validate_inference_config(provider, require_api_key=False)
+            except ProviderError as exc:
+                raise CandidateError("Invalid live API detector provider") from exc
+    if "live_speech_cameras" in value:
+        # Opt-in speech presence (#15, #28): listed paired cameras of a live pool.
+        cameras = value["live_speech_cameras"]
+        try:
+            normalized = ([normalize_mac(mac) for mac in cameras]
+                          if isinstance(cameras, list) else None)
+        except ValueError:
+            normalized = None
+        pool = {stream.get("camera_mac") for stream in value.get("paired_streams") or []
+                if isinstance(stream, dict)}
+        if ("live_pool_detector" not in value or not normalized
+                or len(set(normalized)) != len(normalized) or not set(normalized) <= pool):
+            raise CandidateError("Invalid live speech camera policy")
+        value["live_speech_cameras"] = normalized
+    if "live_speech_max_events_per_hour" in value:
+        limit = value["live_speech_max_events_per_hour"]
+        if ("live_speech_cameras" not in value or type(limit) is not int
+                or not 1 <= limit <= 3600):
+            raise CandidateError("Invalid live speech camera policy")
+    if "live_face" in value:
+        # Opt-in local face embeddings (#20, #28): pinned models, listed cameras.
+        face = value["live_face"]
+        pool = {stream.get("camera_mac") for stream in value.get("paired_streams") or []
+                if isinstance(stream, dict)}
+        try:
+            cameras = ([normalize_mac(mac) for mac in face["cameras"]]
+                       if isinstance(face, dict) and isinstance(face.get("cameras"), list) else None)
+        except ValueError:
+            cameras = None
+        if (not isinstance(face, dict) or "live_pool_detector" not in value or not cameras
+                or not {"cameras", "detector_path", "detector_sha256", "embedder_path",
+                        "embedder_sha256"} <= set(face) <= {
+                            "cameras", "detector_path", "detector_sha256", "embedder_path",
+                            "embedder_sha256", "payload", "embedder_input"}
+                or face.get("embedder_input", "arcface") not in EMBEDDER_INPUTS
+                # Staged payloads isolate what Protect accepts (diagnostic).
+                or face.get("payload", "full") not in {"full", "no_embed", "no_attributes",
+                                                       "descriptor_only"}
+                or len(set(cameras)) != len(cameras) or not set(cameras) <= pool
+                or any(not isinstance(face[k], str) or not Path(face[k]).is_absolute()
+                       for k in ("detector_path", "embedder_path"))
+                or any(not isinstance(face[k], str) or not _PIN.fullmatch(face[k])
+                       for k in ("detector_sha256", "embedder_sha256"))):
+            raise CandidateError("Invalid live face policy")
+        face["cameras"] = cameras
+    if "live_sound" in value:
+        # Opt-in alarm and household sounds (#28): a pinned local AudioSet
+        # classifier on the audio decoder that speech already runs.
+        sound = value["live_sound"]
+        keys = {"cameras", "model_path", "model_sha256", "class_map_path", "class_map_sha256"}
+        try:
+            cameras = ([normalize_mac(mac) for mac in sound["cameras"]]
+                       if isinstance(sound, dict) and isinstance(sound.get("cameras"), list) else None)
+        except ValueError:
+            cameras = None
+        types = sound.get("types", list(SOUND_TYPES)) if isinstance(sound, dict) else None
+        limit = sound.get("max_events_per_hour", 20) if isinstance(sound, dict) else None
+        if (not isinstance(sound, dict) or not cameras or len(set(cameras)) != len(cameras)
+                or not set(cameras) <= set(value.get("live_speech_cameras") or [])
+                or not keys <= set(sound) <= keys | {"types", "max_events_per_hour"}
+                or any(not isinstance(sound[k], str) or not Path(sound[k]).is_absolute()
+                       for k in ("model_path", "class_map_path"))
+                or any(not isinstance(sound[k], str) or not _PIN.fullmatch(sound[k])
+                       for k in ("model_sha256", "class_map_sha256"))
+                or not isinstance(types, list) or not types or len(set(types)) != len(types)
+                or not set(types) <= set(SOUND_TYPES)
+                or type(limit) is not int or not 1 <= limit <= 120):
+            raise CandidateError("Invalid live sound policy")
+        sound["cameras"], sound["types"] = cameras, types
     if "diagnostic_hello_until" in value:
         until = value["diagnostic_hello_until"]
-        if type(until) is not int or until < 0 or until > int(time.time()) + 600:
+        if type(until) is not int or until < 0 or until > time.time() + 600:
             raise CandidateError("Diagnostic hello must expire within ten minutes")
     if "diagnostic_adoption_until" in value:
         until = value["diagnostic_adoption_until"]
-        if type(until) is not int or until < 0 or until > int(time.time()) + 600:
+        if type(until) is not int or until < 0 or until > time.time() + 600:
             raise CandidateError("Diagnostic adoption must expire within ten minutes")
     if "diagnostic_resume_until" in value:
         until = value["diagnostic_resume_until"]
-        if type(until) is not int or until < 0 or until > int(time.time()) + 600:
+        if type(until) is not int or until < 0 or until > time.time() + 600:
             raise CandidateError("Diagnostic resume must expire within ten minutes")
         if "diagnostic_adoption_until" in value:
             raise CandidateError("Adoption and existing-device resume cannot be combined")
     if "diagnostic_function_fingerprints_until" in value:
         until = value["diagnostic_function_fingerprints_until"]
-        if type(until) is not int or until < 0 or until > int(time.time()) + 600:
+        if type(until) is not int or until < 0 or until > time.time() + 600:
             raise CandidateError("Function fingerprint diagnostic must expire within ten minutes")
     if "diagnostic_stream" in value:
         stream = value["diagnostic_stream"]
@@ -252,7 +471,9 @@ def load_config(path: Path) -> dict:
         try:
             stream["camera_mac"] = normalize_mac(stream["camera_mac"])
             stream["source_ip"] = private_source_ip(stream["source_ip"])
-            stream["ffmpeg_path"] = executable_path(stream["ffmpeg_path"])
+            stream["ffmpeg_path"] = (executable_path(stream["ffmpeg_path"])
+                                      if check_decoder_executable else
+                                      _offline_decoder_path(stream["ffmpeg_path"]))
         except IngressError as exc:
             raise CandidateError("Invalid stream diagnostic policy") from exc
     if "diagnostic_streams" in value:
@@ -273,7 +494,9 @@ def load_config(path: Path) -> dict:
             try:
                 camera_mac = normalize_mac(stream["camera_mac"])
                 stream["source_ip"] = private_source_ip(stream["source_ip"])
-                stream["ffmpeg_path"] = executable_path(stream["ffmpeg_path"])
+                stream["ffmpeg_path"] = (executable_path(stream["ffmpeg_path"])
+                                          if check_decoder_executable else
+                                          _offline_decoder_path(stream["ffmpeg_path"]))
             except IngressError as exc:
                 raise CandidateError("Invalid multi-camera stream policy") from exc
             if camera_mac in seen:
@@ -363,7 +586,7 @@ def load_config(path: Path) -> dict:
         until = value["diagnostic_smart_probe_until"]
         if (("diagnostic_stream" not in value and "paired_stream" not in value)
                 or type(until) is not int
-                or until <= int(time.time()) or until > int(time.time()) + 600
+                or until <= int(time.time()) or until > time.time() + 600
                 or ("paired_stream" not in value
                     and until != value.get("diagnostic_hello_until"))):
             raise CandidateError("Smart settings probe requires a bounded camera stream")
@@ -447,6 +670,17 @@ class CandidateService:
             raise CandidateError("Invalid diagnostic disconnect grace")
         self.config = config
         self.state_dir = Path(state_dir)
+        live_config = config.get("live_pool_detector", config.get("live_detector"))
+        # Only the legacy single-stream live_detector keeps an event ceiling;
+        # the live pool admits every confirmed, zone-matched object event.
+        self._event_budget = (EventBudget(
+            self.state_dir, limit=config["live_detector"]["max_events_per_hour"])
+            if "live_detector" in config else None)
+        # One Package event per camera per 30 minutes, across restarts.
+        self._package_cooldown = (EventBudget(
+            self.state_dir, limit=1, namespace="package-cooldown",
+            window_seconds=int(_PACKAGE_COOLDOWN_SECONDS))
+            if live_config is not None else None)
         self.control_port = control_port
         self.disconnect_grace_seconds = disconnect_grace_seconds
         self.runner: web.AppRunner | None = None
@@ -475,6 +709,7 @@ class CandidateService:
         self.provision_isp_replies = 0
         self.ssh_stop_replies = 0
         self.ssh_start_rejections = 0
+        self.firmware_update_refusals = 0
         self.credential_rotations = 0
         self.credential_rotations_rejected = 0
         self.sound_led_replies = 0
@@ -482,18 +717,92 @@ class CandidateService:
         self.timezone_replies = 0
         self.timezone_rejections = 0
         self.face_db_requests_rejected = 0
+        # Speech presence per opted-in camera; Protect switches it per camera.
+        self._speech: dict[str, SpeechActivity] = {
+            camera: SpeechActivity() for camera in config.get("live_speech_cameras", [])}
+        self._speech_enabled: dict[str, bool] = {}
+        # Protect keeps one audio event per camera; the types open in it and
+        # when each entered, plus when the event started (onAudioAlarm).
+        self._audio_open: dict[str, dict[str, float]] = {}
+        self._audio_started: dict[str, float] = {}
+        self.audio_combined_events = 0
+        self.audio_events_capped = 0
+        self._speech_events: dict[str, int] = {}
+        self._speech_settings_seen: set[str] = set()
+        self._speech_announced_at: dict[str, float] = {}
+        self._speech_reannounces: dict[str, int] = {}
+        self._speech_enter_times: dict[str, list[float]] = {}
+        self.speech_rate_limited = 0
+        self._speech_limit = config.get("live_speech_max_events_per_hour", SPEECH_EVENTS_PER_HOUR)
+        self.speech_reannounces = 0
+        self._speech_announced: set[str] = set()
+        # Alarm and household sounds per opted-in camera, only for the types
+        # Protect has enabled for it (ChangeAudioEventsSettings).
+        sound = config.get("live_sound") or {}
+        self._sound_cameras: frozenset[str] = frozenset(sound.get("cameras", ()))
+        self._sound_types: tuple[str, ...] = tuple(sound.get("types", SOUND_TYPES) if sound else ())
+        self._sound_limit = sound.get("max_events_per_hour", 20)
+        self._sound_classifier: SoundClassifier | None = None
+        self._sounds: dict[str, SoundEvents] = {}
+        self._audio_flags: dict[str, dict[str, bool]] = {}
+        self._sound_enter_times: dict[tuple[str, bool], list[float]] = {}
+        self.sound_events_entered: dict[str, int] = {}
+        self.sound_events_left = 0
+        self.sound_rate_limited = 0
+        self.sound_joined_speech = 0
+        self.sound_errors: dict[str, int] = {}
+        # Local face embeddings per opted-in camera, only while Protect has
+        # Face enabled for it (ChangeSmartDetectSettings).
+        self._face_cameras: frozenset[str] = frozenset(
+            (config.get("live_face") or {}).get("cameras", ()))
+        self._face_engine: FaceEngine | None = None
+        self._face_enabled: dict[str, bool] = {}
+        self._face_tasks: dict[str, asyncio.Task] = {}
+        self._face_track_number = 0
+        self.face_analyses = 0
+        self.faces_found = 0
+        self.faces_sent = 0
+        self.faces_gated: dict[str, int] = {}
+        self.stream_control_rejection_reasons: dict[str, int] = {}
+        self.face_yaw_bands: dict[str, int] = {}
+        self.face_px_bands: dict[str, int] = {}
+        self._face_camera_stats: dict[str, dict] = {}
+        # Per camera, counts only: person, vehicle and animal snapshots made
+        # with reVerifyEligible true or false, and those published on a leave.
+        self._reverify_snapshots: dict[str, dict[str, int]] = {}
+        self.face_errors: dict[str, int] = {}
+        self.speech_settings_acks = 0
+        self.speech_settings_rejected = 0
+        self.speech_events_entered = 0
+        self.speech_events_left = 0
+        self.speech_edges_suppressed = 0
         self.smart_settings_requests_rejected = 0
         self.smart_settings_subset_matches = 0
         self.smart_settings_probe_requests = 0
         self._smart_settings_probe_shape: dict[str, int | bool] | None = None
+        self.smart_package_events = 0
+        self.smart_objects_joined = 0
+        self._pool_sessions: dict[str, dict] = {}
+        self.smart_motion_settings_acks = 0
+        self.smart_motion_settings_rejected = 0
+        self.smart_motion_events_started = 0
+        self.smart_motion_events_stopped = 0
+        self._pool_motion: dict[str, MotionDetector] = {}
+        # Per-minute motion measurements per camera; kept across settings pushes (#6).
+        self._pool_motion_timeline: dict[str, MotionTimeline] = {}
         self.smart_motion_probe_requests = 0
         self.smart_motion_probe_acks = 0
         self.smart_motion_probe_zones = 0
         self.smart_feature_probe_events = 0
         self.smart_settings_probe_acks = 0
+        self.smart_settings_repeats = 0
+        self.smart_settings_lpr_acks = 0
+        self.smart_settings_lpr_requested = 0
+        self.smart_settings_rejection_reasons: dict[str, int] = {}
         self.smart_events_entered = 0
         self.smart_events_moved = 0
         self.smart_events_left = 0
+        self.smart_events_closed_on_stop = 0
         self.synthetic_probe_claimed = 0
         self.synthetic_probe_errors = 0
         self.recorded_probe_claimed = 0
@@ -519,6 +828,9 @@ class CandidateService:
         self._live_event_times: deque[float] = deque()
         self.snapshot_requests = 0
         self.snapshot_uploads = 0
+        self.live_snapshot_uploads = 0
+        self.live_snapshot_rejection_reasons: dict[str, int] = {}
+        self._live_snapshot_slots = asyncio.Semaphore(_LIVE_SNAPSHOT_CONCURRENCY)
         self.snapshot_rejections = 0
         self.snapshot_rejection_reasons: dict[str, int] = {}
         self.last_stream_error: str | None = None
@@ -551,24 +863,62 @@ class CandidateService:
                          or "diagnostic_recorded_event_probe" in config else None)
         self._camera_engine: CameraPolicyEngine | None = None
         self._inference: FairInference | None = None
+        self._pool_camera_order: tuple[str, ...] = ()
+        self._held_followup = HeldPackageFollowup()
+        # "shadow" (default) only counts what the follow-up would decide.
+        self._held_followup_announce = (
+            (config.get("live_pool_detector") or {}).get("held_package_followup") == "announce")
+        self._pool_policy_errors: dict[str, str] = {}
+        self._pool_secondary_lens_shapes: dict[str, dict[str, int | bool]] = {}
+        self._pool_recognition_accuracy_shapes: dict[
+            str, dict[str, int | bool | str]] = {}
         if "diagnostic_pool_detector" in config or "live_pool_detector" in config:
             live_pool = "live_pool_detector" in config
             detector = config["live_pool_detector" if live_pool
                               else "diagnostic_pool_detector"]
             cameras = [stream["camera_mac"] for stream in config[
                 "paired_streams" if live_pool else "diagnostic_streams"]]
+            self._pool_camera_order = tuple(normalize_mac(camera) for camera in cameras)
             self._camera_engine = CameraPolicyEngine(
                 cameras,
-                max_events_per_camera=(detector["max_events_per_hour"] if live_pool
-                                       else len(self._pool_smart_types())),
-                event_window_seconds=3600 if live_pool else None)
+                max_events_per_camera=None if live_pool else len(self._pool_smart_types()),
+                event_window_seconds=None,
+                event_budget=None,
+                package_cooldown=self._package_cooldown if live_pool else None,
+                max_track_gap_seconds=(20 if live_pool and
+                                       detector.get("inference_backend") == "vision_api"
+                                       else 3),
+                # Paid API frames are seconds apart; a walking person rarely
+                # keeps box overlap between the two confirming samples.
+                max_center_distance=(1.5 if live_pool and
+                                     detector.get("inference_backend") == "vision_api"
+                                     else None))
             self._inference = FairInference(
                 cameras,
-                load_detector=lambda: RFDetrNanoDetector.from_checkpoint(
-                    detector["checkpoint_path"], detector["checkpoint_sha256"],
-                    threshold=detector["threshold"]),
+                load_detector=(
+                    (lambda: ApiObjectDetector(
+                        detector["provider_config"], self.state_dir,
+                        threshold=detector["threshold"],
+                        max_requests_per_hour=detector.get("max_requests_per_hour"),
+                        package_lens_owned=self._package_lens_owned,
+                        plate_cameras=frozenset(detector.get("plate_cameras", ())),
+                        fallback=detector.get("fallback"),
+                        camera_thresholds=detector.get("camera_thresholds"),
+                        full_frame=self._full_frame_blocking,
+                        score_server=detector.get("score_server")))
+                    if live_pool and detector.get("inference_backend") == "vision_api" else
+                    (lambda: OnnxRFDetrNanoDetector.from_model(
+                        detector["model_path"], detector["model_sha256"],
+                        backend=detector["inference_backend"],
+                        threshold=detector["threshold"]))
+                    if live_pool and "inference_backend" in detector else
+                    (lambda: RFDetrNanoDetector.from_checkpoint(
+                        detector["checkpoint_path"], detector["checkpoint_sha256"],
+                        threshold=detector["threshold"]))),
                 on_result=self._observe_pool_result,
                 on_unavailable=self._pool_camera_unavailable,
+                preserve_first_pending=(live_pool and
+                                        detector.get("inference_backend") == "vision_api"),
                 max_frames_per_camera=(None if live_pool else
                                        detector["max_frames_per_camera"]))
         self.credentials = CredentialStore(self.state_dir)
@@ -592,7 +942,13 @@ class CandidateService:
             self.ingress = AiPortIngressPool(
                 config["paired_streams"],
                 frame_observer_factory=lambda camera: (
-                    lambda frame: self._observe_pool_frame(camera, frame)))
+                    lambda frame: self._observe_pool_frame(camera, frame)),
+                audio_observer_factory=lambda camera: (
+                    (lambda pcm: self._observe_pool_audio(camera, pcm))
+                    if camera in self._speech else None),
+                full_frame_cameras=self._face_cameras,
+                native_frame_cameras=frozenset(
+                    (config.get("live_pool_detector") or {}).get("plate_cameras", ())))
         elif config.get("diagnostic_hello_until", 0) > time.time():
             if "diagnostic_stream" in config:
                 self.ingress = AiPortIngress(
@@ -610,7 +966,25 @@ class CandidateService:
         return ("live_pool_detector" in self.config
                 or time.time() < self.config.get("diagnostic_pool_event_until", 0))
 
+    def _package_lens_owned(self, camera_mac: str) -> bool:
+        engine = self._camera_engine
+        policy = engine.current_policy(camera_mac) if engine is not None else None
+        return policy is not None and policy.package_scope == "second_lens"
+
     async def _observe_pool_frame(self, camera_mac: str, frame: bytes) -> None:
+        if self._held_followup.tracking(camera_mac):
+            await self._follow_held_packages(camera_mac, frame)
+        detector = self._pool_motion.get(camera_mac)
+        if detector is not None and self._pool_event_enabled():
+            try:
+                edges = await asyncio.to_thread(
+                    detector.observe, frame, now=time.monotonic())
+            except MotionSettingsError:
+                edges = ()
+            else:
+                self._pool_motion_timeline.setdefault(camera_mac, MotionTimeline()).record(
+                    detector, edges)
+            await self._publish_motion_edges(camera_mac, edges)
         engine, inference = self._camera_engine, self._inference
         if (engine is None or inference is None
                 or not self._pool_event_enabled()
@@ -618,6 +992,207 @@ class CandidateService:
             return
         await inference.observe(
             camera_mac, frame, generation=engine.policy_generation(camera_mac))
+
+    async def _publish_motion_edges(self, camera_mac: str, edges: tuple) -> None:
+        ws = self._current_ws
+        if (not edges or ws is None or not self._params_agreed
+                or not isinstance(self.ingress, AiPortIngressPool)):
+            return
+        active = {stream["deviceID"] for stream in self.ingress.list_streams()}
+        for edge in edges:
+            if edge.edge == "start" and camera_mac not in active:
+                continue
+            await self._send_control_event(ws, "EventSmartMotion", motion_event_payload(
+                camera_mac, edge, clock_wall_ms=int(time.time() * 1000)))
+            if edge.edge == "start":
+                self.smart_motion_events_started += 1
+            else:
+                self.smart_motion_events_stopped += 1
+
+    async def _observe_pool_audio(self, camera_mac: str, pcm: bytes) -> None:
+        """Speech presence for one opted-in camera; audio is never kept."""
+        detector = self._speech.get(camera_mac)
+        ws = self._current_ws
+        if detector is None or ws is None or not self._params_agreed:
+            return
+        now = time.monotonic()
+        if camera_mac not in self._speech_announced:
+            # Audio is flowing: tell Protect so it pushes this camera's
+            # audio-event settings (ChangeAudioEventsSettings).
+            self._speech_announced.add(camera_mac)
+            self._speech_announced_at[camera_mac] = now
+            await self._send_stream_status(ws, streaming=True, camera_mac=camera_mac)
+        elif ((camera_mac not in self._speech_settings_seen
+               and now - self._speech_announced_at.get(camera_mac, now) >= 60
+               and self._speech_reannounces.get(camera_mac, 0) < 3)
+              or (camera_mac in self._speech_settings_seen
+                  and (not self._speech_enabled.get(camera_mac)
+                       # 30 Sep 7.3.70: enabling sound types on eight
+                       # cameras reached only three; keep pulsing while a
+                       # sound camera has none enabled.
+                       or camera_mac in self._sounds
+                       and not any(self._sound_enabled(camera_mac, kind)
+                                   for kind in self._sound_types))
+                  and now - self._speech_announced_at.get(camera_mac, now) >= 600)):
+            # Protect pushes settings only on a not-ready -> ready change, and
+            # on 7.3.68 it skipped the push after a Speech toggle for four of
+            # six NAS cameras. Pulse readiness: up to three times, a minute
+            # apart, while no settings arrived; then every ten minutes while
+            # Speech stays off, so a later owner toggle is picked up.
+            self._speech_reannounces[camera_mac] = self._speech_reannounces.get(camera_mac, 0) + 1
+            self._speech_announced_at[camera_mac] = now
+            self.speech_reannounces += 1
+            await self._send_stream_status(ws, streaming=True, camera_mac=camera_mac,
+                                           audio_ready=False)
+            await self._send_stream_status(ws, streaming=True, camera_mac=camera_mac)
+        started = self._audio_started.get(camera_mac)
+        if started is not None and now - started >= MAX_EVENT_S:
+            # Overlapping types must not chain one event past the export
+            # bound the AI Key transcribes; close it and start afresh.
+            await self._close_audio_event(ws, camera_mac, -120.0)
+            self.audio_events_capped += 1
+        for edge in detector.feed(pcm):
+            if edge.edge == "enter" and (not self._speech_enabled.get(camera_mac)
+                                         or self._open_sounds(camera_mac)):
+                # The presence detector cannot tell a siren or a bark from a
+                # voice, so speech does not enter while a sound is open.
+                self.speech_edges_suppressed += 1
+                continue
+            if edge.edge == "enter":
+                # Each event costs a local transcription; a noisy outdoor
+                # camera must not starve the shared Whisper backend.
+                recent = [t for t in self._speech_enter_times.get(camera_mac, ())
+                          if now - t < 3600]
+                if len(recent) >= self._speech_limit:
+                    self._speech_enter_times[camera_mac] = recent
+                    self.speech_rate_limited += 1
+                    continue
+                self._speech_enter_times[camera_mac] = recent + [now]
+            if edge.edge == "leave" and not self._audio_is_open(camera_mac, SPEECH):
+                continue
+            await self._send_audio_edge(ws, camera_mac, SPEECH, edge.edge, edge.level_db)
+        sounds = self._sounds.get(camera_mac)
+        if sounds is None:
+            return
+        try:
+            # The classifier runs off the event loop; one camera's chunks
+            # arrive in order, so its detector is never fed concurrently.
+            edges = await asyncio.to_thread(sounds.feed, pcm)
+        except (SoundError, RuntimeError, ValueError) as exc:
+            code = str(exc) if isinstance(exc, SoundError) else "sound_classifier_failed"
+            self.sound_errors[code] = self.sound_errors.get(code, 0) + 1
+            return
+        for edge in edges:
+            if edge.edge == "leave":
+                if self._audio_is_open(camera_mac, edge.kind):
+                    await self._send_audio_edge(ws, camera_mac, edge.kind, "leave", edge.level_db)
+                continue
+            # Smoke and CO alarms have their own budget, four times the other
+            # sounds', so a barking dog never uses up the alarms' share.
+            alarm = edge.kind in ("alrmSmoke", "alrmCmonx")
+            key = (camera_mac, alarm)
+            recent = [t for t in self._sound_enter_times.get(key, ()) if now - t < 3600]
+            if len(recent) >= self._sound_limit * (4 if alarm else 1):
+                self._sound_enter_times[key] = recent
+                self.sound_rate_limited += 1
+                sounds.close(edge.kind)
+                continue
+            self._sound_enter_times[key] = recent + [now]
+            if self._audio_is_open(camera_mac, SPEECH):
+                # Speech and a sound at once: one event with both types.
+                self.sound_joined_speech += 1
+            await self._send_audio_edge(ws, camera_mac, edge.kind, "enter", edge.level_db)
+
+    def _audio_is_open(self, camera_mac: str, kind: str) -> bool:
+        return kind in self._audio_open.get(camera_mac, {})
+
+    def _open_sounds(self, camera_mac: str) -> list[str]:
+        return [kind for kind in self._audio_open.get(camera_mac, {}) if kind != SPEECH]
+
+    async def _send_audio_edge(self, ws: aiohttp.ClientWebSocketResponse, camera_mac: str,
+                               kind: str, edge: str, level_db: float) -> None:
+        """One type enters or leaves the camera's audio event; the others stay open."""
+        open_kinds = self._audio_open.get(camera_mac, {})
+        if (edge == "enter") == (kind in open_kinds):
+            return
+        states = dict.fromkeys(open_kinds, "moving")
+        states[kind] = edge
+        await self._send_control_event(ws, "EventSmartAudio", audio_state_payload(
+            camera_mac, states, clock_wall_ms=int(time.time() * 1000), level_db=level_db))
+        if edge == "enter":
+            if not open_kinds:
+                self._audio_started[camera_mac] = time.monotonic()
+            elif len(open_kinds) == 1:
+                self.audio_combined_events += 1
+            self._audio_open.setdefault(camera_mac, {})[kind] = time.monotonic()
+        else:
+            del open_kinds[kind]
+            if not open_kinds:
+                self._audio_open.pop(camera_mac, None)
+                self._audio_started.pop(camera_mac, None)
+        self._count_audio_edge(camera_mac, kind, edge)
+
+    async def _close_audio_event(self, ws: aiohttp.ClientWebSocketResponse, camera_mac: str,
+                                 level_db: float) -> None:
+        """End the camera's audio event: every open type leaves in one message."""
+        open_kinds = self._audio_open.pop(camera_mac, {})
+        self._audio_started.pop(camera_mac, None)
+        if open_kinds:
+            await self._send_control_event(ws, "EventSmartAudio", audio_state_payload(
+                camera_mac, dict.fromkeys(open_kinds, "leave"),
+                clock_wall_ms=int(time.time() * 1000), level_db=level_db))
+            for kind in open_kinds:
+                self._count_audio_edge(camera_mac, kind, "leave")
+        if camera_mac in self._speech:
+            self._speech[camera_mac].reset()
+        if camera_mac in self._sounds:
+            self._sounds[camera_mac].close()
+
+    def _count_audio_edge(self, camera_mac: str, kind: str, edge: str) -> None:
+        if kind == SPEECH and edge == "enter":
+            self.speech_events_entered += 1
+            self._speech_events[camera_mac] = self._speech_events.get(camera_mac, 0) + 1
+        elif kind == SPEECH:
+            self.speech_events_left += 1
+        elif edge == "enter":
+            self.sound_events_entered[kind] = self.sound_events_entered.get(kind, 0) + 1
+        else:
+            self.sound_events_left += 1
+
+    def _sound_enabled(self, camera_mac: str, kind: str) -> bool:
+        return kind in self._sound_types and self._audio_flags.get(camera_mac, {}).get(kind, False)
+
+    def _speech_camera_health(self, camera_mac: str) -> dict:
+        if camera_mac not in self._speech:
+            return {}
+        return {"speech": {"enabled": self._speech_enabled.get(camera_mac, False),
+                           "events": self._speech_events.get(camera_mac, 0),
+                           "open": self._audio_is_open(camera_mac, SPEECH)}}
+
+    async def _handle_audio_settings(self, ws: aiohttp.ClientWebSocketResponse,
+                                     request_id: int, payload: object) -> None:
+        try:
+            camera, flags = parse_audio_flags(payload)
+            enabled = flags["alrmSpeak"]
+        except AudioSettingsError:
+            camera, flags, enabled = None, {}, False
+        if camera is None or camera not in self._speech:
+            await self._reply_control(ws, "ChangeAudioEventsSettings", request_id, 501,
+                                      {"description": "audio_events_unavailable"})
+            self.speech_settings_rejected += 1
+            return
+        self._speech_enabled[camera] = enabled
+        self._audio_flags[camera] = flags
+        self._speech_settings_seen.add(camera)
+        for open_sound in self._open_sounds(camera):
+            if not self._sound_enabled(camera, open_sound):
+                await self._send_audio_edge(ws, camera, open_sound, "leave", -120.0)
+                self._sounds[camera].close(open_sound)
+        if not enabled and self._audio_is_open(camera, SPEECH):
+            await self._send_audio_edge(ws, camera, SPEECH, "leave", -120.0)
+            self._speech[camera].reset()
+        await self._reply_control(ws, "ChangeAudioEventsSettings", request_id, 0, {})
+        self.speech_settings_acks += 1
 
     async def _pool_camera_unavailable(self, camera_mac: str) -> None:
         # A failed or exhausted model cannot keep an event open. Revoke only
@@ -640,8 +1215,60 @@ class CandidateService:
                 or not self._pool_event_enabled()
                 or generation != engine.policy_generation(camera_mac)):
             return
-        candidates = engine.observe(camera_mac, observations, now=time.monotonic())
+        infrared = (frame is not None and any(item.kind == "package" for item in observations)
+                    and _frame_mode(frame) == "ir")
+        now = time.monotonic()
+        candidates = engine.observe(camera_mac, observations, now=now, infrared=infrared)
+        held = engine.held_packages(camera_mac)
+        for track_id in self._held_followup.tracking(camera_mac) - set(held):
+            self._held_followup.discard(camera_mac, track_id)   # resolved or gone
+        if infrared:
+            # A parcel already in place at a night restart gets only the
+            # startup pair; watch it in the frames decoded anyway.
+            for track_id, box in held.items():
+                if (track_id not in self._held_followup.tracking(camera_mac)
+                        and await asyncio.to_thread(self._held_followup.start,
+                                                    camera_mac, track_id, box, frame, now)
+                        and self._held_followup_announce):
+                    engine.watch_held(camera_mac, track_id)
+        # A confirming paid sample only helps a new, unconfirmed object. When
+        # every sampled object already belongs to an active track, keep the
+        # bounded hourly allowance for later arrivals such as a passing cat.
+        if (observations and self._inference is not None
+                and not engine.needs_confirmation(camera_mac)):
+            self._inference.skip_confirmation(camera_mac)
         await self._publish_pool_candidates(candidates, frame=frame)
+        # A person who stays still sends no further track changes; retry the
+        # face on later frames of the open event (bounded in _schedule_face).
+        session = self._pool_sessions.get(camera_mac)
+        if (frame is not None and session and session.get("active")
+                and self._face_enabled.get(camera_mac) and self._face_engine is not None):
+            for change, _zones in tuple(session["active"].values()):
+                if change.kind == "person":
+                    self._schedule_face(camera_mac, session, change, frame)
+
+    async def _follow_held_packages(self, camera_mac: str, frame: bytes) -> None:
+        engine = self._camera_engine
+        if engine is None or not self._pool_event_enabled():
+            self._held_followup.discard(camera_mac)
+            return
+        now = time.monotonic()
+        decisions = await asyncio.to_thread(self._held_followup.observe,
+                                            camera_mac, frame, now)
+        if not self._held_followup_announce:
+            return          # shadow: decisions are only counted
+        for track_id, decision in decisions.items():
+            if decision == "keep":
+                engine.keep_held(camera_mac, track_id, now=now)
+            elif decision == "confirmed":
+                await self._publish_pool_candidates(
+                    engine.confirm_held(camera_mac, track_id, now=now), frame=frame)
+            elif decision == "animated":
+                engine.veto_held(camera_mac, track_id)
+            else:
+                # moved / expired: no keep-alive; the track leaves by its gap
+                # unless a normal sample finds it again.
+                engine.release_held(camera_mac, track_id)
 
     async def _publish_pool_candidates(
             self, candidates: tuple[CameraEventCandidate, ...],
@@ -654,53 +1281,299 @@ class CandidateService:
             return
         active = {stream["deviceID"] for stream in self.ingress.list_streams()}
         for candidate in candidates:
-            if (candidate.change.edge in {"enter", "moving"}
-                    and candidate.camera_mac not in active):
+            camera, change = candidate.camera_mac, candidate.change
+            if change.edge in {"enter", "moving"} and camera not in active:
                 continue
+            # Protect keeps one ongoing smart event per camera: a second
+            # enter is dropped and any leave closes the event. Report every
+            # object of a camera inside one event instead.
+            session = self._pool_sessions.setdefault(
+                camera, {"active": {}, "seen": {}, "snapshots": []})
+            track = (change, candidate.zone_ids)
+            if change.edge == "enter":
+                opening = not session["active"]
+                if opening:
+                    session["seen"], session["snapshots"] = {}, []
+                    session["faces"], session["face_tries"], session["face_last"] = {}, {}, {}
+                session["active"][change.track_id] = track
+                session["seen"][change.track_id] = track
+                if frame is not None and len(session["snapshots"]) < 4:
+                    try:
+                        self._pool_snapshot_number += 1
+                        policy = self._camera_engine.current_policy(camera)
+                        eligible = bool(policy and policy.reverify_eligible(
+                            change.kind, change.score))
+                        session["snapshots"].append(await asyncio.to_thread(
+                            functools.partial(
+                                make_smart_snapshot, frame, change, int(time.time() * 1000),
+                                filename_track_id=self._pool_snapshot_number,
+                                reverify_eligible=eligible)))
+                        self._count_reverify_snapshot(
+                            camera, change.kind, "flagged" if eligible else "unflagged")
+                    except SnapshotError:
+                        pass
+                edge = "enter" if opening else "moving"
+                tracks = tuple(session["active"].values())
+                if not opening:
+                    self.smart_objects_joined += 1
+            elif change.edge == "moving":
+                if change.track_id not in session["active"]:
+                    continue
+                session["active"][change.track_id] = track
+                session["seen"][change.track_id] = track
+                edge, tracks = "moving", tuple(session["active"].values())
+            else:
+                if change.track_id not in session["seen"]:
+                    continue
+                session["active"].pop(change.track_id, None)
+                session["seen"][change.track_id] = track
+                if session["active"]:
+                    edge, tracks = "moving", tuple(session["active"].values())
+                else:
+                    edge, tracks = "leave", tuple(session["seen"].values())
+            if (frame is not None and change.kind == "person" and change.edge != "leave"
+                    and self._face_enabled.get(camera) and self._face_engine is not None):
+                self._schedule_face(camera, session, change, frame)
             try:
-                payload = smart_event_payload(
-                    candidate.camera_mac, candidate.change,
-                    edge=candidate.change.edge,
-                    clock_wall_ms=int(time.time() * 1000),
-                    zone_ids=candidate.zone_ids)
+                payload = camera_event_payload(
+                    camera, edge, tracks, clock_wall_ms=int(time.time() * 1000))
             except SmartEventError:
                 continue
-            snapshot_key = (candidate.camera_mac, candidate.change.track_id)
-            if candidate.change.edge == "enter" and frame is not None:
-                try:
-                    self._pool_snapshot_number += 1
-                    snapshot = await asyncio.to_thread(
-                        make_smart_snapshot, frame, candidate.change,
-                        payload["clockWall"],
-                        filename_track_id=self._pool_snapshot_number)
-                except SnapshotError:
-                    pass
-                else:
-                    if len(self._pool_event_snapshots) >= 16:
-                        self._pool_event_snapshots.pop(next(iter(self._pool_event_snapshots)))
-                    self._pool_event_snapshots[snapshot_key] = (
-                        snapshot, time.monotonic() + 180)
-            elif candidate.change.edge == "leave":
-                pending_event = self._pool_event_snapshots.pop(snapshot_key, None)
-                if pending_event is not None and pending_event[1] > time.monotonic():
-                    snapshot = pending_event[0]
-                    snapshot.add_to_event(payload)
-                    now = time.monotonic()
-                    for filename, pending in tuple(self._pool_pending_snapshots.items()):
-                        if pending.expires <= now:
-                            del self._pool_pending_snapshots[filename]
-                    if len(self._pool_pending_snapshots) >= 16:
-                        self._pool_pending_snapshots.pop(
-                            next(iter(self._pool_pending_snapshots)))
-                    self._pool_pending_snapshots[snapshot.filename] = (
-                        _PendingPoolSnapshot(candidate.camera_mac, snapshot, now + 75))
+            self._add_faces(payload, session, edge, tracks, camera)
+            if edge == "leave":
+                face_snapshots = ((self.config.get("live_face") or {}).get("payload", "full")
+                                  != "descriptor_only")
+                snapshots = session["snapshots"] + [face[2] for face in
+                                                    session.get("faces", {}).values()
+                                                    if face[2] is not None and face_snapshots]
+                self._pool_sessions.pop(camera, None)
+                for item in session["snapshots"]:
+                    self._count_reverify_snapshot(
+                        camera, item.metadata["smartDetectSnapshotType"],
+                        "published_flagged" if item.metadata["reVerifyEligible"]
+                        else "published_unflagged")
+                if snapshots:
+                    snapshots[0].add_to_event(payload)
+                    payload["smartDetectSnapshots"] = [item.metadata for item in snapshots]
+                    for item in snapshots:
+                        self._remember_pool_snapshot(camera, item)
             await self._send_control_event(ws, "EventSmartDetect", payload)
-            if candidate.change.edge == "enter":
+            if change.kind == "package" and change.edge == "enter":
+                self.smart_package_events += 1
+            if edge == "enter":
                 self.smart_events_entered += 1
-            elif candidate.change.edge == "moving":
+            elif edge == "moving":
                 self.smart_events_moved += 1
             else:
                 self.smart_events_left += 1
+
+    def _full_frame_blocking(self, camera: str, frame: bytes) -> bytes | None:
+        """For detector threads: the frame's full-resolution twin, waiting
+        briefly while it is still being encoded."""
+        if not isinstance(self.ingress, AiPortIngressPool):
+            return None
+        deadline = time.monotonic() + FULL_FRAME_WAIT_S
+        while True:
+            state, twin = self.ingress.full_frame_state(camera, frame)
+            if state != "pending" or time.monotonic() >= deadline:
+                return twin
+            time.sleep(0.1)
+
+    async def _full_resolution(self, camera: str, frame: bytes, stats: dict) -> bytes:
+        """The same frame at full resolution; its twin may still be encoding."""
+        if not isinstance(self.ingress, AiPortIngressPool):
+            return frame
+        deadline = time.monotonic() + FULL_FRAME_WAIT_S
+        waited = False
+        while True:
+            state, twin = self.ingress.full_frame_state(camera, frame)
+            if state == "ready":
+                stats["full_resolution"] += 1
+                stats["twin"]["waited" if waited else "ready"] += 1
+                return twin
+            if state != "pending" or time.monotonic() >= deadline:
+                if state in ("gone", "pending"):
+                    stats["twin"]["timeout" if state == "pending" else "gone"] += 1
+                return frame
+            waited = True
+            await asyncio.sleep(0.1)
+
+    def _face_camera_health(self, camera: str) -> dict:
+        """Per camera: listed for faces, enabled by Protect, and what happened."""
+        stats = self._face_camera_stats.get(camera) or {
+            "analyses": 0, "full_resolution": 0, "detected": 0, "kept": 0, "sent": 0, "gated": {},
+            "twin": {"ready": 0, "waited": 0, "gone": 0, "timeout": 0}}
+        return {"listed": camera in self._face_cameras,
+                "enabled": bool(self._face_enabled.get(camera)),
+                "engine": self._face_engine is not None,
+                **{k: (dict(v) if isinstance(v, dict) else v) for k, v in stats.items()}}
+
+    def _count_reverify_snapshot(self, camera: str, kind: str, outcome: str) -> None:
+        if kind in ("person", "vehicle", "animal"):
+            counts = self._reverify_snapshots.setdefault(camera, dict.fromkeys(
+                ("flagged", "unflagged", "published_flagged", "published_unflagged"), 0))
+            counts[outcome] += 1
+
+    def _count_face_error(self, code: str) -> None:
+        key = code if len(code) <= 48 else "other"
+        if key in self.face_errors or len(self.face_errors) < 12:
+            self.face_errors[key] = self.face_errors.get(key, 0) + 1
+
+    def _schedule_face(self, camera: str, session: dict, change, frame: bytes) -> None:
+        """Analyse a person's face in the background: one at a time per camera,
+        keeping the best-quality face. A person gets three tries once a face is
+        kept and up to eight while none has passed the send gate, because a
+        seated person often turns towards the camera only later."""
+        running = self._face_tasks.get(camera)
+        if running is not None and not running.done():
+            return
+        faces = session.setdefault("faces", {})
+        tries = session.setdefault("face_tries", {})
+        last = session.setdefault("face_last", {})
+        now = time.monotonic()
+        limit = 3 if change.track_id in faces else FACE_TRIES_WITHOUT_FACE
+        if tries.get(change.track_id, 0) >= limit or now - last.get(change.track_id, -1e9) < 2:
+            return
+        tries[change.track_id] = tries.get(change.track_id, 0) + 1
+        last[change.track_id] = now
+        self._face_tasks[camera] = asyncio.create_task(
+            self._analyse_face(camera, faces, change, frame), name="aiport-face")
+
+    def _face_stats(self, camera: str) -> dict:
+        return self._face_camera_stats.setdefault(
+            camera, {"analyses": 0, "full_resolution": 0, "detected": 0, "kept": 0, "sent": 0,
+             "gated": {}, "twin": {"ready": 0, "waited": 0, "gone": 0, "timeout": 0}})
+
+    async def _analyse_face(self, camera: str, faces: dict, change, frame: bytes) -> None:
+        engine = self._face_engine
+        if engine is None:
+            return
+        self.face_analyses += 1
+        stats = self._face_stats(camera)
+        stats["analyses"] += 1
+        frame = await self._full_resolution(camera, frame, stats)
+        try:
+            result = await asyncio.to_thread(engine.analyse, frame, change.box)
+        except FaceError as exc:
+            self._count_face_error(str(exc))
+            return
+        except Exception:
+            self._count_face_error("face_runtime_error")
+            return
+        if result is None:
+            return
+        stats["detected"] += 1
+        yaw = band(abs(result.pose.get("yaw", 0.0)), YAW_BANDS)
+        size = band(result.face_px, FACE_PX_BANDS)
+        self.face_yaw_bands[yaw] = self.face_yaw_bands.get(yaw, 0) + 1
+        self.face_px_bands[size] = self.face_px_bands.get(size, 0) + 1
+        held = send_gate(result)
+        if held is not None:
+            self.faces_gated[held] = self.faces_gated.get(held, 0) + 1
+            stats["gated"][held] = stats["gated"].get(held, 0) + 1
+            return
+        previous = faces.get(change.track_id)
+        # The track's best embeddings, averaged when the face is sent.
+        embeddings = sorted(((previous[3] if previous is not None else ())
+                             + ((result.quality, result.embedding),)),
+                            key=lambda item: item[0], reverse=True)[:EMBEDDINGS_PER_TRACK]
+        if previous is not None and previous[1].quality >= result.quality:
+            faces[change.track_id] = (*previous[:3], tuple(embeddings))
+            return
+        if previous is None:
+            # Camera tracker IDs are small integers; keep face IDs in a range
+            # the object tracker does not reach within one process.
+            self._face_track_number = self._face_track_number % 99_999 + 1
+            face_id = 900_000 + self._face_track_number
+        else:
+            face_id = previous[0]
+        wall = int(time.time() * 1000)
+        try:
+            self._pool_snapshot_number += 1
+            snapshot = await asyncio.to_thread(make_face_snapshot, frame, result, face_id, wall,
+                                               filename_id=self._pool_snapshot_number)
+        except SnapshotError:
+            snapshot = None
+        self.faces_found += 1
+        stats["kept"] += 1
+        faces[change.track_id] = (face_id, result, snapshot, tuple(embeddings))
+
+    def _add_faces(self, payload: dict, session: dict, edge: str, tracks: tuple,
+                   camera: str | None = None) -> None:
+        """Add each found face as its own tracker, linked from its person."""
+        faces = session.get("faces") or {}
+        if not faces:
+            return
+        stage = (self.config.get("live_face") or {}).get("payload", "full")
+        zones = {change.track_id: zone_ids for change, zone_ids in tracks}
+        added = False
+        for person_id, (face_id, result, _snapshot, embeddings) in faces.items():
+            if person_id not in zones:
+                continue
+            if len(embeddings) > 1:
+                result = replace(result, embedding=mean_embedding([e for _, e in embeddings]))
+            payload["descriptors"].append(result.descriptor(face_id, zones[person_id]))
+            added = True
+            if edge == "leave":
+                attrs = payload["trackerIDAttrMap"]
+                if stage in {"full", "no_embed"}:
+                    face_attrs = result.attributes(face_id, zones[person_id])
+                    if stage == "no_embed":
+                        face_attrs.pop("faceEmbed")
+                    attrs[str(face_id)] = face_attrs
+                    if str(person_id) in attrs:
+                        attrs[str(person_id)]["associatedFaceTrackerID"] = face_id
+                self.faces_sent += 1
+                if camera is not None:
+                    self._face_stats(camera)["sent"] += 1
+        if added and "face" not in payload["objectTypes"]:
+            payload["objectTypes"].append("face")
+
+    def _remember_pool_snapshot(self, camera: str, snapshot) -> None:
+        now = time.monotonic()
+        for filename, pending in tuple(self._pool_pending_snapshots.items()):
+            if pending.expires <= now:
+                del self._pool_pending_snapshots[filename]
+        if len(self._pool_pending_snapshots) >= 16:
+            self._pool_pending_snapshots.pop(next(iter(self._pool_pending_snapshots)))
+        self._pool_pending_snapshots[snapshot.filename] = (
+            _PendingPoolSnapshot(camera, snapshot, now + 75))
+
+    async def _handle_pool_motion_settings(
+            self, ws: aiohttp.ClientWebSocketResponse, request_id: int,
+            payload: object) -> None:
+        """Replace one allowlisted camera's motion zones and timings."""
+        engine = self._camera_engine
+        try:
+            camera = normalize_mac(payload.get("deviceID")
+                                   if isinstance(payload, dict) else None)
+            engine.has_policy(camera)  # Enforces the private camera allowlist.
+            policy = parse_motion_settings(payload, camera_mac=camera)
+        except (IngressError, MotionSettingsError):
+            await self._reply_control(ws, "ChangeSmartMotionSettings", request_id, 5,
+                                      {"description": "invalid_motion_settings"})
+            self.smart_motion_settings_rejected += 1
+            return
+        previous = self._pool_motion.get(camera)
+        timeline = self._pool_motion_timeline.setdefault(camera, MotionTimeline())
+        if previous is not None:
+            edges = previous.stop(now=time.monotonic())
+            for edge in edges:
+                timeline.history.count("stops" if edge.edge == "stop" else "starts")
+            await self._publish_motion_edges(camera, edges)
+            timeline.settings_reset()
+        self._pool_motion[camera] = MotionDetector(policy)
+        await self._reply_control(ws, "ChangeSmartMotionSettings", request_id, 0, {})
+        self.smart_motion_settings_acks += 1
+
+    def _count_policy_rejection(self, reason: str) -> None:
+        """Fixed-code reasons only; never the controller's policy content."""
+        self.smart_settings_requests_rejected += 1
+        key = reason if len(reason) <= 64 else "other"
+        if key in self.smart_settings_rejection_reasons or len(
+                self.smart_settings_rejection_reasons) < 16:
+            self.smart_settings_rejection_reasons[key] = (
+                self.smart_settings_rejection_reasons.get(key, 0) + 1)
 
     async def _handle_pool_smart_settings(
             self, ws: aiohttp.ClientWebSocketResponse, request_id: int,
@@ -709,7 +1582,7 @@ class CandidateService:
         if engine is None or not isinstance(payload, dict):
             await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
                                       {"description": "smart_detection_unavailable"})
-            self.smart_settings_requests_rejected += 1
+            self._count_policy_rejection("engine_or_payload")
             return
         try:
             camera = normalize_mac(payload.get("deviceID"))
@@ -717,18 +1590,72 @@ class CandidateService:
         except IngressError:
             await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
                                       {"description": "smart_detection_unavailable"})
-            self.smart_settings_requests_rejected += 1
+            self._count_policy_rejection("not_allowlisted")
+            return
+        if camera in self._face_cameras and isinstance(payload.get("enableSmartDetect"), list):
+            # Face is served locally (live_face); the object policy covers the rest.
+            requested = payload["enableSmartDetect"]
+            self._face_enabled[camera] = "face" in requested
+            payload = dict(payload, enableSmartDetect=[kind for kind in requested if kind != "face"])
+        if set(payload) == {"deviceID", "isLprCamera"}:
+            # Protect 7.3.68 sends every paired camera this separate message
+            # on connect. Answering 501 made Protect log "Failed to handle
+            # EventAIPortStatus isSmartDetectReady". It carries no smart policy.
+            # Live Protect 7.3.68 sends this flag as an integer (0 or 1).
+            if not (type(payload["isLprCamera"]) is bool
+                    or type(payload["isLprCamera"]) is int
+                    and payload["isLprCamera"] in (0, 1)):
+                self._count_policy_rejection(
+                    "invalid_lpr_flag:" + type(payload["isLprCamera"]).__name__)
+                await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
+                                          {"description": "smart_detection_unavailable"})
+                return
+            # Live health showed every startup rejection was this message
+            # (an integer flag, refused as non-boolean before). The AI Port never advertises plate detection,
+            # so acknowledging the flag promises no plate events; it is
+            # counted so health shows plates were requested but not read.
+            self.smart_settings_lpr_acks += 1
+            if payload["isLprCamera"]:
+                self.smart_settings_lpr_requested += 1
+            await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 0, {})
+            return
+        try:
+            repeat = parse_smart_settings(payload, camera_mac=camera)
+        except SmartSettingsError:
+            repeat = None
+        if (repeat is not None and repeat == engine.current_policy(camera)
+                and camera in {stream["deviceID"] for stream in self.ingress.list_streams()}
+                and self._inference is not None
+                and self._inference.is_available(camera)
+                and self._pool_event_enabled()):
+            # Protect re-sends identical settings several times after an AI
+            # Port connects, while the startup pair samples the scene. That
+            # pair is the only sample a stationary object (a package, a
+            # sleeping cat) gets; revoking here discarded its confirmation.
+            self.smart_settings_repeats += 1
+            await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 0, {})
+            self.smart_settings_probe_acks += 1
             return
         if self._inference is not None:
             self._inference.discard_pending(camera)
         await self._publish_pool_candidates(engine.replace_policy(camera, None))
         parsed = None
+        rejection_reason = None
         try:
             parsed = parse_smart_settings(payload, camera_mac=camera)
-        except SmartSettingsError:
-            pass
+        except SmartSettingsError as exc:
+            rejection_reason = str(exc)
         else:
             self.smart_settings_subset_matches += 1
+        if rejection_reason == "unsupported_smart_feature:regions:secondLensZones":
+            self._pool_secondary_lens_shapes[camera] = summarize_secondary_lens_zones(payload)
+        else:
+            self._pool_secondary_lens_shapes.pop(camera, None)
+        if rejection_reason == "invalid_smart_settings:recognition_accuracy":
+            self._pool_recognition_accuracy_shapes[camera] = (
+                summarize_recognition_accuracy(payload))
+        else:
+            self._pool_recognition_accuracy_shapes.pop(camera, None)
         active = {stream["deviceID"] for stream in self.ingress.list_streams()}
         if (parsed is not None and parsed.enabled_types
                 and parsed.enabled_types <= set(self._pool_smart_types())
@@ -736,12 +1663,33 @@ class CandidateService:
                 and self._inference.is_available(camera)
                 and self._pool_event_enabled()):
             engine.replace_policy(camera, parsed)
+            self._pool_policy_errors.pop(camera, None)
             await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 0, {})
             self.smart_settings_probe_acks += 1
             return
+        if (rejection_reason or "").split(":", 1)[0] not in {
+                "invalid_smart_settings", "wrong_camera", "unsupported_smart_feature",
+                "invalid_smart_zone", "unsupported_smart_zone",
+                "invalid_exclude_zone"}:
+            rejection_reason = None
+        if rejection_reason is None:
+            if parsed is None:
+                rejection_reason = "invalid_smart_settings:unclassified"
+            elif not parsed.enabled_types:
+                rejection_reason = "disabled_policy"
+            elif not parsed.enabled_types <= set(self._pool_smart_types()):
+                rejection_reason = "unsupported_type"
+            elif camera not in active:
+                rejection_reason = "inactive_stream"
+            elif self._inference is None or not self._inference.is_available(camera):
+                rejection_reason = "inference_unavailable"
+            else:
+                rejection_reason = "event_disabled"
+        self._pool_policy_errors[camera] = rejection_reason
         await self._reply_control(ws, "ChangeSmartDetectSettings", request_id, 501,
                                   {"description": "smart_detection_unavailable"})
-        self.smart_settings_requests_rejected += 1
+        self._count_policy_rejection(rejection_reason.split(":", 1)[0] + (
+            ":" + rejection_reason.split(":")[1] if rejection_reason.count(":") else ""))
 
     def _select_pool_snapshot(self, filename: object) -> tuple[_PendingPoolSnapshot | None, bool]:
         if not isinstance(filename, str):
@@ -777,6 +1725,17 @@ class CandidateService:
             await asyncio.sleep(15)
             self._prune_snapshots()
 
+    def _pool_feature_types(self) -> list[str]:
+        """Advertised pool capabilities.
+
+        Protect offers Package as a primary-lens zone class only for a device
+        that reports ``packageMaincam``. Without it, Package cannot be scoped
+        by a detection zone. ``packageSecondcam`` is not reported: a doorbell
+        keeps its own package lens, which this device never receives.
+        """
+        kinds = list(self._pool_smart_types())
+        return kinds + ["packageMaincam"] if "package" in kinds else kinds
+
     def _pool_smart_types(self) -> tuple[str, ...]:
         if "live_pool_detector" in self.config:
             return tuple(self.config["live_pool_detector"]["smart_types"])
@@ -784,12 +1743,17 @@ class CandidateService:
             self.config.get("diagnostic_smart_type", "person")]))
 
     async def _revoke_pool_policy(self, camera_mac: str) -> None:
+        detector = self._pool_motion.get(camera_mac)
+        if detector is not None:
+            await self._publish_motion_edges(
+                camera_mac, detector.stop(now=time.monotonic()))
         engine = self._camera_engine
         if engine is None:
             return
         if self._inference is not None:
             self._inference.discard_pending(camera_mac)
         await self._publish_pool_candidates(engine.replace_policy(camera_mac, None))
+        self._pool_sessions.pop(camera_mac, None)
         for key in tuple(self._pool_event_snapshots):
             if key[0] == camera_mac:
                 del self._pool_event_snapshots[key]
@@ -899,10 +1863,16 @@ class CandidateService:
                               else self._event_zone_ids))
             except SmartEventError:
                 continue
+            if (edge == "enter" and live and self._event_budget is not None
+                    and not self._event_budget.claim(self.ingress.camera_mac)):
+                continue
             if edge == "enter" and frame is not None:
                 try:
-                    self._event_snapshot = await asyncio.to_thread(
-                        make_smart_snapshot, frame, change, payload["clockWall"])
+                    policy = self._smart_policy
+                    self._event_snapshot = await asyncio.to_thread(functools.partial(
+                        make_smart_snapshot, frame, change, payload["clockWall"],
+                        reverify_eligible=bool(policy and policy.reverify_eligible(
+                            change.kind, change.score))))
                     self._event_snapshot_expires = time.monotonic() + 180
                 except SnapshotError:
                     self._event_snapshot = None
@@ -1007,7 +1977,7 @@ class CandidateService:
                 or not self.ingress.list_streams()
                 or time.time() + 4 >= self.config["diagnostic_event_until"]
                 or policy.enabled_types != frozenset({"person"})
-                or not policy.allows_score("person", 0.99)):
+                or not _certain(policy, "person", 0.99)):
             return
         box = tuple(probe["box"])
         if policy.zone_ids("person", box) is None:
@@ -1064,8 +2034,8 @@ class CandidateService:
             if time.time() + frame_gap + 3 >= self.config["diagnostic_event_until"]:
                 self.recorded_probe_phase = "expired_after_inference"
                 return
-            if (not policy.allows_score("person", track.enter.score)
-                    or not policy.allows_score("person", track.moving.score)):
+            if (not _certain(policy, "person", track.enter.score)
+                    or not _certain(policy, "person", track.moving.score)):
                 self.recorded_probe_phase = "score_gate"
                 return
             zone_ids = policy.zone_ids("person", track.enter.box)
@@ -1117,7 +2087,7 @@ class CandidateService:
                     or current_policy.enabled_types != frozenset({"person"})
                     or current_policy.zone_ids("person", track.enter.box) != zone_ids
                     or current_policy.zone_ids("person", track.moving.box) != zone_ids
-                    or not current_policy.allows_score("person", track.moving.score)
+                    or not _certain(current_policy, "person", track.moving.score)
                     or not self.ingress.list_streams()
                     or time.time() + 2 >= self.config["diagnostic_event_until"]):
                 self.recorded_probe_errors += 1
@@ -1131,7 +2101,7 @@ class CandidateService:
             if (self._current_ws is ws and current_policy is not None
                     and current_policy.enabled_types == frozenset({"person"})
                     and current_policy.zone_ids("person", track.moving.box) == zone_ids
-                    and current_policy.allows_score("person", track.moving.score)
+                    and _certain(current_policy, "person", track.moving.score)
                     and self.ingress.list_streams()
                     and time.time() < self.config["diagnostic_event_until"]):
                 if snapshot is not None:
@@ -1158,7 +2128,28 @@ class CandidateService:
         app.router.add_post("/api/1.2/manage", self._manage)
         return app
 
+    def _legacy_limits_ignored(self) -> list[str]:
+        detector = self.config.get("live_pool_detector") or {}
+        return ((["live_pool_detector.max_events_per_hour"] if "max_events_per_hour" in detector else [])
+                + (["live_pool_detector.fallback.max_per_hour"]
+                   if "max_per_hour" in (detector.get("fallback") or {}) else []))
+
     async def _health(self, request: web.Request) -> web.Response:
+        live_budget_remaining = None
+        live_budget_healthy = None
+        if "live_detector" in self.config:
+            live_budget_remaining = max(0,
+                self.config["live_detector"]["max_events_per_hour"] - sum(
+                    entered > time.monotonic() - 3600
+                    for entered in self._live_event_times))
+            try:
+                live_budget_remaining = min(
+                    live_budget_remaining,
+                    self._event_budget.remaining(self.ingress.camera_mac))
+                live_budget_healthy = True
+            except EventBudgetError:
+                live_budget_remaining = 0
+                live_budget_healthy = False
         return web.json_response({"service": "aiport-candidate", "adopted": self.adoption.adopted,
             "adoption_pending": self.adoption.pending_token is not None,
             "control_connected": self.connected, "websocket_upgrades": self.upgrades,
@@ -1174,6 +2165,7 @@ class CandidateService:
             "stream_controls_started": self.stream_controls_started,
             "stream_controls_stopped": self.stream_controls_stopped,
             "stream_controls_rejected": self.stream_controls_rejected,
+            "stream_control_rejection_reasons": dict(self.stream_control_rejection_reasons),
             "stream_status_events_sent": self.stream_status_events_sent,
             "stream_reconnects_preserved": self.stream_reconnects_preserved,
             "stream_grace_closures": self.stream_grace_closures,
@@ -1183,6 +2175,7 @@ class CandidateService:
             "provision_isp_replies": self.provision_isp_replies,
             "ssh_stop_replies": self.ssh_stop_replies,
             "ssh_start_rejections": self.ssh_start_rejections,
+            "firmware_update_refusals": self.firmware_update_refusals,
             "credential_rotations": self.credential_rotations,
             "credential_rotations_rejected": self.credential_rotations_rejected,
             "sound_led_replies": self.sound_led_replies,
@@ -1190,19 +2183,83 @@ class CandidateService:
             "timezone_replies": self.timezone_replies,
             "timezone_rejections": self.timezone_rejections,
             "face_db_requests_rejected": self.face_db_requests_rejected,
+            **({"faces": {"cameras": len(self._face_cameras),
+                          "engine": self._face_engine is not None,
+                          "enabled": sum(self._face_enabled.get(c, False) for c in self._face_cameras),
+                          "analyses": self.face_analyses, "found": self.faces_found,
+                          "sent": self.faces_sent, "gated": dict(self.faces_gated),
+                          "yaw_bands": dict(self.face_yaw_bands),
+                          "face_px_bands": dict(self.face_px_bands),
+                          "errors": dict(self.face_errors)}}
+               if self._face_cameras else {}),
+            **({"sounds": {"cameras": len(self._sound_cameras),
+                           "classifier": self._sound_classifier is not None,
+                           "types": len(self._sound_types),
+                           # Sound types Protect has enabled, summed over cameras.
+                           "enabled_types": sum(self._sound_enabled(camera, kind)
+                                                for camera in self._sound_cameras
+                                                for kind in self._sound_types),
+                           "entered": dict(self.sound_events_entered),
+                           "left": self.sound_events_left,
+                           "open": sum(bool(self._open_sounds(c)) for c in self._sound_cameras),
+                           "rate_limited": self.sound_rate_limited,
+                           "joined_speech": self.sound_joined_speech,
+                           "combined_events": self.audio_combined_events,
+                           "events_capped": self.audio_events_capped,
+                           "classifications": sum(d.classifications for d in self._sounds.values()),
+                           "errors": dict(self.sound_errors)}}
+               if self._sound_cameras else {}),
+            **({"speech": {"cameras": len(self._speech),
+                           "enabled": sum(self._speech_enabled.get(c, False) for c in self._speech),
+                           "settings_acks": self.speech_settings_acks,
+                           "settings_rejected": self.speech_settings_rejected,
+                           "events_entered": self.speech_events_entered,
+                           "events_left": self.speech_events_left,
+                           "open": sum(self._audio_is_open(c, SPEECH) for c in self._speech),
+                           "edges_suppressed": self.speech_edges_suppressed,
+                           "reannounces": self.speech_reannounces,
+                           "rate_limited": self.speech_rate_limited,
+                           "max_events_per_hour": self._speech_limit}}
+               if self._speech else {}),
             "smart_settings_requests_rejected": self.smart_settings_requests_rejected,
             "smart_settings_subset_matches": self.smart_settings_subset_matches,
             "smart_settings_probe_requests": self.smart_settings_probe_requests,
+            "smart_package_events": self.smart_package_events,
+            "smart_objects_joined": self.smart_objects_joined,
+            "smart_motion_settings_acks": self.smart_motion_settings_acks,
+            "smart_motion_settings_rejected": self.smart_motion_settings_rejected,
+            "smart_motion_events_started": self.smart_motion_events_started,
+            "smart_motion_events_stopped": self.smart_motion_events_stopped,
             "smart_motion_probe_requests": self.smart_motion_probe_requests,
             "smart_motion_probe_acks": self.smart_motion_probe_acks,
             "smart_motion_probe_zones": self.smart_motion_probe_zones,
             "smart_feature_probe_events": self.smart_feature_probe_events,
             "smart_settings_probe_acks": self.smart_settings_probe_acks,
+            "smart_settings_repeats": self.smart_settings_repeats,
+            "smart_settings_lpr_acks": self.smart_settings_lpr_acks,
+            "smart_settings_lpr_requested": self.smart_settings_lpr_requested,
+            "smart_settings_rejection_reasons": dict(self.smart_settings_rejection_reasons),
+            "package_cooldown_skips": (self._camera_engine.package_cooldown_skips
+                                       if self._camera_engine is not None else 0),
+            "package_ir_followup": {
+                "mode": "announce" if self._held_followup_announce else "shadow",
+                **self._held_followup.decisions},
+            "package_ir_held": (self._camera_engine.package_ir_held
+                                  if self._camera_engine is not None else 0),
+            "package_ir_confirmed": (self._camera_engine.package_ir_confirmed
+                                  if self._camera_engine is not None else 0),
+            "package_ir_as_animal": (self._camera_engine.package_ir_as_animal
+                                  if self._camera_engine is not None else 0),
+            "package_ir_dropped": (self._camera_engine.package_ir_dropped
+                                  if self._camera_engine is not None else 0),
             "smart_events_entered": self.smart_events_entered,
             "smart_events_moved": self.smart_events_moved,
             "smart_events_left": self.smart_events_left,
+            "smart_events_closed_on_stop": self.smart_events_closed_on_stop,
             "snapshot_requests": self.snapshot_requests,
             "snapshot_uploads": self.snapshot_uploads,
+            "live_snapshot_uploads": self.live_snapshot_uploads,
+            "live_snapshot_rejection_reasons": dict(self.live_snapshot_rejection_reasons),
             "snapshot_rejections": self.snapshot_rejections,
             "snapshot_rejection_reasons": dict(self.snapshot_rejection_reasons),
             "synthetic_probe_claimed": self.synthetic_probe_claimed,
@@ -1242,12 +2299,45 @@ class CandidateService:
                                "diagnostic_pool" if "diagnostic_pool_detector" in self.config else
                                "diagnostic" if "diagnostic_detector" in self.config else
                                "passive"),
-            "live_event_budget_remaining": (
-                max(0, self.config["live_detector"]["max_events_per_hour"] - sum(
-                    entered > time.monotonic() - 3600 for entered in self._live_event_times))
-                if "live_detector" in self.config else None),
+            "live_event_budget_remaining": live_budget_remaining,
+            # Limits an older config still names but this version does not apply.
+            "legacy_limits_ignored": self._legacy_limits_ignored(),
+            "live_event_budget_healthy": live_budget_healthy,
             "pool_inference": (self._inference.snapshot()
                                if self._inference is not None else None),
+            "pool_cameras": ([dict(inference, **policy, **stream,
+                                    policy_rejection=self._pool_policy_errors.get(
+                                        self._pool_camera_order[index]),
+                                    secondary_lens_shape=self._pool_secondary_lens_shapes.get(
+                                        self._pool_camera_order[index]),
+                                    recognition_accuracy_shape=(
+                                        self._pool_recognition_accuracy_shapes.get(
+                                            self._pool_camera_order[index])),
+                                    motion=(self._pool_motion[
+                                        self._pool_camera_order[index]].snapshot()
+                                        if self._pool_camera_order[index]
+                                        in self._pool_motion else None),
+                                    motion_history=(self._pool_motion_timeline[
+                                        self._pool_camera_order[index]].snapshot()
+                                        if self._pool_camera_order[index]
+                                        in self._pool_motion_timeline else []),
+                                    face=self._face_camera_health(self._pool_camera_order[index]),
+                                    reverification_snapshots=dict(
+                                        self._reverify_snapshots.get(
+                                            self._pool_camera_order[index])
+                                        or dict.fromkeys(("flagged", "unflagged",
+                                                          "published_flagged",
+                                                          "published_unflagged"), 0)),
+                                    **self._speech_camera_health(
+                                        self._pool_camera_order[index]))
+                              for index, (inference, policy, stream) in enumerate(zip(
+                                  self._inference.camera_snapshot(),
+                                  self._camera_engine.camera_snapshot(now=time.monotonic()),
+                                  self.ingress.camera_diagnostics(self._pool_camera_order),
+                                  strict=True))]
+                             if self._inference is not None
+                             and self._camera_engine is not None
+                             and isinstance(self.ingress, AiPortIngressPool) else None),
             "last_stream_error": self.last_stream_error,
             "last_decoder_exit_code": (self.ingress.last_decoder_exit_code
                                        if self.ingress else None),
@@ -1419,7 +2509,7 @@ class CandidateService:
                      "responseExpected": False, "functionName": function,
                      "messageId": self._next_message_id, "inResponseTo": 0,
                      "payload": payload}
-            if function == "EventSmartDetect":
+            if function in {"EventSmartDetect", "EventSmartMotion", "EventSmartAudio"}:
                 # Protect reads this envelope field when routing a smart
                 # detection; keep it aligned with the payload's clockWall.
                 event["timeStamp"] = datetime.fromtimestamp(
@@ -1430,7 +2520,8 @@ class CandidateService:
 
     async def _send_stream_status(self, ws: aiohttp.ClientWebSocketResponse,
                                   *, streaming: bool,
-                                  camera_mac: str | None = None) -> None:
+                                  camera_mac: str | None = None,
+                                  audio_ready: bool | None = None) -> None:
         assert self.ingress is not None
         if camera_mac is None:
             camera_mac = getattr(self.ingress, "camera_mac", None)
@@ -1449,19 +2540,39 @@ class CandidateService:
             smart_ready = (self._inference is not None
                            and self._inference.is_available(camera_mac))
         if smart_ready:
-            await self._send_control_event(
-                ws, "EventFeatureFlagsUpdated",
-                {"deviceID": camera_mac,
-                 "smartDetect": (list(self._pool_smart_types())
-                                 if isinstance(self.ingress, AiPortIngressPool)
-                                 else [self.config["live_detector"]["smart_type"]]
-                                 if "live_detector" in self.config else
-                                 [self.config.get("diagnostic_smart_type", "person")])})
+            flags: dict[str, object] = {
+                "deviceID": camera_mac,
+                "smartDetect": (self._pool_feature_types()
+                                + (["alrmSpeak"] if camera_mac in self._speech else [])
+                                + (list(self._sound_types) if camera_mac in self._sounds else [])
+                                + (["face"] if camera_mac in self._face_cameras
+                                   and self._face_engine is not None else [])
+                                if isinstance(self.ingress, AiPortIngressPool)
+                                else [self.config["live_detector"]["smart_type"]]
+                                if "live_detector" in self.config else
+                                [self.config.get("diagnostic_smart_type", "person")])}
+            if (isinstance(self.ingress, AiPortIngressPool)
+                    and "live_pool_detector" in self.config):
+                # Protect drops a paired camera's own motion events. Reporting
+                # enhanced motion lets Protect send the camera's motion zones
+                # so this device can send zone-scoped motion instead.
+                flags["motionDetect"] = ["enhanced"]
+            await self._send_control_event(ws, "EventFeatureFlagsUpdated", flags)
             self.smart_feature_probe_events += 1
         await self._send_control_event(
             ws, "EventAIPortStatus",
             {"deviceID": camera_mac, "isStreaming": streaming,
-             "isSmartDetectReady": smart_ready, "isAudioEventReady": False})
+             "isSmartDetectReady": smart_ready,
+             "isAudioEventReady": bool(
+                 streaming and camera_mac in self._speech
+                 and isinstance(self.ingress, AiPortIngressPool)
+                 and self.ingress.audio_ready(camera_mac)
+                 and audio_ready is not False)})
+        if not streaming:
+            self._speech_announced.discard(camera_mac)
+            await self._close_audio_event(ws, camera_mac, -120.0)
+            if camera_mac in self._sounds:
+                self._sounds[camera_mac].reset()
         self.stream_status_events_sent += 1
 
     async def _handle_diagnostic_frame(self, ws: aiohttp.ClientWebSocketResponse,
@@ -1647,6 +2758,13 @@ class CandidateService:
             await self._reply_control(ws, function, request_id, 0, {})
             self.timezone_replies += 1
             return
+        if function == "ChangeAudioEventsSettings":
+            self.last_control_command = function
+            request_id = message.get("messageId")
+            if not self._params_agreed or type(request_id) is not int or request_id < 0:
+                return
+            await self._handle_audio_settings(ws, request_id, message.get("payload"))
+            return
         if function == "UpdateFaceDBRequest":
             self.last_control_command = function
             request_id = message.get("messageId")
@@ -1664,6 +2782,12 @@ class CandidateService:
             if not self._params_agreed or type(request_id) is not int or request_id < 0:
                 return
             self.smart_motion_probe_requests += 1
+            if (isinstance(self.ingress, AiPortIngressPool)
+                    and self._camera_engine is not None
+                    and "live_pool_detector" in self.config):
+                await self._handle_pool_motion_settings(
+                    ws, request_id, message.get("payload"))
+                return
             if (not isinstance(self.ingress, AiPortIngress)
                     or time.time() >= self.config.get(
                     "diagnostic_smart_probe_until", 0)):
@@ -1757,6 +2881,9 @@ class CandidateService:
                                               {"description": exc.code})
                     self.stream_controls_rejected += 1
                     self.last_stream_error = exc.code
+                    reasons = self.stream_control_rejection_reasons
+                    key = exc.code if exc.code in reasons or len(reasons) < 12 else "other"
+                    reasons[key] = reasons.get(key, 0) + 1
                 else:
                     if (result["status"] == "stopped"
                             and isinstance(self.ingress, AiPortIngress)):
@@ -1783,6 +2910,16 @@ class CandidateService:
                                           {"description": "stream_ingest_unavailable"})
                 self.stream_controls_rejected += 1
             return
+        if function == "UpdateFirmwareRequest":
+            # Protect (manual Update or the nightly auto-update) sends a firmware
+            # download link. This AI Port runs no UniFi firmware: refuse at once
+            # rather than let Protect wait for its timeout; the link is never fetched.
+            request_id = message.get("messageId")
+            if self._params_agreed and type(request_id) is int and request_id >= 0:
+                await self._reply_control(ws, function, request_id, 501,
+                                          {"description": "firmware_update_unsupported"})
+                self.firmware_update_refusals += 1
+            return
         if function == "GetRequest":
             self.last_control_command = function
             request_id = message.get("messageId")
@@ -1796,6 +2933,9 @@ class CandidateService:
                     self.snapshot_rejection_reasons.get("unadopted", 0) + 1)
                 return
             request_payload = message.get("payload")
+            if isinstance(request_payload, dict) and request_payload.get("what") == "snapshot":
+                await self._serve_live_snapshot(ws, request_id, request_payload)
+                return
             requested_filename = (request_payload.get("filename")
                                   if isinstance(request_payload, dict) else None)
             pool_pending = None
@@ -1881,6 +3021,65 @@ class CandidateService:
                 self.snapshot_uploads += 1
             return
 
+    async def _serve_live_snapshot(self, ws, request_id: int, payload: dict) -> None:
+        """Upload the camera's newest decoded frame for Protect's live view.
+
+        Protect 7.3.68 routes a paired camera's on-demand snapshot through its
+        AI Port. Only a frame of the requested camera, at most a few seconds
+        old, is sent, and only to the pinned controller's one-use upload URL.
+        """
+        async def refuse(reason: str, description: str) -> None:
+            self.live_snapshot_rejection_reasons[reason] = (
+                self.live_snapshot_rejection_reasons.get(reason, 0) + 1)
+            await self._reply_control(ws, "GetRequest", request_id, 5,
+                                      {"description": description})
+
+        try:
+            camera, url = validated_live_snapshot_request(
+                payload, controller_ip=self.config["controller_ip"])
+            camera = normalize_mac(camera)
+        except (SnapshotError, IngressError) as exc:
+            await refuse(str(exc) if isinstance(exc, SnapshotError) else "invalid_camera",
+                         "snapshot_request_invalid")
+            return
+        frame = None
+        if isinstance(self.ingress, AiPortIngressPool):
+            if camera not in self._pool_camera_order:
+                await refuse("unexpected_snapshot_camera", "snapshot_request_invalid")
+                return
+            frame = self.ingress.latest_frame(camera, max_age=_LIVE_SNAPSHOT_MAX_AGE)
+        elif isinstance(self.ingress, AiPortIngress):
+            if camera != self.ingress.camera_mac:
+                await refuse("unexpected_snapshot_camera", "snapshot_request_invalid")
+                return
+            frame = self.ingress.latest_frame(max_age=_LIVE_SNAPSHOT_MAX_AGE)
+        if frame is None:
+            await refuse("stale_or_missing_frame", "snapshot_unavailable")
+            return
+        if self._live_snapshot_slots.locked():
+            await refuse("busy", "snapshot_unavailable")
+            return
+        async with self._live_snapshot_slots:
+            try:
+                connector = VerifiedConnector(
+                    ssl_context=self._client_context(),
+                    expected_fingerprint=self.config["controller_pin"])
+                timeout = aiohttp.ClientTimeout(total=10, connect=5, sock_connect=5)
+                async with aiohttp.ClientSession(
+                        connector=connector, timeout=timeout, trust_env=False) as session:
+                    form = aiohttp.FormData()
+                    form.add_field("payload", frame, filename="snapshot.jpg",
+                                   content_type="image/jpeg")
+                    async with session.post(url, data=form, allow_redirects=False) as response:
+                        if response.status != 200:
+                            raise aiohttp.ClientError("snapshot_upload_rejected")
+                        await response.content.read(1024)
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ssl.SSLError):
+                await refuse("upload_failed", "snapshot_upload_failed")
+                return
+        await self._reply_control(ws, "GetRequest", request_id, 0, {})
+        self.live_snapshot_uploads += 1
+
     @staticmethod
     async def _expire_diagnostic(ws: aiohttp.ClientWebSocketResponse, until: int) -> None:
         await asyncio.sleep(max(0, until - time.time()))
@@ -1933,6 +3132,29 @@ class CandidateService:
     async def start(self, *, bind: str = "0.0.0.0", port: int = 8443):
         if self.runner is not None:
             return
+        if self._face_cameras and self._face_engine is None:
+            face = self.config["live_face"]
+            try:
+                self._face_engine = await asyncio.to_thread(
+                    lambda: FaceEngine(verify_model(face["detector_path"], face["detector_sha256"]),
+                                       verify_model(face["embedder_path"], face["embedder_sha256"]),
+                                       embedder_input=face.get("embedder_input", "arcface")))
+            except (FaceError, OSError, ImportError, RuntimeError) as exc:
+                self._count_face_error(str(exc) if isinstance(exc, FaceError) else "face_engine_unavailable")
+        if self._sound_cameras and self._sound_classifier is None:
+            sound = self.config["live_sound"]
+            try:
+                self._sound_classifier = await asyncio.to_thread(
+                    lambda: SoundClassifier(Path(sound["model_path"]), sound["model_sha256"],
+                                            Path(sound["class_map_path"]), sound["class_map_sha256"]))
+            except (SoundError, OSError, ImportError, RuntimeError) as exc:
+                code = str(exc) if isinstance(exc, SoundError) else "sound_classifier_unavailable"
+                self.sound_errors[code] = self.sound_errors.get(code, 0) + 1
+            else:
+                self._sounds = {camera: SoundEvents(
+                    self._sound_classifier,
+                    enabled=lambda kind, camera=camera: self._sound_enabled(camera, kind))
+                    for camera in self._sound_cameras}
         self.runner = web.AppRunner(self.app(), access_log=None)
         await self.runner.setup()
         try:
@@ -1944,7 +3166,36 @@ class CandidateService:
             await self.stop()
             raise
 
+    async def _close_open_events_on_stop(self) -> None:
+        """Send a leave for each open native event before the link closes.
+
+        Without it Protect keeps the event open until its own timeout (about
+        six minutes after a redeploy, Esszimmer 26 Sep 03:46). The leave has
+        no snapshots: a stopping AI Port cannot serve their upload.
+        """
+        ws = self._current_ws
+        if ws is None or not self._params_agreed:
+            return
+        for camera in tuple(self._pool_sessions):
+            session = self._pool_sessions.pop(camera)
+            if not session["active"]:
+                continue
+            try:
+                payload = camera_event_payload(
+                    camera, "leave", tuple(session["seen"].values()),
+                    clock_wall_ms=int(time.time() * 1000))
+            except SmartEventError:
+                continue
+            await self._send_control_event(ws, "EventSmartDetect", payload)
+            self.smart_events_left += 1
+            self.smart_events_closed_on_stop += 1
+
     async def stop(self):
+        try:
+            await asyncio.wait_for(self._close_open_events_on_stop(),
+                                   _STOP_CLOSE_SECONDS)
+        except (asyncio.TimeoutError, aiohttp.ClientError, ConnectionError, RuntimeError):
+            pass  # best effort; Protect's own timeout still closes the event
         if self._snapshot_cleanup_task is not None:
             self._snapshot_cleanup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
