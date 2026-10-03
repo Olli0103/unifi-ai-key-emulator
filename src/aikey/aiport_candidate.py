@@ -767,6 +767,9 @@ class CandidateService:
         self.face_yaw_bands: dict[str, int] = {}
         self.face_px_bands: dict[str, int] = {}
         self._face_camera_stats: dict[str, dict] = {}
+        # Per camera, counts only: person, vehicle and animal snapshots made
+        # with reVerifyEligible true or false, and those published on a leave.
+        self._reverify_snapshots: dict[str, dict[str, int]] = {}
         self.face_errors: dict[str, int] = {}
         self.speech_settings_acks = 0
         self.speech_settings_rejected = 0
@@ -1298,12 +1301,15 @@ class CandidateService:
                     try:
                         self._pool_snapshot_number += 1
                         policy = self._camera_engine.current_policy(camera)
+                        eligible = bool(policy and policy.reverify_eligible(
+                            change.kind, change.score))
                         session["snapshots"].append(await asyncio.to_thread(
                             functools.partial(
                                 make_smart_snapshot, frame, change, int(time.time() * 1000),
                                 filename_track_id=self._pool_snapshot_number,
-                                reverify_eligible=bool(policy and policy.reverify_eligible(
-                                    change.kind, change.score)))))
+                                reverify_eligible=eligible)))
+                        self._count_reverify_snapshot(
+                            camera, change.kind, "flagged" if eligible else "unflagged")
                     except SnapshotError:
                         pass
                 edge = "enter" if opening else "moving"
@@ -1341,6 +1347,11 @@ class CandidateService:
                                                     session.get("faces", {}).values()
                                                     if face[2] is not None and face_snapshots]
                 self._pool_sessions.pop(camera, None)
+                for item in session["snapshots"]:
+                    self._count_reverify_snapshot(
+                        camera, item.metadata["smartDetectSnapshotType"],
+                        "published_flagged" if item.metadata["reVerifyEligible"]
+                        else "published_unflagged")
                 if snapshots:
                     snapshots[0].add_to_event(payload)
                     payload["smartDetectSnapshots"] = [item.metadata for item in snapshots]
@@ -1396,6 +1407,12 @@ class CandidateService:
                 "enabled": bool(self._face_enabled.get(camera)),
                 "engine": self._face_engine is not None,
                 **{k: (dict(v) if isinstance(v, dict) else v) for k, v in stats.items()}}
+
+    def _count_reverify_snapshot(self, camera: str, kind: str, outcome: str) -> None:
+        if kind in ("person", "vehicle", "animal"):
+            counts = self._reverify_snapshots.setdefault(camera, dict.fromkeys(
+                ("flagged", "unflagged", "published_flagged", "published_unflagged"), 0))
+            counts[outcome] += 1
 
     def _count_face_error(self, code: str) -> None:
         key = code if len(code) <= 48 else "other"
@@ -2305,6 +2322,12 @@ class CandidateService:
                                         if self._pool_camera_order[index]
                                         in self._pool_motion_timeline else []),
                                     face=self._face_camera_health(self._pool_camera_order[index]),
+                                    reverification_snapshots=dict(
+                                        self._reverify_snapshots.get(
+                                            self._pool_camera_order[index])
+                                        or dict.fromkeys(("flagged", "unflagged",
+                                                          "published_flagged",
+                                                          "published_unflagged"), 0)),
                                     **self._speech_camera_health(
                                         self._pool_camera_order[index]))
                               for index, (inference, policy, stream) in enumerate(zip(

@@ -22,6 +22,8 @@ from .aiport_tracking import (
 
 _OBJECT_KINDS = frozenset({"person", "vehicle", "animal", "package"})
 _KIND_ORDER = ("person", "vehicle", "animal", "package")
+# Classes Protect's reVerificationPolicy can send to the AI Key's second stage.
+_REVERIFY_KINDS = ("person", "vehicle", "animal")
 # A package stays put, so a later sparse sample would re-detect it as a new
 # track. Protect saves each package as its own one-shot event.
 _PACKAGE_COOLDOWN_SECONDS = 1800.0
@@ -102,6 +104,15 @@ class CameraPolicyEngine:
         self._rejected_by_kind = {camera: dict.fromkeys(_KIND_ORDER, 0)
                                   for camera in cameras}
         self._last_package_at: dict[str, float] = {}
+        # Counts only: whether each installed policy carried a reverification
+        # window, observations dropped below it, and where entered tracks
+        # fell. A track entered in the window is the one flagged for the Key.
+        self._reverify = {camera: {
+            "policies_with_window": 0, "policies_without_window": 0,
+            "observations_below_window": dict.fromkeys(_REVERIFY_KINDS, 0),
+            "entered": {kind: {"in_window": 0, "above_window": 0, "no_window": 0}
+                        for kind in _REVERIFY_KINDS},
+        } for camera in cameras}
         self._zone_rejections = {camera: {
             "excluded": 0, "no_class_zone": 0, "outside_zone": 0,
             "below_overlap": 0,
@@ -175,6 +186,11 @@ class CameraPolicyEngine:
         self._trackers[camera] = self._new_tracker()
         self._policies[camera] = policy
         self._generations[camera] += 1
+        if policy is not None:
+            windowed = any(policy.reverification_window(kind) is not None
+                           for kind in _REVERIFY_KINDS)
+            self._reverify[camera]["policies_with_window" if windowed
+                                   else "policies_without_window"] += 1
         return result
 
     def observe(self, camera_mac: str, observations: tuple[ObjectObservation, ...],
@@ -193,6 +209,11 @@ class CameraPolicyEngine:
         score_selected = tuple(value for value in observations
                                if policy.allows_score(value.kind, value.score))
         self._score_eligible_observations[camera] += len(score_selected)
+        below = self._reverify[camera]["observations_below_window"]
+        for value in observations:
+            if (value.kind in below and policy.allows(value.kind)
+                    and policy.reverification_band(value.kind, value.score) == "below_window"):
+                below[value.kind] += 1
         selected_values = []
         for value in score_selected:
             if policy.zone_ids(value.kind, value.box) is not None:
@@ -315,6 +336,10 @@ class CameraPolicyEngine:
                             pass  # the in-memory cooldown still holds
                 if self._event_window_seconds is not None:
                     self._event_times[camera].append(now)
+                band = (policy.reverification_band(change.kind, change.score)
+                        if change.kind in _REVERIFY_KINDS else "below_window")
+                if band != "below_window":          # a below-window score never enters
+                    self._reverify[camera]["entered"][change.kind][band or "no_window"] += 1
                 return CameraEventCandidate(camera, change, zones)
         elif (change.edge == "moving" and active is not None
               and active[0].kind == change.kind
@@ -439,6 +464,18 @@ class CameraPolicyEngine:
                     name: count + self._trackers[camera].stats[name]
                     for name, count in self._association_totals[camera].items()},
                 "events_entered": self._event_counts[camera],
+                "reverification": {
+                    "window": {kind: (list(policy.reverification_window(kind))
+                                      if policy is not None
+                                      and policy.reverification_window(kind) else None)
+                               for kind in _REVERIFY_KINDS},
+                    "policies_with_window": self._reverify[camera]["policies_with_window"],
+                    "policies_without_window": self._reverify[camera]["policies_without_window"],
+                    "observations_below_window": dict(
+                        self._reverify[camera]["observations_below_window"]),
+                    "entered": {kind: dict(bands) for kind, bands
+                                in self._reverify[camera]["entered"].items()},
+                },
                 "active_tracks": len(self._active[camera]),
                 "event_budget_remaining": (None if self._max_events is None
                                            else max(0, self._max_events - used)),

@@ -785,3 +785,43 @@ def test_an_uncapped_engine_refuses_a_budget_that_would_reintroduce_a_ceiling(tm
     with pytest.raises(IngressError):
         CameraPolicyEngine([FIRST], max_events_per_camera=None,
                            event_budget=EventBudget(tmp_path, limit=1))
+
+
+def test_reverification_counts_show_whether_entered_tracks_fall_in_the_window():
+    engine = CameraPolicyEngine([FIRST, SECOND], max_events_per_camera=None)
+    engine.replace_policy(FIRST, policy(FIRST, reverify=True))
+    engine.replace_policy(SECOND, policy(SECOND))
+    assert engine.observe(FIRST, (person(0.3),), now=1) == ()           # below: dropped
+    assert engine.observe(FIRST, (person(0.3),), now=2) == ()
+    assert engine.observe(FIRST, (person(0.56),), now=3) == ()
+    inside, = engine.observe(FIRST, (person(0.56),), now=4)
+    assert inside.change.edge == "enter"
+    assert engine.current_policy(FIRST).reverify_eligible("person", inside.change.score)
+    assert engine.observe(SECOND, (person(0.56),), now=1) == ()
+    unwindowed, = engine.observe(SECOND, (person(0.56),), now=2)
+    assert not engine.current_policy(SECOND).reverify_eligible("person", unwindowed.change.score)
+    engine.observe(FIRST, (), now=10)                                   # the track leaves
+    assert engine.observe(FIRST, (person(0.95),), now=11) == ()
+    above, = engine.observe(FIRST, (person(0.95),), now=12)
+    assert above.change.edge == "enter"
+    first, second = engine.camera_snapshot(now=13)
+    assert first["reverification"] == {
+        "window": {"person": [40, 80], "vehicle": None, "animal": None},
+        "policies_with_window": 1, "policies_without_window": 0,
+        "observations_below_window": {"person": 2, "vehicle": 0, "animal": 0},
+        "entered": {"person": {"in_window": 1, "above_window": 1, "no_window": 0},
+                    "vehicle": {"in_window": 0, "above_window": 0, "no_window": 0},
+                    "animal": {"in_window": 0, "above_window": 0, "no_window": 0}}}
+    assert second["reverification"]["window"] == {"person": None, "vehicle": None, "animal": None}
+    assert (second["reverification"]["policies_with_window"],
+            second["reverification"]["policies_without_window"]) == (0, 1)
+    assert second["reverification"]["entered"]["person"] == {
+        "in_window": 0, "above_window": 0, "no_window": 1}
+    # A re-sent policy without the window is counted, so health shows Protect
+    # withdrawing it; an identical repeat is not a new install.
+    engine.replace_policy(FIRST, policy(FIRST, reverify=True))
+    engine.replace_policy(FIRST, policy(FIRST))
+    first, _ = engine.camera_snapshot(now=14)
+    assert (first["reverification"]["policies_with_window"],
+            first["reverification"]["policies_without_window"]) == (1, 1)
+    assert first["reverification"]["window"]["person"] is None

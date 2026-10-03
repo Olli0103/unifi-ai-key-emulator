@@ -142,6 +142,16 @@ On 24 September, an isolated UGREEN NAS probe loaded the pinned ONNX model after
 
 For a missed live detection, `/healthz` now reports `pool_cameras` in the same order as the private `paired_streams` configuration. Each entry contains an index, counters, and a fixed `policy_rejection` code when Protect's smart-detection settings cannot be enforced. Unsupported settings are classified as `reverification`, `types`, `regions`, `advanced`, or `tamper`; their values are not retained in health output. Counters include inference attempts and successes, observation totals by class, observations that passed Protect's score and zone gates, frames with at least one eligible observation, entered events, active tracks, and remaining entries in the rolling-hour budget. Health output does not expose camera IDs, scores, images, or stream addresses. Compare two readings around a test walk to locate the stage that dropped it. `event_budget_healthy` reports whether the durable state was readable and the wall clock passed its rollback check; false means zero remaining entries.
 
+For second-stage verification, each camera's entry also has a `reverification` block:
+- `window`: Protect's current person, vehicle and animal window in whole percent, or null without one.
+- `policies_with_window` and `policies_without_window`: how many installed policies carried a window and how many did not.
+- `observations_below_window`: observations dropped below the window.
+- `entered`: entered tracks in the window, above it, or with no window.
+
+`reverification_snapshots` counts person, vehicle and animal snapshots made with `reVerifyEligible` true or false, and those published on a leave. The window is judged on the whole percent that the event and snapshot publish as `confidenceLevel`. A track flagged in Protect's view is therefore also flagged here: before, a score published as 80 % could stay unflagged, and one published as 40 % was dropped.
+
+These are counts only. A flagged snapshot shows what the AI Port sent; whether Protect then asks the AI Key is a separate readback.
+
 For zone misses, each camera's private health entry also counts fixed rejection reasons: `excluded`, `no_class_zone`, `outside_zone`, and `below_overlap`. Rejected overlapping boxes are divided into trace (under 50%), partial (50–80%), and at least 80% bands. These cumulative counts expose neither box nor zone coordinates and do not change which observations are admitted. Exclusions take precedence, so an excluded box is not also counted in an overlap band. Compare counters before and after a real observation before changing the policy.
 
 Each `pool_cameras` entry also reports whether its stream is currently active, its restart attempts and successes, fixed failure categories, and the state observed when recovery began. `process_exited`, `reader_stopped`, and `no_recent_frame` describe the decoder at that check; they do not prove why it stopped. Repeated `stream_start_timeout` failures mean retries produced no first frame within the configured timeout. These counters contain no camera ID or RTSP address, and the configured camera order is checked before health rows are combined.

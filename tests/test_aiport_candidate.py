@@ -3783,3 +3783,81 @@ async def test_a_doorbell_whose_package_lens_owns_package_gets_no_main_lens_pack
         assert health["live_snapshot_uploads"] == 0
     finally:
         await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_pool_track_in_the_reverification_window_is_published_flagged(
+        tmp_path, monkeypatch):
+    config = fixture_state(tmp_path)
+    cameras = ("2A1122334455", "2A1122334456")
+    config["paired_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1",
+         "ffmpeg_path": sys.executable} for mac in cameras]
+    config["live_pool_detector"] = {
+        "checkpoint_path": str(tmp_path / "model.pth"),
+        "checkpoint_sha256": "a" * 64, "threshold": 0.3,
+        "smart_types": ["person"], "max_events_per_hour": 120}
+    frames = []
+    for color in ("red", "blue"):
+        image = BytesIO()
+        Image.new("RGB", (640, 360), color).save(image, format="JPEG")
+        frames.append(image.getvalue())
+    # First camera: an uncertain person (56 %); second: a certain one (95 %).
+    observations = (ObjectObservation("person", "person", 0.56, (0.2, 0.2, 0.5, 0.8)),
+                    ObjectObservation("person", "person", 0.95, (0.2, 0.2, 0.5, 0.8)))
+
+    class Model:
+        def detect(self, frame):
+            return (observations[frames.index(frame)],)
+
+    monkeypatch.setattr(RFDetrNanoDetector, "from_checkpoint", lambda *a, **k: Model())
+    service = CandidateService(config, tmp_path)
+    service.adoption.state = {**service.adoption.binding, "phase": "adopted"}
+    service._params_agreed = True
+    service.ingress.list_streams = lambda: [{"deviceID": mac} for mac in cameras]
+
+    class Sink:
+        def __init__(self):
+            self.messages = []
+
+        async def send_bytes(self, raw):
+            self.messages.append(json.loads(raw))
+
+    sink = Sink()
+    service._current_ws = sink
+    window = {"person": {"enable": True, "mode": "custom",
+                         "minPresenceProbability": 40, "maxPresenceProbability": 80},
+              "vehicle": {"enable": False}, "animal": {"enable": False}}
+    for index, camera in enumerate(cameras, 1):
+        await service._send_stream_status(sink, streaming=True, camera_mac=camera)
+        await service._handle_diagnostic_frame(sink, json.dumps({
+            "functionName": "ChangeSmartDetectSettings", "messageId": index,
+            "payload": {"deviceID": camera, "algoVersion": "beta",
+                        "enableSmartDetect": ["person"], "eventStartMSec": 1000,
+                        "eventStopMSec": 3000, "zones": {}, "lines": {},
+                        "reVerificationPolicy": window}}).encode())
+        assert sink.messages[-1]["statusCode"] == 0
+    for _ in range(2):
+        for camera, frame in zip(cameras, frames):
+            await service._observe_pool_frame(camera, frame)
+            await service._inference.join()
+    for camera in cameras:
+        changes = service._camera_engine.observe(camera, (), now=time.monotonic() + 4)
+        await service._publish_pool_candidates(changes)
+    left = {message["payload"]["deviceID"]: message["payload"] for message in sink.messages
+            if message["functionName"] == "EventSmartDetect"
+            and message["payload"]["edgeType"] == "leave"}
+    published = {camera: [(item["confidenceLevel"], item["reVerifyEligible"])
+                          for item in left[camera]["smartDetectSnapshots"]] for camera in cameras}
+    assert published == {cameras[0]: [(56, True)], cameras[1]: [(95, False)]}
+    health = json.loads((await service._health(None)).text)["pool_cameras"]
+    assert [camera["reverification_snapshots"] for camera in health] == [
+        {"flagged": 1, "unflagged": 0, "published_flagged": 1, "published_unflagged": 0},
+        {"flagged": 0, "unflagged": 1, "published_flagged": 0, "published_unflagged": 1}]
+    assert [camera["reverification"]["entered"]["person"] for camera in health] == [
+        {"in_window": 1, "above_window": 0, "no_window": 0},
+        {"in_window": 0, "above_window": 1, "no_window": 0}]
+    assert all(camera["reverification"]["window"]["person"] == [40, 80] for camera in health)
+    text = json.dumps(health)
+    assert all(mac not in text and mac.lower() not in text for mac in cameras)
+    await service.stop()

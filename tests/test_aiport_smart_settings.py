@@ -306,6 +306,31 @@ def test_person_reverification_flags_its_window_and_drops_scores_below_it():
             parse_smart_settings(raw, camera_mac=CAMERA)
 
 
+def test_the_reverification_window_is_judged_on_the_published_whole_percent():
+    raw = full_frame_policy()
+    raw["enableSmartDetect"] = ["person", "animal"]
+    raw["reVerificationPolicy"] = {
+        "person": {"enable": True, "mode": "custom",
+                   "minPresenceProbability": 40, "maxPresenceProbability": 80},
+        "vehicle": {"enable": False}, "animal": {"enable": False},
+    }
+    policy = parse_smart_settings(raw, camera_mac=CAMERA)
+    assert policy.reverification_window("person") == (40, 80)
+    assert policy.reverification_window("animal") is None
+    # 0.804 is published as confidenceLevel 80, inside Protect's window, and
+    # 0.396 as 40: before, the raw score left the first unflagged and dropped
+    # the second although Protect would see both inside the window.
+    for score, band, allowed in ((0.394, "below_window", False), (0.396, "in_window", True),
+                                 (0.56, "in_window", True), (0.804, "in_window", True),
+                                 (0.806, "above_window", True)):
+        assert policy.reverification_band("person", score) == band, score
+        assert policy.allows_score("person", score) is allowed, score
+        assert policy.reverify_eligible("person", score) is (band == "in_window"), score
+    assert policy.reverification_band("animal", 0.5) is None       # no window: no flag
+    assert policy.allows_score("animal", 0.5) and not policy.reverify_eligible("animal", 0.5)
+    assert policy.reverification_band("person", float("nan")) is None
+
+
 def test_vehicle_zone_and_reverification_gate_do_not_admit_other_classes():
     raw = full_frame_policy()
     raw["enableSmartDetect"] = ["vehicle"]

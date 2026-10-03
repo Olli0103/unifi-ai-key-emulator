@@ -220,15 +220,33 @@ class SmartPolicy:
         floor = dict(self.reverification_floors).get(kind)
         return (self.allows(kind) and type(score) in (int, float)
                 and math.isfinite(score) and 0 <= score <= 1
-                and (score >= floor if floor is not None
-                     else ceiling is None or score > ceiling))
+                and (_percent(score) >= _percent(floor) if floor is not None
+                     else ceiling is None or _percent(score) > _percent(ceiling)))
 
     def reverify_eligible(self, kind: str, score: float) -> bool:
         """Inside the class's reverification window: the AI Key should verify it."""
+        return self.reverification_band(kind, score) == "in_window"
+
+    def reverification_window(self, kind: str) -> tuple[int, int] | None:
+        """The class's window in whole percent, as Protect configured it."""
         ceiling = dict(self.reverification_ceilings).get(kind)
         floor = dict(self.reverification_floors).get(kind)
-        return (ceiling is not None and floor is not None and type(score) in (int, float)
-                and math.isfinite(score) and floor <= score <= ceiling)
+        if ceiling is None or floor is None:
+            return None
+        return _percent(floor), _percent(ceiling)
+
+    def reverification_band(self, kind: str, score: float) -> str | None:
+        """``below_window``, ``in_window`` or ``above_window``; None without a window.
+
+        Compared on the whole percent the event and snapshot publish as
+        ``confidenceLevel``, so the flag agrees with what Protect sees.
+        """
+        window = self.reverification_window(kind)
+        if window is None or type(score) not in (int, float) or not math.isfinite(score):
+            return None
+        level = _percent(score)
+        return ("below_window" if level < window[0] else
+                "above_window" if level > window[1] else "in_window")
 
     def zone_ids(self, kind: str,
                  box: tuple[float, float, float, float]) -> tuple[int, ...] | None:
@@ -284,6 +302,11 @@ class SmartPolicy:
 
     def person_zone_ids(self, box: tuple[float, float, float, float]) -> tuple[int, ...] | None:
         return self.zone_ids("person", box)
+
+
+def _percent(value: float) -> int:
+    """A 0..1 score as the whole percent Protect shows and compares."""
+    return round(value * 100)
 
 
 def _timing(value: object) -> int:
