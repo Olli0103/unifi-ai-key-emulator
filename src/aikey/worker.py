@@ -378,6 +378,17 @@ _SINGLE_FRAME_EXPORT_MS = 1000
 _DEEP_RETRYABLE = frozenset({"sessionDescribe", "reidEmbed"})
 
 
+def _with_interval(url, start, end):
+    """The export URL with its literal start and end components replaced."""
+    parsed = urlsplit(url)
+    parts = parsed.query.split("&")
+    if sum(p.startswith("start=") for p in parts) != 1 or sum(p.startswith("end=") for p in parts) != 1:
+        raise WorkerError("Reverification export needs a start and end")
+    query = "&".join(f"start={start}" if p.startswith("start=") else f"end={end}" if p.startswith("end=")
+                     else p for p in parts)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, ""))
+
+
 def _fit_area(images, budget):
     """JPEGs scaled by one common factor so their pixels sum to at most budget."""
     from PIL import Image
@@ -513,6 +524,8 @@ class JobProcessor:
         self.ram_tagging = {"requests": 0, "tags": 0, "failed": 0}
         # Speech exports refused for exceeding max_audio_ms.
         self.speech_counts = {"refused_long": 0, "clipped": 0}
+        # Second-stage verdicts (counts only) and exports narrowed to the video bound.
+        self.reverify_counts = {"narrowed": 0, "confirmed": 0, "retyped": 0, "unchanged": 0}
         self._stopping = False
         self._start_lock = asyncio.Lock()
         self._load_history()
@@ -1162,12 +1175,24 @@ class JobProcessor:
             start, end = int(query["start"]), int(query["end"])
         except (KeyError, ValueError) as exc:
             raise WorkerError("Reverification export needs a start and end") from exc
-        if query.get("camera") != body["camera"] or not 0 <= start <= end or end - start > self.max_video_duration_ms:
+        if query.get("camera") != body["camera"] or not 0 <= start <= end:
+            raise WorkerError("Reverification export must match the camera and a bounded interval")
+        regions = [region for region in _meta_regions(body.get("thumbnailMeta"))
+                   if region[3] in ("person", "vehicle", "animal") and start <= region[1] <= end]
+        if end - start > self.max_video_duration_ms and regions:
+            # Protect spans the export from the first to the last thumbnail; a
+            # long track exceeds the video bound. Verify the bounded window from
+            # the first object instead of refusing the whole task.
+            window_start = min(region[1] for region in regions)
+            window_end = min(end, window_start + self.max_video_duration_ms)
+            media_url = _with_interval(media_url, window_start, window_end)
+            start, end = window_start, window_end
+            self.reverify_counts["narrowed"] += 1
+        if end - start > self.max_video_duration_ms:
             raise WorkerError("Reverification export must match the camera and a bounded interval")
         chosen = {}
-        for tracker, ts, coord, kind, confidence in _meta_regions(body.get("thumbnailMeta")):
-            if kind in ("person", "vehicle", "animal") and start <= ts <= end and (
-                    tracker not in chosen or confidence > chosen[tracker][3]):
+        for tracker, ts, coord, kind, confidence in regions:
+            if start <= ts <= end and (tracker not in chosen or confidence > chosen[tracker][3]):
                 chosen[tracker] = (ts, _padded(coord, 0.1), kind, confidence)
         if not chosen:
             raise WorkerError("Reverification has no person, vehicle or animal regions")
@@ -1820,6 +1845,8 @@ class JobProcessor:
                 "ledger": len(self._history), "retroactive": dict(self.retroactive),
                 "speech": dict(self.speech_counts),
                 **({"ram_tagging": dict(self.ram_tagging)} if self._tag_server() else {}),
+                **({"reverification": dict(self.reverify_counts)}
+                   if self.find_anything and self.find_anything.get("reverification") is True else {}),
                 **({"deep": dict(self.deep_counts),
                     "deep_timing": {kind: {stage: dict(v) for stage, v in stages.items()}
                                     for kind, stages in self.deep_timing.items()},
@@ -2315,6 +2342,8 @@ class JobProcessor:
                                 "isValidDetection": valid, "detectedAs": detected,
                                 "detectionConfidence": round(confidence, 4)})
         inferred = time.monotonic()
+        for name, value in counts.items():
+            self.reverify_counts[name] += value
         payload = {"model": clip.MODEL, "action": "classify",
                    "inference_time_ms": round((inferred - prepared) * 1000),
                    "result": {"cameraId": job.payload["camera"], "eventId": job.payload["event"],

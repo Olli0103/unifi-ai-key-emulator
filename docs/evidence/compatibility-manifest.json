@@ -1,6 +1,6 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-10-02.2",
+ "manifest_version": "ai-key/2026-10-03.1",
  "processor_profile": "ai-key",
  "base_commit": "7241dcb",
  "emulated_identity": {
@@ -1017,9 +1017,10 @@
    "id": "control.request_ai.second_stage_verification",
    "area": "control",
    "title": "RequestAI second_verifier_mlabel classify (Second Stage Verification) answered by local CLIP zero-shot",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
-    "live-protect-7.3.68": "not_observed"
+    "live-protect-7.3.68": "not_observed",
+    "live-protect-7.3.70": "native-verified"
    },
    "static": [
     "static-protect-7.3.60-bundle"
@@ -1027,17 +1028,21 @@
    "tests": [
     "tests/test_find_anything.py::test_second_stage_verification_is_answered_by_local_clip",
     "tests/test_find_anything.py::test_second_stage_verification_is_refused_unless_opted_in",
-    "tests/test_find_anything.py::test_malformed_verification_requests_are_refused_before_media"
+    "tests/test_find_anything.py::test_malformed_verification_requests_are_refused_before_media",
+    "tests/test_find_anything.py::test_a_single_thumbnail_reverification_exports_the_second_after_it",
+    "tests/test_find_anything.py::test_a_reverification_longer_than_the_video_bound_verifies_its_first_window",
+    "tests/test_find_anything.py::test_a_long_reverification_without_regions_is_still_refused_before_media"
    ],
    "implementation": [
     "src/aikey/worker.py"
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "A live reverification task and its saved result: enabling it changes live event classification (saveReverification retypes matched thumbnails and objects), so it needs the owner's approval",
-    "Zero-shot accuracy on real low-confidence crops is not measured"
+    "An unsure verdict (detectedAs none) leaving a live event unchanged has not been read back",
+    "Zero-shot accuracy on real low-confidence crops is not measured",
+    "No verdict for an AI Port-sourced track has been saved yet"
    ],
-   "notes": "Unsure or background verdicts answer detectedAs none, which saveReverification ignores, so the event is unchanged; a different type is sent only at a zero-shot probability of 0.9 or more."
+   "notes": "Unsure or background verdicts answer detectedAs none, which saveReverification ignores, so the event is unchanged; a different type is sent only at a zero-shot probability of 0.9 or more. 3 Oct 2026: Protect asked to verify a Wohnzimmer (G6) animal thumbnail; the Key confirmed it (callback 200) and Protect saved preReverificationObjectType animal and preReverificationConfidence 72, now showing 99 %. A track longer than max_video_duration_ms is verified in the window from its first object."
   },
   {
    "id": "control.recognize_key_frames",
@@ -2831,7 +2836,7 @@
    "features": [
     "control.request_ai.second_stage_verification"
    ],
-   "procedure": "Owner decision: enable find_anything.reverification for a bounded window, then read back one reverified event's detectedThumbnails (preReverificationObjectType and confidence) and confirm unsure verdicts left events unchanged."
+   "procedure": "Read back one reverified event where the Key answered detectedAs none and confirm its type and confidence were left unchanged; then one AI Port-sourced verdict."
   },
   {
    "id": "N14",

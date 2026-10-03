@@ -1358,3 +1358,35 @@ async def test_a_single_thumbnail_reverification_exports_the_second_after_it(con
     assert verdicts == {1: "person"}
     [query] = controller.export_queries
     assert (query["start"], query["end"], query["format"]) == (str(ts), str(ts + 1000), "mp4")
+
+
+async def test_a_reverification_longer_than_the_video_bound_verifies_its_first_window(controller, tmp_path):
+    # Protect spans the export from the first to the last thumbnail, so a long
+    # G6 track asks for more than max_video_duration_ms (live, 3 Oct: 1 refused).
+    controller.region_vectors = [mix(person=1.0)]
+    first = START + 1500
+    meta = [{"ts": first, "roi": [verify_roi(1, "person")]},
+            {"ts": first + 150_000, "roi": [verify_roi(2, "person")]}]
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        await worker.handle(reverification_request(controller, meta, start=START, end=first + 150_000))
+        counts = worker.status()["reverification"]
+    finally:
+        await worker.stop()
+    [posted] = controller.reverifications
+    assert [r["trackerID"] for r in posted["result"]["verificationResults"]] == [1]
+    [query] = controller.export_queries
+    assert (query["start"], query["end"], query["format"]) == (str(first), str(first + 120_000), "mp4")
+    assert counts == {"narrowed": 1, "confirmed": 1, "retyped": 0, "unchanged": 0}
+
+
+async def test_a_long_reverification_without_regions_is_still_refused_before_media(controller, tmp_path):
+    request = reverification_request(controller, [{"ts": START + 400_000, "roi": [verify_roi(1, "person")]}],
+                                     start=START, end=START + 300_000)
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError, match="bounded interval"):
+            await worker.handle(request)
+    finally:
+        await worker.stop()
+    assert controller.reverifications == [] and controller.clip_requests == []

@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-10-02.2). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-10-03.1). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-10-02.2` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-10-03.1` for the `ai-key` profile, based on commit `7241dcb`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -45,7 +45,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `control.request_ai.on_demand_inference`: RequestAI :7968/on_demand_inference, admitted before inference | native-verified | not_observed | native-verified | not_observed | — | Protect 7.2.105, AI Key 2.2.8 | experimental_opt_in |
 | `control.request_ai.describe`: RequestAI :7968/describe session task with image or video inputs | native-verified | not_observed | not_observed | not_observed | native-verified | Protect 7.2.105 | default |
 | `control.request_ai.unknown_target`: RequestAI with an unimplemented or malformed targetUri | fixture-tested | not_observed | not_observed | not_observed | — | Protect 7.2.105, AI Key 2.2.8 | default |
-| `control.request_ai.second_stage_verification`: RequestAI second_verifier_mlabel classify (Second Stage Verification) answered by local CLIP zero-shot | fixture-tested | — | — | not_observed | — | Protect 7.3.60 bundle | explicit_opt_in |
+| `control.request_ai.second_stage_verification`: RequestAI second_verifier_mlabel classify (Second Stage Verification) answered by local CLIP zero-shot | native-verified | — | — | not_observed | native-verified | Protect 7.3.60 bundle | explicit_opt_in |
 | `control.recognize_key_frames`: recognizeKeyFrames video caption command within explicit one-use camera scopes | native-verified | not_observed | native-verified | native-verified | — | Protect 7.2.105, AI Key 2.2.8 | experimental_opt_in |
 | `control.continuous_caption_admission`: Opt-in automatic captions admitted by fresh Protect inventory, model-family policy and a durable global budget | fixture-tested | not_observed | not_observed | not_observed | — | — | experimental_opt_in |
 | **worker** | |  |  |  |  | | |
@@ -160,8 +160,9 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `control.request_ai.on_demand_inference`: Other camera families
 - `control.request_ai.on_demand_inference`: A successful player AI summary after 7.3.60: it failed natively on 7.3.68 (28 Sep, owner report of "Failed to generate" summaries) and all 4 on-demand jobs on 7.3.70 timed out (30 Sep) behind a speech backlog
 - `control.request_ai.unknown_target`: Protect's retry treatment of errorCode 95 versus 5 for RequestAI
-- `control.request_ai.second_stage_verification`: A live reverification task and its saved result: enabling it changes live event classification (saveReverification retypes matched thumbnails and objects), so it needs the owner's approval
+- `control.request_ai.second_stage_verification`: An unsure verdict (detectedAs none) leaving a live event unchanged has not been read back
 - `control.request_ai.second_stage_verification`: Zero-shot accuracy on real low-confidence crops is not measured
+- `control.request_ai.second_stage_verification`: No verdict for an AI Port-sourced track has been saved yet
 - `control.recognize_key_frames`: Continuous and all-camera operation (issue #12)
 - `control.recognize_key_frames`: Persistence after a controller restart
 - `control.continuous_caption_admission`: Native Protect dispatch and persistence under continuous admission
@@ -289,6 +290,6 @@ Every live trial must record each experimental activation below that was in effe
 - **N9** (`control.continuous_caption_admission`, `worker.private_journal_rollover`): In an isolated, reviewed rollout, confirm fresh model-family inventory, Protect-side dispatch, persistence, budget exhaustion, additions/removals, reconnect and journal rollover. Keep richer native-AI models excluded until tag preservation is verified.
 - **N10** (`capability.retroactive_processing`, `control.recognize_key_frames.multiple_images`, `index.thumbnail_tags`): Completion path established (empty batch query at about 19:45 UTC on 26 Sep; the final batch, ending at the cursor, completed between 19:44 and 19:45 UTC per the Key archive). 27 Sep read-only comparison: the 2110 older and 2310 covered tracker-crop events do not differ in duration (p50 28 s vs 27 s, max 314 s both), camera mix (the same 8 cameras), thumbnail fields (croppedId, trackerId, objectId, confidence) or smartDetectTrack availability; only ramState differs. No task listing is exposed (aiprocessors carries aggregate taskStatistics only). Remaining (needs_evidence): Protect's aiprocessorTasks rows for the older events and the 7.3.68 retroactive batch query. Continuing them requires a new processor record (re-adoption), which is out of scope.
 - **N11** (`search.native_retrieval`, `search.index_recovery`, `database.controller_migrations`): After a planned controller restart, confirm isSearchHost true, that existing ramDetections rows survive, and that a known positive text search still returns its object.
-- **N13** (`control.request_ai.second_stage_verification`): Owner decision: enable find_anything.reverification for a bounded window, then read back one reverified event's detectedThumbnails (preReverificationObjectType and confidence) and confirm unsure verdicts left events unchanged.
+- **N13** (`control.request_ai.second_stage_verification`): Read back one reverified event where the Key answered detectedAs none and confirm its type and confidence were left unchanged; then one AI Port-sourced verdict.
 - **N14** (`control.request_ai.on_demand_inference`, `callback.on_demand_camera_upload`): With the speech queue healthy, press the player's AI summary once on one event and record only whether the summary rendered and the matching on_demand job state; no summary text is recorded.
 - **N15** (`callback.ram_full_event_tagging`): On 7.3.70, one exact-event GET for an event whose caption job completed after 30 Sep 06:00 local; record only metadata.ramState and whether ramDescription is non-empty.

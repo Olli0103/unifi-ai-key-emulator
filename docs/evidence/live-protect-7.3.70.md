@@ -220,6 +220,28 @@ Closing this gap needs a search-host image with those extensions and a local cro
 - Between about 12:47 and 13:20 the Protect app reconnected to the Key several times (5 credential rotations since 12:26). On each Protect start, `enforceDeepUnderstandingInternalOnly` disables the Deep Understanding policy when the console owner is not an internal account (static, 7.3.70 bundle), so the Key fell back to basic mode. At 14:27 the policy was re-enabled at the owner's standing request (keep deep); the Key reports `aiMode: deep` again.
 - The NAS monitor now reads the Key's `ai_mode` and raises `deep_mode_off` (local overlay, not in the repository). Its `ovms_failing` alert existed, but no tick ran during the outage.
 
+**Second outage, watchdog and the first saved verdict (2–3 Oct).**
+- *Model Server:* stuck in `CL_OUT_OF_RESOURCES` again from 2 Oct 14:45 until a restart on 3 Oct 15:01. Session describes, captions and player summaries failed for about 24 hours (Key: 81 of 7200 describe tasks saved at the time).
+- *Reproduction (3 Oct, synthetic images only):*
+  - One describe-sized request (20 crops of 180×220 px with Protect's person prompt, schema and sampling) raised the error after 17 s. From then on, every request failed until the process restarted.
+  - The same request then passed three times. Requests without the schema or sampling passed, and so did up to 30 crops, 1 MP in total, grey, RGBA, CMYK and tiny or extreme sizes, and 4 concurrent requests.
+  - The NAS gave no kernel log or GPU error state without root.
+  - A fixed `--cache_size 2 --max_num_seqs 4` did not help: the first error came 53 s after the container was recreated. The error is intermittent and happens per request, not when the cache fills. Container memory stayed below 12 of 16 GB, with no cgroup limit events.
+- *Watchdog (NAS, outside the repository):*
+  - A systemd user timer runs every minute (linger on).
+  - It restarts the Model Server when the error appears after its last restart and a one-token image probe fails. It allows at most one restart per 3 minutes and starts a stopped container.
+  - It logs times and counts only.
+  - First automatic restart: 3 Oct 15:09.
+- *First saved native verdict:*
+  - On 3 Oct 14:10 Protect asked the Key to verify a Wohnzimmer (G6) animal thumbnail. The Key's CLIP verifier confirmed it and the callback answered 200 at 14:11:28.
+  - Protect saved `preReverificationObjectType: animal` and `preReverificationConfidence: 72` and now shows the detection at 99 %.
+  - AI Port-sourced verdicts stay needs_evidence.
+- *Long tracks:* one task was refused as `reverify_export`. Protect spans the export from the first to the last thumbnail, and a long G6 track exceeds the 120 s video bound. Since this change (code), the Key verifies the 120 s window from the first person, vehicle or animal thumbnail and counts it as `narrowed`. Later thumbnails keep their saved state. A long task with no such region in its window is still refused before any media.
+- *Firmware:* every AI Port slot refused Protect's update request at least once (1–2 each, 501 `firmware_update_unsupported`). The 03:00 auto-update leaves 5.1.12 in place.
+- *Plates (counts since the slots started 2 Oct):*
+  - Einfahrt: 59 vehicles, 11 plates read, 2 partial; 23 crop re-reads, 6 read, 4 complete, 5 improved, 2 conflicts kept apart.
+  - The second slot-4 plate camera: 386 vehicles and 105 crop re-reads, none with a legible plate.
+
 **Deep mode replaces the basic per-event path.**
 - From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
 - From 05:14 to 08:40, 0 of 140 smart events and 0 of 291 audio events did, and no new Find Anything (`ramDetections`) rows were written (last at 05:12). The Key received no `recognizeKeyFrames` task.
