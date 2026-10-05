@@ -270,7 +270,7 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - `tools/i915-preempt-timeout.sh` on the NAS raises the i915 preemption timeout of the render and compute engines from 7.5 s to 60 s, applied now and at boot, and reports GPU resets logged since boot. `--undo` restores the default.
   - It needs root, so the owner runs it; the watchdog stays in place either way.
   - Applied by the owner on 5 Oct: rcs0 and ccs0 now read 60000 ms and the boot unit is enabled. The video engines are unchanged.
-  - The script found 0 GPU resets in the kernel log. The NAS has been up since 4 Jul, so the log may no longer reach back to the 3 Oct episodes, and the reset hypothesis is neither confirmed nor ruled out.
+  - The script found 0 GPU resets in the kernel log. That proves nothing: the kernel log only reached back to 5 Oct 14:15, about an hour, because disk pass-through messages fill it. It has no i915 or drm lines since then. After a new `CL_OUT_OF_RESOURCES`, the kernel log has to be read within about an hour to confirm or rule out a reset.
 - *Watchdog record (3 Oct):* six automatic restarts between 16:56 and 18:57, each followed by a passing probe within about a minute. After the 18:57 restart there was no further `CL_OUT_OF_RESOURCES` for 44 hours, through 5 Oct 15:26. That afternoon Protect was retrying describes after the 24-hour outage.
 
 - *Windows after the reconnect:* every AI Port camera holds a 40–80 % person, vehicle and animal window from one installed policy, and none arrived without one. Only slot 1 scores with the local detector, so only its cameras can produce in-window tracks. Whether Protect asks for their verdict stays needs_evidence.
