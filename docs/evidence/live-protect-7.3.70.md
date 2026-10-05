@@ -260,6 +260,9 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - Cat classes veto a baby cry; clinks, keys, coins and dishes veto glass break.
   - Health counts the vetoes and, for each entered type, the strongest AudioSet class name, score band and level band. These counts show what the night-time sirens are without keeping any audio.
 - Bark, CO and the remaining siren false positives stay needs_evidence until those counts are read.
+- *Speech off outdoors (5 Oct, owner's request):* in 48 hours the outdoor cameras raised about 800 speech events each (Garage 803, Giebel hinten 785, Haustür 664), most likely wind and road noise. Speech was removed from the Protect audio types of Haustür, Garage and Giebel hinten; Einfahrt and Giebel Vorn were already off. The AI Ports picked the change up only on reconnect, not while running.
+- *AI Port r56 (39e039a, all four slots, 5 Oct about 07:40):* every slot reconnected with all streams decoding; speech reads 3 of 3 on slot 1, 1 of 2 on slot 2 and 0 on slots 3 and 4.
+- *Windows after the reconnect:* every AI Port camera holds a 40–80 % person, vehicle and animal window from one installed policy, and none arrived without one. Only slot 1 scores with the local detector, so only its cameras can produce in-window tracks. Whether Protect asks for their verdict stays needs_evidence.
 
 **Deep mode replaces the basic per-event path.**
 - From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
