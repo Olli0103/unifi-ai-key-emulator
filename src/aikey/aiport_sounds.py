@@ -54,14 +54,25 @@ CLASSES = {
     # events); only "Shatter" is breaking glass.
     "alrmGlassBreak": ("Shatter",),
 }
+# AudioSet classes that, when they score at least as high, mean the sound was
+# something else. Live, 5 Oct: a 101 s "baby cry" in the Flur, where the
+# owner's cat lives, and about five "glass breaks" a day at the front door,
+# where keys and coins jingle. A vetoed hop counts as below the bar.
+CONFUSERS = {
+    "alrmBabyCry": ("Cat", "Meow", "Caterwaul", "Purr", "Hiss"),
+    "alrmGlassBreak": ("Chink, clink", "Keys jangling", "Coin (dropping)",
+                       "Dishes, pots, and pans", "Cutlery, silverware"),
+}
 WINDOW_SAMPLES = 15600                     # 0.975 s, the YAMNet patch
 HOP_SAMPLES = 7680                         # 0.48 s
 HISTORY_SAMPLES = 6 * SAMPLE_RATE          # beep-pattern analysis only
 # Score to enter, consecutive 0.48 s hops above it, seconds below it to
-# leave. Tightened after the first live day (30 Sep): sirens and car alarms
-# must hold for about 2 s (road noise crossed a 1 s bar), glass must shatter
-# clearly, and the rest need a higher score.
-POLICY = {"alarm": (0.4, 3, 6.0), "alrmSiren": (0.6, 4, 4.0),
+# leave. Tightened after the first live day (30 Sep): car alarms must hold
+# for about 2 s (road noise crossed a 1 s bar), glass must shatter clearly,
+# and the rest need a higher score. Sirens need 0.7 for about 4 s (5 Oct:
+# 11 night-time sirens in 6 hours on the road-facing Einfahrt, each a few
+# seconds long; a passing emergency vehicle sounds for much longer).
+POLICY = {"alarm": (0.4, 3, 6.0), "alrmSiren": (0.7, 8, 4.0),
           "alrmBabyCry": (0.5, 3, 4.0), "alrmBark": (0.5, 2, 3.0),
           "alrmBurglar": (0.5, 4, 4.0), "alrmCarHorn": (0.5, 2, 2.0),
           "alrmGlassBreak": (0.6, 1, 2.0)}
@@ -103,6 +114,12 @@ def log_mel_patch(wave):
     frames = np.stack([wave[i:i + _STFT_WINDOW] for i in starts]) * window
     magnitude = np.abs(np.fft.rfft(frames, n=_FFT, axis=1)).astype(np.float32)
     return np.log(magnitude @ mel_weights() + 0.001).astype(np.float32)
+
+
+# Health bands for an entered sound: classifier score and level in dBFS.
+SCORE_BANDS = ("0.9+", "0.8-0.9", "0.6-0.8", "under_0.6")
+LEVEL_BANDS = ("-30+", "-40..-30", "-50..-40", "under_-50")
+TOP_NAMES = 6                    # distinct AudioSet names kept per type; the rest is "other"
 
 
 class SoundError(ValueError):
@@ -164,12 +181,16 @@ class SoundClassifier:
         with open(class_map_path, newline="") as handle:
             names = [row[-1].strip() for row in csv.reader(handle)][1:]
         index = {name: i for i, name in enumerate(names)}
+        self.names = tuple(names)
         self.groups = {}
         for group, labels in CLASSES.items():
             missing = [label for label in labels if label not in index]
             if missing:
                 raise SoundError("sound_class_map_incomplete")
             self.groups[group] = [index[label] for label in labels]
+        # A class map without a confuser class simply has no veto for it.
+        self.confusers = {group: [index[label] for label in labels if label in index]
+                          for group, labels in CONFUSERS.items()}
         import onnxruntime
         options = onnxruntime.SessionOptions()
         options.intra_op_num_threads = options.inter_op_num_threads = threads
@@ -195,7 +216,13 @@ class SoundClassifier:
         if scores is None:
             raise SoundError("sound_model_output")
         top = scores.reshape(-1, self._classes).max(axis=0)
-        return {group: float(max(top[i] for i in ids)) for group, ids in self.groups.items()}
+        result = {group: float(max(top[i] for i in ids)) for group, ids in self.groups.items()}
+        for group, ids in self.confusers.items():
+            if ids and max(float(top[i]) for i in ids) >= result[group] > 0:
+                result["veto:" + group], result[group] = result[group], 0.0
+        # The strongest AudioSet class, by index, for counts-only health.
+        result["top"] = float(top.argmax())
+        return result
 
 
 class SoundEvents:
@@ -210,6 +237,11 @@ class SoundEvents:
                  enabled: Callable[[str], bool], min_level_db: float = -55.0,
                  clock: Callable[[], float] = time.monotonic):
         self._classify, self._enabled = classify, enabled
+        self._names = tuple(getattr(classify, "names", ()))
+        # Counts only: hops a confuser vetoed above the bar, and per entered
+        # type the strongest AudioSet class, score and level at the enter.
+        self.vetoed = dict.fromkeys(CONFUSERS, 0)
+        self.entered_detail: dict[str, dict[str, dict[str, int]]] = {}
         self.min_level_db = min_level_db
         self._clock = clock
         self._history = array.array("h")
@@ -274,6 +306,9 @@ class SoundEvents:
             self.classifications += 1
             scores = self._classify(window)
         edges: list[SoundEdge] = []
+        for group in self.vetoed:
+            if scores.get("veto:" + group, 0.0) >= POLICY[group][0]:
+                self.vetoed[group] += 1
         for group, (threshold, needed, _) in POLICY.items():
             if scores.get(group, 0.0) >= threshold:
                 self._hits[group] += 1
@@ -297,4 +332,20 @@ class SoundEvents:
         for _, kind, group in sorted(candidates):
             self._opened[group] = (kind, now)
             edges.append(SoundEdge(kind, "enter", level))
+            self._count_enter(kind, scores, scores.get(group, 0.0), level)
         return edges
+
+    def _count_enter(self, kind: str, scores: dict[str, float], score: float, level: float) -> None:
+        detail = self.entered_detail.setdefault(kind, {
+            "top": {}, "score": dict.fromkeys(SCORE_BANDS, 0),
+            "level": dict.fromkeys(LEVEL_BANDS, 0)})
+        top = scores.get("top")
+        name = (self._names[int(top)] if top is not None and 0 <= int(top) < len(self._names)
+                else "unknown")
+        if name not in detail["top"] and len(detail["top"]) >= TOP_NAMES:
+            name = "other"
+        detail["top"][name] = detail["top"].get(name, 0) + 1
+        detail["score"][next(band for band, low in zip(SCORE_BANDS, (0.9, 0.8, 0.6, -1.0))
+                             if score >= low)] += 1
+        detail["level"][next(band for band, low in zip(LEVEL_BANDS, (-30.0, -40.0, -50.0, -1e9))
+                             if level >= low)] += 1

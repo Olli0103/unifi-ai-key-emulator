@@ -403,9 +403,129 @@ def test_alarm_scores_without_a_beep_pattern_and_short_siren_blips_do_not_enter(
     scores.value = {"alarm": 0.9}
     assert run(events, clock, 3) == []                  # steady noise: no T3/T4 pattern
     scores.value = {"alrmSiren": 0.9}
-    assert run(events, clock, 1.2) == []                # under ~2 s of siren
+    assert run(events, clock, 3) == []                  # under ~4 s of siren (5 Oct)
     assert run(events, clock, 1.5) == [("alrmSiren", "enter")]
     scores.value = {}
     run(events, clock, 5)
     scores.value = {"alrmGlassBreak": 0.55}             # below the shatter bar
     assert run(events, clock, 2) == []
+
+
+def test_a_siren_needs_a_clear_score_held_for_about_four_seconds():
+    # 5 Oct: 11 night-time sirens in 6 hours on the road-facing Einfahrt.
+    clock, scores = Clock(), Scores()
+    events = detector(scores, clock)
+    scores.value = {"alrmSiren": 0.65}                  # passed the old 0.6 bar
+    assert run(events, clock, 10) == []
+    scores.value = {"alrmSiren": 0.9}
+    assert run(events, clock, 3) == []                  # the old ~2 s bar
+    scores.value = {"alrmSiren": 0.6}                   # a dip restarts the count
+    assert run(events, clock, 0.6) == []
+    scores.value = {"alrmSiren": 0.9}
+    assert run(events, clock, 3) == []
+    assert run(events, clock, 1.5) == [("alrmSiren", "enter")]
+
+
+def synthetic_classifier(tmp_path, monkeypatch, scored):
+    """A pinned classifier over a synthetic class map and one score row."""
+    import hashlib
+    import sys
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from aikey.aiport_sounds import CLASSES, CONFUSERS, SoundClassifier
+    names = (["Speech"] + [label for labels in CLASSES.values() for label in labels]
+             + [label for labels in CONFUSERS.values() for label in labels])
+    class_map = tmp_path / "classes.csv"
+    class_map.write_text("index,mid,display_name\n" + "".join(
+        f'{i},/m/{i},"{name}"\n' for i, name in enumerate(names)))
+    model = tmp_path / "sound.onnx"
+    model.write_bytes(b"synthetic model bytes")
+    row = np.zeros((1, len(names)), dtype=np.float32)
+    for name, value in scored.items():
+        row[0, names.index(name)] = value
+
+    class Session:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_inputs(self):
+            return [SimpleNamespace(name="waveform")]
+
+        def run(self, outputs, feeds):
+            return [row]
+
+    monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(
+        SessionOptions=SimpleNamespace, InferenceSession=Session))
+    digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()   # noqa: E731
+    return SoundClassifier(model, digest(model), class_map, digest(class_map)), names
+
+
+@pytest.mark.parametrize("scored, group, kept", [
+    ({"Baby cry, infant cry": 0.8, "Meow": 0.85}, "alrmBabyCry", False),     # the cat
+    ({"Baby cry, infant cry": 0.8, "Meow": 0.3}, "alrmBabyCry", True),
+    ({"Shatter": 0.7, "Keys jangling": 0.75}, "alrmGlassBreak", False),      # keys at the door
+    ({"Shatter": 0.7, "Chink, clink": 0.7}, "alrmGlassBreak", False),
+    ({"Shatter": 0.9, "Coin (dropping)": 0.4}, "alrmGlassBreak", True),
+    ({"Siren": 0.8, "Meow": 0.9}, "alrmSiren", True),                         # no siren veto
+])
+def test_a_confuser_class_scoring_as_high_vetoes_the_sound(tmp_path, monkeypatch,
+                                                          scored, group, kept):
+    classify, names = synthetic_classifier(tmp_path, monkeypatch, scored)
+    scores = classify(array.array("h", [0] * 15600))
+    raw = max(value for name, value in scored.items() if name not in
+              ("Meow", "Keys jangling", "Chink, clink", "Coin (dropping)"))
+    if kept:
+        assert scores[group] == pytest.approx(raw) and "veto:" + group not in scores
+    else:
+        assert scores[group] == 0.0 and scores["veto:" + group] == pytest.approx(raw)
+    assert names[int(scores["top"])] == max(scored, key=scored.get)
+
+
+def test_entered_sounds_count_their_strongest_class_score_and_level_and_vetoes():
+    clock = Clock()
+
+    class Named(Scores):
+        names = tuple(f"Class {i}" for i in range(10))
+
+    scores = Named()
+    events = detector(scores, clock)
+    scores.value = {"veto:alrmBabyCry": 0.9}            # a cat: never enters, counted
+    assert run(events, clock, 2) == []
+    assert events.vetoed["alrmBabyCry"] >= 3 and events.vetoed["alrmGlassBreak"] == 0
+    for top in range(8):                                # eight distinct strongest classes
+        scores.value = {"alrmBark": 0.85, "top": float(top)}
+        assert run(events, clock, 1.2) == [("alrmBark", "enter")]
+        scores.value = {}
+        run(events, clock, 4)
+    detail = events.entered_detail["alrmBark"]
+    assert detail["top"] == {**{f"Class {i}": 1 for i in range(6)}, "other": 2}
+    assert detail["score"] == {"0.9+": 0, "0.8-0.9": 8, "0.6-0.8": 0, "under_0.6": 0}
+    assert sum(detail["level"].values()) == 8
+    assert set(detail["level"]) == {"-30+", "-40..-30", "-50..-40", "under_-50"}
+
+
+async def test_camera_health_counts_vetoes_and_entered_sound_detail_without_identifiers(tmp_path):
+    clock = Clock()
+
+    class Named(Scores):
+        names = ("Speech", "Bark", "Meow")
+
+    scores = Named()
+    service, sink = await sound_service(tmp_path, scores, clock)
+    try:
+        await audio_settings(service, sink, 60, enableAlrmBark=1, enableAlrmBabyCry=1)
+        scores.value = {"veto:alrmBabyCry": 0.9, "top": 2.0}
+        await feed(service, noise(1.5, amplitude=6000), clock)
+        scores.value = {"alrmBark": 0.95, "top": 1.0}
+        await feed(service, noise(1.5, amplitude=6000), clock)
+        health = service._speech_camera_health(CAMERA)["sound"]
+    finally:
+        await service.stop()
+    assert health["vetoed"]["alrmBabyCry"] >= 1 and health["vetoed"]["alrmGlassBreak"] == 0
+    assert list(health["entered"]) == ["alrmBark"]
+    assert health["entered"]["alrmBark"]["top"] == {"Bark": 1}
+    assert health["entered"]["alrmBark"]["score"]["0.9+"] == 1
+    text = json.dumps(health)
+    assert CAMERA not in text and CAMERA.lower() not in text

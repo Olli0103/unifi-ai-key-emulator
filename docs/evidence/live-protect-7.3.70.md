@@ -249,6 +249,18 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - Einfahrt: 59 vehicles, 11 plates read, 2 partial; 23 crop re-reads, 6 read, 4 complete, 5 improved, 2 conflicts kept apart.
   - The second slot-4 plate camera: 386 vehicles and 105 crop re-reads, none with a legible plate.
 
+**False sound alarms (2–5 Oct).**
+- *Readback (owner's web session, counts only):* in 72 hours the AI Ports' sound classifier raised:
+  - 20 sirens, all on the road-facing Einfahrt and all between 20:00 and 07:00, 11 of them on 5 Oct between 00:26 and 06:20, each event 24–31 s long in Protect (about 20 s of that is Protect's own padding);
+  - 25 barks, 14 of them on Garage and 7 on Einfahrt;
+  - 6 glass breaks, 5 of them at the Haustür doorbell during the day;
+  - 2 CO alarms and one 101 s baby cry in the Flur, where the owner's cat lives.
+- *Change (code):*
+  - A siren needs 0.7 for about 4 s instead of 0.6 for about 2 s.
+  - Cat classes veto a baby cry; clinks, keys, coins and dishes veto glass break.
+  - Health counts the vetoes and, for each entered type, the strongest AudioSet class name, score band and level band. These counts show what the night-time sirens are without keeping any audio.
+- Bark, CO and the remaining siren false positives stay needs_evidence until those counts are read.
+
 **Deep mode replaces the basic per-event path.**
 - From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
 - From 05:14 to 08:40, 0 of 140 smart events and 0 of 291 audio events did, and no new Find Anything (`ramDetections`) rows were written (last at 05:12). The Key received no `recognizeKeyFrames` task.

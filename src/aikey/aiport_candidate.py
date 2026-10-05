@@ -1165,9 +1165,16 @@ class CandidateService:
     def _speech_camera_health(self, camera_mac: str) -> dict:
         if camera_mac not in self._speech:
             return {}
+        sounds = self._sounds.get(camera_mac)
         return {"speech": {"enabled": self._speech_enabled.get(camera_mac, False),
                            "events": self._speech_events.get(camera_mac, 0),
-                           "open": self._audio_is_open(camera_mac, SPEECH)}}
+                           "open": self._audio_is_open(camera_mac, SPEECH)},
+                # Counts only: confuser vetoes and, per entered sound type, its
+                # strongest AudioSet class name, score band and level band.
+                **({"sound": {"vetoed": dict(sounds.vetoed),
+                              "entered": {kind: {name: dict(counts) for name, counts in detail.items()}
+                                          for kind, detail in sounds.entered_detail.items()}}}
+                   if sounds is not None else {})}
 
     async def _handle_audio_settings(self, ws: aiohttp.ClientWebSocketResponse,
                                      request_id: int, payload: object) -> None:
