@@ -275,6 +275,34 @@ Closing this gap needs a search-host image with those extensions and a local cro
 
 - *Windows after the reconnect:* every AI Port camera holds a 40–80 % person, vehicle and animal window from one installed policy, and none arrived without one. Only slot 1 scores with the local detector, so only its cameras can produce in-window tracks. Whether Protect asks for their verdict stays needs_evidence.
 
+**Third Model Server outage: descriptor exhaustion (4–7 Oct).**
+- From 4 Oct 08:56 to 7 Oct 09:36, the Model Server logged "Too many open files" about 15,000 times and reset every connection. It held 946 leaked sockets against its 1024-descriptor limit.
+- Session describes, player summaries and the AI Port fallback failed for about three days. Since the 3 Oct Key restart, 670 of 24,586 describe tasks were saved; the failed jobs read "Server disconnected".
+- No `CL_OUT_OF_RESOURCES` appeared, so the watchdog never probed, and the monitor counted only "Request processing failed".
+- *Fix (7 Oct 09:36):*
+  - The container was recreated with a 65,536-descriptor limit; the old one is kept stopped as `local-ovms-nas-before-ulimit`.
+  - The watchdog now probes every minute. It restarts on a failed probe after either log marker, or after two consecutive failed probes without one.
+  - The monitor also counts both markers.
+  - Since then, every describe task that reached the model was saved.
+- *Still open:*
+  - 64 failed describe jobs in the journal hit the Key's 10 MB media limit on session exports, a separate limit from the outage.
+  - The leak's source is unknown. At the old rate (about 1,000 descriptors in 14 hours) the new limit lasts weeks, and the watchdog covers the rest.
+
+**Second-stage verification is not requested for AI Port cameras.**
+- From 3 Oct 15:35 to 7 Oct 09:30, Protect saved 23 verdicts, all for the native Wohnzimmer G6 (18 person, 5 animal, all confirmed).
+- In the same period, slot 1 published 314 snapshots with `reVerifyEligible: true`. Protect stored 470 AI Port thumbnails inside the 40–80 % window (Flur 133, Schlafzimmer 212, Büro 125), none with a verdict and none requested.
+- The flag sits where native cameras put it. A 28 Sep support file shows native snapshots on the leave edge carrying it the same way, with two extra fields (`clockBestMonotonic`, `framingRect`) that AI Port snapshots lack.
+- Without the bundle source, the cause is unconfirmed. Protect may not send second-stage tasks for AI Port-paired cameras, perhaps because a real AI Port applies the `reVerificationPolicy` it receives on the device; or a missing field may stop it.
+- Meanwhile slot 1's score detector only lowers the confidence Protect shows for uncertain detections; nothing verifies them.
+
+**Sounds after r56 (5 Oct 07:45 to 7 Oct 09:30, 50 hours).**
+- No siren on Einfahrt (20 in the 72 hours before). Two sirens on Giebel hinten at 07:51 and 07:52 on 5 Oct were probably real.
+- Barks: 11 across six cameras. Their strongest class was the generic "Domestic animals, pets" or "Animal", mostly with scores under 0.6.
+- Car horns: 5, all classified as horns.
+- Glass breaks: 2, classed as "Crack" and "Breaking"; one more was vetoed as a clink.
+- Baby cries: 2, one on the native G6 and one at a very low level.
+- Speech on the outdoor cameras stopped by 5 Oct 11:00.
+
 **Deep mode replaces the basic per-event path.**
 - From 02:14 to 05:14, 13 of 14 smart events and 4 of 4 audio events got a caption and RAM tags.
 - From 05:14 to 08:40, 0 of 140 smart events and 0 of 291 audio events did, and no new Find Anything (`ramDetections`) rows were written (last at 05:12). The Key received no `recognizeKeyFrames` task.
