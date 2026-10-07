@@ -294,7 +294,8 @@ Closing this gap needs a search-host image with those extensions and a local cro
 - The flag sits where native cameras put it. A 28 Sep support file shows native snapshots on the leave edge carrying it the same way, with two extra fields (`clockBestMonotonic`, `framingRect`) that AI Port snapshots lack.
 - Without the bundle source, the cause is unconfirmed. Protect may not send second-stage tasks for AI Port-paired cameras, perhaps because a real AI Port applies the `reVerificationPolicy` it receives on the device; or a missing field may stop it.
 - Meanwhile slot 1's score detector only lowers the confidence Protect shows for uncertain detections; nothing verifies them.
-- *Next test (owner-approved, 7 Oct):* AI Port snapshots now carry `framingRect` and `clockBestMonotonic` too. Whether Protect then asks for verdicts is needs_evidence.
+- *Next test (owner-approved, 7 Oct):* AI Port snapshots now carry `framingRect` and `clockBestMonotonic` too (AI Port r57, fd63bb4, all four slots from about 14:10, every stream decoding). Whether Protect then asks for verdicts is needs_evidence.
+- *Key r29 (fd63bb4, about 14:15):* in its first five minutes, 18 of 20 describe tasks were saved using 12 windowed exports, with no size refusals and 2 HTTP 404s.
 
 **Sounds after r56 (5 Oct 07:45 to 7 Oct 09:30, 50 hours).**
 - No siren on Einfahrt (20 in the 72 hours before). Two sirens on Giebel hinten at 07:51 and 07:52 on 5 Oct were probably real.
