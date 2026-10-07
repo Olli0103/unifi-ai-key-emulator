@@ -411,6 +411,16 @@ def test_alarm_scores_without_a_beep_pattern_and_short_siren_blips_do_not_enter(
     assert run(events, clock, 2) == []
 
 
+def test_a_bark_needs_a_score_of_at_least_0_6():
+    # 7 Oct: most false barks scored under 0.6.
+    clock, scores = Clock(), Scores()
+    events = detector(scores, clock)
+    scores.value = {"alrmBark": 0.55}
+    assert run(events, clock, 5) == []
+    scores.value = {"alrmBark": 0.65}
+    assert run(events, clock, 1.2) == [("alrmBark", "enter")]
+
+
 def test_a_siren_needs_a_clear_score_held_for_about_four_seconds():
     # 5 Oct: 11 night-time sirens in 6 hours on the road-facing Einfahrt.
     clock, scores = Clock(), Scores()
@@ -435,8 +445,8 @@ def synthetic_classifier(tmp_path, monkeypatch, scored):
     import numpy as np
 
     from aikey.aiport_sounds import CLASSES, CONFUSERS, SoundClassifier
-    names = (["Speech"] + [label for labels in CLASSES.values() for label in labels]
-             + [label for labels in CONFUSERS.values() for label in labels])
+    names = list(dict.fromkeys(["Speech"] + [label for labels in CLASSES.values() for label in labels]
+                               + [label for labels in CONFUSERS.values() for label in labels]))
     class_map = tmp_path / "classes.csv"
     class_map.write_text("index,mid,display_name\n" + "".join(
         f'{i},/m/{i},"{name}"\n' for i, name in enumerate(names)))
@@ -469,13 +479,15 @@ def synthetic_classifier(tmp_path, monkeypatch, scored):
     ({"Shatter": 0.7, "Chink, clink": 0.7}, "alrmGlassBreak", False),
     ({"Shatter": 0.9, "Coin (dropping)": 0.4}, "alrmGlassBreak", True),
     ({"Siren": 0.8, "Meow": 0.9}, "alrmSiren", True),                         # no siren veto
+    ({"Bark": 0.7, "Purr": 0.75}, "alrmBark", False),                         # the cat again
+    ({"Bark": 0.8, "Cat": 0.3}, "alrmBark", True),
 ])
 def test_a_confuser_class_scoring_as_high_vetoes_the_sound(tmp_path, monkeypatch,
                                                           scored, group, kept):
     classify, names = synthetic_classifier(tmp_path, monkeypatch, scored)
     scores = classify(array.array("h", [0] * 15600))
     raw = max(value for name, value in scored.items() if name not in
-              ("Meow", "Keys jangling", "Chink, clink", "Coin (dropping)"))
+              ("Meow", "Purr", "Cat", "Keys jangling", "Chink, clink", "Coin (dropping)"))
     if kept:
         assert scores[group] == pytest.approx(raw) and "veto:" + group not in scores
     else:
@@ -494,6 +506,7 @@ def test_entered_sounds_count_their_strongest_class_score_and_level_and_vetoes()
     scores.value = {"veto:alrmBabyCry": 0.9}            # a cat: never enters, counted
     assert run(events, clock, 2) == []
     assert events.vetoed["alrmBabyCry"] >= 3 and events.vetoed["alrmGlassBreak"] == 0
+    assert events.vetoed["alrmBark"] == 0
     for top in range(8):                                # eight distinct strongest classes
         scores.value = {"alrmBark": 0.85, "top": float(top)}
         assert run(events, clock, 1.2) == [("alrmBark", "enter")]

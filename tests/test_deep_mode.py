@@ -525,3 +525,74 @@ async def test_a_close_pass_crops_each_object_box_from_the_video_export(controll
     assert len(exports) == 1 and result["result"]["crops"] == 2
     [(_, body)] = controller.callbacks
     assert body["pass"] == "close" and body["labels"] == ["top:hoodie", "topColor:red"]
+
+
+async def test_a_long_close_pass_fetches_short_windows_around_its_objects(controller, tmp_path):
+    # 7 Oct: whole-session exports of long 4K sessions exceeded max_video_bytes.
+    import asyncio
+    import shutil
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("Real ffmpeg executable unavailable")
+    video = tmp_path / "synthetic.mp4"
+    process = await asyncio.create_subprocess_exec(
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+        "color=c=gray:s=320x240:r=5:d=5", "-c:v", "mpeg4", "-y", str(video))
+    assert await process.wait() == 0
+    start = 1_700_000_000_000
+    exports = []
+
+    async def export(request):
+        exports.append(dict(request.query))
+        return web.Response(body=video.read_bytes(), content_type="video/mp4",
+                            headers={"x-start-timestamp": request.query["start"]})
+    app = web.Application()
+    app.router.add_get("/internal/aiprocessors/video/export", export)
+    runner = web.AppRunner(app, shutdown_timeout=1)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    origin = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
+    config = worker_config(controller)
+    config["controller_origins"].append(origin)
+    config["worker"]["ffmpeg_path"] = ffmpeg
+    deep_mode.save_prompts(tmp_path, *deep_mode.validate_prompts(prompts_body()))
+    worker = JobProcessor(config, tmp_path, camera_registry=Registry())
+    request = describe_request()
+    request["payload"].pop("images")
+    request["payload"]["pass"] = "close"
+    objects = [{"coord": [100, 200, 300, 500], "ts": start + 200_000, "objectType": "person",
+                "objectId": "obj1"},
+               {"coord": [100, 200, 300, 500], "ts": start + 10_000, "objectType": "person",
+                "objectId": "obj2"},
+               {"coord": [500, 100, 200, 300], "ts": start + 12_000, "objectType": "person",
+                "objectId": "obj3"}]
+    request["payload"]["videos"] = [{
+        "reqUrl": f"{origin}/internal/aiprocessors/video/export?camera={CAMERA}&event={EVENT}"
+                  f"&start={start}&end={start + 300_000}&channel=0&type=rotating",
+        "objects": objects}]
+    try:
+        result = await worker.handle(request)
+        counts = worker.status()["deep"]
+    finally:
+        await worker.stop()
+        await runner.cleanup()
+    assert [(int(q["start"]) - start, int(q["end"]) - start) for q in exports] == [
+        (9_000, 13_000), (199_000, 201_000)]
+    assert all(q["camera"] == CAMERA and q["channel"] == "0" for q in exports)
+    assert result["result"]["crops"] == 3 and counts["export_windows"] == 2
+    [chat] = controller.chat_requests
+    assert sum(part["type"] == "image_url" for part in chat["messages"][1]["content"]) == 3
+
+
+def test_short_sessions_keep_protects_export_and_many_clusters_fall_back_to_it():
+    from aikey.worker import _describe_windows
+    url = "http://c/internal/aiprocessors/video/export?camera=c&start=1000&end=21000&channel=0"
+    assert _describe_windows(url, [5000, 2000]) == [(url, [2000, 5000])]
+    long_url = url.replace("end=21000", "end=1000000")
+    many = [1000 + 10_000 * n for n in range(20)]
+    assert _describe_windows(long_url, many) == [(long_url, many)]          # over 16 windows
+    [(window, times)] = _describe_windows(long_url, [500_000, 503_000])
+    assert "start=499000" in window and "end=504000" in window and times == [500_000, 503_000]
+    [(first, _), _] = _describe_windows(long_url, [1500, 900_000])
+    assert "start=1000" in first                                            # never before the session

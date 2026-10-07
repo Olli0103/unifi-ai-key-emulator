@@ -285,7 +285,7 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - The monitor also counts both markers.
   - Since then, every describe task that reached the model was saved.
 - *Still open:*
-  - 64 failed describe jobs in the journal hit the Key's 10 MB media limit on session exports, a separate limit from the outage.
+  - Session exports over the Key's 100 MiB video limit are a separate cause: after the fix, 78 describe tasks hit it between 12:00 and 14:00. The whole-session export of a long 4K session is the large part. Since this change (code), a close pass over a session longer than 30 s fetches short exports around its object times instead. A further 25 tasks got HTTP 404 from Protect's export, cause unknown.
   - The leak's source is unknown. At the old rate (about 1,000 descriptors in 14 hours) the new limit lasts weeks, and the watchdog covers the rest.
 
 **Second-stage verification is not requested for AI Port cameras.**
@@ -294,6 +294,7 @@ Closing this gap needs a search-host image with those extensions and a local cro
 - The flag sits where native cameras put it. A 28 Sep support file shows native snapshots on the leave edge carrying it the same way, with two extra fields (`clockBestMonotonic`, `framingRect`) that AI Port snapshots lack.
 - Without the bundle source, the cause is unconfirmed. Protect may not send second-stage tasks for AI Port-paired cameras, perhaps because a real AI Port applies the `reVerificationPolicy` it receives on the device; or a missing field may stop it.
 - Meanwhile slot 1's score detector only lowers the confidence Protect shows for uncertain detections; nothing verifies them.
+- *Next test (owner-approved, 7 Oct):* AI Port snapshots now carry `framingRect` and `clockBestMonotonic` too. Whether Protect then asks for verdicts is needs_evidence.
 
 **Sounds after r56 (5 Oct 07:45 to 7 Oct 09:30, 50 hours).**
 - No siren on Einfahrt (20 in the 72 hours before). Two sirens on Giebel hinten at 07:51 and 07:52 on 5 Oct were probably real.

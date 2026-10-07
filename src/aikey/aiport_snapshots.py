@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from io import BytesIO
 import ipaddress
 import re
+import time
 from urllib.parse import urlsplit
 
 from PIL import Image, UnidentifiedImageError
@@ -45,7 +46,8 @@ class SmartSnapshot:
 
 def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int, *,
                         filename_track_id: int | None = None,
-                        reverify_eligible: bool = False) -> SmartSnapshot:
+                        reverify_eligible: bool = False,
+                        monotonic_ms: int | None = None) -> SmartSnapshot:
     """Keep one cropped JPEG in memory until Protect requests it."""
     if not isinstance(frame, bytes) or len(frame) > 2_000_000 or len(frame) < 16:
         raise SnapshotError("invalid_snapshot_frame")
@@ -71,7 +73,13 @@ def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int, *,
             side = max(32, min(side, image.width, image.height))
             left = max(0, min(image.width - side, cx * image.width - side / 2))
             top = max(0, min(image.height - side, cy * image.height - side / 2))
-            crop = image.crop((round(left), round(top), round(left + side), round(top + side)))
+            box = (round(left), round(top), round(left + side), round(top + side))
+            crop = image.crop(box)
+            # The crop in per-mille of the full frame, [x, y, w, h], as native
+            # cameras report it (framingRect, 28 Sep support file).
+            framing = [round(box[0] * 1000 / image.width), round(box[1] * 1000 / image.height),
+                       round((box[2] - box[0]) * 1000 / image.width),
+                       round((box[3] - box[1]) * 1000 / image.height)]
             crop.thumbnail((360, 360))
             output = BytesIO()
             crop.convert("RGB").save(output, format="JPEG", quality=85)
@@ -90,6 +98,10 @@ def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int, *,
     filename = f"smartdetectsnap_zone_{filename_id}{wall_ms}.jpg"
     full_fov_filename = f"smartdetectsnap_zone_{filename_id}{wall_ms}_fullfov.jpg"
     metadata = {
+        # Native snapshots carry the best frame's monotonic clock next to its
+        # wall clock, and every flagged native snapshot had both fields; AI
+        # Port snapshots lacked them and Protect never verified one (7 Oct).
+        "clockBestMonotonic": int(time.monotonic() * 1000) if monotonic_ms is None else monotonic_ms,
         "clockBestWall": wall_ms,
         "smartDetectSnapshot": filename,
         "smartDetectSnapshotType": change.kind,
@@ -100,6 +112,7 @@ def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int, *,
         "confidenceLevel": round(change.score * 100),
         "coord": [round(x1 * 1000), round(y1 * 1000),
                   round((x2 - x1) * 1000), round((y2 - y1) * 1000)],
+        "framingRect": framing,
         # Inside Protect's reverification window: its detection service then
         # asks the AI Key to verify the track (7.3.70 reVerificationPolicy).
         "reVerifyEligible": reverify_eligible is True,

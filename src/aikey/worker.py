@@ -372,6 +372,13 @@ def _clean_enhanced_jpeg(data, source_size):
 
 _DESCRIBE_STAGES = ("queued", "fetch", "frames", "gate", "infer", "callback")
 _SINGLE_FRAME_EXPORT_MS = 1000
+# A close pass exports the whole session. Long sessions on 4K cameras exceeded
+# max_video_bytes (7 Oct: 78 refused in two hours), so a session longer than
+# this is fetched as short windows around its object times instead.
+_DESCRIBE_EXPORT_SPAN_MS = 30_000
+_DESCRIBE_WINDOW_MS = 1000           # before the first and after the last time of a window
+_DESCRIBE_GAP_MS = 5000              # object times closer than this share a window
+_DESCRIBE_MAX_WINDOWS = 16
 # Protect re-sends a failed deep task under the same task ID. These run on local
 # models and a failed one sent no callback, so the retry is admitted; uncertain
 # callbacks still are not.
@@ -387,6 +394,35 @@ def _with_interval(url, start, end):
     query = "&".join(f"start={start}" if p.startswith("start=") else f"end={end}" if p.startswith("end=")
                      else p for p in parts)
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, ""))
+
+
+def _describe_windows(url, times):
+    """``[(export URL, object times)]`` covering a close pass's object times.
+
+    A session up to ``_DESCRIBE_EXPORT_SPAN_MS`` keeps Protect's export as it
+    is. A longer one is fetched as one short export per cluster of nearby
+    object times, a second either side, so the bytes no longer grow with the
+    session's length.
+    """
+    query = dict(parse_qsl(urlsplit(url).query))
+    try:
+        start, end = int(query["start"]), int(query["end"])
+    except (KeyError, ValueError):
+        return [(url, sorted(set(times)))]
+    if end - start <= _DESCRIBE_EXPORT_SPAN_MS:
+        return [(url, sorted(set(times)))]
+    clusters = []
+    for ts in sorted(set(times)):
+        if (clusters and ts - clusters[-1][-1] <= _DESCRIBE_GAP_MS
+                and ts - clusters[-1][0] <= _DESCRIBE_EXPORT_SPAN_MS - 2 * _DESCRIBE_WINDOW_MS):
+            clusters[-1].append(ts)
+        else:
+            clusters.append([ts])
+    if len(clusters) > _DESCRIBE_MAX_WINDOWS:
+        return [(url, sorted(set(times)))]
+    return [(_with_interval(url, max(start, cluster[0] - _DESCRIBE_WINDOW_MS),
+                            cluster[-1] + _DESCRIBE_WINDOW_MS), cluster)
+            for cluster in clusters]
 
 
 def _fit_area(images, budget):
@@ -586,7 +622,7 @@ class JobProcessor:
             raise WorkerError(str(exc)) from exc
         # Deep-mode work; counts only, no identifiers or text.
         self.deep_counts = {"embed_tasks": 0, "crops_embedded": 0, "crops_failed": 0,
-                            "describe_tasks": 0, "described": 0, "labels": 0}
+                            "describe_tasks": 0, "described": 0, "labels": 0, "export_windows": 0}
         # Where describe time goes, per pass and stage (n, total and max ms), and
         # the stage a describe was in when its deadline passed.
         self.deep_timing = {kind: {stage: {"n": 0, "total_ms": 0, "max_ms": 0} for stage in _DESCRIBE_STAGES}
@@ -2523,22 +2559,30 @@ class JobProcessor:
         except deep_mode.DeepModeError as exc:
             raise WorkerError(str(exc)) from exc
         for video, (_, url) in zip(job.payload.get("videos", []), job.media):
-            data, headers = await self._fetch(url, "video")
-            if job.stage == "fetch":
-                mark = self._describe_stage(job, "frames", mark)
-            for item in video["objects"]:
-                frame = await self._video_frame(data, headers, url, job, timestamp=item["ts"])
-                with Image.open(BytesIO(frame)) as picture:
-                    picture = picture.convert("RGB")
-                    width, height = picture.size
-                    x1, y1, x2, y2 = _padded(item["coord"], prompt["margin"])
-                    crop = picture.crop((int(x1 * width), int(y1 * height),
-                                         max(int(x1 * width) + 1, round(x2 * width)),
-                                         max(int(y1 * height) + 1, round(y2 * height))))
-                    crop.thumbnail((768, 768))
-                    out = BytesIO()
-                    crop.save(out, format="JPEG", quality=90)
-                    crops.append(out.getvalue())
+            windows = _describe_windows(url, [item["ts"] for item in video["objects"]])
+            if len(windows) > 1 or windows[0][0] != url:
+                self.deep_counts["export_windows"] += len(windows)
+            by_index = {}
+            for window_url, times in windows:
+                data, headers = await self._fetch(window_url, "video")
+                if job.stage == "fetch":
+                    mark = self._describe_stage(job, "frames", mark)
+                for index, item in enumerate(video["objects"]):
+                    if item["ts"] not in times:
+                        continue
+                    frame = await self._video_frame(data, headers, window_url, job, timestamp=item["ts"])
+                    with Image.open(BytesIO(frame)) as picture:
+                        picture = picture.convert("RGB")
+                        width, height = picture.size
+                        x1, y1, x2, y2 = _padded(item["coord"], prompt["margin"])
+                        crop = picture.crop((int(x1 * width), int(y1 * height),
+                                             max(int(x1 * width) + 1, round(x2 * width)),
+                                             max(int(y1 * height) + 1, round(y2 * height))))
+                        crop.thumbnail((768, 768))
+                        out = BytesIO()
+                        crop.save(out, format="JPEG", quality=90)
+                        by_index[index] = out.getvalue()
+            crops += [by_index[index] for index in sorted(by_index)]
         if not crops:
             raise WorkerError("No crops to describe")
         try:

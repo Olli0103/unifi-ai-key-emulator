@@ -64,3 +64,22 @@ def test_a_track_inside_the_reverification_window_is_flagged_for_the_ai_key():
         "reVerifyEligible"] is False
     assert make_smart_snapshot(frame.getvalue(), track, 1_790_000_000_000,
                                reverify_eligible=True).metadata["reVerifyEligible"] is True
+
+
+def test_a_snapshot_reports_its_crop_and_monotonic_clock_like_a_native_camera():
+    # Every flagged native snapshot carried framingRect and clockBestMonotonic
+    # (28 Sep support file); AI Port snapshots had neither (7 Oct).
+    frame = BytesIO()
+    Image.new("RGB", (640, 360), (40, 90, 140)).save(frame, format="JPEG")
+    track = TrackChange("leave", 7, "person", "person", 0.6, (0.345, 0.125, 0.701, 0.94))
+    snapshot = make_smart_snapshot(frame.getvalue(), track, 1_790_000_000_000,
+                                   reverify_eligible=True, monotonic_ms=123_456)
+    metadata = snapshot.metadata
+    assert metadata["clockBestMonotonic"] == 123_456
+    x, y, w, h = metadata["framingRect"]
+    assert all(type(v) is int for v in metadata["framingRect"])
+    # The crop is square in pixels and holds the object's box.
+    assert abs(w * 640 / 1000 - h * 360 / 1000) <= 2
+    assert x <= 345 and x + w >= 701 and y <= 125 and y + h >= 940 and y + h <= 1000
+    default = make_smart_snapshot(frame.getvalue(), track, 1_790_000_000_000).metadata
+    assert type(default["clockBestMonotonic"]) is int and default["clockBestMonotonic"] > 0
