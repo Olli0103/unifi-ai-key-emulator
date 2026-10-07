@@ -223,6 +223,7 @@ def render_matrix(manifest):
         "| --- | --- | " + " | ".join("---" for _ in live_ids) + " | --- | --- |",
     ]
     static_label = {s["id"]: s.get("protect_version") and f"Protect {s['protect_version']}"
+                    or s.get("bundle_version") and f"Protect {s['bundle_version']} bundle"
                     or s.get("firmware_version") and f"AI Key {s['firmware_version']}" or "vendor docs"
                     for s in manifest["evidence_sources"]}
     area = None

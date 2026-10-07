@@ -5,6 +5,7 @@ Choose one vision provider in `inference.provider`. The model name must be expli
 | Provider | API | Default base URL |
 | --- | --- | --- |
 | `openai` | Responses, `/v1/responses` | `https://api.openai.com/v1` |
+| `anthropic` | Messages, `/v1/messages` | `https://api.anthropic.com/v1` |
 | `ollama` | Native chat, `/api/chat` | `http://127.0.0.1:11434` |
 | `openai-compatible` | Chat Completions, `/v1/chat/completions` | `http://127.0.0.1:11434/v1` |
 
@@ -30,6 +31,12 @@ Merge this fragment into the generated configuration and replace the model place
 OpenAI receives camera images and the prompt when a job runs. This adapter requires an API key and the official HTTPS endpoint. The only endpoint exception is a loopback fixture in explicit `runtime.mode="lab"`.
 
 Requests use `input_text` and base64 `input_image` items. They set `store:false` and `stream:false`. The parser accepts completed assistant text and rejects errors, refusals, or incomplete responses. It skips reasoning and commentary. `store:false` controls response storage; it is not a claim about every provider retention policy. See [OpenAI image inputs](https://developers.openai.com/api/docs/guides/images-vision) and the [Responses reference](https://developers.openai.com/api/reference/cli/resources/responses/methods/create).
+
+## Claude / Anthropic
+
+Select `anthropic`, an explicit vision model ID, and a private Claude API key file. The official endpoint is `https://api.anthropic.com/v1`. The adapter sends base64 image blocks before the text prompt and uses the Messages API with `x-api-key` and `anthropic-version` headers. It accepts only an `end_turn` assistant message with nonempty text; refusals, truncation and tool output fail closed. See Anthropic's [vision guide](https://platform.claude.com/docs/en/build-with-claude/vision), [Messages API guide](https://platform.claude.com/docs/en/build-with-claude/working-with-messages), and [API key guide](https://platform.claude.com/docs/en/get-api-key).
+
+The control site stores a new key in the profile's private state folder. It requires a Claude API key from the Claude Console; a Claude app or coding-plan entitlement is not an API credential. This adapter is for scene descriptions or coarse object observations. It does not establish face identification or calibrated bounding boxes. No live Claude request has been made in this project.
 
 ## Ollama
 
@@ -67,7 +74,7 @@ Use this adapter for servers implementing vision Chat Completions, including com
 
 ## Shared behavior
 
-`max_output_tokens` accepts integers from 1 through 32768. Defaults are 1024 for OpenAI and 256 for the other adapters. For reasoning models, this budget can also cover reasoning tokens. An incomplete result fails instead of becoming a partial caption. OpenAI gets no temperature parameter unless configured explicitly; the other adapters default to zero. A selected model may reject a configured parameter.
+`max_output_tokens` accepts integers from 1 through 32768. Defaults are 1024 for OpenAI and Claude and 256 for the other adapters. For reasoning models, this budget can also cover reasoning tokens. An incomplete result fails instead of becoming a partial caption. OpenAI gets no temperature parameter unless configured explicitly; Claude's adapter does not send one; the other adapters default to zero. A selected model may reject a configured parameter.
 
 The worker's queue, deadline, image count, response size, and description length limits apply to all providers. HTTP errors and redirects fail the job without retry or fallback. Provider sessions never receive the Protect client certificate or device headers. Protect media and callback requests never receive the provider API key.
 

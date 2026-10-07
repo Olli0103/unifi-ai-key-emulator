@@ -56,9 +56,9 @@ def server_context(state_dir: Path) -> ssl.SSLContext:
     return context
 
 
-def client_context(config: dict) -> ssl.SSLContext:
+def client_context(config: dict, *, ca_file: str | None = None) -> ssl.SSLContext:
     controller = config["controller"]
-    context = ssl.create_default_context(cafile=controller["ca_file"])
+    context = ssl.create_default_context(cafile=ca_file or controller["ca_file"])
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     # A directly trusted console certificate can have a hostname that differs from its LAN IP.
     context.check_hostname = controller.get("verify_hostname", True)

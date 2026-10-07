@@ -1,0 +1,1408 @@
+"""Basic Find Anything: local CLIP query vectors and thumbnailTags indexing (#2, #21)."""
+
+import asyncio
+import io
+import json
+import shutil
+from urllib.parse import urlencode
+
+from aiohttp import FormData, web
+from aiohttp.test_utils import TestClient, TestServer
+import pytest
+import pytest_asyncio
+
+from aikey import clip
+from aikey.clip_server import InputError, build_app, parse_regions, preprocess
+from aikey.config import ConfigError, validate_config
+from aikey.device import DeviceService
+from aikey.protocol import decode_message, encode_message
+from aikey.search import EmbeddingError, SearchService
+from aikey.worker import JobProcessor, WorkerError
+from test_basic_descriptions import device_config, wire
+
+CAMERA, EVENT = "index-camera-fixture", "index-event-fixture"
+START, END = 1_700_000_000_000, 1_700_000_004_000
+UNIT = [1.0] + [0.0] * 767
+
+
+def vector(index):
+    values = [0.0] * 768
+    values[index] = 2.0
+    return values
+
+
+class Controller:
+    def __init__(self):
+        self.video = b""
+        self.callbacks, self.clip_requests, self.vision_requests, self.text_requests = [], [], [], []
+        self.vision_reply = None
+        self.region_vectors = None                # per-region image vectors, when set
+        self.reverifications = []
+        self.tag_requests, self.tag_status = 0, 200
+
+    async def tags(self, request):
+        reader = await request.multipart()
+        part = await reader.next()
+        assert part.name == "image" and (await part.read(decode=False))[:3] == b"\xff\xd8\xff"
+        self.tag_requests += 1
+        if self.tag_status != 200:
+            return web.json_response({}, status=self.tag_status)
+        return web.json_response({"model": "ram-plus-swin-large-14m", "tags": [
+            {"tag": "person", "confScore": 0.97}, {"tag": "garden", "confScore": 0.81},
+            {"tag": "bicycle", "confScore": 0.74}]})
+
+    async def export(self, request):
+        self.export_queries = getattr(self, "export_queries", []) + [dict(request.query)]
+        return web.Response(body=self.video, content_type="video/mp4",
+                            headers={"x-start-timestamp": str(START)})
+
+    async def image(self, request):
+        reader = await request.multipart()
+        parts = {}
+        while (part := await reader.next()) is not None:
+            parts[part.name] = await part.read(decode=False)
+        regions = json.loads(parts["regions"])
+        self.clip_requests.append({"regions": regions, "jpeg": parts["image"][:3] == b"\xff\xd8\xff"})
+        vectors = (self.region_vectors[:len(regions)] if self.region_vectors
+                   else [vector(i) for i in range(len(regions))])
+        return web.json_response({"model": clip.MODEL, "dim": 768, "embeddings": vectors})
+
+    async def crop(self, request):
+        self.crop_requests = getattr(self, "crop_requests", []) + [request.match_info["image"]]
+        from PIL import Image
+        out = io.BytesIO()
+        size = (3840, 2160) if request.match_info["image"] == "big4k" else (96, 160)
+        Image.new("RGB", size, (90, 90, 90)).save(out, "JPEG" if request.match_info["image"] != "png1" else "PNG")
+        return web.Response(body=out.getvalue(), content_type="image/jpeg")
+
+    async def text(self, request):
+        body = await request.json()
+        self.text_requests.append(body)
+        from aikey.worker import _VERIFY_PROMPTS
+        prompts = list(_VERIFY_PROMPTS.values())
+        index = 10 + prompts.index(body["texts"][0]) if body["texts"][0] in prompts else 5
+        return web.json_response({"model": clip.MODEL, "dim": 768, "embeddings": [vector(index)]})
+
+    async def reverification(self, request):
+        self.reverifications.append(await request.json())
+        return web.json_response({"reverification": 1})
+
+    async def vision(self, request):
+        self.vision_requests.append(True)
+        self.vision_bodies = getattr(self, "vision_bodies", []) + [await request.json()]
+        if self.vision_reply is None:
+            return web.json_response({}, status=500)
+        return web.json_response(self.vision_reply)
+
+    async def callback(self, request):
+        reader = await request.multipart()
+        parts = {}
+        while (part := await reader.next()) is not None:
+            body = await part.read(decode=False)
+            parts[part.name] = json.loads(body) if part.name == "ram" else (
+                part.headers.get("Content-Type"), body[:3])
+        self.callbacks.append(parts)
+        return web.json_response({"ram": None})
+
+
+@pytest_asyncio.fixture
+async def controller(tmp_path):
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("Real ffmpeg executable unavailable")
+    service = Controller()
+    video = tmp_path / "synthetic.mp4"
+    process = await asyncio.create_subprocess_exec(
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+        "color=c=gray:s=320x240:r=5:d=4", "-c:v", "mpeg4", "-y", str(video))
+    assert await process.wait() == 0
+    service.video, service.ffmpeg = video.read_bytes(), ffmpeg
+    app = web.Application()
+    app.router.add_get("/internal/aiprocessors/video/export", service.export)
+    app.router.add_post("/v1/image", service.image)
+    app.router.add_get("/internal/aiprocessors/image/{image}", service.crop)
+    app.router.add_post("/v1/text", service.text)
+    app.router.add_post("/v1/tags", service.tags)
+    app.router.add_post("/v1/chat/completions", service.vision)
+    app.router.add_post("/internal/aiprocessors/recognize-anything", service.callback)
+    app.router.add_post("/internal/aiprocessors/reverification", service.reverification)
+    runner = web.AppRunner(app, shutdown_timeout=1)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    service.origin = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
+    try:
+        yield service
+    finally:
+        await runner.cleanup()
+
+
+def config(service, **extra):
+    options = {"runtime": {"mode": "lab"}, "controller_origins": [service.origin],
+               "device": {"mac": "02:00:00:00:00:98"},
+               "inference": {"base_url": service.origin + "/v1", "model": "synthetic-vision"},
+               "search": {"enabled": True, "profile": clip.PROFILE},
+               "find_anything": {"clip_server": service.origin, "index_camera_ids": [CAMERA]},
+               "worker": {"max_queue": 2, "timeout_s": 20, "ffmpeg_path": service.ffmpeg}}
+    options.update(extra)
+    return options
+
+
+def roi(tracker, ts, coord, confidence=0.9, kind="person"):
+    return {"roi": {"name": "", "coord": coord, "trackerId": tracker,
+                    "attributes": {"objectType": kind}, "confidence": confidence,
+                    "objectType": kind}, "ts": ts}
+
+
+def task(camera=CAMERA, meta=None, ram_type="video"):
+    body = {"camera": camera, "event": EVENT, "channel": 0, "start": START, "end": END,
+            "type": "rotating", "mute": True, "format": "mp4", "createEvent": False}
+    query = {k: ("true" if v is True else "false" if v is False else str(v)) for k, v in body.items()}
+    payload = {"reqUrl": "/internal/aiprocessors/video/export?" + urlencode(query),
+               "resUrl": "/internal/aiprocessors/recognize-anything", "ramType": ram_type,
+               "keyMoments": [START + 1000], "postVLM": False, "thumbnailMs": [START + 1500],
+               "thumbnailMeta": meta if meta is not None else [
+                   roi(3, START + 1500, [100, 200, 300, 400]),
+                   roi(4, START + 1500, [600, 100, 200, 500], confidence=0.7, kind="vehicle"),
+                   roi(3, START + 9000, [0, 0, 100, 100])],        # outside the export
+               **body}
+    return {"command": "recognizeKeyFrames", "payload": payload}
+
+
+async def test_objects_are_embedded_locally_and_posted_as_thumbnail_tags(controller, tmp_path):
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        result = await worker.handle(task())
+    finally:
+        await worker.stop()
+    assert controller.vision_requests == []                 # never the vision provider
+    # One decoded frame; both objects cropped with 10% padding, best first.
+    assert controller.clip_requests == [{"jpeg": True, "regions": [
+        [0.07, 0.16, 0.43, 0.64], [0.58, 0.05, 0.82, 0.65]]}]
+    [parts] = controller.callbacks
+    assert set(parts) == {"ram"}
+    ram = parts["ram"]
+    assert ram["cameraId"] == CAMERA and ram["eventId"] == EVENT and ram["status"] == "success"
+    assert ram["description"] == "" and ram["keyMomentsTags"] == []
+    tags = ram["thumbnailTags"]
+    # saveEventTagging matches (trackerID, keyMomentMs) to trackerId and exact detectedAt.
+    assert [(t["trackerID"], t["keyMomentMs"]) for t in tags] == [(3, START + 1500), (4, START + 1500)]
+    # Each object carries its class as a RAM tag, which AI Trigger alarms require (#26).
+    assert [[tag["tag"] for tag in t["tags"]] for t in tags] == [["person"], ["vehicle"]]
+    assert all(0 < t["tags"][0]["confScore"] <= 1 for t in tags)
+    assert all(len(t["imgEmbed"]) == 768 for t in tags)
+    assert tags[0]["imgEmbed"][0] == 1.0 and tags[1]["imgEmbed"][1] == 1.0   # normalized
+    assert result["result"] == {"indexed": 2, "snapshots": 0}
+    journal = "".join(p.read_text() for p in (tmp_path / "worker-jobs").glob("*.json"))
+    assert "imgEmbed" not in journal
+
+
+async def test_index_jobs_never_consume_a_caption_permit(controller, tmp_path):
+    options = config(controller)
+    options["worker"]["test_scope"] = {"kind": "recognizeKeyFrames", "permit_id": "other-camera",
+                                       "camera_id": "caption-camera-fixture"}
+    worker = JobProcessor(options, tmp_path)
+    try:
+        await worker.handle(task())
+    finally:
+        await worker.stop()
+    assert list((tmp_path / "worker-test-scopes").glob("*.json")) == []
+
+
+async def test_tasks_without_indexable_objects_are_refused_before_media(controller, tmp_path):
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        for meta in ([], [roi(3, START + 9000, [0, 0, 10, 10])]):
+            with pytest.raises(WorkerError, match="no indexable objects"):
+                await worker.handle(task(meta=meta))
+        with pytest.raises(WorkerError, match="Region metadata entries"):
+            await worker.handle(task(meta=[roi(3, START, [0, 0, 1200, 10])]))
+        with pytest.raises(WorkerError):
+            await worker.handle(task(ram_type="image"))
+    finally:
+        await worker.stop()
+    assert controller.clip_requests == [] and controller.callbacks == []
+
+
+async def test_other_cameras_are_not_indexed(controller, tmp_path):
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError):
+            await worker.handle(task(camera="unlisted-camera"))
+    finally:
+        await worker.stop()
+    assert controller.clip_requests == []
+
+
+async def test_indexing_needs_the_enabled_clip_search_profile(controller, tmp_path):
+    options = config(controller, search={"enabled": False, "profile": clip.PROFILE})
+    worker = JobProcessor(options, tmp_path)
+    try:
+        with pytest.raises(WorkerError):
+            await worker.handle(task())
+    finally:
+        await worker.stop()
+    assert controller.clip_requests == []
+
+
+async def test_a_captioned_camera_carries_thumbnail_tags_in_its_caption_callback(controller, tmp_path):
+    options = config(controller)
+    options["worker"]["test_scope"] = {"kind": "recognizeKeyFrames", "permit_id": "once",
+                                       "camera_id": CAMERA}
+    controller.vision_reply = {"choices": [{"finish_reason": "stop",
+                                             "message": {"content": "A person walks."}}]}
+    worker = JobProcessor(options, tmp_path)
+    command = task()
+    command["payload"]["postVLM"] = True
+    try:
+        await worker.handle(command)
+    finally:
+        await worker.stop()
+    [parts] = controller.callbacks
+    assert [t["trackerID"] for t in parts["ram"]["thumbnailTags"]] == [3, 4]
+
+
+async def test_the_device_routes_index_cameras_to_the_worker(tmp_path):
+    calls = []
+
+    async def admit(body):
+        calls.append(body)
+        return {"accepted": True}
+    options = device_config()
+    options["search"] = {"enabled": True, "profile": clip.PROFILE}
+    options["find_anything"] = {"clip_server": "http://127.0.0.1:8180", "index_camera_ids": [CAMERA]}
+    device = DeviceService(options, tmp_path, admit)
+    reply = decode_message(await device.handle_message(wire("recognizeKeyFrames", task()["payload"])))
+    assert reply.header["errorCode"] == 0 and calls[0]["payload"]["camera"] == CAMERA
+    assert device.status["recognize_key_frames"]["metadata_presence_counts"]["thumbnailMeta"] == 1
+    counts = device.status["recognize_key_frames"]["thumbnail_meta_counts"]
+    assert {k: v for k, v in counts.items() if v} == {
+        "tasks_with_objects": 1, "objects_inside": 2, "objects_after_end": 1, "name_empty": 3,
+        "ts_in_thumbnail_ms": 2, "ts_not_in_thumbnail_ms": 1}
+    shapes = device.status["recognize_key_frames"]["region_shape_counts"]["thumbnailMeta"]
+    assert {k: v for k, v in shapes.items() if v} == {
+        "entries": 3, "max_le_1000": 3, "xywh_fits_1000": 3, "xyxy_ordered": 2,
+        "type_person": 2, "type_vehicle": 1}
+
+
+async def test_nl_parse_is_answered_with_a_local_clip_text_vector(controller, tmp_path):
+    options = {"search": {"enabled": True, "profile": clip.PROFILE},
+               "find_anything": {"clip_server": controller.origin}}
+    service = SearchService(options, tmp_path)
+    try:
+        response = decode_message(await service.handle_message(encode_message(
+            {"id": "q1", "type": "request", "action": "NL_PARSE", "timestamp": 1},
+            {"querySentence": "red car", "model": clip.MODEL})))
+        assert response.header["errorCode"] == 0 and response.header["id"] == "q1"
+        body = response.body
+        assert body["model"] == clip.MODEL and body["dim"] == 768 and body["exact_match"] is False
+        assert body["keyTags"] == [{"matchedWord": "car", "tags": ["vehicle"]}]   # "red car"
+        assert body["objectTypes"] == ["vehicle"]
+        assert "startTime" not in body and "timeTag" not in body
+        assert body["txtEmbed"][5] == 1.0 and len(body["txtEmbed"]) == 768
+        # Protect's default model is clip-ViT-L-14 when a request omits it.
+        response = decode_message(await service.handle_message(encode_message(
+            {"id": "q2", "type": "request", "action": "NL_PARSE", "timestamp": 1},
+            {"querySentence": "red car"})))
+        assert response.header["errorCode"] == 0
+        # Deep-mode E5 queries are not answered with CLIP vectors.
+        response = decode_message(await service.handle_message(encode_message(
+            {"id": "q3", "type": "request", "action": "NL_PARSE", "timestamp": 1},
+            {"querySentence": "red car", "model": "multilingual-e5-small"})))
+        assert response.header["errorCode"] == 1 and response.body == {}
+        assert service.status["queries"] == 2 and service.status["query_failures"] == 1
+        assert service.status["object_filters"] == 2 and service.status["time_filters"] == 0
+        assert controller.text_requests == [{"texts": ["red car"]}, {"texts": ["red car"]}]
+        service._check_profile()
+        profile = json.loads((tmp_path / "search-profile.json").read_text())
+        assert profile["profile"] == clip.PROFILE and profile["dimensions"] == 768
+    finally:
+        await service.stop()
+
+
+@pytest.mark.parametrize("server", ["https://127.0.0.1:8180", "http://8.8.8.8:8180",
+                                    "http://clip.example:8180", "http://127.0.0.1:8180/v1",
+                                    "http://user:pw@127.0.0.1:8180"])
+def test_the_clip_server_must_be_local(server):
+    with pytest.raises(clip.ClipError):
+        clip.validate_find_anything_config({"clip_server": server})
+
+
+def test_config_validates_find_anything(tmp_path):
+    from aikey.config import defaults
+    base = defaults(tmp_path, "02:00:00:00:00:98")
+    base["search"]["profile"] = clip.PROFILE
+    with pytest.raises(ConfigError):
+        validate_config(base, base=tmp_path)            # clip profile needs find_anything
+    base["find_anything"] = {"clip_server": "http://192.168.64.1:8180/", "index_camera_ids": ["a"]}
+    assert validate_config(base, base=tmp_path)["find_anything"]["clip_server"] == "http://192.168.64.1:8180"
+    base["search"]["profile"] = "unknown"
+    with pytest.raises(ConfigError):
+        validate_config(base, base=tmp_path)
+
+
+def test_vectors_are_checked_and_normalized():
+    assert clip.normalize(vector(2))[2] == 1.0
+    for bad in ([1.0] * 767, [float("nan")] * 768, [0.0] * 768, ["1"] * 768):
+        with pytest.raises(clip.ClipError):
+            clip.normalize(bad)
+
+
+def test_regions_are_validated():
+    assert parse_regions("[[0.1, 0.1, 0.5, 0.5]]") == [(0.1, 0.1, 0.5, 0.5)]
+    for raw in ("[]", "[[0.5, 0.1, 0.1, 0.5]]", "[[0, 0, 2, 1]]", "nope", "[[0,0,1]]"):
+        with pytest.raises(InputError):
+            parse_regions(raw)
+
+
+def test_preprocessing_matches_clip_geometry():
+    from PIL import Image
+    pixels = preprocess(Image.new("RGB", (640, 360), (255, 255, 255)))
+    assert pixels.shape == (3, 224, 224)
+    assert abs(float(pixels[0, 0, 0]) - (1 - 0.48145466) / 0.26862954) < 1e-4
+
+
+async def test_the_clip_server_returns_normalized_vectors_and_counts_only():
+    seen = []
+
+    def text(texts):
+        seen.append(texts)
+        return [vector(1) for _ in texts]
+
+    def image(jpeg, regions):
+        return [vector(0) for _ in (regions or [None])]
+    async with TestClient(TestServer(build_app(text, image))) as client:
+        body = await (await client.post("/v1/text", json={"texts": ["a dog "]})).json()
+        assert body["model"] == clip.MODEL and body["dim"] == 768 and body["embeddings"][0][1] == 1.0
+        assert seen == [["a dog"]]
+        form = FormData()
+        form.add_field("image", b"\xff\xd8\xff" + b"0" * 64, filename="f.jpg", content_type="image/jpeg")
+        form.add_field("regions", "[[0, 0, 0.5, 0.5], [0.5, 0.5, 1, 1]]")
+        body = await (await client.post("/v1/image", data=form)).json()
+        assert len(body["embeddings"]) == 2
+        assert (await client.post("/v1/text", json={"texts": []})).status == 400
+        assert (await client.post("/v1/text", json={"texts": ["x" * 2000]})).status == 400
+        form = FormData()
+        form.add_field("image", b"GIF89a", filename="f.gif", content_type="image/gif")
+        assert (await client.post("/v1/image", data=form)).status == 400
+        health = await (await client.get("/healthz")).json()
+        assert health == {"status": "ok", "model": clip.MODEL, "dim": 768, "text_requests": 3,
+                          "image_requests": 2, "texts": 1, "regions": 2, "rejected": 3, "failed": 0}
+
+
+def test_real_clip_weights_rank_the_matching_text_first():
+    """Runs only where the pinned ONNX export is present (not in CI)."""
+    from pathlib import Path
+    models = Path(__file__).resolve().parents[1] / "state" / "clip-models"
+    if not (models / "onnx" / "vision_model.onnx").is_file():
+        pytest.skip("CLIP ONNX weights are not present")
+    pytest.importorskip("onnxruntime")
+    from PIL import Image, ImageDraw
+    from aikey.clip_server import onnx_encoders
+    encode_text, encode_image = onnx_encoders(str(models), threads=2)
+    picture = Image.new("RGB", (640, 360), "white")
+    ImageDraw.Draw(picture).rectangle([220, 80, 420, 280], fill="red")
+    jpeg = io.BytesIO()
+    picture.save(jpeg, "JPEG")
+    [image_vector] = [clip.normalize(v) for v in encode_image(jpeg.getvalue(), None)]
+    texts = [clip.normalize(v) for v in encode_text(["a red square", "a blue circle", "a car"])]
+    scores = [sum(a * b for a, b in zip(image_vector, t)) for t in texts]
+    assert scores[0] == max(scores)
+    # Protect's text slider maps to cosine distances 0.60..0.92.
+    assert 0.60 <= 1 - scores[0] <= 0.92
+
+
+def test_the_search_port_can_carry_its_own_certificate_pin(tmp_path):
+    options = {"controller": {"expected_fingerprint": "aa" * 32, "search_expected_fingerprint": "bb" * 32}}
+    assert SearchService(options, tmp_path)._fingerprint() == "bb" * 32
+    assert SearchService({"controller": {"expected_fingerprint": "aa" * 32}}, tmp_path)._fingerprint() == "aa" * 32
+    from aikey.config import defaults
+    base = defaults(tmp_path, "02:00:00:00:00:98")
+    base["controller"]["search_expected_fingerprint"] = "bb" * 32
+    with pytest.raises(ConfigError, match="go together"):
+        validate_config(base, base=tmp_path)
+    base["controller"]["search_ca_file"] = "search-ca.pem"
+    assert validate_config(base, base=tmp_path)["controller"]["search_ca_file"] == str(tmp_path / "search-ca.pem")
+    base["controller"]["search_expected_fingerprint"] = "not-a-pin"
+    with pytest.raises(ConfigError):
+        validate_config(base, base=tmp_path)
+
+
+def test_protect_error_replies_with_an_empty_string_body_decode():
+    import struct
+    header = json.dumps({"id": "echo-1", "type": "error", "errorCode": 1002, "error": "No handlers"}).encode()
+    wire = struct.pack(">BBBBI", 1, 1, 0, 0, len(header)) + header + struct.pack(">BBBBI", 2, 2, 0, 0, 0)
+    message = decode_message(wire)
+    assert message.header["type"] == "error" and message.body == {}
+    from aikey.protocol import ContractError
+    with pytest.raises(ContractError):
+        decode_message(struct.pack(">BBBBI", 1, 1, 0, 0, len(header)) + header
+                       + struct.pack(">BBBBI", 2, 2, 0, 0, 2) + b"hi")
+
+
+def live_roi(ts, *objects):
+    """The live 7.3.68 shape: one entry per timestamp with a list of objects."""
+    return {"ts": ts, "roi": [{"coord": coord, "trackerId": tracker, "confidence": confidence,
+                               "name": kind, "objectType": kind} for tracker, coord, kind, confidence in objects]}
+
+
+async def test_live_list_shaped_thumbnail_meta_is_indexed(controller, tmp_path):
+    meta = [live_roi(START + 1500, (3, [100, 200, 300, 400], "person", 0.9),
+                     (4, [600, 100, 200, 500], "vehicle", 0.7))]
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        await worker.handle(task(meta=meta))
+    finally:
+        await worker.stop()
+    [parts] = controller.callbacks
+    assert [(t["trackerID"], t["keyMomentMs"]) for t in parts["ram"]["thumbnailTags"]] == [
+        (3, START + 1500), (4, START + 1500)]
+
+
+async def test_key_moment_regions_become_search_snapshots_with_crops(controller, tmp_path):
+    command = task(meta=[])
+    command["payload"]["roiMeta"] = [
+        live_roi(START + 1000, (5, [100, 100, 200, 300], "person", 80), (6, [500, 500, 100, 100], "face", 99)),
+        live_roi(START + 2000, (5, [120, 100, 200, 300], "person", 60), (7, [0, 0, 400, 200], "vehicle", 70)),
+        live_roi(START + 9000, (8, [0, 0, 100, 100], "animal", 99))]            # outside the export
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        result = await worker.handle(command)
+    finally:
+        await worker.stop()
+    assert controller.vision_requests == []
+    [parts] = controller.callbacks
+    ram = parts["ram"]
+    assert ram.get("thumbnailTags") == [] and ram["description"] == ""
+    moments = ram["keyMomentsTags"]
+    # One snapshot per tracker (best confidence), faces never, outside-export never.
+    assert [(m["keyMomentMs"], m["searchSnapshots"][0]["trackerID"],
+             m["searchSnapshots"][0]["smartDetectSnapshotType"]) for m in moments] == [
+        (START + 1000, 5, "person"), (START + 2000, 7, "vehicle")]
+    snapshot = moments[0]["searchSnapshots"][0]
+    # Protect's snapshotSchema fields, exactly.
+    assert set(snapshot) == {"clockBestMonotonic", "clockBestWall", "smartDetectHeatmap",
+                             "smartDetectSnapshot", "smartDetectSnapshotName",
+                             "smartDetectSnapshotType", "trackerID"}
+    assert snapshot["clockBestWall"] == START + 1000 and snapshot["smartDetectSnapshot"] == "5.jpg"
+    assert all(len(m["imgEmbed"]) == 768 for m in moments)
+    assert all([tag["tag"] for tag in m["tags"]] == [m["searchSnapshots"][0]["smartDetectSnapshotType"]]
+               for m in moments if m["searchSnapshots"][0]["smartDetectSnapshotType"] in
+               ("person", "vehicle", "animal", "package"))
+    assert parts["5"] == ("image/jpeg", b"\xff\xd8\xff") and parts["7"] == ("image/jpeg", b"\xff\xd8\xff")
+    assert result["result"] == {"indexed": 0, "snapshots": 2}
+
+
+async def test_existing_objects_take_precedence_over_snapshots(controller, tmp_path):
+    command = task()
+    command["payload"]["roiMeta"] = [live_roi(START + 1000, (5, [100, 100, 200, 300], "person", 80))]
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        await worker.handle(command)
+    finally:
+        await worker.stop()
+    [parts] = controller.callbacks
+    assert parts["ram"]["keyMomentsTags"] == [] and len(parts["ram"]["thumbnailTags"]) == 2
+    assert set(parts) == {"ram"}
+
+
+class _FakeResponse:
+    def __init__(self, status, body):
+        self.status, self._body = status, body
+
+        class _Content:
+            async def iter_chunked(_self, size):
+                yield body
+        self.content = _Content()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeSession:
+    closed = False
+
+    def __init__(self, status=200, body=b""):
+        self.status, self.body, self.requests = status, body, []
+
+    def get(self, url, headers=None, **kwargs):
+        self.requests.append((url, headers))
+        return _FakeResponse(self.status, self.body)
+
+
+def _image(fmt):
+    from PIL import Image
+    out = io.BytesIO()
+    Image.new("RGB", (64, 48), (200, 30, 30)).save(out, fmt)
+    return out.getvalue()
+
+
+def image_search(uri, identifier="img-1"):
+    return encode_message({"id": identifier, "type": "request", "action": "IMAGE_SEARCH", "timestamp": 1},
+                          {"imgUri": uri})
+
+
+async def test_search_by_image_returns_a_local_clip_vector(controller, tmp_path):
+    options = {"search": {"enabled": True, "profile": clip.PROFILE},
+               "find_anything": {"clip_server": controller.origin},
+               "controller": {"host": "192.168.0.1"}, "device": {"mac": "02:9d:90:a5:48:ca"}}
+    service = SearchService(options, tmp_path)
+    uri = "https://192.168.0.1:7444/internal/files/recognizeImage/upload-1.jpg"
+    try:
+        for body in (_image("JPEG"), _image("PNG")):
+            service._media_session = _FakeSession(body=body)
+            response = decode_message(await service.handle_message(image_search(uri)))
+            assert response.header["errorCode"] == 0 and set(response.body) == {"imgEmbed"}
+            assert len(response.body["imgEmbed"]) == 768 and response.body["imgEmbed"][0] == 1.0
+            [(url, headers)] = service._media_session.requests
+            assert url == uri and headers["x-ident"] == "029D90A548CA"
+        assert controller.clip_requests[-1] == {"jpeg": True, "regions": [[0.0, 0.0, 1.0, 1.0]]}
+        assert service.status["image_queries"] == 2 and service.status["image_failures"] == {}
+    finally:
+        service._media_session = None
+        await service.stop()
+
+
+@pytest.mark.parametrize("uri,category", [
+    ("http://192.168.0.1:7443/internal/files/recognizeImage/a.jpg", "uri"),
+    ("https://192.168.0.2:7444/internal/files/recognizeImage/a.jpg", "uri"),
+    ("https://192.168.0.1:7444/api/cameras", "uri"),
+    ("https://192.168.0.1:7443/internal/files/recognizeImage/a.jpg", "uri"),     # not the media port
+    ("https://192.168.0.1:7444/internal/files/../api", "uri"),
+    ("https://192.168.0.1:7444/internal/files/recognizeImage/a.jpg?x=1", "uri"),
+    (None, "uri"),
+])
+async def test_search_by_image_fetches_only_the_console_upload_route(tmp_path, uri, category):
+    options = {"search": {"enabled": True, "profile": clip.PROFILE},
+               "find_anything": {"clip_server": "http://127.0.0.1:1"},
+               "controller": {"host": "192.168.0.1"}, "device": {"mac": "02:9d:90:a5:48:ca"}}
+    service = SearchService(options, tmp_path)
+    service._media_session = _FakeSession(body=_image("JPEG"))
+    response = decode_message(await service.handle_message(image_search(uri)))
+    assert response.header["errorCode"] == 1 and response.body == {}
+    assert service._media_session.requests == [] and service.status["image_failures"] == {category: 1}
+
+
+async def test_search_by_image_refuses_non_images_and_http_errors(tmp_path):
+    options = {"search": {"enabled": True, "profile": clip.PROFILE},
+               "find_anything": {"clip_server": "http://127.0.0.1:1"},
+               "controller": {"host": "192.168.0.1"}, "device": {"mac": "02:9d:90:a5:48:ca"}}
+    service = SearchService(options, tmp_path)
+    uri = "https://192.168.0.1:7444/internal/files/recognizeImage/a.jpg"
+    for session in (_FakeSession(body=b"GIF89a..."), _FakeSession(status=404)):
+        service._media_session = session
+        assert decode_message(await service.handle_message(image_search(uri))).header["errorCode"] == 1
+    assert service.status["image_failures"] == {"format": 1, "http_4xx": 1}
+
+
+def test_image_search_is_advertised_only_with_the_clip_profile(tmp_path):
+    async def admit(body):
+        return {"accepted": True}
+    options = device_config()
+    assert DeviceService(options, tmp_path / "a", admit).get_info()["featureFlags"]["supportImageSearch"] == {
+        "enabled": False, "version": "v1"}
+    options["search"] = {"enabled": True, "profile": clip.PROFILE}
+    options["find_anything"] = {"clip_server": "http://127.0.0.1:8180"}
+    assert DeviceService(options, tmp_path / "b", admit).get_info()["featureFlags"]["supportImageSearch"][
+        "enabled"] is True
+    options["device"]["feature_flags"] = {"supportImageSearch": {"enabled": False, "version": "v1"}}
+    assert DeviceService(options, tmp_path / "c", admit).get_info()["featureFlags"]["supportImageSearch"][
+        "enabled"] is False
+
+
+def test_capability_flags_follow_the_served_features(tmp_path):
+    async def admit(body):
+        return {"accepted": True}
+    options = device_config()
+    options["worker"] = {}
+    flags = DeviceService(options, tmp_path / "a", admit).get_info()["featureFlags"]
+    for name in ("supportTts", "supportFaceRecognition", "supportRecognizeAnything",
+                 "supportLicensePlateRecognition", "supportImageSearch"):
+        assert flags[name] == {"enabled": False, "version": "v1"}, name
+    options["speech_to_text"] = {"provider": "openai-compatible", "camera_ids": ["cam-w"]}
+    options["face_recognition"] = {"server": "http://127.0.0.1:8179", "camera_ids": ["cam-w"]}
+    options["search"] = {"enabled": True, "profile": clip.PROFILE}
+    options["find_anything"] = {"clip_server": "http://127.0.0.1:8180", "index_camera_ids": ["cam-w"]}
+    flags = DeviceService(options, tmp_path / "b", admit).get_info()["featureFlags"]
+    assert {name: flags[name]["enabled"] for name in (
+        "supportTts", "supportFaceRecognition", "supportRecognizeAnything",
+        "supportLicensePlateRecognition", "supportImageSearch")} == {
+        "supportTts": True, "supportFaceRecognition": True, "supportRecognizeAnything": True,
+        "supportLicensePlateRecognition": False, "supportImageSearch": True}
+    options["device"]["feature_flags"] = {"supportTts": {"enabled": False, "version": "v1"}}
+    assert DeviceService(options, tmp_path / "c", admit).get_info()["featureFlags"]["supportTts"][
+        "enabled"] is False
+
+
+def multiple_images(images, camera=CAMERA):
+    return {"command": "recognizeKeyFrames", "payload": {
+        "resUrl": "/internal/aiprocessors/recognize-anything", "ramType": "multipleImages",
+        "format": "jpeg", "camera": camera, "event": EVENT, "channel": 0, "start": START, "end": END,
+        "type": "rotating", "images": images}}
+
+
+def crop_entry(image_id, tracker, moment, confidence=80, kind="person"):
+    return {"reqUrl": f"/internal/aiprocessors/image/{image_id}", "imageId": image_id,
+            "keyMoment": moment, "confidence": confidence, "objectType": kind,
+            "attributes": {"trackerId": tracker}, "trackerId": tracker}
+
+
+async def test_retroactive_crops_are_embedded_locally_as_thumbnail_tags(controller, tmp_path):
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        result = await worker.handle(multiple_images([
+            crop_entry("crop1", 11, START + 500), crop_entry("png1", 12, START + 900, 60, "vehicle"),
+            crop_entry("crop3", 11, START + 500, 40)]))            # same object, lower confidence
+    finally:
+        await worker.stop()
+    assert controller.vision_requests == []                     # never the vision provider
+    assert controller.crop_requests == ["crop1", "png1"]
+    assert [r["regions"] for r in controller.clip_requests] == [[[0.0, 0.0, 1.0, 1.0]]] * 2
+    [parts] = controller.callbacks
+    ram = parts["ram"]
+    assert set(parts) == {"ram"} and ram["description"] == "" and ram["keyMomentsTags"] == []
+    assert [(t["trackerID"], t["keyMomentMs"]) for t in ram["thumbnailTags"]] == [
+        (11, START + 500), (12, START + 900)]
+    assert all(len(t["imgEmbed"]) == 768 for t in ram["thumbnailTags"])
+    assert result["result"] == {"indexed": 2, "snapshots": 0}
+
+
+@pytest.mark.parametrize("images", [
+    [],
+    [{"reqUrl": "/internal/aiprocessors/image/other", "imageId": "crop1", "keyMoment": START, "trackerId": 1}],
+    [{"reqUrl": "/internal/aiprocessors/image/crop1", "imageId": "crop1", "keyMoment": START}],
+    [{"reqUrl": "/internal/aiprocessors/image/../x", "imageId": "../x", "keyMoment": START, "trackerId": 1}],
+])
+async def test_malformed_retroactive_tasks_are_refused_before_media(controller, tmp_path, images):
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError):
+            await worker.handle(multiple_images(images))
+        with pytest.raises(WorkerError):
+            await worker.handle(multiple_images([crop_entry("crop1", 1, START)], camera="unlisted"))
+    finally:
+        await worker.stop()
+    assert getattr(controller, "crop_requests", []) == [] and controller.clip_requests == []
+
+
+def test_retroactive_processing_is_advertised_only_on_opt_in(tmp_path):
+    async def admit(body):
+        return {"accepted": True}
+    options = device_config()
+    options["search"] = {"enabled": True, "profile": clip.PROFILE}
+    options["find_anything"] = {"clip_server": "http://127.0.0.1:8180", "index_camera_ids": ["cam"]}
+    flags = DeviceService(options, tmp_path / "a", admit).get_info()["featureFlags"]
+    assert flags["supportRetroactiveProcessing"] == {"enabled": False, "version": "v1"}
+    options["find_anything"]["retroactive"] = True
+    flags = DeviceService(options, tmp_path / "b", admit).get_info()["featureFlags"]
+    assert flags["supportRetroactiveProcessing"]["enabled"] is True
+    with pytest.raises(clip.ClipError):
+        clip.validate_find_anything_config({"clip_server": "http://127.0.0.1:8180", "retroactive": "yes"})
+
+
+BERLIN_EVENING = 1_790_442_000_000          # Sat 26 Sep 2026 19:00 Europe/Berlin
+
+
+def _local(ms):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.fromtimestamp(ms / 1000, ZoneInfo("Europe/Berlin")).strftime("%a %H:%M")
+
+
+@pytest.mark.parametrize("text,types,window", [
+    ("a red car", ["vehicle"], None),
+    ("Person heute", ["person"], ("today", "Sat 00:00", "Sat 19:00")),
+    ("cat last night", ["animal"], ("last_night", "Fri 18:00", "Sat 06:00")),
+    ("Paket gestern", ["package"], ("yesterday", "Fri 00:00", "Sat 00:00")),
+    ("someone at the door this morning", ["person"], ("this_morning", "Sat 05:00", "Sat 12:00")),
+    ("people in the last 3 hours", ["person"], ("last_hours", "Sat 16:00", "Sat 19:00")),
+    ("Kennzeichen", ["licensePlate"], None),
+    ("carport at dusk", [], None),                   # word boundaries: no "car"
+    ("a blue circle", [], None),
+])
+def test_query_filters_are_parsed_locally(text, types, window):
+    from aikey.search import parse_query_filters
+    result = parse_query_filters(text, BERLIN_EVENING, "Europe/Berlin")
+    assert result["objectTypes"] == types
+    if window is None:
+        assert set(result) == {"objectTypes"}
+    else:
+        tag, start, end = window
+        assert result["timeTag"] == tag
+        assert (_local(result["startTime"]), _local(result["endTime"])) == (start, end)
+
+
+def test_an_unknown_timezone_falls_back_to_utc():
+    from aikey.search import parse_query_filters
+    result = parse_query_filters("today", BERLIN_EVENING, "Not/AZone")
+    assert result["endTime"] == BERLIN_EVENING and result["startTime"] % 86_400_000 == 0
+
+
+async def test_nl_parse_reply_carries_protects_filter_fields(controller, tmp_path):
+    (tmp_path / "device-state.json").write_text(json.dumps({"timezone": "Europe/Berlin"}))
+    options = {"search": {"enabled": True, "profile": clip.PROFILE},
+               "find_anything": {"clip_server": controller.origin}}
+    service = SearchService(options, tmp_path)
+    try:
+        response = decode_message(await service.handle_message(encode_message(
+            {"id": "q1", "type": "request", "action": "NL_PARSE", "timestamp": 1},
+            {"querySentence": "Hund heute", "model": clip.MODEL})))
+    finally:
+        await service.stop()
+    body = response.body
+    assert body["objectTypes"] == ["animal"] and body["timeTag"] == "today"
+    assert body["startTime"] < body["endTime"] and len(body["txtEmbed"]) == 768
+    assert service.status["time_filters"] == 1
+
+
+# --- Second Stage Verification (reverification) with local CLIP ---
+
+def mix(**weights):
+    """A unit vector in the prompt space: person=10, vehicle=11, animal=12, package=13, background=14."""
+    axes = {"person": 10, "vehicle": 11, "animal": 12, "package": 13, "background": 14}
+    values = [0.0] * 768
+    for kind, weight in weights.items():
+        values[axes[kind]] = weight
+    norm = sum(v * v for v in values) ** 0.5
+    return [v / norm for v in values]
+
+
+def reverification_request(service, meta, start=None, end=None):
+    query = {"camera": CAMERA, "event": EVENT, "channel": "0", "start": str(START if start is None else start),
+             "end": str(END if end is None else end),
+             "type": "rotating", "mute": "true", "format": "ubv", "createEvent": "false"}
+    return {"targetUri": ":7788/v1/models/second_verifier_mlabel/inference", "timeoutMs": 30000,
+            "resUrl": service.origin + "/internal/aiprocessors/reverification",
+            "payload": {"action": "classify", "params": {
+                "reqUrl": service.origin + "/internal/aiprocessors/video/export?" + urlencode(query),
+                "thumbnailMs": [m["ts"] for m in meta], "thumbnailMeta": meta,
+                "camera": CAMERA, "event": EVENT, "score_threshold": 0.8}}}
+
+
+def verify_roi(tracker, kind, coord=(100, 100, 300, 500), confidence=0.6):
+    return {"trackerID": tracker, "objectType": kind, "coord": list(coord), "confidence": confidence}
+
+
+def reverification_config(controller, enabled=True):
+    options = config(controller)
+    options["find_anything"]["reverification"] = enabled
+    options["worker"]["request_mp4_exports"] = True
+    return options
+
+
+async def test_second_stage_verification_is_answered_by_local_clip(controller, tmp_path):
+    controller.region_vectors = [
+        mix(person=1.0),                          # tracker 1 person: confirmed
+        mix(animal=1.0),                          # tracker 2 "vehicle": clearly an animal -> retyped
+        mix(animal=0.5, vehicle=0.5),             # tracker 3 animal: unsure -> none
+        mix(background=1.0)]                      # tracker 4 person: background -> none, invalid
+    meta = [{"ts": START + 1500, "roi": [verify_roi(1, "person"), verify_roi(2, "vehicle"),
+                                         verify_roi(3, "animal"), verify_roi(4, "person")]}]
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        result = await worker.handle(reverification_request(controller, meta))
+    finally:
+        await worker.stop()
+    assert controller.vision_requests == []                     # never the vision provider
+    [posted] = controller.reverifications
+    assert posted["action"] == "classify" and posted["model"] == clip.MODEL
+    outcome = posted["result"]
+    assert outcome["cameraId"] == CAMERA and outcome["eventId"] == EVENT and outcome["status"] == "success"
+    verdicts = {r["trackerID"]: (r["objectType"], r["detectedAs"], r["isValidDetection"])
+                for r in outcome["verificationResults"]}
+    assert verdicts == {1: ("person", "person", True), 2: ("vehicle", "animal", False),
+                        3: ("animal", "none", True), 4: ("person", "none", False)}
+    assert all(r["thumbnailMs"] == START + 1500 and 0 < r["detectionConfidence"] <= 1
+               for r in outcome["verificationResults"])
+    assert result["result"] == {"confirmed": 1, "retyped": 1, "unchanged": 2}
+
+
+async def test_second_stage_verification_is_refused_unless_opted_in(controller, tmp_path):
+    meta = [{"ts": START + 1500, "roi": [verify_roi(1, "person")]}]
+    worker = JobProcessor(reverification_config(controller, enabled=False), tmp_path)
+    try:
+        with pytest.raises(WorkerError, match="Unsupported RequestAI targetUri"):
+            await worker.handle(reverification_request(controller, meta))
+    finally:
+        await worker.stop()
+    assert controller.reverifications == [] and controller.clip_requests == []
+
+
+@pytest.mark.parametrize("change", [
+    lambda r: r.__setitem__("resUrl", r["resUrl"].replace("reverification", "recognize-anything")),
+    lambda r: r["payload"].__setitem__("action", "detect"),
+    lambda r: r["payload"]["params"].__setitem__("thumbnailMeta", [{"ts": START + 1, "roi": [
+        {"trackerID": 1, "objectType": "package", "coord": [1, 1, 10, 10], "confidence": 1}]}]),
+    lambda r: r["payload"]["params"].__setitem__("camera", "other-camera"),
+])
+async def test_malformed_verification_requests_are_refused_before_media(controller, tmp_path, change):
+    request = reverification_request(controller, [{"ts": START + 1500, "roi": [verify_roi(1, "person")]}])
+    change(request)
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError):
+            await worker.handle(request)
+    finally:
+        await worker.stop()
+    assert controller.reverifications == [] and controller.clip_requests == []
+
+
+class RevisionedClip:
+    """A CLIP server double that reports a weights revision (#18)."""
+
+    def __init__(self, revision):
+        self.revision = revision
+
+    async def text(self, request):
+        await request.json()
+        return web.json_response({"model": clip.MODEL, "dim": 768, "revision": self.revision,
+                                  "embeddings": [vector(5)]})
+
+    async def health(self, request):
+        return web.json_response({"status": "ok", "model": clip.MODEL, "dim": 768, "revision": self.revision})
+
+
+async def nl_parse(service):
+    return decode_message(await service.handle_message(encode_message(
+        {"id": "q", "type": "request", "action": "NL_PARSE", "timestamp": 1},
+        {"querySentence": "a dog", "model": clip.MODEL})))
+
+
+def test_the_weights_revision_covers_both_encoders_and_the_tokenizer(tmp_path):
+    from aikey.clip_server import weights_revision
+    (tmp_path / "onnx").mkdir()
+    for name in ("onnx/text_model.onnx", "onnx/vision_model.onnx", "tokenizer.json"):
+        (tmp_path / name).write_bytes(name.encode())
+    first = weights_revision(str(tmp_path))
+    assert len(first) == 64 and weights_revision(str(tmp_path)) == first
+    (tmp_path / "tokenizer.json").write_bytes(b"other")
+    assert weights_revision(str(tmp_path)) != first
+
+
+async def test_the_clip_server_reports_its_revision():
+    app = build_app(lambda texts: [vector(1) for _ in texts], lambda jpeg, regions: [vector(0)],
+                    revision="a" * 64)
+    async with TestClient(TestServer(app)) as client:
+        body = await (await client.post("/v1/text", json={"texts": ["a dog"]})).json()
+        health = await (await client.get("/healthz")).json()
+    assert body["revision"] == health["revision"] == "a" * 64
+
+
+async def test_search_pins_the_clip_revision_once_and_refuses_other_weights(tmp_path):
+    served = RevisionedClip("a" * 64)
+    app = web.Application()
+    app.router.add_post("/v1/text", served.text)
+    app.router.add_get("/healthz", served.health)
+    async with TestServer(app) as server:
+        options = {"search": {"enabled": True, "profile": clip.PROFILE},
+                   "find_anything": {"clip_server": f"http://127.0.0.1:{server.port}"}}
+        service = SearchService(options, tmp_path)
+        try:
+            service._check_profile()              # a profile from before pinning existed
+            before = (tmp_path / "search-profile.json").read_text()
+            assert "revision" not in json.loads(before)
+            await service.pin_revision()
+            profile = json.loads((tmp_path / "search-profile.json").read_text())
+            assert profile["revision"] == "a" * 64
+            assert (tmp_path / "search-profile.json.before-upgrade").read_text() == before
+            assert service.status["revision"] == "a" * 12
+            service._check_profile()              # the sync check accepts the pinned profile
+            assert (await nl_parse(service)).header["errorCode"] == 0
+            served.revision = "b" * 64            # the server's weights changed
+            assert (await nl_parse(service)).header["errorCode"] == 1
+        finally:
+            await service.stop()
+        restarted = SearchService(options, tmp_path)
+        try:
+            await restarted.pin_revision()        # the pin survives; it is not re-learned
+            assert restarted.clip.expected_revision == "a" * 64
+            assert (await nl_parse(restarted)).header["errorCode"] == 1
+        finally:
+            await restarted.stop()
+
+
+async def test_a_changed_profile_is_not_upgraded_with_a_revision(tmp_path):
+    served = RevisionedClip("a" * 64)
+    app = web.Application()
+    app.router.add_get("/healthz", served.health)
+    async with TestServer(app) as server:
+        options = {"search": {"enabled": True, "profile": clip.PROFILE},
+                   "find_anything": {"clip_server": f"http://127.0.0.1:{server.port}"}}
+        stale = {"search": options["search"], "find_anything": {"clip_server": "http://127.0.0.1:9"}}
+        SearchService(stale, tmp_path)._check_profile()
+        service = SearchService(options, tmp_path)
+        with pytest.raises(EmbeddingError):
+            await service.pin_revision()
+        assert "revision" not in json.loads((tmp_path / "search-profile.json").read_text())
+        assert not (tmp_path / "search-profile.json.before-upgrade").exists()
+        await service.stop()
+
+
+async def test_worker_clip_calls_follow_the_pinned_revision(controller, tmp_path):
+    worker = JobProcessor(config(controller), tmp_path)
+    assert worker._clip_client().expected_revision is None
+    (tmp_path / "search-profile.json").write_text(json.dumps({"revision": "c" * 64}))
+    assert worker._clip_client().expected_revision == "c" * 64
+    await worker.stop()
+
+
+async def test_completed_index_jobs_roll_over_so_a_backfill_never_fills_the_ledger(controller, tmp_path):
+    options = config(controller)
+    options["worker"]["max_ledger_entries"] = 2
+    worker = JobProcessor(options, tmp_path)
+    try:
+        for event in ("retro-a", "retro-b", "retro-c"):
+            command = multiple_images([crop_entry("crop1", 11, START + 500)])
+            command["payload"]["event"] = event
+            await worker.handle(command)
+            for record in worker._history.values():
+                record["updatedAt"] -= 120                 # age past the one-minute rollover
+                path = worker.state_dir / f"{record['jobId']}.json"
+                path.write_text(json.dumps(record))
+        # Three jobs through a two-entry ledger: completed index jobs were archived.
+        status = worker.status()
+        assert status["retroactive"]["completed"] == 3 and status["retroactive"]["archived"] >= 1
+        assert status["ledger"] <= 2
+        # An archived event is still recognized, not processed twice.
+        command = multiple_images([crop_entry("crop1", 11, START + 500)])
+        command["payload"]["event"] = "retro-a"
+        worker._rollover_history()
+        result = await worker.handle(command)
+        assert result["callback"] == "already_completed"
+    finally:
+        await worker.stop()
+
+
+async def test_retroactive_image_and_unindexed_camera_tasks_are_refused_before_any_fetch(controller, tmp_path):
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError, match="not a Find Anything index camera"):
+            await worker.handle(multiple_images([crop_entry("crop1", 11, START)], camera="offline-camera-fixture"))
+        command = multiple_images([crop_entry("crop1", 11, START)])
+        command["payload"]["ramType"] = "image"
+        with pytest.raises(WorkerError, match="image tasks are not processed"):
+            await worker.handle(command)
+        counts = worker.status()["retroactive"]
+        assert counts["refused_unindexed_camera"] == 1 and counts["refused_image"] == 1
+        assert getattr(controller, "crop_requests", []) == [] and controller.vision_requests == []
+    finally:
+        await worker.stop()
+
+
+async def test_live_jobs_run_before_queued_backfill_jobs(controller, tmp_path):
+    options = config(controller)
+    options["worker"]["max_queue"] = 8
+    worker = JobProcessor(options, tmp_path)
+    order = []
+
+    async def execute(job):
+        order.append(job.operation)
+        return {"status": "processed"}
+    worker._execute = execute
+    worker._record = lambda *args, **kwargs: None
+    import time
+    loop = asyncio.get_running_loop()
+    from aikey.worker import _Job
+    jobs = [_Job(f"{i:064x}", "0" * 64, op, {}, "", "", [], time.monotonic() + 60, loop.create_future())
+            for i, op in enumerate(["indexImages", "indexImages", "speechToText"])]
+    for job in jobs:
+        worker._queue.put_nowait((1 if job.operation == "indexImages" else 0, next(worker._sequence), job))
+    consumer = asyncio.create_task(worker._consume())
+    await asyncio.wait_for(asyncio.gather(*(job.future for job in jobs)), 5)
+    consumer.cancel()
+    assert order == ["speechToText", "indexImages", "indexImages"]
+
+
+
+def test_key_tags_name_the_class_of_object_words_only():
+    from aikey.search import key_tags
+    assert key_tags("a man walking his Hund past the Auto") == [
+        {"matchedWord": "man", "tags": ["person"]}, {"matchedWord": "hund", "tags": ["animal"]},
+        {"matchedWord": "auto", "tags": ["vehicle"]}]
+    assert key_tags("a sailing boat on the lake") == []          # no class word, no tags
+    assert key_tags("face at the window") == []                  # face is not a class tag here
+    assert key_tags(None) == [] and len(key_tags(" ".join(["car"] * 20))) == 1
+
+
+def test_garden_animals_and_delivery_people_get_their_class_key_tag():
+    # "ein Igel im Garten" must share the animal tag with an indexed animal,
+    # or Protect's AI Trigger alarm can never fire for it.
+    from aikey.search import key_tags
+    assert [t["tags"] for t in key_tags("ein Igel und ein Marder im Garten")] == [["animal"], ["animal"]]
+    assert key_tags("squirrel on the fence")[0]["tags"] == ["animal"]
+    assert key_tags("Eichhörnchen am Futterhaus")[0]["tags"] == ["animal"]
+    assert key_tags("der Paketbote an der Tür")[0] == {"matchedWord": "paketbote", "tags": ["person"]}
+    assert key_tags("a boat and a tree") == []
+
+
+def test_class_tags_cover_supported_classes_and_nothing_else():
+    from aikey.worker import _class_tags
+    assert _class_tags("person", 0.87) == [{"confScore": 0.87, "tag": "person"}]
+    assert _class_tags("package") == [{"confScore": 1.0, "tag": "package"}]
+    assert _class_tags("vehicle", 7) == [{"confScore": 1.0, "tag": "vehicle"}]   # bad score
+    for unknown in (None, "", "face", "licensePlate", "boat", 3):
+        assert _class_tags(unknown) == []
+
+
+async def test_retroactive_crops_carry_their_class_tag(controller, tmp_path):
+    worker = JobProcessor(config(controller), tmp_path)
+    try:
+        await worker.handle(multiple_images([
+            crop_entry("crop1", 11, START + 500), crop_entry("png1", 12, START + 900, 60, "vehicle"),
+            crop_entry("crop3", 13, START + 700, 50, "face")]))
+    finally:
+        await worker.stop()
+    tags = {t["trackerID"]: [x["tag"] for x in t["tags"]] for t in controller.callbacks[0]["ram"]["thumbnailTags"]}
+    assert tags == {11: ["person"], 12: ["vehicle"], 13: []}
+
+
+# --- #14 duplicate tracks, unsupported classes and calibration --------------
+
+async def _verify(controller, tmp_path, meta):
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        result = await worker.handle(reverification_request(controller, meta))
+    finally:
+        await worker.stop()
+    [posted] = controller.reverifications
+    return result, posted["result"]["verificationResults"]
+
+
+async def test_a_duplicate_track_is_answered_once_at_its_best_sighting(controller, tmp_path):
+    controller.region_vectors = [mix(person=1.0)]
+    meta = [{"ts": START + 1000, "roi": [verify_roi(1, "person", confidence=0.4),
+                                         verify_roi(2, "person", confidence=0.7)]},
+            {"ts": START + 2000, "roi": [verify_roi(1, "person", confidence=0.9),
+                                         verify_roi(1, "person", confidence=0.2)]}]
+    result, answers = await _verify(controller, tmp_path, meta)
+    assert sorted((a["trackerID"], a["thumbnailMs"]) for a in answers) == [
+        (1, START + 2000), (2, START + 1000)]                    # one answer per tracker
+    assert result["result"] == {"confirmed": 2, "retyped": 0, "unchanged": 0}
+
+
+async def test_unsupported_and_unnamed_classes_get_no_verdict(controller, tmp_path):
+    controller.region_vectors = [mix(vehicle=1.0)]
+    roi = [verify_roi(1, "person"), verify_roi(2, "package"), verify_roi(3, "face"),
+           verify_roi(4, "licensePlate"), {"trackerID": 5, "coord": [1, 1, 10, 10]}]
+    _, answers = await _verify(controller, tmp_path, [{"ts": START + 1500, "roi": roi}])
+    # Only the person region is judged; Protect keeps the other detections as they are.
+    assert [(a["trackerID"], a["objectType"], a["detectedAs"]) for a in answers] == [(1, "person", "vehicle")]
+
+
+async def test_regions_outside_the_exported_interval_are_not_judged(controller, tmp_path):
+    controller.region_vectors = [mix(person=1.0)]
+    meta = [{"ts": START + 1500, "roi": [verify_roi(1, "person")]},
+            {"ts": END + 1, "roi": [verify_roi(2, "person")]},
+            {"ts": START - 1, "roi": [verify_roi(3, "person")]}]
+    _, answers = await _verify(controller, tmp_path, meta)
+    assert [a["trackerID"] for a in answers] == [1]
+
+
+async def test_only_out_of_interval_regions_are_refused_before_media(controller, tmp_path):
+    request = reverification_request(controller, [{"ts": END + 1, "roi": [verify_roi(1, "person")]}])
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError, match="no person, vehicle or animal regions"):
+            await worker.handle(request)
+    finally:
+        await worker.stop()
+    assert controller.reverifications == [] and controller.clip_requests == []
+
+
+async def test_at_most_32_trackers_are_judged_per_task(controller, tmp_path):
+    controller.region_vectors = [mix(person=1.0)] * 32
+    roi = [verify_roi(tracker, "person") for tracker in range(40)]
+    _, answers = await _verify(controller, tmp_path, [{"ts": START + 1500, "roi": roi}])
+    assert sorted(a["trackerID"] for a in answers) == list(range(32))
+    # One thumbnail with 32 regions is embedded in two calls of at most 16 (#14):
+    # a single call is refused by the CLIP server and used to fail the whole task.
+    image_calls = [len(r["regions"]) for r in controller.clip_requests if "regions" in r]
+    assert image_calls == [16, 16]
+
+
+@pytest.mark.parametrize("probability,expected", [
+    (0.9005, ("animal", False)),      # just above the retype bar: retyped
+    (0.8995, ("none", True)),         # just below: left unchanged, not called invalid
+])
+def test_the_retype_bar_is_calibrated_at_the_documented_probability(probability, expected):
+    import math as _math
+    kinds = ["person", "vehicle", "animal", "package", "background"]
+    prompts = {kind: [1.0 if k == kind else 0.0 for k in kinds] for kind in kinds}
+    # Logit scale 100: with four other classes at 0, p = e^L / (e^L + 4).
+    logit = _math.log(4 * probability / (1 - probability))
+    image = [logit / 100 if kind == "animal" else 0.0 for kind in kinds]
+    detected, valid, confidence = JobProcessor._verdict(image, prompts, "person")
+    assert (detected, valid) == expected and abs(confidence - probability) < 1e-9
+    # The original class winning is always a confirmation, however weak.
+    weak = [0.001 if kind == "person" else 0.0 for kind in kinds]
+    assert JobProcessor._verdict(weak, prompts, "person")[:2] == ("person", True)
+    # Background never retypes, even when certain.
+    certain_background = [0.2 if kind == "background" else 0.0 for kind in kinds]
+    assert JobProcessor._verdict(certain_background, prompts, "person")[:2] == ("none", False)
+
+
+async def test_an_index_task_of_a_caption_scope_camera_is_still_indexed(controller, tmp_path):
+    """#1: a one-use caption scope must not shadow the camera's Find Anything index."""
+    options = config(controller)
+    options["worker"]["test_scope"] = {"kind": "recognizeKeyFrames", "permit_id": "once",
+                                       "camera_id": CAMERA}
+    worker = JobProcessor(options, tmp_path)
+    try:
+        result = await worker.handle(task())                          # postVLM false: index only
+    finally:
+        await worker.stop()
+    assert result["result"] == {"indexed": 2, "snapshots": 0}
+    assert controller.vision_requests == []                           # no provider call
+    assert list((tmp_path / "worker-test-scopes").glob("*.json")) == []   # permit untouched
+
+
+async def test_an_index_task_of_a_scope_camera_outside_the_index_is_still_refused(controller, tmp_path):
+    options = config(controller)
+    options["worker"]["test_scope"] = {"kind": "recognizeKeyFrames", "permit_id": "once",
+                                       "camera_id": "caption-only-camera"}
+    worker = JobProcessor(options, tmp_path)
+    try:
+        with pytest.raises(WorkerError, match="captioned, muted"):
+            await worker.handle(task(camera="caption-only-camera"))
+    finally:
+        await worker.stop()
+    assert controller.clip_requests == [] and controller.vision_requests == []
+
+
+async def test_a_continuous_camera_keeps_its_index_tasks_local_and_unbudgeted(controller, tmp_path):
+    class Registry:
+        allowed_ids = frozenset({CAMERA})
+
+        def allows(self, camera_id):
+            return camera_id in self.allowed_ids
+
+    options = config(controller)
+    options["worker"]["continuous"] = {"enabled": True, "camera_models": ["Fixture"]}
+    worker = JobProcessor(options, tmp_path, camera_registry=Registry())
+    try:
+        result = await worker.handle(task())
+    finally:
+        await worker.stop()
+    assert result["result"] == {"indexed": 2, "snapshots": 0}
+    assert controller.vision_requests == []
+    assert not (tmp_path / "caption-budget.json").exists()            # no caption permit spent
+
+
+# --- RAM++ open-vocabulary tags and audio-event thumbnails (7.3.70) ---------
+
+def tagged_config(controller, **extra):
+    options = config(controller, **extra)
+    options["find_anything"]["tag_server"] = controller.origin
+    return options
+
+
+def audio_image(**changes):
+    payload = {"reqUrl": "/internal/aiprocessors/image/crop1", "imageId": "crop1",
+               "resUrl": "/internal/aiprocessors/recognize-anything", "ramType": "image",
+               "format": "jpeg", "camera": "audio-camera-fixture", "event": EVENT, "channel": 0,
+               "start": START, "end": END, "type": "rotating", "keyMoment": START + 700}
+    payload.update(changes)
+    return {"command": "recognizeKeyFrames", "payload": payload}
+
+
+async def test_an_audio_event_thumbnail_gets_event_level_ram_tags(controller, tmp_path):
+    worker = JobProcessor(tagged_config(controller), tmp_path)
+    try:
+        result = await worker.handle(audio_image())
+        status = worker.status()
+    finally:
+        await worker.stop()
+    assert controller.crop_requests == ["crop1"] and controller.vision_requests == []
+    [parts] = controller.callbacks
+    ram = parts["ram"]
+    assert ram["description"] == "" and ram["eventId"] == EVENT and "thumbnailTags" not in ram
+    assert ram["keyMomentsTags"] == [{"keyMomentMs": START + 700, "tags": [
+        {"confScore": 0.97, "tag": "person"}, {"confScore": 0.81, "tag": "garden"},
+        {"confScore": 0.74, "tag": "bicycle"}]}]                  # no search snapshots: event level
+    assert result["result"] == {"tags": 3, "described": False}
+    assert status["retroactive"]["images"] == 1 and status["ram_tagging"]["tags"] == 3
+
+
+@pytest.mark.parametrize("changes", [
+    {"reqUrl": "/internal/aiprocessors/image/other"}, {"imageId": "../x"}, {"format": "png"},
+    {"type": "fixed"}, {"channel": 3}, {"keyMoment": "1"}, {"start": END + 1},
+    {"resUrl": "/internal/aiprocessors/descriptions/1"}, {"extra": 1},
+])
+async def test_malformed_audio_image_tasks_are_refused_before_media(controller, tmp_path, changes):
+    worker = JobProcessor(tagged_config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError):
+            await worker.handle(audio_image(**changes))
+    finally:
+        await worker.stop()
+    assert getattr(controller, "crop_requests", []) == [] and controller.tag_requests == 0
+
+
+async def test_index_jobs_carry_scene_tags_and_ram_tags_per_object(controller, tmp_path):
+    worker = JobProcessor(tagged_config(controller), tmp_path)
+    try:
+        await worker.handle(task())
+    finally:
+        await worker.stop()
+    ram = controller.callbacks[0]["ram"]
+    scene = [m for m in ram["keyMomentsTags"] if "searchSnapshots" not in m]
+    assert [t["tag"] for t in scene[0]["tags"]] == ["person", "garden", "bicycle"]
+    tags = {t["trackerID"]: [x["tag"] for x in t["tags"]] for t in ram.get("thumbnailTags", [])}
+    tags.update({m["searchSnapshots"][0]["trackerID"]: [x["tag"] for x in m["tags"]]
+                 for m in ram["keyMomentsTags"] if "searchSnapshots" in m})
+    assert tags == {3: ["person", "garden", "bicycle"], 4: ["vehicle", "person", "garden", "bicycle"]}
+    assert controller.tag_requests == 3                          # the scene and two objects
+
+
+async def test_a_failing_tag_server_never_fails_the_job(controller, tmp_path):
+    controller.tag_status = 503
+    worker = JobProcessor(tagged_config(controller), tmp_path)
+    try:
+        await worker.handle(multiple_images([crop_entry("crop1", 11, START + 500)]))
+        status = worker.status()
+    finally:
+        await worker.stop()
+    [tagged] = controller.callbacks[0]["ram"]["thumbnailTags"]
+    assert [t["tag"] for t in tagged["tags"]] == ["person"]      # the class tag alone
+    assert status["ram_tagging"] == {"requests": 1, "tags": 0, "failed": 1}
+
+
+async def test_an_audio_image_without_tags_or_a_local_describer_fails(controller, tmp_path):
+    controller.tag_status = 500
+    worker = JobProcessor(tagged_config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError, match="No local tags or description"):
+            await worker.handle(audio_image())
+    finally:
+        await worker.stop()
+    assert controller.callbacks == []
+
+
+def test_the_tag_server_must_be_local(controller):
+    options = config(controller)["find_anything"]
+    assert clip.validate_find_anything_config({**options, "tag_server": "http://172.30.50.14:8190/"})[
+        "tag_server"] == "http://172.30.50.14:8190"
+    for bad in ("https://tags.example.com", "http://8.8.8.8:8190", "http://10.0.0.1/v1", 5):
+        with pytest.raises(clip.ClipError):
+            clip.validate_find_anything_config({**options, "tag_server": bad})
+
+
+async def test_a_continuous_unmetered_key_also_describes_the_audio_thumbnail(controller, tmp_path):
+    class Registry:
+        allowed_ids = frozenset({"audio-camera-fixture"})
+
+        def allows(self, camera_id):
+            return camera_id in self.allowed_ids
+
+    controller.vision_reply = {"choices": [{"finish_reason": "stop",
+                                            "message": {"content": "A synthetic scene."}}]}
+    options = tagged_config(controller)
+    options["worker"]["continuous"] = {"enabled": True, "camera_models": ["Fixture"],
+                                       "unmetered": True}
+    worker = JobProcessor(options, tmp_path, camera_registry=Registry())
+    try:
+        result = await worker.handle(audio_image())
+        other = await worker.handle(audio_image(camera="unlisted-camera", event="other-event"))
+    finally:
+        await worker.stop()
+    assert result["result"] == {"tags": 3, "described": True}
+    assert other["result"] == {"tags": 3, "described": False}        # not a registry camera
+    assert controller.callbacks[0]["ram"]["description"] == "A synthetic scene."
+    assert len(controller.vision_requests) == 1
+    assert not (tmp_path / "caption-budget.json").exists()
+
+
+async def test_a_4k_audio_thumbnail_reaches_the_vision_model_at_most_1280_wide(controller, tmp_path):
+    import base64
+
+    from PIL import Image
+
+    class Registry:
+        allowed_ids = frozenset({"audio-camera-fixture"})
+
+        def allows(self, camera_id):
+            return camera_id in self.allowed_ids
+
+    controller.vision_reply = {"choices": [{"finish_reason": "stop",
+                                            "message": {"content": "A synthetic scene."}}]}
+    options = tagged_config(controller)
+    options["worker"]["continuous"] = {"enabled": True, "camera_models": ["Fixture"],
+                                       "unmetered": True}
+    worker = JobProcessor(options, tmp_path, camera_registry=Registry())
+    try:
+        await worker.handle(audio_image(imageId="big4k", reqUrl="/internal/aiprocessors/image/big4k"))
+    finally:
+        await worker.stop()
+    [body] = controller.vision_bodies
+    url = next(part["image_url"]["url"] for part in body["messages"][0]["content"]
+               if part.get("type") == "image_url")
+    with Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))) as picture:
+        assert picture.size == (1280, 720)
+
+
+async def test_a_single_thumbnail_reverification_exports_the_second_after_it(controller, tmp_path):
+    # An AI Port track has one thumbnail, so Protect sends start == end (live, 2 Oct).
+    controller.region_vectors = [mix(person=1.0)]
+    ts = START + 1500
+    meta = [{"ts": ts, "roi": [verify_roi(1, "person")]}]
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        await worker.handle(reverification_request(controller, meta, start=ts, end=ts))
+    finally:
+        await worker.stop()
+    [posted] = controller.reverifications
+    verdicts = {r["trackerID"]: r["detectedAs"] for r in posted["result"]["verificationResults"]}
+    assert verdicts == {1: "person"}
+    [query] = controller.export_queries
+    assert (query["start"], query["end"], query["format"]) == (str(ts), str(ts + 1000), "mp4")
+
+
+async def test_a_reverification_longer_than_the_video_bound_verifies_its_first_window(controller, tmp_path):
+    # Protect spans the export from the first to the last thumbnail, so a long
+    # G6 track asks for more than max_video_duration_ms (live, 3 Oct: 1 refused).
+    controller.region_vectors = [mix(person=1.0)]
+    first = START + 1500
+    meta = [{"ts": first, "roi": [verify_roi(1, "person")]},
+            {"ts": first + 150_000, "roi": [verify_roi(2, "person")]}]
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        await worker.handle(reverification_request(controller, meta, start=START, end=first + 150_000))
+        counts = worker.status()["reverification"]
+    finally:
+        await worker.stop()
+    [posted] = controller.reverifications
+    assert [r["trackerID"] for r in posted["result"]["verificationResults"]] == [1]
+    [query] = controller.export_queries
+    assert (query["start"], query["end"], query["format"]) == (str(first), str(first + 120_000), "mp4")
+    assert counts == {"narrowed": 1, "confirmed": 1, "retyped": 0, "unchanged": 0}
+
+
+async def test_a_long_reverification_without_regions_is_still_refused_before_media(controller, tmp_path):
+    request = reverification_request(controller, [{"ts": START + 400_000, "roi": [verify_roi(1, "person")]}],
+                                     start=START, end=START + 300_000)
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        with pytest.raises(WorkerError, match="bounded interval"):
+            await worker.handle(request)
+    finally:
+        await worker.stop()
+    assert controller.reverifications == [] and controller.clip_requests == []
+
+
+async def test_a_reverification_thumbnail_at_the_export_end_is_judged_on_the_last_frame(controller, tmp_path):
+    # Protect ends the export at the last thumbnail; seeking to the very end
+    # yields no frame, which failed the whole task (live, 3 Oct 15:08).
+    controller.region_vectors = [mix(person=1.0), mix(person=1.0)]
+    meta = [{"ts": START + 1500, "roi": [verify_roi(1, "person")]},
+            {"ts": END, "roi": [verify_roi(2, "person", confidence=0.7)]}]
+    worker = JobProcessor(reverification_config(controller), tmp_path)
+    try:
+        await worker.handle(reverification_request(controller, meta))
+    finally:
+        await worker.stop()
+    [posted] = controller.reverifications
+    verdicts = {r["trackerID"]: (r["thumbnailMs"], r["detectedAs"]) for r in posted["result"]["verificationResults"]}
+    assert verdicts == {1: (START + 1500, "person"), 2: (END, "person")}

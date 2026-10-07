@@ -10,10 +10,17 @@ from dataclasses import dataclass
 import math
 
 from .aiport_detection import ObjectObservation
+from .aiport_plates import merge_plates, normalize_plate
 
 
-_KINDS = frozenset({"person", "vehicle", "animal"})
+_KINDS = frozenset({"person", "vehicle", "animal", "package"})
 _MAX_OBSERVATIONS_PER_FRAME = 100
+_MAX_REACQUIRE_SECONDS = 30.0
+
+
+# Classes the vision model swapped for one object between samples (a cat in
+# night IR read as a package); only these may confirm an unconfirmed track.
+_CONFUSED_KINDS = frozenset({"animal", "package"})
 
 
 class TrackingError(ValueError):
@@ -28,6 +35,7 @@ class TrackChange:
     label: str
     score: float
     box: tuple[float, float, float, float]
+    plate: str | None = None
 
 
 @dataclass
@@ -37,11 +45,14 @@ class _Track:
     last_seen: float
     hits: int = 1
     active: bool = False
+    held: bool = False      # confirmed, but its enter was not announced
+    plate: str | None = None
 
     def change(self, edge: str) -> TrackChange:
         return TrackChange(edge, self.track_id, self.observation.kind,
                            self.observation.label, self.observation.score,
-                           self.observation.box)
+                           self.observation.box,
+                           self.plate if self.observation.kind == "vehicle" else None)
 
 
 def validate_observation(value: object) -> None:
@@ -76,17 +87,35 @@ def _iou(first: tuple[float, float, float, float],
     return intersection / (first_area + second_area - intersection)
 
 
+def _proximity(first: tuple[float, float, float, float],
+               second: tuple[float, float, float, float]) -> float:
+    """Center distance in units of the larger box's longest side."""
+    dx = (first[0] + first[2] - second[0] - second[2]) / 2
+    dy = (first[1] + first[3] - second[1] - second[3]) / 2
+    scale = max(first[2] - first[0], first[3] - first[1],
+                second[2] - second[0], second[3] - second[1])
+    return math.hypot(dx, dy) / scale
+
+
 class TemporalTracker:
     """Match observations by class and overlap, then require repeated evidence.
 
     ``update`` accepts one frame's observations at a nondecreasing monotonic
     timestamp. A track enters after ``min_hits`` consecutive matching frames.
-    An active track leaves once its last sighting exceeds ``max_gap_seconds``.
-    Tentative tracks disappear on a missed frame. Nothing is persisted.
+    An active track leaves after an unmatched observation frame exceeds
+    ``max_gap_seconds``. A matching box can bridge a short inference delay,
+    but not a stream outage longer than 30 seconds. Tentative tracks disappear
+    on a missed frame. Nothing is persisted.
+
+    ``max_center_distance`` is for sparse samplers such as a paid vision API,
+    whose frames are seconds apart. A walking person then rarely keeps 25%
+    box overlap, so a same-class box whose center moved less than this many
+    longest box sides also matches. Overlap matches always take priority.
     """
 
     def __init__(self, *, min_hits: int = 2, max_gap_seconds: float = 3.0,
-                 iou_threshold: float = 0.25, max_tracks: int = 32):
+                 iou_threshold: float = 0.25, max_tracks: int = 32,
+                 max_center_distance: float | None = None):
         if (type(min_hits) is not int or not 2 <= min_hits <= 10
                 or type(max_gap_seconds) not in (int, float)
                 or not math.isfinite(max_gap_seconds)
@@ -94,8 +123,19 @@ class TemporalTracker:
                 or type(iou_threshold) not in (int, float)
                 or not math.isfinite(iou_threshold)
                 or not 0 < iou_threshold < 1
-                or type(max_tracks) is not int or not 1 <= max_tracks <= 100):
+                or type(max_tracks) is not int or not 1 <= max_tracks <= 100
+                or max_center_distance is not None
+                and (type(max_center_distance) not in (int, float)
+                     or not math.isfinite(max_center_distance)
+                     or not 0 < max_center_distance <= 3)):
             raise TrackingError("invalid_tracking_policy")
+        self.max_center_distance = (None if max_center_distance is None
+                                    else float(max_center_distance))
+        # Content-free association counters for private health.
+        self.stats = {"iou_matches": 0, "proximity_matches": 0,
+                      "tentative_unmatched": 0, "class_resolved": 0}
+        # One unconfirmed sighting per class, e.g. a cat seen only once.
+        self.tentative_by_kind = dict.fromkeys(sorted(_KINDS), 0)
         self.min_hits = min_hits
         self.max_gap_seconds = float(max_gap_seconds)
         self.iou_threshold = float(iou_threshold)
@@ -103,6 +143,33 @@ class TemporalTracker:
         self._tracks: dict[int, _Track] = {}
         self._next_id = 1
         self._last_update: float | None = None
+
+    @property
+    def has_tentative(self) -> bool:
+        """Whether an unconfirmed sighting still needs a second sample."""
+        return any(not track.active for track in self._tracks.values())
+
+    def hold(self, track_id: int, held: bool = True) -> None:
+        """Keep a confirmed track open to the animal/package resolution.
+
+        The engine holds a track whose enter it did not announce (a night-IR
+        package); an animal sighting of it then enters as a new Animal.
+        """
+        track = self._tracks.get(track_id)
+        if track is not None and track.active:
+            track.held = held
+
+    def touch(self, track_id: int, now: float) -> bool:
+        """Keep a held track alive while local evidence shows it unchanged."""
+        track = self._tracks.get(track_id)
+        if track is None or not track.held or not math.isfinite(now):
+            return False
+        track.last_seen = max(track.last_seen, now)
+        return True
+
+    def current_change(self, track_id: int) -> TrackChange | None:
+        track = self._tracks.get(track_id)
+        return track.change("moving") if track is not None and track.active else None
 
     def update(self, observations: tuple[ObjectObservation, ...], *,
                now: float) -> tuple[TrackChange, ...]:
@@ -118,7 +185,9 @@ class TemporalTracker:
 
         changes = []
         for track_id, track in tuple(self._tracks.items()):
-            if now - track.last_seen > self.max_gap_seconds:
+            gap = now - track.last_seen
+            if (not track.active and gap > self.max_gap_seconds
+                    or track.active and gap > _MAX_REACQUIRE_SECONDS):
                 if track.active:
                     changes.append(track.change("leave"))
                 del self._tracks[track_id]
@@ -126,30 +195,61 @@ class TemporalTracker:
         candidates = []
         for index, observation in enumerate(observations):
             for track_id, track in self._tracks.items():
-                if observation.kind != track.observation.kind:
+                crossed = observation.kind != track.observation.kind
+                if crossed and not ((not track.active or track.held) and {observation.kind,
+                                    track.observation.kind} == _CONFUSED_KINDS):
                     continue
+                offset = 2 if crossed else 0   # same-class matches win
                 overlap = _iou(observation.box, track.observation.box)
                 if overlap >= self.iou_threshold:
-                    candidates.append((-overlap, track_id, index))
+                    candidates.append((offset, -overlap, track_id, index))
+                elif self.max_center_distance is not None:
+                    distance = _proximity(observation.box, track.observation.box)
+                    if distance <= self.max_center_distance:
+                        candidates.append((offset + 1, distance, track_id, index))
         matched_tracks: set[int] = set()
         matched_observations: set[int] = set()
-        for _, track_id, index in sorted(candidates):
+        for tier, _, track_id, index in sorted(candidates):
             if track_id in matched_tracks or index in matched_observations:
                 continue
             matched_tracks.add(track_id)
             matched_observations.add(index)
+            self.stats["proximity_matches" if tier % 2 else "iou_matches"] += 1
             track = self._tracks[track_id]
-            track.observation = observations[index]
+            observation = observations[index]
+            if observation.kind != track.observation.kind:
+                # A night-IR cat alternated between animal and package from
+                # one sample to the next, so neither class confirmed. An
+                # unconfirmed or held track resolves the pair to animal.
+                self.stats["class_resolved"] += 1
+                if observation.kind != "animal":
+                    observation = ObjectObservation(
+                        "animal", track.observation.label, observation.score,
+                        observation.box)
+            resolved = track.observation.kind != observation.kind
+            if observation.kind == "vehicle":
+                track.plate = merge_plates(track.plate, normalize_plate(observation.plate))
+            track.observation = observation
             track.last_seen = now
             track.hits += 1
-            if track.active:
+            if track.active and track.held and resolved:
+                track.held = False
+                changes.append(track.change("enter"))
+            elif track.active:
                 changes.append(track.change("moving"))
             elif track.hits >= self.min_hits:
                 track.active = True
                 changes.append(track.change("enter"))
 
         for track_id, track in tuple(self._tracks.items()):
-            if track_id not in matched_tracks and not track.active:
+            if track_id in matched_tracks:
+                continue
+            if not track.active:
+                self.stats["tentative_unmatched"] += bool(observations)
+                self.tentative_by_kind[track.observation.kind] += 1
+                del self._tracks[track_id]
+            elif now - track.last_seen > self.max_gap_seconds:
+                changes.append(track.change("leave"))
                 del self._tracks[track_id]
         for index, observation in enumerate(observations):
             if index in matched_observations:
@@ -160,6 +260,8 @@ class TemporalTracker:
                 continue
             track_id = self._next_id
             self._next_id += 1
-            self._tracks[track_id] = _Track(track_id, observation, now)
+            self._tracks[track_id] = _Track(
+                track_id, observation, now,
+                plate=normalize_plate(observation.plate) if observation.kind == "vehicle" else None)
         self._last_update = now
         return tuple(changes)

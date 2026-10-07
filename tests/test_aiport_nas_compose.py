@@ -156,3 +156,14 @@ def test_manifest_output_is_private_and_idempotent(tmp_path):
     with pytest.raises(SystemExit):
         main(argv)
     assert output.read_text() == "different\n"
+
+
+def test_a_mixed_plan_gets_services_only_for_protect_slots(tmp_path):
+    plan, states, options = fixture(tmp_path)
+    onvif = dict(plan["instances"][0], slot=len(plan["instances"]) + 1, source_kind="onvif",
+                 camera_ids=[f"{9:024x}"], host_ip="192.168.10.140", deployable=False,
+                 blocked_by="onvif_ingest_not_implemented")
+    mixed = dict(plan, instances=plan["instances"] + [onvif])
+    compose = build_nas_compose(mixed, states, **options)
+    assert set(compose["services"]) == {"aiport_slot_1", "aiport_slot_2"}
+    assert "192.168.10.140" not in json.dumps(compose)

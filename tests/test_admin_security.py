@@ -39,6 +39,7 @@ def test_login_session_requires_origin_and_csrf_for_mutations():
     assert SESSION_COOKIE_NAME.startswith("__Host-")
     read = security.authorize("GET", ORIGIN, login.credentials.cookie)
     assert read.allowed and read.subject == "administrator"
+    assert security.csrf_token(login.credentials.cookie) == login.credentials.csrf_token
     missing = security.authorize("POST", ORIGIN, login.credentials.cookie)
     assert not missing.allowed and missing.reason == "csrf_rejected"
     mutation = security.authorize(

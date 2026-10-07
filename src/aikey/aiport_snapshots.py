@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from io import BytesIO
 import ipaddress
 import re
+import time
 from urllib.parse import urlsplit
 
 from PIL import Image, UnidentifiedImageError
@@ -17,6 +18,10 @@ class SnapshotError(ValueError):
     """A snapshot or controller upload request failed validation."""
 
 
+# Protect's on-demand ("live") snapshot upload: a random token path on 7444.
+_LIVE_UPLOAD_PATH = re.compile(r"/internal/camera-upload/[A-Za-z0-9]{16,64}\Z")
+_LIVE_UPLOAD_PORT = 7444
+_LIVE_QUALITIES = frozenset({"medium", "max"})
 _UPLOAD_PATH = re.compile(
     r"/internal/camera-upload/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
@@ -40,11 +45,13 @@ class SmartSnapshot:
 
 
 def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int, *,
-                        filename_track_id: int | None = None) -> SmartSnapshot:
+                        filename_track_id: int | None = None,
+                        reverify_eligible: bool = False,
+                        monotonic_ms: int | None = None) -> SmartSnapshot:
     """Keep one cropped JPEG in memory until Protect requests it."""
     if not isinstance(frame, bytes) or len(frame) > 2_000_000 or len(frame) < 16:
         raise SnapshotError("invalid_snapshot_frame")
-    if not isinstance(change, TrackChange) or change.kind not in {"person", "vehicle", "animal"}:
+    if not isinstance(change, TrackChange) or change.kind not in {"person", "vehicle", "animal", "package"}:
         raise SnapshotError("invalid_snapshot_track")
     if type(wall_ms) is not int or wall_ms <= 0:
         raise SnapshotError("invalid_snapshot_time")
@@ -66,7 +73,13 @@ def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int, *,
             side = max(32, min(side, image.width, image.height))
             left = max(0, min(image.width - side, cx * image.width - side / 2))
             top = max(0, min(image.height - side, cy * image.height - side / 2))
-            crop = image.crop((round(left), round(top), round(left + side), round(top + side)))
+            box = (round(left), round(top), round(left + side), round(top + side))
+            crop = image.crop(box)
+            # The crop in per-mille of the full frame, [x, y, w, h], as native
+            # cameras report it (framingRect, 28 Sep support file).
+            framing = [round(box[0] * 1000 / image.width), round(box[1] * 1000 / image.height),
+                       round((box[2] - box[0]) * 1000 / image.width),
+                       round((box[3] - box[1]) * 1000 / image.height)]
             crop.thumbnail((360, 360))
             output = BytesIO()
             crop.convert("RGB").save(output, format="JPEG", quality=85)
@@ -85,6 +98,10 @@ def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int, *,
     filename = f"smartdetectsnap_zone_{filename_id}{wall_ms}.jpg"
     full_fov_filename = f"smartdetectsnap_zone_{filename_id}{wall_ms}_fullfov.jpg"
     metadata = {
+        # Native snapshots carry the best frame's monotonic clock next to its
+        # wall clock, and every flagged native snapshot had both fields; AI
+        # Port snapshots lacked them and Protect never verified one (7 Oct).
+        "clockBestMonotonic": int(time.monotonic() * 1000) if monotonic_ms is None else monotonic_ms,
         "clockBestWall": wall_ms,
         "smartDetectSnapshot": filename,
         "smartDetectSnapshotType": change.kind,
@@ -95,10 +112,49 @@ def make_smart_snapshot(frame: bytes, change: TrackChange, wall_ms: int, *,
         "confidenceLevel": round(change.score * 100),
         "coord": [round(x1 * 1000), round(y1 * 1000),
                   round((x2 - x1) * 1000), round((y2 - y1) * 1000)],
-        "reVerifyEligible": False,
+        "framingRect": framing,
+        # Inside Protect's reverification window: its detection service then
+        # asks the AI Key to verify the track (7.3.70 reVerificationPolicy).
+        "reVerifyEligible": reverify_eligible is True,
     }
     return SmartSnapshot(filename, jpeg, metadata, full_fov_filename,
                          full_fov_jpeg, full_fov_width, full_fov_height)
+
+
+def validated_live_snapshot_request(payload: object, *,
+                                    controller_ip: str) -> tuple[str, str]:
+    """Accept Protect's on-demand snapshot request; return (camera MAC, URL).
+
+    Observed on Protect 7.3.68 for paired cameras: ``what`` is ``snapshot``,
+    ``deviceID`` names the camera, and the upload goes to a one-use token
+    path on the pinned controller's port 7444.
+    """
+    if (not isinstance(payload, dict) or payload.get("what") != "snapshot"
+            or set(payload) - {"what", "deviceID", "quality", "timeoutMs", "uri"}):
+        raise SnapshotError("unsupported_snapshot_request")
+    if payload.get("quality", "medium") not in _LIVE_QUALITIES:
+        raise SnapshotError("unexpected_snapshot_request")
+    timeout_ms = payload.get("timeoutMs", 60_000)
+    if type(timeout_ms) is not int or not 0 < timeout_ms <= 60_000:
+        raise SnapshotError("invalid_snapshot_timeout")
+    device = payload.get("deviceID")
+    if not isinstance(device, str) or not re.fullmatch(r"[0-9A-Fa-f]{12}", device):
+        raise SnapshotError("snapshot_camera_required")
+    uri = payload.get("uri")
+    if not isinstance(uri, str) or len(uri) > 256:
+        raise SnapshotError("invalid_snapshot_url")
+    try:
+        parsed = urlsplit(uri)
+        expected = ipaddress.IPv4Address(controller_ip)
+        actual = ipaddress.IPv4Address(parsed.hostname or "")
+        port = parsed.port
+    except (ipaddress.AddressValueError, ValueError) as exc:
+        raise SnapshotError("invalid_snapshot_url") from exc
+    if (parsed.scheme != "https" or actual != expected or port != _LIVE_UPLOAD_PORT
+            or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or not _LIVE_UPLOAD_PATH.fullmatch(parsed.path)):
+        raise SnapshotError("invalid_snapshot_url")
+    return device.upper(), uri
 
 
 def validated_upload_url(payload: object, *, controller_ip: str, filename: str,

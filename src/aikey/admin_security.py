@@ -193,6 +193,12 @@ class AdminSecurity:
                 return self._decision(False, "csrf_rejected", action, actor, now)
         return self._decision(True, "authorized", action, actor, now, subject=subject)
 
+    def csrf_token(self, cookie: str) -> str | None:
+        """Render a form token only for a current, signed administrator session."""
+        if self._claims(cookie, int(self._clock())) is None:
+            return None
+        return _b64encode(hmac.digest(self._key, b"csrf\0" + cookie.encode(), "sha256"))
+
     def _same_origin(self, origin: str) -> bool:
         try:
             actual = _origin(origin, allow_loopback_http=self._allow_loopback_http)

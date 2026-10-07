@@ -32,6 +32,9 @@ _WRITE_ONLY_PATHS = {
     ("database", "password_file"),
 }
 _SENSITIVE_KEY_PARTS = ("password", "secret", "token", "api_key", "authorization")
+_INFERENCE_FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
+                               "allow_insecure_http", "max_output_tokens",
+                               "api_key_file"})
 _IMMUTABLE_PATHS = {
     ("runtime", "mode"),
     ("runtime", "state_dir"),
@@ -132,6 +135,13 @@ def _merge_patch(target: Any, patch: Any, path: tuple[str, ...] = ()) -> Any:
     return result
 
 
+# Model roles (#17). Caption and speech may change model here; the paired
+# search encoders are pinned by the index and change only through #18.
+EDITABLE_ROLE_PATHS = {"caption": ("inference", "model"), "speech": ("speech_to_text", "model")}
+FIXED_ROLE_MODELS = {"search_image_text": "clip-ViT-L-14", "text_embedding": "multilingual-e5-small"}
+_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+/-]{0,127}\Z")
+
+
 class ConfigurationStore:
     """Validate, version and atomically replace one configuration file.
 
@@ -186,6 +196,212 @@ class ConfigurationStore:
             self._replace(target_content)
             persisted, persisted_checked = self._read(self.path)
             return ConfigurationSnapshot(_revision(persisted), _public(persisted_checked))
+
+    def preview_inference(self, expected_revision: str,
+                          inference: dict[str, Any]) -> ConfigurationPreview:
+        content, current = self._read(self.path)
+        candidate = self._inference_candidate(current, inference)
+        return self._prepare_inference(content, current, expected_revision, candidate)
+
+    def apply_inference(self, expected_revision: str,
+                        inference: dict[str, Any]) -> ConfigurationSnapshot:
+        """Change only the vision provider, including its write-only key reference."""
+        with self._locked():
+            content, current = self._read(self.path)
+            candidate = self._inference_candidate(current, inference)
+            preview = self._prepare_inference(content, current, expected_revision, candidate)
+            if not preview.changed_fields:
+                return ConfigurationSnapshot(preview.current_revision, _public(current))
+            encoded = self._encode(self._validate(candidate))
+            self._archive(content)
+            self._replace(encoded)
+            persisted, checked = self._read(self.path)
+            if _revision(persisted) != _revision(encoded):
+                raise ConfigurationStoreError("Configuration replacement could not be verified")
+            # Written only after the new revision is verified: a crash before this
+            # leaves no undo offer, never one for the wrong revision (#17).
+            self._write_provider_journal(_revision(content), _revision(persisted))
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
+
+    # --- per-role model settings (#17) -------------------------------------
+
+    def role_models(self) -> dict[str, dict[str, Any]]:
+        """Each AI Key model role, its current model and whether it may be edited here."""
+        _, current = self._read(self.path)
+        speech = current.get("speech_to_text")
+        roles = {
+            "caption": {"model": current["inference"].get("model"), "editable": True, "reason": None},
+            "speech": ({"model": speech.get("model"), "editable": True, "reason": None}
+                       if isinstance(speech, dict) else
+                       {"model": None, "editable": False, "reason": "role_not_configured"}),
+        }
+        for role, model in FIXED_ROLE_MODELS.items():
+            roles[role] = {"model": model, "editable": False, "reason": "index_migration_required"}
+        return roles
+
+    def apply_role_model(self, expected_revision: str, role: str, model: str) -> ConfigurationSnapshot:
+        """Change only one role's model; provider, endpoint and key stay as they are."""
+        if role in FIXED_ROLE_MODELS:
+            raise UnsafeConfigurationChange("role_not_editable: index_migration_required")
+        if role not in EDITABLE_ROLE_PATHS:
+            raise UnsafeConfigurationChange("unknown_role")
+        if not isinstance(model, str) or not _MODEL_ID.fullmatch(model) or ".." in model:
+            raise UnsafeConfigurationChange("invalid_model_id")
+        section, field = EDITABLE_ROLE_PATHS[role]
+        with self._locked():
+            content, current = self._read(self.path)
+            revision = _revision(content)
+            if (not isinstance(expected_revision, str)
+                    or not hmac.compare_digest(revision, expected_revision)):
+                raise RevisionConflict("Configuration changed since it was read")
+            if not isinstance(current.get(section), dict):
+                raise UnsafeConfigurationChange("role_not_configured")
+            if current[section].get(field) == model:
+                return ConfigurationSnapshot(revision, _public(current))
+            candidate = deepcopy(current)
+            candidate[section][field] = model
+            encoded = self._encode(self._validate(candidate))
+            self._archive(content)
+            self._replace(encoded)
+            persisted, checked = self._read(self.path)
+            if _revision(persisted) != _revision(encoded):
+                raise ConfigurationStoreError("Configuration replacement could not be verified")
+            self._write_provider_journal(revision, _revision(persisted))
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
+
+    # --- one-step provider rollback (#17) ----------------------------------
+
+    @property
+    def _provider_journal(self) -> Path:
+        return self.history_dir / "provider-change.json"
+
+    def _write_provider_journal(self, previous: str, current: str) -> None:
+        encoded = json.dumps({"schema": 1, "from": previous, "to": current},
+                             separators=(",", ":")).encode()
+        try:
+            atomic_private(self._provider_journal, encoded + b"\n")
+        except OSError:
+            # The change itself is saved. Without a fresh record no undo is offered:
+            # an older record names another revision and reads as stale.
+            pass
+
+    def _read_provider_journal(self) -> dict[str, str] | None:
+        path = self._provider_journal
+        if not path.exists() and not path.is_symlink():
+            return None
+        try:
+            value = json.loads(self._read_regular_bytes(path, 4096))
+        except (OSError, ValueError) as exc:
+            raise ConfigurationStoreError("Provider undo record is unreadable") from exc
+        if (not isinstance(value, dict) or set(value) != {"schema", "from", "to"}
+                or value["schema"] != 1
+                or not all(isinstance(value[k], str) and _REVISION.fullmatch(value[k])
+                           for k in ("from", "to"))):
+            raise ConfigurationStoreError("Provider undo record is invalid")
+        return value
+
+    def _prior_key_present(self, raw_target: dict[str, Any]) -> bool:
+        reference = (raw_target.get("inference") or {}).get("api_key_file")
+        if reference is None:
+            return True
+        if not isinstance(reference, str) or not reference:
+            return False
+        # A container path (e.g. /state/provider-key-…) names a file stored next
+        # to this config on the host; a host path is checked directly.
+        for candidate in (Path(reference), self.path.parent / Path(reference).name):
+            try:
+                metadata = candidate.lstat()
+            except OSError:
+                continue
+            if stat.S_ISREG(metadata.st_mode) and metadata.st_size > 0:
+                return True
+        return False
+
+    def provider_rollback_status(self) -> dict[str, Any]:
+        """Whether the last provider change can be undone; never paths or values."""
+        try:
+            journal = self._read_provider_journal()
+            if journal is None:
+                return {"available": False, "reason": "no_recorded_provider_change"}
+            content, _ = self._read(self.path)
+            if _revision(content) != journal["to"]:
+                return {"available": False, "reason": "configuration_changed_since"}
+            target_content = self._read_regular_bytes(self.history_dir / f"{journal['from']}.json",
+                                                      _MAX_CONFIG_BYTES)
+            if _revision(target_content) != journal["from"]:
+                return {"available": False, "reason": "prior_revision_inconsistent"}
+            if not self._prior_key_present(json.loads(target_content)):
+                return {"available": False, "reason": "prior_key_missing"}
+        except (ConfigurationStoreError, OSError, ValueError):
+            return {"available": False, "reason": "undo_record_unreadable"}
+        return {"available": True, "reason": None, "revision": journal["to"]}
+
+    def rollback_provider(self, expected_revision: str) -> ConfigurationSnapshot:
+        """Restore the exact configuration before the last provider change."""
+        with self._locked():
+            journal = self._read_provider_journal()
+            if journal is None:
+                raise ConfigurationStoreError("No provider change to roll back")
+            content, current = self._read(self.path)
+            revision = _revision(content)
+            if (not isinstance(expected_revision, str)
+                    or not hmac.compare_digest(revision, expected_revision)
+                    or revision != journal["to"]):
+                raise RevisionConflict("Configuration changed since it was read")
+            target_path = self.history_dir / f"{journal['from']}.json"
+            target_content, target = self._read(target_path)
+            if _revision(target_content) != journal["from"]:
+                raise ConfigurationStoreError("Stored configuration revision does not match its identifier")
+            if not self._prior_key_present(json.loads(target_content)):
+                raise ConfigurationStoreError("The prior provider key is no longer stored")
+            self._assert_immutable(current, target)
+            self._assert_search_profile(target)
+            self._archive(content)
+            self._replace(target_content)
+            persisted, checked = self._read(self.path)
+            if _revision(persisted) != journal["from"]:
+                raise ConfigurationStoreError("Configuration replacement could not be verified")
+            # One step only: the undo record is spent once the prior revision is live.
+            self._provider_journal.unlink(missing_ok=True)
+            self._fsync_directory(self.history_dir)
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
+
+    def _inference_candidate(self, current: dict[str, Any],
+                             inference: dict[str, Any]) -> dict[str, Any]:
+        if (not isinstance(inference, dict) or not {"provider", "model", "base_url"} <=
+                set(inference) or not set(inference) <= _INFERENCE_FIELDS):
+            raise UnsafeConfigurationChange("Vision provider settings are incomplete")
+        selected = deepcopy(inference)
+        if ("api_key_file" not in selected
+                and current["inference"].get("provider") == selected["provider"]
+                and current["inference"].get("base_url") == selected["base_url"]
+                and current["inference"].get("api_key_file")):
+            selected["api_key_file"] = current["inference"]["api_key_file"]
+        if "api_key_file" in inference:
+            key_path = selected["api_key_file"]
+            state = Path(current["runtime"]["state_dir"])
+            if (not isinstance(key_path, str) or not Path(key_path).is_absolute()
+                    or Path(key_path).parent != state):
+                raise UnsafeConfigurationChange(
+                    "Vision key file must be inside the processor state directory")
+        candidate = deepcopy(current)
+        candidate["inference"] = selected
+        return candidate
+
+    def _prepare_inference(self, content: bytes, current: dict[str, Any],
+                           expected_revision: str,
+                           candidate: dict[str, Any]) -> ConfigurationPreview:
+        revision = _revision(content)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(revision, expected_revision)):
+            raise RevisionConflict("Configuration changed since it was read")
+        checked = self._validate(candidate)
+        self._assert_immutable(current, checked)
+        self._assert_search_profile(checked)
+        changes = tuple(_changed(current, checked))
+        result_revision = revision if not changes else _revision(self._encode(checked))
+        return ConfigurationPreview(revision, result_revision, _public(checked),
+                                    changes, bool(changes))
 
     def _prepare(self, content: bytes, current: dict[str, Any], expected_revision: str,
                  patch: dict[str, Any]) -> ConfigurationPreview:

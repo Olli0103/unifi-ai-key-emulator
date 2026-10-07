@@ -58,3 +58,19 @@ Diagnostic bundles use a field allowlist. Do not export raw configuration, envir
 The security workflow runs the full test suite, static checks, a package build, a locked-runtime dependency audit, a validated CycloneDX SBOM and a full-history secret scan. Third-party actions use immutable commit SHAs with read-only repository permissions. Malformed media, oversized responses, redirect attempts, credentialed URLs and cross-client credential leakage require negative tests.
 
 Private security reporting, signed update verification, model file hashing and restore testing remain `needs_evidence`. Track them in issues #11, #16, #24 and the relevant provider/model work rather than treating this document as completion evidence.
+
+## Face-enhancement route boundaries (#3 review of #23, 27 Sep 2026)
+
+The opt-in `enhanceImage` route (off unless `face_enhancement.server` is set) was reviewed with adversarial, synthetic-media tests in `tests/test_face_enhancement.py`.
+
+| Boundary | Control | Evidence |
+|---|---|---|
+| SSRF (crop fetch) | The crop URL must be on a configured controller origin, and its path must be `/internal/aiprocessors/image/<imageId>`. Other hosts and protocol-relative URLs are refused. | `test_a_crop_on_another_host_is_refused` |
+| SSRF (enhancer) | The enhancer must be a loopback or private `http://` address with no path. | `test_the_enhancer_must_be_local` |
+| Redirects | Neither the crop fetch nor the enhancer call follows redirects; any non-200 (a 204 declines) fails the task without an upload. | `test_redirects_are_never_followed` |
+| Credential forwarding | **Fixed:** the enhancer call used the controller session (device TLS identity and controller pin). It now uses the separate model-server session, like the face server. | `test_the_enhancer_is_called_without_the_controller_session` |
+| Oversized or deceptive output | **Fixed:** declared dimensions are checked from the header before any pixel is decoded (JPEG only, no smaller than the source, at most 2048 px, PIL's bomb guard counts as a rejection). The output is **re-encoded**, so EXIF and bytes appended after the end marker never reach Protect. The response size is bounded by `max_media_bytes`. | `test_a_huge_declared_size_is_refused_before_decoding`, `test_metadata_and_appended_bytes_never_reach_protect`, and the decline cases |
+| Cross-task substitution | **Fixed:** the crop URL's query (`type`, `camera`, `smartDetectObject`) must equal the task body, so one object's derivative can never be stored under another. The callback fields always come from the validated task, never from the enhancer. One job identity per object; a changed input for the same object is refused. | `test_a_crop_url_for_another_object_is_refused` |
+| Originals | Protect stores the upload in its separate `enhancedImages` table; the source crop is never modified. | `test_an_enhanced_face_is_uploaded_as_a_separate_derivative` |
+
+Native enhancement acceptance remains `needs_evidence` (#23): enhancement is not configured and has not been deployed.

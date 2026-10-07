@@ -50,6 +50,40 @@ def test_provision_creates_stable_private_identity_and_never_rotates_it(tmp_path
     assert (state / "device.key").read_bytes() == previous_key
 
 
+def test_existing_slot_accepts_valid_camera_policy_without_rewriting_identity(tmp_path):
+    plan, cert, pin, root = fixture(tmp_path)
+    state = root / "slot-1"
+    provision_slot(plan, 1, state, controller_ip="192.168.10.1",
+                   controller_cert_file=cert, controller_pin=pin)
+    config_path = state / "config.json"
+    config = json.loads(config_path.read_text())
+    config["paired_streams"] = [
+        {"camera_mac": mac, "source_ip": "192.168.10.1",
+         "ffmpeg_path": "/usr/bin/ffmpeg"}
+        for mac in ("2A1122334455", "2A1122334456")]
+    config["live_pool_detector"] = {
+        "inference_backend": "vision_api",
+        "provider_config": {"provider": "ollama", "model": "synthetic-vision",
+                            "base_url": "http://127.0.0.1:11434"},
+        "threshold": 0.8, "smart_types": ["person"], "max_requests_per_hour": 24,
+    }
+    config_path.write_text(json.dumps(config) + "\n")
+    previous_config = config_path.read_bytes()
+    previous_key = (state / "device.key").read_bytes()
+
+    result = provision_slot(plan, 1, state, controller_ip="192.168.10.1",
+                            controller_cert_file=cert, controller_pin=pin)
+    assert result["state"] == "verified_existing"
+    assert config_path.read_bytes() == previous_config
+    assert (state / "device.key").read_bytes() == previous_key
+
+    config["device_ip"] = "192.168.10.22"
+    config_path.write_text(json.dumps(config) + "\n")
+    with pytest.raises(InstanceStateError, match="differs"):
+        provision_slot(plan, 1, state, controller_ip="192.168.10.1",
+                       controller_cert_file=cert, controller_pin=pin)
+
+
 @pytest.mark.parametrize("change", [
     "unaddressed", "wrong_pin", "same_controller_ip", "same_ai_key_ip",
 ])
@@ -126,3 +160,20 @@ def test_provisioned_certificate_fingerprint_cannot_change_silently(tmp_path):
     with pytest.raises(InstanceStateError, match="differs"):
         provision_slot(plan, 1, state, controller_ip="192.168.10.1",
                        controller_cert_file=cert, controller_pin=pin)
+
+
+def test_an_onvif_slot_is_never_provisioned(tmp_path):
+    controller = tmp_path / "controller"
+    controller.mkdir(mode=0o700)
+    cert, _ = ensure_identity_certificate(controller, "2A1100F0A55E")
+    pin = hashlib.sha256(ssl.PEM_cert_to_DER_cert(cert.read_text())).hexdigest()
+    plan = plan_ai_ports({"schema": "aikey-camera-preflight/1", "cameras": [
+        {"id": f"{1:024x}", "model": "Third-party camera", "state": "CONNECTED",
+         "processing_class": "legacy_ingress_needed", "source_kind": "onvif"}]},
+        device_ips=["192.168.10.20"], ai_key_ip="192.168.10.21")
+    root = tmp_path / "states"
+    root.mkdir(mode=0o700)
+    with pytest.raises(InstanceStateError, match="ONVIF ingest is not implemented"):
+        provision_slot(plan, 1, root / "slot-1", controller_ip="192.168.10.1",
+                       controller_cert_file=cert, controller_pin=pin)
+    assert not (root / "slot-1").exists()
