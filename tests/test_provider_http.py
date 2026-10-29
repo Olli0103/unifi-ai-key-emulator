@@ -77,7 +77,7 @@ def test_late_http_or_tls_connect_cannot_return_an_expired_connection(monkeypatc
 ])
 def test_sync_dial_checks_all_answers_before_creating_any_socket(monkeypatch, answers):
     calls = []
-    monkeypatch.setattr(socket, 'getaddrinfo', lambda *a, **kw: answers)
+    monkeypatch.setattr(provider_http, 'resolve_addresses', lambda *a, **kw: answers)
     monkeypatch.setattr(socket, 'socket', lambda *a: calls.append(a))
     with pytest.raises(ProviderAddressError):
         provider_http._connect(('configured.example', 443), 2)
@@ -93,7 +93,7 @@ def test_numeric_transport_peer_is_the_checked_answer_without_second_lookup(monk
         s = Socket()
         made.append(s)
         return s
-    monkeypatch.setattr(socket, 'getaddrinfo', lookup)
+    monkeypatch.setattr(provider_http, 'resolve_addresses', lookup)
     monkeypatch.setattr(socket, 'socket', make)
     assert provider_http._connect(('configured.example', 443), 2) is made[0]
     assert made[0].peer == ('8.8.8.8', 443) and len(lookups) == 1
@@ -101,7 +101,7 @@ def test_numeric_transport_peer_is_the_checked_answer_without_second_lookup(monk
 
 def test_dial_owns_the_resolver_sequence_after_validation(monkeypatch):
     answers = peers('8.8.8.8')
-    monkeypatch.setattr(socket, 'getaddrinfo', lambda *a, **kw: answers)
+    monkeypatch.setattr(provider_http, 'resolve_addresses', lambda *a, **kw: answers)
     original = provider_http.checked_addresses
     def checked(*args):
         result = original(*args)
@@ -117,7 +117,7 @@ def test_dial_owns_the_resolver_sequence_after_validation(monkeypatch):
 @pytest.mark.parametrize('timeout', [None, 0, -1, float('inf'), float('nan'), True, 10 ** 400])
 def test_invalid_connect_budget_fails_before_dns_or_socket(monkeypatch, timeout):
     calls = []
-    monkeypatch.setattr(socket, 'getaddrinfo', lambda *a, **kw: calls.append('dns'))
+    monkeypatch.setattr(provider_http, 'resolve_addresses', lambda *a, **kw: calls.append('dns'))
     monkeypatch.setattr(socket, 'socket', lambda *a: calls.append('socket'))
     with pytest.raises(ProviderAddressError):
         provider_http._connect(('configured.example', 443), timeout)
@@ -130,7 +130,7 @@ def test_late_dns_completion_does_not_start_a_late_connection(monkeypatch):
     def slow(*a, **kw):
         clock[0] = 3
         return peers('8.8.8.8')
-    monkeypatch.setattr(socket, 'getaddrinfo', slow)
+    monkeypatch.setattr(provider_http, 'resolve_addresses', slow)
     monkeypatch.setattr(socket, 'socket', lambda *a: made.append(a))
     with pytest.raises(TimeoutError):
         provider_http._connect(('configured.example', 443), 2)
@@ -141,7 +141,7 @@ def test_late_dns_completion_does_not_start_a_late_connection(monkeypatch):
 def test_candidate_attempts_share_budget_and_late_success_is_closed(monkeypatch, late_success):
     clock, made = [0], []
     monkeypatch.setattr(provider_http.time, 'monotonic', lambda: clock[0])
-    monkeypatch.setattr(socket, 'getaddrinfo', lambda *a, **kw: peers('8.8.8.8', '1.1.1.1'))
+    monkeypatch.setattr(provider_http, 'resolve_addresses', lambda *a, **kw: peers('8.8.8.8', '1.1.1.1'))
     def connect():
         clock[0] = 3
         if not late_success:
@@ -169,7 +169,7 @@ def test_interrupt_closes_provisional_socket_without_retry(monkeypatch):
 def test_dns_outage_keeps_its_fixed_subtype_and_policy_failure_is_not_fallback(monkeypatch):
     def unavailable(*a, **kw):
         raise socket.gaierror('SYNTHETIC-RESOLVER-CANARY')
-    monkeypatch.setattr(socket, 'getaddrinfo', unavailable)
+    monkeypatch.setattr(provider_http, 'resolve_addresses', unavailable)
     with pytest.raises(api.ApiDetectionError, match='^api_detection_dns_unavailable$') as error:
         api._post('https://configured.example/v1/probe', {}, {})
     assert 'CANARY' not in str(error.value)
@@ -187,7 +187,7 @@ def test_policy_rejection_before_paid_budget_does_not_select_local_fallback(tmp_
     detector.transport = lambda *a: calls.append('primary')
     detector.fallback = object()
     detector._fallback_text = lambda *a: calls.append('fallback')
-    monkeypatch.setattr(socket, 'getaddrinfo', lambda *a, **kw: peers('8.8.8.8', '127.0.0.1'))
+    monkeypatch.setattr(api, 'resolve_addresses', lambda *a, **kw: peers('8.8.8.8', '127.0.0.1'))
     with pytest.raises(api.ApiDetectionError, match='^api_detection_address_refused$'):
         detector.detect_for_camera(FIRST, STILL)
     assert calls == [] and detector.budget.remaining(FIRST) == 2

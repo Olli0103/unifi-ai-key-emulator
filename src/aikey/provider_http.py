@@ -10,12 +10,7 @@ from urllib.request import (BaseHandler, HTTPHandler, HTTPSHandler, HTTPRedirect
                             ProxyHandler, build_opener)
 
 from .provider_network import ProviderAddressError, checked_addresses, validate_provider_host
-
-
-class ProviderLookupError(socket.gaierror):
-    def __init__(self):
-        # Preserve a fixed DNS-outage subtype without resolver payloads.
-        super().__init__("provider_dns_unavailable")
+from .provider_dns import ProviderLookupError, ProviderDNSTimeout, ProviderResolverError, resolve_addresses
 
 
 def _deadline(timeout):
@@ -136,7 +131,9 @@ def _connect(address, timeout, source_address=None):
                   (host, port, 0, 0) if literal.version == 6 else (host, port))]
     else:
         try:
-            peers = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
+            peers = resolve_addresses(host, port, _remaining(deadline))
+        except (ProviderDNSTimeout, ProviderResolverError):
+            raise
         except OSError:
             raise ProviderLookupError() from None
     peers = tuple(peers)

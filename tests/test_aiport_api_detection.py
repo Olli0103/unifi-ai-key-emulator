@@ -368,7 +368,7 @@ def test_dns_outage_preserves_budget_and_recovers_without_restart(tmp_path, monk
         resolutions.append(1)
         raise socket.gaierror("private resolver detail")
 
-    monkeypatch.setattr("aikey.aiport_api_detection.socket.getaddrinfo", unavailable)
+    monkeypatch.setattr("aikey.aiport_api_detection.resolve_addresses", unavailable)
     with pytest.raises(ApiDetectionError, match="api_detection_dns_unavailable"):
         detector.detect_for_camera(FIRST, STILL)
     with pytest.raises(ApiDetectionError, match="api_detection_dns_unavailable"):
@@ -378,7 +378,7 @@ def test_dns_outage_preserves_budget_and_recovers_without_restart(tmp_path, monk
     assert detector.budget.remaining(FIRST) == 2
 
     clock[0] += 61
-    monkeypatch.setattr("aikey.aiport_api_detection.socket.getaddrinfo",
+    monkeypatch.setattr("aikey.aiport_api_detection.resolve_addresses",
                         lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM,
                                                    socket.IPPROTO_TCP, '', ('8.8.8.8', 443))])
     for _ in range(4):
