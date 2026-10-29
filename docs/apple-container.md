@@ -144,6 +144,10 @@ The old container stays stopped for a later rollback. The output is only the ser
 
 On 26 Sep 2026 at 08:41:14 the pinned Mac AI Port was stopped, with no event open. The agent's next tick started the same container at 08:41:18. Within 12 s its control connection was back and all three streams were decoding. Protect showed the AI Port `CONNECTED` with its three paired cameras unchanged. A native Flur Animal event followed at 08:41:59. The AI Key and the NAS AI Ports were untouched.
 
+For permanent removal or recovery, follow the [uninstall/restore
+boundaries](uninstall-restore.md); retain identity, journals and indexes and
+hold the specific supervisor before removing a container.
+
 ## Networking limits and later search work
 
 Apple's default network uses NAT. Published ports pass through a proxy that opens a separate connection to the container. The application therefore cannot assume it sees the original controller IP. This follows from the 1.4.1 `ConnectHandler.swift` and `UDPForwarder.swift` implementation, reviewed alongside `NetworkMode.swift` in the [release source](https://github.com/apple/container/tree/1.4.1/Sources).
