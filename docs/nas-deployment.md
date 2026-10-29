@@ -82,6 +82,12 @@ Back up state and the database together before upgrades. Protect firmware change
 
 ## Dated recovery evidence
 
+The [29 October source upgrade](evidence/nas-source-upgrade-20261029.md) records
+the later private hybrid-search deployment, current source/runtime versions,
+verified cold backups, identity/index preservation, paired network-namespace
+replacement and bounded native checks. It is not a fresh-install/public Compose
+qualification, full restore/rollback, host-reboot or quality/soak PASS.
+
 The instructions above describe the public dense-search preparation, not every
 later private deployment. The [29 October isolated restore](evidence/nas-restore-20261029.md)
 restored a deployed hybrid-image backup into a separate network-less database

@@ -7,6 +7,12 @@ from older 7.3.60/7.3.68/7.3.70 trials.
 
 ## Observed
 
+These sections record successive bounded observations. The later
+[source upgrade and native checks](nas-source-upgrade-20261029.md) replace the
+inventory-only deployment while preserving its identity/configuration. Its
+manifest now reports `live_partial`; earlier `unknown` observations below
+remain historical, not the current running status.
+
 - The native controller reports Protect 7.3.74. The authenticated, independently
   pinned integration inventory returns 11 cameras, 10 connected, across eight
   UniFi model families. The complete private ID-set digest matches a separately
@@ -80,7 +86,9 @@ post-caption restart, all cameras, overload behavior or new Deep processing.
 - Fresh adoption, a new management-password rotation, or a controller upgrade
   from a captured before-state on 7.3.74.
 - A new persisted 7.3.74 audio transcript, identity/enhancement workflow,
-  image query, deep-session round trip or comparative quality result.
+  deep-session round trip or comparative quality result. Later bounded native
+  image-query transport and unresolved ranking/contrast results are recorded
+  in the source-upgrade report, not promoted to general relevance acceptance.
 - Complete restored-device/controller bootstrap, host reboot, sustained pilot,
   or a native ONVIF test. The owner has no ONVIF camera and explicitly keeps
   that requirement open.

@@ -24,7 +24,8 @@ EXPIRY_KINDS = ("manual", "none", "per_job", "not_stored", "on_admission",
 ROWS = (
     {"key": "media_frames", "category": "Downloaded clips, decoded frames and image crops",
      "local": "In-memory media plus per-job private video decode directories",
-     "protect": "Protect retains its original recording and uploaded search/face snapshots",
+     "protect": "Protect retains original recordings, query-image uploads and search/face snapshots; "
+                "their deletion/expiry is independent and not fully verified",
      "destination": "Configured caption, face, CLIP or other selected model service; "
                     "only the role's selected input. Protect receives callback snapshots.",
      "default": "No model selected; no continuous camera scope. Features require explicit setup.",
