@@ -419,6 +419,7 @@ class ConfigurationStore:
         checked = self._validate(candidate)
         self._assert_immutable(current, checked)
         self._assert_search_profile(checked)
+        self._assert_credential_routes(current, checked)
         changes = tuple(_changed(current, checked))
         resulting = current_revision if not changes else _revision(self._encode(checked))
         return ConfigurationPreview(
@@ -434,6 +435,30 @@ class ConfigurationStore:
             return validate_config(value, base=self.path.parent)
         except ConfigError as exc:
             raise UnsafeConfigurationChange(str(exc)) from exc
+
+    @staticmethod
+    def _assert_credential_routes(before: dict[str, Any], after: dict[str, Any]) -> None:
+        """A generic merge patch must not retarget a role's stored credential.
+
+        Role-scoped operations explicitly retain/drop/replace their key. Generic
+        patches have no such authority: their write-only field check otherwise
+        prevents changing a key while silently retaining it at a new service.
+        """
+        roles = {
+            "inference": (("provider", "base_url"), "api_key_file"),
+            "embeddings": (("backend", "base_url"), "bearer_token_file"),
+            "speech_to_text": (("provider", "base_url"), "api_key_file"),
+            "database": (("host", "port", "sslrootcert"), "password_file"),
+        }
+        for role, (route_fields, credential) in roles.items():
+            previous, candidate = before.get(role), after.get(role)
+            if not isinstance(previous, dict) or not isinstance(candidate, dict):
+                continue
+            retained = previous.get(credential)
+            if (retained and retained == candidate.get(credential)
+                    and any(previous.get(k) != candidate.get(k) for k in route_fields)):
+                raise UnsafeConfigurationChange(
+                    "Credential destination changes require a role-specific write-only operation")
 
     def _assert_immutable(self, before: dict[str, Any], after: dict[str, Any]) -> None:
         changed = [".".join(path) for path in sorted(_IMMUTABLE_PATHS)
