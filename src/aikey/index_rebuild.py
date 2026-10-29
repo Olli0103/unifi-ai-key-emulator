@@ -124,10 +124,14 @@ class Rebuild:
         self.directory = self.state_dir / "index-rebuild" / self.tag
         self.journal_path = self.directory / "journal.json"
         existing = self._read(self.journal_path)
-        if current["revision"] == target_revision and not (existing and existing.get("state") == "cut_over"):
+        at_target = current["revision"] == target_revision
+        if at_target and not (existing and existing.get("state") in ("verified", "cut_over")):
             raise RebuildError("The target revision is already the live revision")
-        base = self._read(self.directory / "previous-profile.json") if current["revision"] == target_revision else current
-        identity = {k: v for k, v in (base or current).items() if k != "fingerprint"}
+        base = self._read(self.directory / "previous-profile.json") if at_target else current
+        if at_target and (base is None or base.get("revision") != existing.get("from_revision")
+                          or base.get("revision") == target_revision):
+            raise RebuildError("The previous profile does not match this generation")
+        identity = {k: v for k, v in base.items() if k != "fingerprint"}
         identity.update(revision=target_revision, source=target_source)
         self.target_profile = _with_fingerprint(identity)
         self.journal = existing or {
@@ -136,7 +140,12 @@ class Rebuild:
         if self.journal.get("revision") != target_revision or self.journal.get("state") not in STATES:
             raise RebuildError("The rebuild journal belongs to another generation; inspect it")
         # A journal for a finished generation keeps its original "from" revision.
-        if self.journal["state"] not in ("cut_over",) and self.journal["from_revision"] != current["revision"]:
+        recovering_profile = at_target and self.journal["state"] == "verified"
+        if recovering_profile and (current != self.target_profile or not self.store.has_snapshot(self.tag)
+                                   or not self.store.swapped(self.tag)):
+            raise RebuildError("The interrupted profile swap cannot be verified; inspect it")
+        if (self.journal["state"] != "cut_over" and not recovering_profile
+                and self.journal["from_revision"] != current["revision"]):
             raise RebuildError("The live revision changed since this generation started; start a new one")
 
     @staticmethod
@@ -233,6 +242,16 @@ class Rebuild:
                 or (counts.get("tables") or {}).get("ramDetections") != live["rows"]):
             raise RebuildError("A verified backup matching the live index is required")
         previous = self._read(self.live_profile)
+        if previous == self.target_profile:
+            # Both swaps committed, but the journal write may have been
+            # interrupted. Re-check durable evidence before finalizing; never
+            # overwrite the original snapshot or previous profile on retry.
+            saved_previous = self._read(self.directory / "previous-profile.json")
+            if (saved_previous is None or saved_previous.get("revision") != self.journal["from_revision"]
+                    or not self.store.has_snapshot(self.tag) or not self.store.swapped(self.tag)):
+                raise RebuildError("The interrupted profile swap cannot be verified; inspect it")
+            self._save(state="cut_over", cut_over={"rows": live["rows"], "at": self.now()})
+            return {"state": "cut_over", "rows": live["rows"]}
         if previous is None or previous.get("revision") != self.journal["from_revision"]:
             raise RebuildError("The live profile no longer matches this generation")
         _atomic_json(self.directory / "previous-profile.json", previous)
