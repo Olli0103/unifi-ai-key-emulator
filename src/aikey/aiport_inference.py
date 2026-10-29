@@ -85,6 +85,7 @@ class FairInference:
         self._consecutive_turns = 0
         self._confirmation_camera: str | None = None
         self._worker: asyncio.Task | None = None
+        self._active_thread: asyncio.Task | None = None
         self._closed = False
         self._global_failure = False
         self.dropped_frames = 0
@@ -142,6 +143,16 @@ class FairInference:
                 return camera
         raise RuntimeError("inference queue is empty")
 
+    async def _call_in_thread(self, function, *args):
+        job = asyncio.create_task(asyncio.to_thread(function, *args))
+        self._active_thread = job
+        try:
+            # Keep an explicit handle even if an async waiter is cancelled.
+            return await asyncio.shield(job)
+        finally:
+            if job.done() and self._active_thread is job:
+                self._active_thread = None
+
     async def _run(self) -> None:
         while self._pending and not self._closed and not self._global_failure:
             camera = self._next_camera()
@@ -152,7 +163,7 @@ class FairInference:
             try:
                 if self._model is None:
                     try:
-                        self._model = await asyncio.to_thread(self._load_detector)
+                        self._model = await self._call_in_thread(self._load_detector)
                         if (self._model is None
                                 or not callable(getattr(self._model, "detect", None))
                                 and not callable(getattr(self._model,
@@ -165,11 +176,15 @@ class FairInference:
                         for unavailable_camera in self._cameras:
                             await self._notify_unavailable(unavailable_camera)
                         return
+                # Shutdown may begin while the model loads in a real thread.
+                # Do not start a new (potentially paid) call after that boundary.
+                if self._closed:
+                    return
                 detect_for_camera = getattr(self._model, "detect_for_camera", None)
                 if callable(detect_for_camera):
-                    result = await asyncio.to_thread(detect_for_camera, camera, frame)
+                    result = await self._call_in_thread(detect_for_camera, camera, frame)
                 else:
-                    result = await asyncio.to_thread(self._model.detect, frame)
+                    result = await self._call_in_thread(self._model.detect, frame)
                 if not isinstance(result, tuple) or len(result) > 100:
                     raise TrackingError("invalid_tracking_observation")
                 for observation in result:
@@ -227,10 +242,10 @@ class FairInference:
                 pass
 
     async def join(self) -> None:
-        """Wait for the currently queued diagnostic work to finish."""
+        """Wait for queued work without transferring ownership to this waiter."""
         worker = self._worker
         if worker is not None:
-            await worker
+            await asyncio.shield(worker)
 
     def skip_confirmation(self, camera_mac: str) -> None:
         """Save a paid confirming request when nothing new needs one."""
@@ -264,17 +279,35 @@ class FairInference:
                      or self._attempts[camera] < self._max_frames))
 
     async def close(self) -> None:
+        """Seal admission and wait for already-running work, without retrying.
+
+        Cancelling an asyncio wrapper does not stop a synchronous model/API
+        thread. Never report completion merely because that wrapper cancelled.
+        A cancelled caller can call close again to await the same operation.
+        Async result delivery may be cancelled after the thread has finished.
+        """
         self._closed = True
         self._pending.clear()
         self._latest_pending.clear()
         self._confirmation_camera = None
+        thread = self._active_thread
+        if thread is not None:
+            try:
+                await asyncio.shield(thread)
+            except Exception:
+                # The worker owns classification of model errors; never expose
+                # a raw thread exception merely because shutdown is waiting.
+                pass
+            if self._active_thread is thread:
+                self._active_thread = None
         worker = self._worker
         if worker is not None and not worker.done():
             worker.cancel()
             try:
                 await worker
             except asyncio.CancelledError:
-                pass
+                if asyncio.current_task().cancelling():
+                    raise
         self._model = None
 
     def snapshot(self) -> dict[str, object]:
