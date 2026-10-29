@@ -18,6 +18,11 @@ prepares controller/listener/provider/model settings without editing JSON. Run
 it in the intended filesystem/runtime namespace: generated absolute paths must
 exist **inside** the eventual container. The existing mount layout and historical
 device-service/control-profile steps below are not automatically migrated.
+Fresh setup can now select `--control-profile device-service` with the explicitly
+verified `--controller-fingerprint`, and `--pin-only-hostname` only when its
+certificate name does not cover the chosen address. Separate search trust uses
+`--search-fingerprint` during setup and `trust --channel search` afterward; it
+does not enable a database or prove Apple/native search compatibility.
 
 Install the release from [Apple's 1.4.1 release page](https://github.com/apple/container/releases/tag/1.4.1). The commands below use its [command reference](https://github.com/apple/container/blob/1.4.1/docs/command-reference.md). Use a dedicated directory outside the repository for state and replace the uppercase address placeholders. No real LAN addresses or API secrets belong in this guide.
 

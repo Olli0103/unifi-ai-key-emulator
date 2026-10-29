@@ -26,7 +26,10 @@ def _parser():
     setup.add_argument("--bind", help="Explicit listener IP; defaults to --device-ip")
     setup.add_argument("--https-port", type=int, default=8080)
     setup.add_argument("--protect-version", required=True, help="Operator-reported version; not live verification")
+    setup.add_argument("--control-profile", choices=("ucp4", "device-service"), default="ucp4",
+                       help="Controller protocol; device-service requires the explicit SHA-256 pin")
     setup.add_argument("--controller-fingerprint", help="Independently verified SHA-256 pin; not trust import")
+    setup.add_argument("--search-fingerprint", help="Separate verified search-channel SHA-256 pin; not trust import")
     setup.add_argument("--pin-only-hostname", action="store_true", help="Disable hostname matching, requiring the explicit pin")
     setup.add_argument("--request-mp4-exports", action="store_true")
     setup.add_argument("--ffmpeg-path", type=Path, help="Absolute path in the eventual runtime")
@@ -44,7 +47,8 @@ def _parser():
     trust = commands.add_parser("trust", help="Import controller certificate using a verified fingerprint")
     trust.add_argument("--config", type=Path, default=Path("config.json"))
     trust.add_argument("--fingerprint", required=True, help="Independently verified SHA-256 fingerprint")
-    trust.add_argument("--port", type=int, help="TLS endpoint, defaults to configured control port")
+    trust.add_argument("--channel", choices=("control", "search"), default="control")
+    trust.add_argument("--port", type=int, help="TLS endpoint, defaults to the selected channel's configured port")
     lab = commands.add_parser("lab", help="Run synthetic end-to-end loopback test, without Protect")
     lab.add_argument("--output", type=Path, default=Path("lab-results.json"))
     inventory = commands.add_parser("inventory", help="Read-only Protect camera preflight; no processing is enabled")
@@ -156,9 +160,19 @@ def main(argv=None):
             from .tls import import_controller_trust
             if not config["controller"]["host"]:
                 raise ConfigError("Set controller.host before importing trust")
+            controller = config["controller"]
+            search = args.channel == "search"
+            if search and not controller.get("search_ca_file"):
+                raise ConfigError("Search trust requires a separately configured search CA path and pin")
+            pin = controller.get("search_expected_fingerprint" if search else "expected_fingerprint")
+            if pin is not None and (not isinstance(pin, str)
+                    or pin.replace(":", "").lower() != args.fingerprint.replace(":", "").lower()):
+                raise ConfigError("Supplied fingerprint differs from the selected channel's configured pin")
+            port = args.port if args.port is not None else controller["search_port" if search else "control_port"]
+            if not 1 <= port <= 65535:
+                raise ConfigError("Trust endpoint must be a TCP port between 1 and 65535")
             fingerprint = import_controller_trust(config["controller"]["host"],
-                args.port or config["controller"]["control_port"], args.fingerprint,
-                Path(config["controller"]["ca_file"]))
+                port, args.fingerprint, Path(controller["search_ca_file" if search else "ca_file"]))
             print(json.dumps({"trusted_sha256": fingerprint, "http_requests_sent": 0}))
             return 0
         if not report["ready_for_device_start"]:
