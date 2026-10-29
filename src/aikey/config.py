@@ -19,20 +19,32 @@ class ConfigError(ValueError):
 
 
 def _local_inference(inference: dict) -> bool:
-    """A caption model with no per-request cost: Ollama or OpenAI-compatible on a private address."""
-    import ipaddress
-    from urllib.parse import urlsplit
+    """Endpoint eligibility for an explicit owner-selected unmetered policy.
+
+    A provider name is not proof of locality or zero charges. This is only a
+    location guard; a private proxy can still forward to a paid service.
+    """
     provider = inference.get("provider")
-    if provider == "ollama":
-        return True
-    if provider != "openai-compatible" or not isinstance(inference.get("base_url"), str):
+    if not isinstance(provider, str) or provider not in {"ollama", "openai-compatible"}:
+        return False
+    base_url = inference.get("base_url")
+    if base_url is None and provider == "ollama":
+        from .providers import DEFAULT_BASE_URLS
+        base_url = DEFAULT_BASE_URLS["ollama"]
+    if not isinstance(base_url, str):
         return False
     try:
-        address = ipaddress.ip_address(urlsplit(inference["base_url"]).hostname or "")
+        host = urlsplit(base_url).hostname or ""
+        if host == "localhost":
+            return True
+        address = ipaddress.ip_address(host)
     except ValueError:
         return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
     return any(address in ipaddress.ip_network(net) for net in (
-        "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"))
+        "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8",
+        "::1/128", "fc00::/7"))
 
 def atomic_private(path: Path, content: str | bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -197,10 +209,9 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
                            or not value.isprintable() or any(ch.isspace() for ch in value)
                            for value in ids)):
                 raise ConfigError("worker.continuous.camera_ids requires distinct camera IDs")
-        # The 12-per-hour budget caps provider cost. A local model (Ollama, or an
-        # OpenAI-compatible server such as OpenVINO Model Server on a private
-        # address) has none, so the owner may run it unmetered; a paid or
-        # public provider cannot.
+        # The owner may explicitly waive the rolling caption budget for a
+        # local endpoint. Provider names alone never grant that waiver. This
+        # guard does not attest the billing or upstream routing of a local proxy.
         if "unmetered" in policy and (policy["unmetered"] is not True
                                       or not _local_inference(config.get("inference", {}))):
             raise ConfigError("worker.continuous.unmetered requires a local caption model")

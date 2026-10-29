@@ -341,7 +341,8 @@ def test_unmetered_captions_need_a_local_caption_model(tmp_path):
     config["inference"].update(provider="ollama", base_url="http://127.0.0.1:11434",
                                model="qwen3-vl:8b-instruct")
     assert validate_config(deepcopy(config))["worker"]["continuous"]["unmetered"] is True
-    # OpenVINO Model Server on the NAS backend network is local and free too.
+    # The private backend endpoint permits the owner's explicit waiver; this
+    # location check alone does not prove its billing or upstream routing.
     ovms = deepcopy(config)
     ovms["inference"].update(provider="openai-compatible", base_url="http://172.30.50.13:8000/v3",
                              allow_remote=True, allow_insecure_http=True)
@@ -450,3 +451,33 @@ async def test_caption_timeout_is_configurable_for_slow_local_models(services, t
     config["worker"]["caption_timeout_s"] = 0
     with pytest.raises(WorkerError):
         JobProcessor(config, tmp_path, camera_registry=MutableRegistry("camera-fixture"))
+
+
+@pytest.mark.parametrize("endpoint", ["https://cloud.example.invalid", "https://8.8.8.8",
+                                      "https://[2001:4860:4860::8888]"])
+def test_public_ollama_endpoint_cannot_bypass_the_caption_budget(tmp_path, endpoint):
+    config = defaults(tmp_path / "state", "020000000001")
+    config["controller"]["protect_version"] = "7.3.68"
+    config["worker"].update(callback_mode="enabled", request_mp4_exports=True,
+                            continuous=dict(policy(tmp_path), unmetered=True))
+    config["inference"].update(provider="ollama", base_url=endpoint,
+                               model="synthetic-model", allow_remote=True)
+    with pytest.raises(ConfigError, match="unmetered requires a local caption model"):
+        validate_config(config)
+    # The remote provider remains available with the ordinary metered policy.
+    del config["worker"]["continuous"]["unmetered"]
+    assert "unmetered" not in validate_config(config)["worker"]["continuous"]
+
+
+@pytest.mark.parametrize("endpoint", ["http://127.0.0.1:11434", "http://localhost:11434",
+                                      "http://192.168.10.20:11434", "http://[::1]:11434",
+                                      "http://[fd12::20]:11434",
+                                      "http://[::ffff:192.168.10.20]:11434"])
+def test_local_ollama_endpoint_keeps_the_explicit_unmetered_policy(tmp_path, endpoint):
+    config = defaults(tmp_path / "state", "020000000001")
+    config["controller"]["protect_version"] = "7.3.68"
+    config["worker"].update(callback_mode="enabled", request_mp4_exports=True,
+                            continuous=dict(policy(tmp_path), unmetered=True))
+    config["inference"].update(provider="ollama", base_url=endpoint,
+                               model="synthetic-model", allow_remote=True, allow_insecure_http=True)
+    assert validate_config(config)["worker"]["continuous"]["unmetered"] is True
