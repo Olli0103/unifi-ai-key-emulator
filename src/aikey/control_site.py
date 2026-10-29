@@ -589,8 +589,10 @@ class ControlSite:
                                        request.headers.get("Origin", ""))
         if not decision.allowed or decision.credentials is None:
             self._audit("login", decision.reason if decision.reason else "refused")
+            detail = ("The active session limit is reached. Sign out another session or wait for expiry."
+                      if decision.reason == "session_capacity" else "Check the password and try again.")
             return _page("Sign in failed", "<h1>Sign in failed</h1>"
-                         "<p class='error'>Check the password and try again.</p>"
+                         f"<p class='error'>{detail}</p>"
                          "<p><a href='/login'>Back to sign in</a></p>")
         self._audit("login", "signed_in")
         response = web.HTTPSeeOther("/")
@@ -604,7 +606,8 @@ class ControlSite:
         if cookie is None:
             raise web.HTTPSeeOther("/login")
         csrf = self.security.csrf_token(cookie)
-        assert csrf is not None
+        if csrf is None:
+            raise web.HTTPSeeOther("/login")
         try:
             key = self.aikey.snapshot()
             ports = {profile: store.snapshot()
@@ -875,11 +878,14 @@ class ControlSite:
                 "the already permitted cameras to be sent to OpenAI if selected</label>"
                 "<button>Save speech provider</button></form></section>")
 
-    def _speech_camera_tokens(self, cookie: str, snapshot) -> dict[str, str]:
+    def _speech_camera_tokens(self, cookie: str, snapshot) -> dict[str, str] | None:
         # Opaque selection labels, NOT independent authorization. Session,
         # origin, CSRF, revision and the server's current allowlist remain required.
         speech = snapshot.configuration.get("speech_to_text") or {}
-        key = self.security.csrf_token(cookie).encode()
+        csrf = self.security.csrf_token(cookie)
+        if csrf is None:
+            return None
+        key = csrf.encode()
         return {hmac.new(key, f"speech-camera:{snapshot.revision}:{camera}".encode(),
                          hashlib.sha256).hexdigest(): camera
                 for camera in speech.get("camera_ids", [])}
@@ -916,6 +922,8 @@ class ControlSite:
                 pass  # An inventory outage must never block disabling saved audio.
         tokens = self._speech_camera_tokens(cookie, snapshot)
         csrf = self.security.csrf_token(cookie)
+        if tokens is None or csrf is None:
+            raise web.HTTPSeeOther("/login")
         destination = current.get("base_url") or (
             "https://api.openai.com/v1" if current.get("provider") == "openai" else "not configured")
         hidden = (f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
@@ -960,6 +968,9 @@ class ControlSite:
             if snapshot.revision != fields["revision"]:
                 raise RevisionConflict("Saved configuration changed")
             tokens = self._speech_camera_tokens(cookie, snapshot)
+            if tokens is None:
+                self._audit("speech_permissions", "forbidden", "aikey")
+                raise web.HTTPForbidden()
             selected = fields.getall("keep_camera", [])
             if (len(selected) > 32 or any(not isinstance(token, str) or token not in tokens for token in selected)
                     or len(set(selected)) != len(selected)
@@ -1282,9 +1293,11 @@ class ControlSite:
 
     async def logout(self, request: web.Request) -> web.Response:
         fields = await request.post()
-        if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
+        cookie = self._session(request, mutate=True, csrf=fields.get("csrf"))
+        if cookie is None:
             self._audit("logout", "forbidden")
             raise web.HTTPForbidden()
+        self.security.revoke(cookie)
         self._audit("logout", "signed_out")
         response = web.HTTPSeeOther("/login")
         response.del_cookie(self.cookie_name, path="/", httponly=True,
