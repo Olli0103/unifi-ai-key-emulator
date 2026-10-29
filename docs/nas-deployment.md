@@ -72,6 +72,10 @@ Enable `worker.description_embeddings` and the E5 query responder together only 
 
 The controller applies its own migrations. This build supplies only the documented dense-search database preparation. If the installed version requires BM25 extensions or reranking, this profile is insufficient. Resolve that requirement before claiming native search.
 
+See [pause, uninstall and restore](uninstall-restore.md) before removing any
+service or volume; cold copies, credential state and shared network namespaces
+need separate treatment.
+
 ## Acceptance and rollback
 
 Verify ordinary adoption, reconnect without replaying the token, one controller-created inference job, one persisted description and positive/negative native search cases separately. Check the correct event after refresh and after a planned service restart. Save sanitized errors and exact firmware versions.

@@ -10,6 +10,10 @@ The local build has device management/adoption, UCP4 control, UDP discovery, a b
 
 The inspected controller source is 7.2.105, alongside AI Key firmware 2.2.8. Public metadata did not return a 7.3.56 package during inspection. The live results above establish those specific behaviors, not full protocol or feature compatibility. The [bounded automatic-description path](docs/basic-descriptions.md) has separate persistence acceptance checks.
 
+For pausing, removing the application or recovering retained state, use the
+[safe uninstall/restore guide](docs/uninstall-restore.md). Removal is not deletion
+of Protect recordings, adopted identity, provider data or backups.
+
 ## Roadmap and product status
 
 A credentials-free [synthetic control-site preview](docs/synthetic-demo.md) is
