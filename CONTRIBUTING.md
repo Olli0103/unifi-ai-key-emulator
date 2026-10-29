@@ -6,9 +6,22 @@ Thanks for helping. This project emulates the UniFi AI Key and AI Port so they w
 
 Do not put credentials, API keys, device passwords, camera images, recordings, transcripts, face or plate data, private hostnames, IP plans or controller support files in an issue, pull request, test or fixture. Security problems go through [SECURITY.md](SECURITY.md), never a public issue.
 
+## Development prerequisites
+
+Use Python 3.12 or newer and an OpenSSL executable that supports `passwd -6`. Credential tests use SHA-512-crypt, as does the AI Port management login. The `openssl` command included with macOS may be LibreSSL and reject `-6`; installing the Python `cryptography` package does not replace that command.
+
+On macOS with Homebrew OpenSSL installed, select it for the current shell before running the tests:
+
+```sh
+export PATH="$(brew --prefix openssl)/bin:$PATH"
+openssl version
+```
+
+FFmpeg must also be on PATH for the real video and audio integration tests. Tests that need an unavailable optional decoder or model report a skip; a passing subset is not full media or model coverage. The unsupported-UBV rejection tests use a non-executable placeholder and forbid subprocess execution, so they need no decoder.
+
 ## Run the lab and checks from a clean checkout
 
-Python 3.12 or newer. Everything below is synthetic: the lab uses loopback controller, media, model and embedding services, and it never contacts Protect or an external model.
+Everything below is synthetic: the lab uses loopback controller, media, model and embedding services, and it never contacts Protect or an external model.
 
 ```sh
 git clone https://github.com/Olli0103/unifi-ai-key-emulator.git
@@ -19,6 +32,8 @@ python3 -m venv .venv
 .venv/bin/python -m ruff check .
 .venv/bin/python -m pytest -q
 ```
+
+To match CI's locked runtime dependencies, replace the install step with `.venv/bin/python -m pip install -r requirements-runtime.lock '.[dev,database]'`.
 
 CI runs the same `ruff` and `pytest` commands, plus a Gitleaks history scan and a dependency and SBOM check. A pull request needs all of them green.
 
