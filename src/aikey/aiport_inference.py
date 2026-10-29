@@ -41,6 +41,8 @@ class FairInference:
         "api_detection_http_5xx", "api_detection_response_too_large",
         "api_detection_request_failed", "api_detection_provider_response_invalid",
         "api_detection_dns_unavailable",
+        "api_detection_dns_timeout", "api_detection_resolver_unavailable",
+        "api_detection_address_refused",
         "invalid_api_key_file", "inline_api_key_forbidden",
     })
 
