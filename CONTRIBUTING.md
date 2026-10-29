@@ -69,13 +69,13 @@ Assistants are welcome. You are responsible for every line you submit:
 
 Contributor-specific handoff notes live in [docs/planning/claude-handoff.md](docs/planning/claude-handoff.md).
 
-## Still to be decided by the maintainer
+## Maintenance and reporting
 
-These are open in issue #11 and are not promises yet:
-
-- the code of conduct;
-- review ownership, the support and version policy, and triage labels;
-- the private vulnerability-reporting route.
+Read [maintenance and support](MAINTAINERS.md) for review ownership, experimental
+version support and triage. [Contributor conduct](CODE_OF_CONDUCT.md) applies to
+maintainers, contributors and assistants. Security issues use the private route
+in [SECURITY.md](SECURITY.md), never a public issue. No response SLA or stable
+release support is implied by accepting a contribution.
 
 ## Origin, licensing and contribution rights
 
