@@ -7,6 +7,7 @@ These records describe the interface observations used by the implementation. Th
 - [Search and storage](search-evidence.md)
 - [AI Key compatibility matrix](compatibility-matrix.md), generated from the versioned [compatibility manifest](compatibility-manifest.json)
 - [AI Port controller contract](ai-port-controller-contract.md) and [AI Port firmware/discovery evidence](ai-port-firmware-contract.md)
+- [29 October reviewed-source Key/four-Port deployment](key-port-batch159-20261029.md): preserved native identities/pairings and checked cold backups, not quality or full native recovery.
 
 ## Compatibility manifest
 
