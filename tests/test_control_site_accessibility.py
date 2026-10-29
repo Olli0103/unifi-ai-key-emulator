@@ -21,10 +21,13 @@ class Structure(HTMLParser):
         self.controls = []
         self.labels = set()
         self.tabindices = []
+        self.references = []
     def handle_starttag(self, tag, attributes):
         attrs = dict(attributes)
         if attrs.get("id"):
             self.ids.append(attrs["id"])
+        if attrs.get("aria-labelledby"):
+            self.references.extend(attrs["aria-labelledby"].split())
         if tag == "main":
             self.mains.append(attrs)
         if tag == "a":
@@ -52,6 +55,7 @@ def assert_landmark(markup):
     page = parsed(markup)
     assert len(page.mains) == 1
     assert len(page.ids) == len(set(page.ids))
+    assert all(reference in page.ids for reference in page.references)
     target = page.mains[0].get("id")
     assert target and any(link.get("href") == "#" + target for link in page.links)
     assert not any(index > 0 for index in page.tabindices)

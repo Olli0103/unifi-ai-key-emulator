@@ -1091,9 +1091,9 @@ class ControlSite:
                     control = _safe(self._ROLE_REASONS.get(info["reason"], info["reason"]))
                 rows.append(f"<tr><td>{_safe(title)}</td><td>{_safe(label)}</td>"
                             f"<td>{_safe(info['model'] or '—')}</td><td>{control}</td></tr>")
-        return ("<section><h2>Models by role</h2><p class='muted'>Changes only the model of one role; "
+        return ("<section><h2 id='models-by-role'>Models by role</h2><p class='muted'>Changes only the model of one role; "
                 "the provider, endpoint and key stay as they are. Search encoders are pinned by the "
-                "index.</p><div class='scroll' role='region' aria-label='Models by role table' tabindex='0'>"
+                "index.</p><div class='scroll' role='region' aria-labelledby='models-by-role' tabindex='0'>"
                 "<table><tr><th scope='col'>Profile</th><th scope='col'>Role</th>"
                 "<th scope='col'>Model</th><th scope='col'>Change</th></tr>"
                 + "".join(rows) + "</table></div></section>")
