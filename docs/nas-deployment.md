@@ -79,3 +79,20 @@ Verify ordinary adoption, reconnect without replaying the token, one controller-
 Stop the emulator with `docker compose stop emulator`. Stop the optional database separately if started. Keep the state directory, private key and database volume for diagnosis and recovery; do not use `down -v` or regenerate identity as routine troubleshooting. Removing the test processor from Protect is a separate console change.
 
 Back up state and the database together before upgrades. Protect firmware changes can invalidate this private protocol. Pending jobs are not durably resumed, and an uncertain callback needs inspection before any retry. Longer runtime and load behavior have not yet been measured.
+
+## Dated recovery evidence
+
+The instructions above describe the public dense-search preparation, not every
+later private deployment. The [29 October isolated restore](evidence/nas-restore-20261029.md)
+restored a deployed hybrid-image backup into a separate network-less database
+and checked row counts, vector readability and selected identity/configuration
+files. It did not replace the live database or activate a copied identity.
+
+For an official PostgreSQL-style entrypoint, `pg_isready` alone can see the
+temporary initialization server before the requested database exists. Wait for
+the final server and execute a bounded `SELECT 1` against the exact target
+database before restore. After restore, check the actual profile, tables,
+extensions **and tokenizer/catalog registrations**, then native retrieval after
+the controller's verified bootstrap. Extension presence and a zero exit code
+from `pg_restore` are not hybrid-search readiness. Full recovery and sustained
+operation remain open under #24.
