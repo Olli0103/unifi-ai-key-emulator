@@ -17,3 +17,17 @@
 - [ ] `ruff check .` and `pytest -q` pass locally.
 - [ ] No credentials, media, transcripts, identities, vendor files or private network details are included.
 - [ ] If an AI coding assistant helped, I reviewed and ran what it wrote.
+
+## Origin and rights
+
+Record independently written code, public API references and any third-party
+material/license. Do not paste private evidence or vendor extracts. State any
+rights uncertainty explicitly; do not invent owner/employer approval.
+
+
+## Release impact
+
+Does this change affect protocol research, adoption, dependencies, models,
+packaged content or trademark presentation? Update the release record and
+invalidate earlier source-fingerprint approval when relevant. A green CI run is
+not legal or production-release approval.
