@@ -1,8 +1,8 @@
 # AI Key compatibility matrix
 
-<!-- Generated from compatibility-manifest.json (ai-key/2026-10-29.1). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
+<!-- Generated from compatibility-manifest.json (ai-key/2026-10-29.2). Run `python tests/test_compatibility_manifest.py --write`; do not edit by hand. -->
 
-Manifest `ai-key/2026-10-29.1` for the `ai-key` profile, based on commit `de1324b`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
+Manifest `ai-key/2026-10-29.2` for the `ai-key` profile, based on commit `dcacb4f`. AI Key profile only. AI Port is a separate profile (issue #6). Statuses describe this repository's behavior, not vendor parity.
 
 - `native-verified`: Observed on a live Protect controller; see the per-version live results. Applies only to those versions and conditions.
 - `fixture-tested`: Implemented and covered by synthetic tests; native behavior is not individually verified.
@@ -63,7 +63,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | **search** | |  |  |  |  |  | | |
 | `search.e5_session_query`: E5 session search queries next to basic CLIP search | native-verified | — | — | — | native-verified | — | Protect 7.3.70 bundle | explicit_opt_in |
 | **callbacks** | |  |  |  |  |  | | |
-| `callbacks.audio_image_tagging`: Audio-event thumbnails (ramType image) answered with event-level tags and a local description | native-verified | — | — | — | native-verified | — | Protect 7.3.70 bundle | explicit_opt_in |
+| `callbacks.audio_image_tagging`: Audio-event thumbnails (ramType image) answered with event-level tags and a local description | native-verified | — | — | — | native-verified | indirect | Protect 7.3.70 bundle | explicit_opt_in |
 | **search** | |  |  |  |  |  | | |
 | `index.ram_open_vocabulary_tags`: RAM++ open-vocabulary tags for scenes, objects and crops | native-verified | — | — | — | native-verified | — | Protect 7.3.70 bundle | explicit_opt_in |
 | **control** | |  |  |  |  |  | | |
@@ -82,7 +82,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `media.origin_and_redirect_policy`: Exact controller-origin allowlist, known paths only, no redirects | fixture-tested | — | — | — | — | — | — | default |
 | **callbacks** | |  |  |  |  |  | | |
 | `callback.on_demand_camera_upload`: On-demand result JSON at /internal/camera-upload/<token> | native-verified | not_observed | native-verified | not_observed | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
-| `callback.ram_full_event_tagging`: Full RAM event-tagging multipart callback with keyMomentsTags [] | native-verified | not_observed | native-verified | native-verified | — | — | Protect 7.2.105, AI Key 2.2.8 | default |
+| `callback.ram_full_event_tagging`: Full RAM event-tagging multipart callback with keyMomentsTags [] | native-verified | not_observed | native-verified | native-verified | — | indirect | Protect 7.2.105, AI Key 2.2.8 | default |
 | `callback.ram_description_only`: Legacy description-only multipart profiles key-2.2.8 and protect-7.2.105 | unsupported | not_observed | not_observed | not_observed | — | — | Protect 7.2.105, AI Key 2.2.8 | explicit_opt_in |
 | `callback.task_description`: Session description JSON at /internal/aiprocessors/descriptions/<taskId> | native-verified | not_observed | not_observed | not_observed | native-verified | — | Protect 7.2.105 | default |
 | `callback.origin_allowlist`: Callbacks only to configured controller origins and known routes | fixture-tested | — | — | — | — | — | — | default |
@@ -123,6 +123,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 | `index.face_task_search_tags`: Find Anything tags in the ram part of a face-recognition callback | fixture-tested | — | — | — | not_observed | — | Protect 7.3.60 bundle | default |
 | **control** | |  |  |  |  |  | | |
 | `control.update_lcm_settings`: updateLcmSettings display settings stored and answered 0 | fixture-tested | — | — | — | not_observed | — | — | default |
+| **callbacks** | |  |  |  |  |  | | |
+| `captions.persisted_description`: Exact native events retain nonempty descriptions after page reload | native-verified | — | — | — | — | native-verified | — | explicit_opt_in |
 
 ## Missing evidence
 
@@ -243,6 +245,8 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `search.index_recovery` (needs_evidence): A live restore into the running search host read back through Protect search (the 2 Oct drill restored into a throwaway container only)
 - `index.face_task_search_tags`: Native search hits for a native face camera's objects indexed through a face task (a row-count increase alone does not attribute rows)
 - `control.update_lcm_settings`: Protect's own view after the reply (its aiprocessors log no longer reporting the failure) was not read back
+- `captions.persisted_description`: Post-caption controller-restart persistence, quality and all-camera acceptance
+- `captions.persisted_description`: Full callback/tag payload and audio transcript acceptance on this version
 
 ## Contradictions and stale records
 

@@ -67,7 +67,7 @@ def _config(tmp_path, **policy_changes):
 def test_the_config_accepts_a_camera_pin_and_the_true_controller_label(tmp_path):
     assert validate_config(_config(tmp_path, camera_ids=[LISTED, OTHER]))["worker"]["continuous"][
         "camera_ids"] == [LISTED, OTHER]
-    assert CONTINUOUS_CAPTION_VERSIONS == {"7.3.60", "7.3.68", "7.3.70"}
+    assert CONTINUOUS_CAPTION_VERSIONS == {"7.3.60", "7.3.68", "7.3.70", "7.3.74"}
 
 
 @pytest.mark.parametrize("ids", [[], [LISTED, LISTED], [LISTED, 7], ["two words"], [""],
@@ -109,7 +109,7 @@ async def test_a_controller_reporting_an_evidenced_version_is_admitted(tmp_path,
     assert code == 0 and admitted == ["camera-fixture"]
 
 
-@pytest.mark.parametrize("reported", [None, "7.3.56", "7.3.74", "7.4.1", "not-a-version"])
+@pytest.mark.parametrize("reported", [None, "7.3.56", "7.3.73", "7.3.75", "7.4.1", "not-a-version"])
 async def test_an_unreported_or_unevidenced_controller_version_blocks_admission(tmp_path, reported):
     code, admitted, device = await _device(tmp_path, reported)
     assert code == 95 and admitted == []                             # no worker, no budget, no media
@@ -118,9 +118,31 @@ async def test_an_unreported_or_unevidenced_controller_version_blocks_admission(
 
 
 async def test_a_partially_observed_controller_keeps_baseline_control_not_caption_admission(tmp_path):
-    code, admitted, device = await _device(tmp_path, "7.3.74")
+    code, admitted, device = await _device(tmp_path, "7.3.56")
     assert code == 95 and admitted == []
     reply = decode_message(await device.handle_message(wire("getInfo", {}, "baseline")))
     assert reply.header["errorCode"] == 0
     assert reply.body["mac"] == device.mac
     assert device.status["compatibility"]["controller_version_evidence"] == "live_partial"
+
+
+@pytest.mark.parametrize("version", ["7.3.60", "7.3.68", "7.3.70", "7.3.74"])
+def test_each_caption_evidenced_version_accepts_explicit_continuous_config(tmp_path, version):
+    config = _config(tmp_path)
+    config["controller"]["protect_version"] = version
+    assert validate_config(config)["controller"]["protect_version"] == version
+
+
+async def test_a_reported_upgrade_revokes_caption_admission_despite_the_old_config_pin(tmp_path):
+    code, admitted, device = await _device(tmp_path, "7.3.74")
+    assert code == 0 and admitted == ["camera-fixture"]
+    identity = device.mac
+    for version, expected in (("7.3.75", 95), ("7.3.74", 0)):
+        reply = decode_message(await device.handle_message(wire(
+            "setConsoleInfo", {"controller": {"protectVersion": version}}, f"console-{version}")))
+        assert reply.header["errorCode"] == 0
+        response = decode_message(await device.handle_message(wire(
+            "recognizeKeyFrames", command(version)["payload"], version)))
+        assert response.header["errorCode"] == expected
+        assert device.mac == identity
+    assert admitted == ["camera-fixture", "camera-fixture"]
