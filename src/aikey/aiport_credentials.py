@@ -41,7 +41,7 @@ class CredentialStore:
         self.credential: tuple[str, str] | None = None
         if os.path.lexists(self.path):
             try:
-                fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW)
+                fd = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
                 with os.fdopen(fd, "rb") as source:
                     info = os.fstat(source.fileno())
                     if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_size > 256:

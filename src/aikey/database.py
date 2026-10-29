@@ -73,7 +73,7 @@ def _read_secret(path: Path, *, optional: bool = False) -> str | None:
     if optional and not path.exists():
         return None
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
         with os.fdopen(descriptor, "rb") as handle:
             metadata = os.fstat(handle.fileno())
             if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) & 0o077:

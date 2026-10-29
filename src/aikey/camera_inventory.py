@@ -71,7 +71,7 @@ class Camera:
 
 def _read_private(path: Path, limit: int) -> bytes:
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     except OSError as exc:
         raise InventoryError("Inventory credential or trust file is unavailable") from exc
     try:

@@ -64,7 +64,7 @@ def _private_dir(path: Path) -> bool:
 
 
 def _read_json(path: Path):
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
     with os.fdopen(fd, "rb") as handle:
         meta = os.fstat(handle.fileno())
         if not stat.S_ISREG(meta.st_mode) or meta.st_size > _MAX_BYTES:

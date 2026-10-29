@@ -83,7 +83,7 @@ class AiPortConfigurationStore:
 
     def _read(self) -> tuple[bytes, dict]:
         try:
-            descriptor = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW)
+            descriptor = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
             with os.fdopen(descriptor, "rb") as source:
                 info = os.fstat(source.fileno())
                 if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
