@@ -183,6 +183,81 @@ async def test_a_crash_after_the_swap_committed_keeps_the_original_snapshot(tmp_
     assert store.live["obj-4"] == vector(4)                    # the old vectors, not the staged ones
 
 
+async def crash_after_profile_swap(tmp_path, monkeypatch):
+    store = setup(tmp_path)
+    run = rebuild(store, tmp_path)
+    await run.stage(Embedder(NEW), source())
+    run.verify()
+
+    def crash_before_journal(**changes):
+        assert changes["state"] == "cut_over"
+        raise SystemExit("crash after profile replacement")
+
+    monkeypatch.setattr(run, "_save", crash_before_journal)
+    with pytest.raises(SystemExit):
+        run.cutover(backup=BACKUP, key_quiesced=quiet)
+    assert json.loads(run.live_profile.read_text())["revision"] == NEW
+    assert json.loads(run.journal_path.read_text())["state"] == "verified"
+    return store, run
+
+
+async def test_a_crash_after_profile_swap_recovers_without_replacing_the_snapshot(tmp_path, monkeypatch):
+    store, run = await crash_after_profile_swap(tmp_path, monkeypatch)
+    original_snapshot = {k: list(v) for k, v in store.snapshot[run.tag].items()}
+
+    resumed = rebuild(store, tmp_path)
+    assert resumed.cutover(backup=BACKUP, key_quiesced=quiet) == {"state": "cut_over", "rows": 5}
+    assert store.snapshot[run.tag] == original_snapshot
+    await rebuild(store, tmp_path).rollback(key_quiesced=quiet)
+    assert store.live == {o: vector(int(o.split("-")[1])) for o in OBJECTS}
+    assert json.loads(run.live_profile.read_text())["revision"] == OLD
+
+
+@pytest.mark.parametrize("fault", ["missing_previous", "wrong_previous", "missing_snapshot",
+                                   "changed_vectors", "changed_profile", "changed_endpoint"])
+async def test_profile_swap_recovery_refuses_inconsistent_evidence_without_writes(tmp_path, monkeypatch, fault):
+    store, run = await crash_after_profile_swap(tmp_path, monkeypatch)
+    previous = run.directory / "previous-profile.json"
+    if fault == "missing_previous":
+        previous.unlink()
+    elif fault == "wrong_previous":
+        value = json.loads(previous.read_text())
+        value["revision"] = "c" * 64
+        previous.write_text(json.dumps(value))
+    elif fault == "missing_snapshot":
+        del store.snapshot[run.tag]
+    elif fault == "changed_vectors":
+        store.live["obj-0"] = vector(50)
+    elif fault == "changed_profile":
+        value = json.loads(run.live_profile.read_text())
+        value["model"] = "another-model"
+        run.live_profile.write_text(json.dumps(value))
+    before_files = {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    before_store = json.dumps(vars(store), sort_keys=True)
+    with pytest.raises(RebuildError):
+        Rebuild(store, tmp_path, target_revision=NEW,
+                target_source="http://127.0.0.1:9999" if fault == "changed_endpoint" else "http://127.0.0.1:8181")
+    assert {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before_files
+    assert json.dumps(vars(store), sort_keys=True) == before_store
+
+
+@pytest.mark.parametrize("fault", ["active_key", "unverified_backup", "withdrawn_approval", "lost_snapshot"])
+async def test_profile_swap_recovery_rechecks_cutover_guards(tmp_path, monkeypatch, fault):
+    store, run = await crash_after_profile_swap(tmp_path, monkeypatch)
+    resumed = rebuild(store, tmp_path)
+    if fault == "withdrawn_approval":
+        monkeypatch.setattr("aikey.index_rebuild.APPROVED_NATIVE_READBACK", None)
+    elif fault == "lost_snapshot":
+        del store.snapshot[run.tag]
+    before_files = {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    before_store = json.dumps(vars(store), sort_keys=True)
+    with pytest.raises(RebuildError):
+        resumed.cutover(backup={} if fault == "unverified_backup" else BACKUP,
+                        key_quiesced=lambda: fault != "active_key")
+    assert {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before_files
+    assert json.dumps(vars(store), sort_keys=True) == before_store
+
+
 async def test_rollback_re_embeds_rows_indexed_after_cutover_or_refuses(tmp_path):
     store = setup(tmp_path)
     run = rebuild(store, tmp_path)
