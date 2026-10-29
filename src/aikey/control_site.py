@@ -157,6 +157,7 @@ class ControlSite:
         app.router.add_post("/provider", self.save_provider)
         app.router.add_post("/provider/rollback", self.rollback_provider)
         app.router.add_post("/role-model", self.save_role_model)
+        app.router.add_post("/speech-provider", self.save_speech_provider)
         app.router.add_post("/logout", self.logout)
         app.router.add_get("/healthz", self.health)
         return app
@@ -598,7 +599,7 @@ class ControlSite:
                   "<a href='/audit'>Audit log</a> · "
                   "<a href='/caption-preflight'>Caption preflight</a> · "
                   "<a href='/state-backup-preflight'>Backup preflight</a></p>"
-                + undo_form + self._role_models_section(csrf)
+                + undo_form + self._role_models_section(csrf) + self._speech_form(key, csrf)
                 + "<div class='grid'>")
         body += self._provider_form("AI Key", "aikey", key.revision, inference,
                                     key_configured, csrf)
@@ -784,6 +785,90 @@ class ControlSite:
                      "index migration", "role_not_configured": "Not configured",
                      "vision_provider_not_configured": "No vision provider configured"}
 
+    @staticmethod
+    def _speech_form(snapshot, csrf: str) -> str:
+        current = snapshot.configuration.get("speech_to_text")
+        if not isinstance(current, dict):
+            return ("<section><h2>Speech provider</h2><p>Not configured. Per-camera audio "
+                    "permission must be configured before choosing a speech provider.</p></section>")
+        options = "".join(f"<option value='{name}'"
+                          f"{' selected' if current.get('provider') == name else ''}>{label}</option>"
+                          for name, label in (("openai-compatible", "Local compatible API"),
+                                               ("openai", "OpenAI")))
+        configured = bool(current.get("api_key_file", {}).get("configured"))
+        return ("<section><h2>Speech provider</h2><p>Only already permitted cameras are affected. "
+                "Their audio is sent to the API base URL below. Choosing OpenAI sends audio "
+                "to OpenAI and may incur charges; it does not use the caption budget. "
+                "Saving does not test the provider or enable more cameras.</p>"
+                f"<p>Speech key reference configured: {'yes' if configured else 'no'}.</p>"
+                "<form method='post' action='/speech-provider'>"
+                f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
+                f"<input type='hidden' name='revision' value='{_safe(snapshot.revision)}'>"
+                f"<label>Speech provider<select name='provider'>{options}</select></label>"
+                f"<label>Speech model ID<input name='model' required maxlength='128' "
+                f"value='{_safe(current.get('model'))}'></label>"
+                f"<label>Speech API base URL<input name='base_url' required maxlength='512' "
+                f"value='{_safe(current.get('base_url'))}'></label>"
+                "<label>New speech API key<input name='api_key' type='password' "
+                "autocomplete='new-password'></label>"
+                f"<label>Language (optional two-letter code)<input name='language' maxlength='2' "
+                f"value='{_safe(current.get('language'))}'></label>"
+                "<label><input name='local_network' type='checkbox' "
+                + ("checked" if current.get("local_network") else "") +
+                ">Allow a private-network speech server (HTTP is unencrypted)</label>"
+                "<label><input name='allow_cloud_audio' type='checkbox'>I allow audio from "
+                "the already permitted cameras to be sent to OpenAI if selected</label>"
+                "<button>Save speech provider</button></form></section>")
+
+    async def save_speech_provider(self, request: web.Request) -> web.Response:
+        fields = await request.post()
+        if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
+            self._audit("speech_provider", "forbidden", "aikey")
+            raise web.HTTPForbidden()
+        created_key = None
+        committed = False
+        try:
+            selection = {"provider": fields["provider"], "model": fields["model"].strip(),
+                         "base_url": fields["base_url"].strip(),
+                         "local_network": "local_network" in fields}
+            if selection["provider"] == "openai" and "allow_cloud_audio" not in fields:
+                raise ValueError
+            language = fields.get("language", "").strip()
+            if language:
+                selection["language"] = language
+            key = fields.get("api_key", "")
+            if key:
+                if not 8 <= len(key) <= 4096 or any(ch.isspace() for ch in key):
+                    raise ValueError
+                runtime_state = Path(load_config(self.aikey.path)["runtime"]["state_dir"])
+                key_name = f"speech-key-{secrets.token_hex(8)}"
+                created_key = self.aikey.path.parent / key_name
+                selection["api_key_file"] = str(runtime_state / key_name)
+            preview = await asyncio.to_thread(self.aikey.preview_speech, fields["revision"], selection)
+            if created_key is not None:
+                _private_directory(self.aikey.path.parent)
+                atomic_private(created_key, key + "\n")
+            result = await asyncio.to_thread(self.aikey.apply_speech, fields["revision"], selection)
+            committed = True
+            if result.revision != preview.resulting_revision:
+                raise ValueError
+        except (KeyError, ValueError, TypeError, OSError, ConfigurationStoreError):
+            if created_key is not None and not committed:
+                # An uncertain atomic replacement may already reference this file.
+                # Keep it unless the persisted config proves it was not committed.
+                try:
+                    raw = load_config(self.aikey.path).get("speech_to_text") or {}
+                    if Path(raw.get("api_key_file", "/")).name != created_key.name:
+                        created_key.unlink(missing_ok=True)
+                except (OSError, ValueError):
+                    pass
+            self._audit("speech_provider", "rejected", "aikey")
+            return _page("Speech settings not saved", "<h1>Speech settings not saved</h1>"
+                         "<p class='error'>Check the speech provider, endpoint, key, audio "
+                         "permission and current revision. Reload settings before retrying.</p>"
+                         "<p><a href='/'>Back to settings</a></p>")
+        self._audit("speech_provider", "saved", "aikey")
+        raise web.HTTPSeeOther("/?saved=1")
     def _role_models_section(self, csrf: str) -> str:
         """Per-role models, one revision-checked form per editable role (#17)."""
         rows = []
