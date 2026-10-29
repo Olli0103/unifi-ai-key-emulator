@@ -1,6 +1,7 @@
 """Stdlib model transport: no proxies/redirects or validation/connection DNS race."""
 
 import http.client
+import io
 import ipaddress
 import math
 import socket
@@ -25,6 +26,100 @@ def _deadline(timeout):
     if not valid:
         raise ProviderAddressError()
     return time.monotonic() + timeout
+
+
+def _remaining(deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("provider_request_unavailable")
+    return remaining
+
+
+class _DeadlineReader(io.RawIOBase):
+    """A fresh *remaining* budget for each raw receive, including header lines."""
+
+    def __init__(self, raw, connection, deadline):
+        super().__init__()
+        self.raw, self.connection, self.deadline = raw, connection, deadline
+
+    def readable(self):
+        return True
+
+    def fileno(self):
+        return self.raw.fileno()
+
+    def readinto(self, target):
+        self.connection.settimeout(_remaining(self.deadline))
+        count = self.raw.readinto(target)
+        _remaining(self.deadline)
+        return count
+
+    def close(self):
+        try:
+            self.raw.close()
+        finally:
+            super().close()
+
+
+class _DeadlineSocket:
+    """Preserve socket ownership/makefile refs; never reconnect or renew a budget."""
+
+    def __init__(self, connection, deadline):
+        self.connection, self.deadline = connection, deadline
+
+    def __getattr__(self, name):
+        return getattr(self.connection, name)
+
+    def sendall(self, data, *args, **kwargs):
+        self.connection.settimeout(_remaining(self.deadline))
+        result = self.connection.sendall(data, *args, **kwargs)
+        _remaining(self.deadline)
+        return result
+
+    def makefile(self, mode, *args, **kwargs):
+        if mode != "rb" or args or kwargs:
+            raise ValueError("provider_response_stream_invalid")
+        _remaining(self.deadline)
+        raw = self.connection.makefile("rb", buffering=0)
+        return io.BufferedReader(_DeadlineReader(raw, self.connection, self.deadline))
+
+
+class _DeadlineResponse(http.client.HTTPResponse):
+    def __init__(self, connection, *args, **kwargs):
+        self._provider_deadline = connection.deadline
+        self._provider_connection = connection
+        super().__init__(connection, *args, **kwargs)
+
+    def _bounded(self, method, *args):
+        try:
+            _remaining(self._provider_deadline)
+            result = method(*args)
+            _remaining(self._provider_deadline)
+            return result
+        except BaseException:
+            try:
+                self.close()
+            finally:
+                self._provider_connection.close()
+            raise
+
+    def begin(self):
+        return self._bounded(super().begin)
+
+    def read(self, amt=None):
+        return self._bounded(super().read, amt)
+
+    def read1(self, n=-1):
+        return self._bounded(super().read1, n)
+
+    def readinto(self, target):
+        return self._bounded(super().readinto, target)
+
+    def readline(self, limit=-1):
+        return self._bounded(super().readline, limit)
+
+    def peek(self, n=-1):
+        return self._bounded(super().peek, n)
 
 
 def _connect(address, timeout, source_address=None):
@@ -78,40 +173,48 @@ def _connect(address, timeout, source_address=None):
     raise OSError("provider_connection_unavailable")
 
 
-class ProviderHTTPConnection(http.client.HTTPConnection):
+class _RequestBudget:
+    response_class = _DeadlineResponse
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._create_connection = _connect
+        self._provider_deadline = None
 
-    def connect(self):
-        if self._tunnel_host:
-            raise ProviderAddressError()
-        deadline = _deadline(self.timeout)
+    def request(self, *args, **kwargs):
+        self._provider_deadline = _deadline(self.timeout)
+        if isinstance(self.sock, _DeadlineSocket):
+            self.sock.deadline = self._provider_deadline
         try:
-            super().connect()
-            if time.monotonic() >= deadline:
-                raise TimeoutError("provider_connection_unavailable")
+            return super().request(*args, **kwargs)
         except BaseException:
             self.close()
             raise
 
-
-class ProviderHTTPSConnection(http.client.HTTPSConnection):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._create_connection = _connect
-
     def connect(self):
         if self._tunnel_host:
             raise ProviderAddressError()
-        deadline = _deadline(self.timeout)
+        if self._provider_deadline is None:
+            self._provider_deadline = _deadline(self.timeout)
+        original_timeout = self.timeout
         try:
+            self.timeout = _remaining(self._provider_deadline)
             super().connect()
-            if time.monotonic() >= deadline:
-                raise TimeoutError("provider_connection_unavailable")
+            self.sock.settimeout(_remaining(self._provider_deadline))
+            self.sock = _DeadlineSocket(self.sock, self._provider_deadline)
         except BaseException:
             self.close()
             raise
+        finally:
+            self.timeout = original_timeout
+
+
+class ProviderHTTPConnection(_RequestBudget, http.client.HTTPConnection):
+    pass
+
+
+class ProviderHTTPSConnection(_RequestBudget, http.client.HTTPSConnection):
+    pass
 
 
 class ProviderHTTPHandler(HTTPHandler):
