@@ -8,6 +8,8 @@ import math
 from typing import Any
 from urllib.parse import urlsplit
 
+from .provider_network import ProviderAddressError, validate_provider_host
+
 
 class ProviderError(RuntimeError):
     """Provider configuration or its response cannot produce a description."""
@@ -66,6 +68,9 @@ class VisionProvider:
                     or any(ch in self.base_url for ch in "\\%")):
                 raise ValueError
             port = url.port or (443 if url.scheme == "https" else 80)
+            validate_provider_host(url.hostname, authority=url.netloc)
+        except ProviderAddressError as exc:
+            raise ProviderError("Invalid inference provider hostname") from exc
         except (ValueError, TypeError) as exc:
             raise ProviderError("Invalid inference.base_url") from exc
         if self.provider in {"openai", "anthropic"}:

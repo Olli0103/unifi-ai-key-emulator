@@ -30,6 +30,8 @@ from urllib.parse import urlsplit
 
 import aiohttp
 
+from .provider_network import ProviderConnector
+
 
 MODEL = "clip-ViT-L-14"
 DIMENSIONS = 768
@@ -113,7 +115,8 @@ class ClipClient:
     def _client(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=self.timeout_s), trust_env=False)
+                connector=ProviderConnector(), timeout=aiohttp.ClientTimeout(total=self.timeout_s),
+                trust_env=False, cookie_jar=aiohttp.DummyCookieJar())
         return self._session
 
     async def _vectors(self, response: aiohttp.ClientResponse, count: int) -> list[list[float]]:

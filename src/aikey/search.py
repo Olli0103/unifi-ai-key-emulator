@@ -24,6 +24,7 @@ import uuid
 import aiohttp
 
 from . import clip
+from .provider_network import ProviderAddressError, ProviderConnector, validate_provider_host
 from .protocol import ContractError, decode_message, encode_message
 from .device import VerifiedConnector
 from .embedding_profile import EmbeddingProfileError, ensure_embedding_profile, pinned_value
@@ -132,6 +133,10 @@ class EmbeddingService:
             base = str(self.config.get("base_url", "")).rstrip("/")
             endpoint = base + ("/embeddings" if base.endswith("/v1") else "/v1/embeddings")
         parsed = urlsplit(endpoint)
+        try:
+            validate_provider_host(parsed.hostname, authority=parsed.netloc)
+        except ProviderAddressError as exc:
+            raise EmbeddingError("Invalid embedding provider hostname") from exc
         if (parsed.scheme not in ("http", "https") or not parsed.hostname
                 or parsed.username or parsed.password or parsed.fragment or parsed.query
                 or any(char.isspace() for char in endpoint)
@@ -152,7 +157,8 @@ class EmbeddingService:
             if not math.isfinite(timeout) or timeout <= 0:
                 raise EmbeddingError("Embedding timeout must be positive")
             self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=timeout), trust_env=False
+                connector=ProviderConnector(), timeout=aiohttp.ClientTimeout(total=timeout),
+                trust_env=False, cookie_jar=aiohttp.DummyCookieJar()
             )
         headers = {}
         token_file = self.config.get("bearer_token_file")

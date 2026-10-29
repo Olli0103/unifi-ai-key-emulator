@@ -43,7 +43,22 @@ Backup, restore and update actions require separate authorization and an explici
 
 An operator must see the destination and data class before enabling a remote provider. Provider selection never falls back silently. The service must fail closed if a required credential file disappears or becomes unreadable.
 
-DNS rebinding protection for user-configured hostnames is `needs_evidence`. Before the administration site accepts arbitrary provider hosts, issue #13 must define whether it pins resolved addresses, restricts address ranges or requires explicit approved destinations. The chosen rule must cover IPv4 and IPv6, redirects and address changes between validation and connection.
+The asynchronous Key model, embedding, CLIP, rerank and model-catalog clients
+check every DNS answer at the connection boundary. Except for `localhost`
+(which must resolve only to loopback), a hostname may resolve only to ordinary
+global unicast addresses. Private backends use explicit LAN/VPN/loopback IPs;
+special, link-local, multicast, reserved and supported translation/transition
+prefixes are refused even when written as literals. IPv4-mapped IPv6 is
+classified by its IPv4 address. Mixed public/private answers fail as a whole.
+The checked address records are passed directly to aiohttp's transport, not
+resolved again. Verified TLS still uses the original provider hostname.
+Unicode hostnames must be supplied as ASCII IDNA A-labels; compatibility
+Unicode cannot normalize into an approved loopback/private destination.
+
+This source boundary does not yet cover the separate synchronous AI Port
+HTTP/enrollment helpers, prove live DNS behavior, or attest routing/billing
+behind an approved endpoint. Those remain open in #3/#13. See the
+[bounded checks and operational limits](evidence/provider-dns-boundary-20261029.md).
 
 Model text is data. It never becomes a command, URL, path, query or configuration update. Camera media and model output cannot expand the configured network allowlist. Future OCR, speech and recognition adapters inherit the same rule.
 
