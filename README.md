@@ -12,6 +12,11 @@ The inspected controller source is 7.2.105, alongside AI Key firmware 2.2.8. Pub
 
 ## Roadmap and product status
 
+A credentials-free [synthetic control-site preview](docs/synthetic-demo.md) is
+available with `local-aikey-demo`. It binds only to loopback, reads no deployment
+state and cannot discover/adopt devices, change settings or contact a model.
+Every displayed result is fictional, not a quality or native-acceptance claim.
+
 The [roadmap](PLAN.md) covers native AI Key and AI Port behavior, automatic camera discovery, AI Port processing for legacy and ONVIF cameras, a provider/model control site, security and detection-quality checks, and the path to a maintained open-source product. Work is tracked in the [issue index](docs/planning/issues.md), with [Claude/contributor handoff instructions](docs/planning/claude-handoff.md).
 
 Project-authored code is licensed under [Apache-2.0](LICENSE). [Community release readiness](docs/legal/release-readiness.md) tracks code origin, firmware-use authorization, contributor/employer rights, dependency/image/model obligations and adoption proof. Third-party components retain their own terms. The license choice does not establish code-origin, firmware-analysis or legal clearance; those release gates remain open. See [contributing](CONTRIBUTING.md). Opt-in all-camera admission has synthetic tests, but it has not been deployed or native-verified. A [loopback control site](docs/control-site.md) now manages vision provider and model settings for both profiles; broader feature controls remain open.
