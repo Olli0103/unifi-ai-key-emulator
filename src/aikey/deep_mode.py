@@ -27,10 +27,13 @@ import base64
 import binascii
 import ipaddress
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+from .protocol import ContractError, _json_object
 
 EMBED_TARGET = ":7445/generate-embeddings"
 DESCRIBE_TARGET = ":7968/describe"
@@ -50,6 +53,23 @@ _PROMPT_FIELDS = {"systemPrompt", "userPrompt", "temperature", "topK", "topP", "
 
 class DeepModeError(ValueError):
     """A deep-mode request, reply or configuration outside the accepted shape."""
+
+
+def _finite_number(value: Any) -> bool:
+    try:
+        return type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _decode_schema(value: str) -> dict:
+    # This JSON is inside base64: the outer wire decoder cannot validate it.
+    # Reuse its strict object parser so duplicates and overflowed numbers are
+    # refused before the prompts or their advertised hash can change.
+    try:
+        return _json_object(_decode(value).encode("utf-8"))
+    except (ContractError, UnicodeError) as exc:
+        raise DeepModeError("Describe schema must be a finite, unambiguous JSON object") from exc
 
 
 def validate_config(value: Any) -> dict | None:
@@ -100,9 +120,9 @@ def validate_prompts(body: Any) -> tuple[dict, str]:
             raise DeepModeError("Unsupported describe prompts")
         for name in ("systemPrompt", "userPrompt", "describeSchema"):
             _decode(entry[name])
-        json.loads(_decode(entry["describeSchema"]))
+        _decode_schema(entry["describeSchema"])
         for name in _PROMPT_FIELDS - {"systemPrompt", "userPrompt", "describeSchema"}:
-            if name in entry and (type(entry[name]) not in (int, float) or entry[name] != entry[name]):
+            if name in entry and not _finite_number(entry[name]):
                 raise DeepModeError("Unsupported describe prompts")
     return prompts, body["configHash"]
 
@@ -149,7 +169,7 @@ def select_prompt(prompts: dict, types: list[str]) -> dict:
     if entry is None:
         raise DeepModeError("No describe prompt for these object types")
     return {"system": _decode(entry["systemPrompt"]), "user": _decode(entry["userPrompt"]),
-            "schema": json.loads(_decode(entry["describeSchema"])),
+            "schema": _decode_schema(entry["describeSchema"]),
             "sampling": {name: entry[name] for name in ("temperature", "topK", "topP", "minP",
                                                         "repeatPenalty", "presencePenalty")
                          if name in entry},
@@ -167,7 +187,8 @@ def bounded_schema(schema: dict) -> dict:
     3 of 22 answers hit 1024 tokens while normal ones used about 40). A bound
     already present is kept.
     """
-    labels = (schema.get("properties") or {}).get("labels") if isinstance(schema, dict) else None
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    labels = properties.get("labels") if isinstance(properties, dict) else None
     if not isinstance(labels, dict) or labels.get("type") != "array" or "maxItems" in labels:
         return schema
     bounded = json.loads(json.dumps(schema))
@@ -206,10 +227,16 @@ def padded_reid(vector: list[float]) -> list[float]:
     """
     if not isinstance(vector, list) or not 1 <= len(vector) <= REID_DIMENSIONS:
         raise DeepModeError("Re-ID vector has the wrong size")
-    norm = sum(v * v for v in vector) ** 0.5
-    if not norm or norm != norm:
+    if not all(_finite_number(v) for v in vector):
+        raise DeepModeError("Re-ID vector has non-finite or nonnumeric values")
+    scale = max(abs(v) for v in vector)
+    if not scale:
         raise DeepModeError("Re-ID vector is empty")
-    return [round(v / norm, 6) for v in vector] + [0.0] * (REID_DIMENSIONS - len(vector))
+    # Squaring finite components can overflow or underflow. Scaling first
+    # preserves their direction, including at the smallest subnormal value.
+    scaled = [v / scale for v in vector]
+    norm = math.hypot(*scaled)
+    return [round(v / norm, 6) for v in scaled] + [0.0] * (REID_DIMENSIONS - len(vector))
 
 
 def validate_embed_request(command: dict) -> tuple[dict, str]:
@@ -265,7 +292,9 @@ def validate_describe_request(body: Any) -> None:
             coord = item.get("coord") if isinstance(item, dict) else None
             if (not isinstance(item, dict) or item.get("objectType") not in DESCRIBE_TYPES
                     or type(item.get("ts")) is not int or not isinstance(coord, list)
-                    or len(coord) != 4 or any(type(v) not in (int, float) for v in coord)):
+                    or len(coord) != 4 or not all(_finite_number(v) for v in coord)
+                    or not (0 <= coord[0] < 1000 and 0 <= coord[1] < 1000
+                            and 0 < coord[2] <= 1000 and 0 < coord[3] <= 1000)):
                 raise DeepModeError("Unsupported describe object")
             objects += 1
     if len(images) + objects > MAX_DESCRIBE_IMAGES:

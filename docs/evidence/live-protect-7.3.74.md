@@ -28,6 +28,32 @@ from older 7.3.60/7.3.68/7.3.70 trials.
   model space. The [isolated restore](nas-restore-20261029.md) has separate
   limits, including an empty tokenizer catalog after logical restore.
 
+## Additional session-search and control observations
+
+The authenticated native session statistics return 13,399 sessions. An initial
+search hit a client-side 12-second deadline. A bounded terminal read returned
+30 sessions for `person in a room` in 796 ms and 30 for the contrast query
+`a sailing boat on the ocean` in 2,927 ms. The result-ID sets differ, compared
+inside the browser without exporting IDs or descriptions. This is ranked
+search availability, not labeled relevance, a negative-query PASS or an
+explanation of the initial timeout. The live search host has one tokenizer
+registration; the isolated restore's empty catalog is not a live failure.
+
+The current Deep policy was disabled, with the existing all-camera scope, and
+the processor reported Basic. A bounded normal `ai-policies/deepUnderstanding`
+PATCH was accepted with HTTP 200 and read back enabled, then restored. A
+follow-up asynchronous observation exceeded the browser evaluation deadline;
+intermediate controller/processor observations disagreed. Its restoration
+also returned HTTP 200. Independent final reads subsequently confirmed the
+policy disabled, the same all-camera/empty-explicit-list scope, and Basic in
+both the controller's processor record and the Key's persisted state. No
+internal-user/permission flags or provider/camera settings were changed.
+
+Key counters still show zero new Deep description/embedding tasks and an empty
+queue. Therefore this proves the settings write/read/restore path, not Deep
+processing, description persistence, a restart round trip or quality. No new
+processing-mode acceptance or version allowlist entry follows from it.
+
 ## Not observed / not authorized by this evidence
 
 - Fresh adoption, a new management-password rotation, or a controller upgrade
