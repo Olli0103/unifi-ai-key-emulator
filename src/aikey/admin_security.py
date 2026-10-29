@@ -10,6 +10,7 @@ import hmac
 import ipaddress
 import json
 import secrets
+import threading
 import time
 from typing import Callable
 from urllib.parse import urlsplit
@@ -96,13 +97,15 @@ class AdminSecurity:
 
     def __init__(self, signing_key: bytes, allowed_origin: str, *,
                  session_ttl_seconds: int = 3600, login_window_seconds: int = 300,
-                 max_login_attempts: int = 5, allow_loopback_http: bool = False,
+                 max_login_attempts: int = 5, max_sessions: int = 128,
+                 allow_loopback_http: bool = False,
                  clock: Callable[[], float] = time.time):
         if not isinstance(signing_key, bytes) or len(signing_key) < 32:
             raise AdminSecurityError("Admin signing key must contain at least 32 random bytes")
         if (type(session_ttl_seconds) is not int or not 60 <= session_ttl_seconds <= 43200
                 or type(login_window_seconds) is not int or not 10 <= login_window_seconds <= 3600
-                or type(max_login_attempts) is not int or not 1 <= max_login_attempts <= 20):
+                or type(max_login_attempts) is not int or not 1 <= max_login_attempts <= 20
+                or type(max_sessions) is not int or not 1 <= max_sessions <= 1024):
             raise AdminSecurityError("Invalid admin session or login-rate policy")
         self._key = signing_key
         self.allowed_origin = _origin(
@@ -111,9 +114,14 @@ class AdminSecurity:
         self.session_ttl = session_ttl_seconds
         self.login_window = login_window_seconds
         self.max_login_attempts = max_login_attempts
+        self.max_sessions = max_sessions
         self._allow_loopback_http = allow_loopback_http
         self._clock = clock
         self._attempts: dict[str, deque[int]] = defaultdict(deque)
+        # Only sessions issued by this runtime carry authority. A restart must
+        # not revive a logged-out cookie merely because the signing key persists.
+        self._sessions: dict[str, int] = {}
+        self._session_lock = threading.RLock()
 
     @staticmethod
     def create_password_record(password: str) -> str:
@@ -170,7 +178,10 @@ class AdminSecurity:
             self._trim_attempt_buckets()
             return self._decision(False, "invalid_credentials", "login", actor, now)
         self._attempts.pop(actor, None)
-        credentials, subject = self._issue(now)
+        issued = self._issue(now)
+        if issued is None:
+            return self._decision(False, "session_capacity", "login", actor, now)
+        credentials, subject = issued
         return self._decision(
             True, "authenticated", "login", actor, now,
             credentials=credentials, subject=subject,
@@ -199,6 +210,20 @@ class AdminSecurity:
             return None
         return _b64encode(hmac.digest(self._key, b"csrf\0" + cookie.encode(), "sha256"))
 
+    def revoke(self, cookie: str) -> bool:
+        """End one currently issued session; never cancel an admitted operation."""
+        with self._session_lock:
+            claims = self._claims(cookie, int(self._clock()))
+            if claims is None:
+                return False
+            self._sessions.pop(claims[1], None)
+            return True
+
+    def _prune_sessions(self, now: int) -> None:
+        # Called under the session lock. Expiry cannot be undone by clock rollback.
+        for session in [sid for sid, expires in self._sessions.items() if expires <= now]:
+            del self._sessions[session]
+
     def _same_origin(self, origin: str) -> bool:
         try:
             actual = _origin(origin, allow_loopback_http=self._allow_loopback_http)
@@ -212,21 +237,28 @@ class AdminSecurity:
         digest = hmac.digest(self._key, b"actor\0" + client_id.encode("utf-8", "replace"), "sha256")
         return "client:" + digest.hex()[:16]
 
-    def _issue(self, now: int) -> tuple[AdminCredentials, str]:
-        subject = "administrator"
-        session_id = secrets.token_hex(16)
-        expires = now + self.session_ttl
-        payload = json.dumps(
-            {"exp": expires, "iat": now, "sid": session_id, "sub": subject, "v": 1},
-            sort_keys=True, separators=(",", ":"),
-        ).encode()
-        body = _b64encode(payload)
-        signature = _b64encode(hmac.digest(self._key, b"session\0" + body.encode(), "sha256"))
-        cookie = body + "." + signature
-        csrf = _b64encode(hmac.digest(self._key, b"csrf\0" + cookie.encode(), "sha256"))
-        return AdminCredentials(cookie, csrf, expires), subject
+    def _issue(self, now: int) -> tuple[AdminCredentials, str] | None:
+        with self._session_lock:
+            self._prune_sessions(now)
+            if len(self._sessions) >= self.max_sessions:
+                return None  # Never evict someone else's still-valid session.
+            subject = "administrator"
+            session_id = secrets.token_hex(16)
+            expires = now + self.session_ttl
+            payload = json.dumps(
+                {"exp": expires, "iat": now, "sid": session_id, "sub": subject, "v": 1},
+                sort_keys=True, separators=(",", ":"),
+            ).encode()
+            body = _b64encode(payload)
+            signature = _b64encode(hmac.digest(self._key, b"session\0" + body.encode(), "sha256"))
+            cookie = body + "." + signature
+            csrf = _b64encode(hmac.digest(self._key, b"csrf\0" + cookie.encode(), "sha256"))
+            self._sessions[session_id] = expires
+            return AdminCredentials(cookie, csrf, expires), subject
 
     def _claims(self, cookie: str, now: int) -> tuple[str, str] | None:
+        with self._session_lock:
+            self._prune_sessions(now)
         try:
             if not isinstance(cookie, str) or len(cookie) > 2048 or cookie.count(".") != 1:
                 raise ValueError
@@ -244,7 +276,10 @@ class AdminSecurity:
                     or not 0 <= claims["iat"] <= now < claims["exp"]
                     or claims["exp"] - claims["iat"] != self.session_ttl):
                 raise ValueError
-            return claims["sub"], claims["sid"]
+            with self._session_lock:
+                if self._sessions.get(claims["sid"]) != claims["exp"]:
+                    raise ValueError
+                return claims["sub"], claims["sid"]
         except (UnicodeError, ValueError, TypeError, json.JSONDecodeError):
             return None
 

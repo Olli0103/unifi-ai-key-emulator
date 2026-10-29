@@ -171,6 +171,26 @@ Open `http://127.0.0.1:8765/` on the same host. Each AI Port form appears when t
 
 API-backed AI Port detection is still experimental. The motion gate, provider-failure backoff, object output validation and the optional durable request cap have synthetic tests, but real-camera object locations, score calibration and saved Protect events are `needs_evidence`. Do not treat a successful settings save as proof that the selected model is suitable or that Protect accepted its events. See [AI Port candidate](aiport-candidate.md) for the backend configuration and current native evidence.
 
+## Session lifetime and logout
+
+Sign-in sessions belong to the current control-site server instance. **Sign in
+again after restarting the site**, even if its private signing-key file is
+unchanged. Logout revokes that session server-side as well as expiring its browser
+cookie; a copied old cookie cannot authorize later reads or saves. Other signed-in
+sessions remain valid. Rejected Origin/CSRF logout requests do not revoke a session.
+
+The server keeps at most 128 current sessions by default, with an expiry-bound,
+in-memory registry. A full registry refuses a new login without evicting another
+valid session; sign out an existing session or wait for expiry. This is distinct
+from a wrong password. Observed expiry/revocation cannot be reversed by setting
+the wall clock back. Persistent administrator credentials and device/provider
+keys are unchanged.
+
+Logout does not cancel an already admitted save, provider test or processor job.
+Reconcile any in-flight operation's result separately. These source/HTTP tests
+are not a deployed service change or full security-audit approval. See the
+[session-lifecycle checks](evidence/admin-session-lifecycle-20261029.md).
+
 ## Explicit direct HTTPS
 
 Mac and Linux can also serve the same authenticated site over direct TLS.
