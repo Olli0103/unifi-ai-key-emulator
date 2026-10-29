@@ -88,14 +88,22 @@ Ollama remote markers when supplied. An omitted remote marker does not prove a
 local model or zero upstream cost. No returned model is automatically selected,
 and the site does not automatically validate or change an index/model space.
 
-## Synthetic vision test
+## Synthetic provider tests
 
 Configured caption and API-detection roles have a separate **Run one synthetic
 vision test** action. It shows the saved model and destination and requires an
 unchecked cost acknowledgement. The test sends one generated image containing
 random characters, never camera media. Provider charges may apply separately
 from camera caption/request caps. Saving settings or listing models never
-starts this test. Speech and other role tests are not yet available.
+starts this test.
+
+An already configured AI Key speech role also offers **Run one synthetic speech
+test**. It uploads exactly one generated second of silent mono 16-bit/16-kHz WAV
+audio through that role's saved transcription adapter, endpoint and key. No
+recorded audio, speech, camera permission or test identity is required or enabled.
+The form discloses that media/destination/model and requires the same separate,
+unchecked cost acknowledgement. It does not start automatically or change audio
+scope/provider/model settings. Other role tests remain unavailable.
 
 The signed-in, same-origin/CSRF-checked form is bound to its profile, role,
 revision and session with a 120-second single-use grant. Grants are consumed
@@ -103,7 +111,10 @@ before credential loading/contact; old forms fail after a restart. At most one
 test runs at a time, with a 30-second cooldown and a bounded pending-form set.
 The client makes one request, without redirects, cookies, environment proxies,
 decompression, retries or fallback, with 20-second/64-KiB response bounds and a
-128-output-token request limit. It uses only the selected role's saved key.
+128-output-token request limit for vision. Speech uses the existing adapter's
+verbose-JSON segment settings for the one-second input; it has the same response
+byte/deadline bound, not a claimed provider output-token or billing cap. Both use
+only the selected role's saved key.
 
 The page reports a match/mismatch and timing, not model text, keys or images.
 One matching synthetic answer is not general modality, internal model identity,
@@ -112,6 +123,15 @@ activated or changed. A settings change during the test makes its result stale.
 Known preflight failures report that no request started; an unverified outcome
 after a possible request is not automatically retried and may have been charged.
 A new explicit test needs a new form and acknowledgement.
+
+The speech page reports only whether the API returned no **parsed speech** for
+the generated silence, plus elapsed time. A nonempty parsed response is a
+silence mismatch; its transcript is never displayed, logged or stored by this
+probe. Empty output is not proof of speech recognition or model quality. A
+silent fixture cannot verify accent/language/noise handling, native transcript
+persistence, internal model identity, provider retention or charges. A shared
+one-at-a-time/cooldown gate covers vision and speech. No automatic retry,
+fallback or activation follows a mismatch, error or timeout.
 
 ### Provider hostnames
 

@@ -44,7 +44,7 @@ from .config_store import (
 from .index_rebuild import migration_plan
 from .model_catalog import CatalogError, catalog_provider, fetch_catalog
 from .providers import DEFAULT_BASE_URLS
-from .provider_probe import ProbeError, ProbeGrants, probe_vision
+from .provider_probe import ProbeError, ProbeGrants, probe_speech, probe_vision
 
 
 _COOKIE = "aikey_admin_local"
@@ -1089,25 +1089,27 @@ class ControlSite:
                 + "".join(rows) + "</table></section>")
 
     def _probe_form(self, csrf, profile, role, revision, destination, model) -> str:
-        if role not in {"caption", "detection"}:
+        if role not in {"caption", "detection", "speech"}:
             return "<p>A synthetic test for this role is not available.</p>"
         if not isinstance(model, str) or not model.strip():
-            return "<p>Save a vision model before running a synthetic test.</p>"
+            return "<p>Save a model before running a synthetic test.</p>"
         grant = self._probe_grants.issue(profile, role, revision, csrf)
         if grant is None:
             return "<p>Synthetic test forms are temporarily full. Reload settings later.</p>"
         hidden = {"csrf": csrf, "profile": profile, "role": role,
                   "revision": revision, "grant": grant}
+        medium = "one generated second of silent WAV audio" if role == "speech" else "one generated image"
+        kind = "speech" if role == "speech" else "vision"
         return ("<form method='post' action='/provider-probe'>"
                 + "".join(f"<input type='hidden' name='{name}' value='{_safe(value)}'>"
                           for name, value in hidden.items())
                 + f"<p>Synthetic test destination: {_safe(destination)}; model: {_safe(model)}. "
-                  "Sends one generated image, not camera media. Tests one API path, not general "
+                  f"Sends {medium}, not camera media. Tests one API path, not general "
                   "modality, model identity or recognition quality.</p>"
                   "<label><input type='checkbox' name='acknowledge_cost' value='yes' required> "
                   "Send this synthetic test. Provider charges may apply, separately from camera "
                   "caption/request caps.</label>"
-                  "<button>Run one synthetic vision test</button></form>")
+                  f"<button>Run one synthetic {kind} test</button></form>")
 
     async def provider_probe(self, request: web.Request) -> web.Response:
         fields = await request.post()
@@ -1117,7 +1119,7 @@ class ControlSite:
         expected = {"csrf", "profile", "role", "revision", "grant", "acknowledge_cost"}
         if (set(fields) != expected or any(len(fields.getall(k)) != 1 for k in expected)
                 or not all(isinstance(fields[k], str) for k in expected)
-                or fields["acknowledge_cost"] != "yes" or fields["role"] not in {"caption", "detection"}):
+                or fields["acknowledge_cost"] != "yes" or fields["role"] not in {"caption", "detection", "speech"}):
             self._audit("provider_probe", "invalid_request")
             raise web.HTTPBadRequest(text="A fresh synthetic-test form and cost acknowledgement are required")
         profile, role, revision = fields["profile"], fields["role"], fields["revision"]
@@ -1131,7 +1133,7 @@ class ControlSite:
             self._audit("provider_probe", "stale", profile)
             raise web.HTTPConflict(text="The configured role changed. Reload settings before testing.")
         if not isinstance(selection.get("model"), str) or not selection["model"].strip():
-            raise web.HTTPBadRequest(text="Save a vision model before testing")
+            raise web.HTTPBadRequest(text="Save a model before testing")
         try:
             self._probe_grants.begin(fields["grant"], profile, role, revision, fields["csrf"])
         except ProbeError as exc:
@@ -1142,9 +1144,9 @@ class ControlSite:
             raise web.HTTPConflict(text="The synthetic-test form expired or was already used. Reload settings.")
         self._audit("provider_probe", "started", profile)
         try:
-            provider = await asyncio.to_thread(catalog_provider, selection, speech=False,
+            provider = await asyncio.to_thread(catalog_provider, selection, speech=role == "speech",
                 host_state=store.path.parent, runtime_state=runtime_state, lab=lab)
-            report = await probe_vision(provider)
+            report = await (probe_speech(provider) if role == "speech" else probe_vision(provider))
         except (CatalogError, OSError):
             self._audit("provider_probe", "preflight_unavailable", profile)
             return _page("Synthetic test unavailable", "<h1>Synthetic test unavailable</h1>"
@@ -1177,8 +1179,19 @@ class ControlSite:
                          "<p>The settings changed during the test. Its result is not current. "
                          "A request may have been charged; no settings were activated or changed.</p>"
                          "<p><a href='/'>Settings</a></p>")
-        matched = report["synthetic_image_matched"]
+        matched = report["synthetic_silence_matched" if role == "speech" else "synthetic_image_matched"]
         self._audit("provider_probe", "matched" if matched else "mismatch", profile)
+        if role == "speech":
+            return _page("Synthetic speech test", "<h1>Synthetic speech test</h1>"
+                         + f"<p>Profile: {_safe(profile)}; role: speech; "
+                           f"model: {_safe(selection['model'])}; destination: {_safe(provider.base_url)}.</p>"
+                         + ("<p>The API returned no parsed speech for generated silence.</p>" if matched else
+                            "<p>The API returned parsed speech for generated silence; no transcript is shown.</p>")
+                         + f"<p>Elapsed: {report['elapsed_ms']} ms. This tests one synthetic silence API path, "
+                           "not voice recognition, general modality, internal model identity or quality. "
+                           "No model was selected, no audio permission or configuration changed, "
+                           "and no camera audio was sent. Provider charges may apply.</p>"
+                           "<p><a href='/'>Settings</a></p>")
         return _page("Synthetic vision test", "<h1>Synthetic vision test</h1>"
                      + f"<p>Profile: {_safe(profile)}; role: {_safe(role)}; "
                        f"model: {_safe(selection['model'])}; destination: {_safe(provider.base_url)}.</p>"
