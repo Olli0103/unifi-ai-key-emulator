@@ -64,11 +64,14 @@ bodies or URLs. This does not encrypt identity storage or change retention.
 
 This source boundary does not prove live DNS behavior or attest routing/billing
 behind an approved endpoint. Blocking libc DNS cannot be forcibly cancelled
-here, and the existing sync HTTP response timeout is not a proven whole-request
-wall-clock deadline. Late DNS/connect completion cannot begin an expired HTTP
-transfer, but sustained/slow-response acceptance remains open in #3/#24. See the
+here. Synchronous connections now share a monotonic request budget across
+connection/TLS, sends, header parsing and body reads, including slow individual
+bytes and already buffered late results. A late DNS/connect completion cannot
+begin an expired HTTP transfer, but a blocked resolver itself is not forcibly
+interrupted and sustained/live-provider acceptance remains open in #3/#24. See the
 [async checks](evidence/provider-dns-boundary-20261029.md) and
-[sync/enrollment limits](evidence/provider-sync-boundary-20261029.md).
+[sync/enrollment limits](evidence/provider-sync-boundary-20261029.md) and the
+[subsequent transfer-deadline checks](evidence/provider-response-deadline-20261029.md).
 
 Model text is data. It never becomes a command, URL, path, query or configuration update. Camera media and model output cannot expand the configured network allowlist. Future OCR, speech and recognition adapters inherit the same rule.
 
