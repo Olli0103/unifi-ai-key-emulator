@@ -68,30 +68,36 @@ def _unicast(address) -> bool:
             or any(address.version == net.version and address in net for net in _PRIVATE))
 
 
+def checked_addresses(host, port, records):
+    """Check the complete answer before either async or sync transport uses it."""
+    validate_provider_host(host)
+    try:
+        literal = _address(host)
+    except ProviderAddressError:
+        literal = None
+    if not records or len(records) > MAX_ADDRESSES:
+        raise ProviderAddressError()
+    checked = []
+    for record in records:
+        address = _address(record.get("host"))
+        if (record.get("port") != port or record.get("hostname") != host
+                or not _unicast(address)
+                or (literal is not None and address != literal)
+                or (literal is None and not (
+                    address.is_loopback if host.lower().rstrip(".") == "localhost"
+                    else address.is_global))):
+            raise ProviderAddressError()
+        checked.append(dict(record))
+    return checked
+
+
 class ProviderConnector(aiohttp.TCPConnector):
     async def _resolve_host(self, host, port, traces=None):
         validate_provider_host(host)
-        try:
-            literal = _address(host)
-        except ProviderAddressError:
-            literal = None
         try:
             records = await super()._resolve_host(host, port, traces)
         except (OSError, RuntimeError):
             # Includes a resolver returning an empty cached answer. Do not
             # expose resolver diagnostics or turn cancellation into a retry.
             raise ProviderAddressError() from None
-        if not records or len(records) > MAX_ADDRESSES:
-            raise ProviderAddressError()
-        checked = []
-        for record in records:
-            address = _address(record.get("host"))
-            if (record.get("port") != port or record.get("hostname") != host
-                    or not _unicast(address)
-                    or (literal is not None and address != literal)
-                    or (literal is None and not (
-                        address.is_loopback if host.lower().rstrip(".") == "localhost"
-                        else address.is_global))):
-                raise ProviderAddressError()
-            checked.append(dict(record))
-        return checked
+        return checked_addresses(host, port, records)
