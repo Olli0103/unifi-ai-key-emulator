@@ -73,3 +73,11 @@ processor image or camera setting was replaced by this drill.
 
 Private receipts retain backup hashes, exact paths, commands and the unsuccessful
 attempts. No production credential or state archive belongs in public fixtures.
+
+## Later physical-backup result
+
+A separate [cold physical restore](nas-cold-restore-20261029.md) on the same date
+preserved tokenizer registrations and passed a synthetic `session_tok` query,
+verified-TLS credential association and an isolated restart. That completed test
+uses a different backup format; it does not erase this logical-path failure or
+prove full native device restoration.
