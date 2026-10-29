@@ -133,7 +133,7 @@ class _PendingPoolSnapshot:
 
 def _private_file(path: Path, max_size: int) -> bytes:
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
         with os.fdopen(fd, "rb") as handle:
             info = os.fstat(handle.fileno())
             if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_size > max_size:

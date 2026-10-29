@@ -509,7 +509,7 @@ def _read_private_key(path: str) -> str:
     if not isinstance(path, str) or not Path(path).is_absolute():
         raise ApiDetectionError("invalid_api_key_file")
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
         with os.fdopen(fd, "rb") as source:
             info = os.fstat(source.fileno())
             if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()

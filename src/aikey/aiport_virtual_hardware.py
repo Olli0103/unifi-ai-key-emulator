@@ -28,7 +28,7 @@ def _load_private(path: Path, limit: int, validate: Callable[[object], T]) -> T 
     if not os.path.lexists(path):
         return None
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
         with os.fdopen(fd, "rb") as source:
             info = os.fstat(source.fileno())
             if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_size > limit:

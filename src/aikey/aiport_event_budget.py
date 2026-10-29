@@ -132,7 +132,7 @@ class EventBudget:
 
     def _read(self) -> dict:
         try:
-            fd = os.open(self.path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            fd = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
         except FileNotFoundError:
             return {"schema": 1, "high_water_ns": 0, "events": {}}
         except OSError as exc:
