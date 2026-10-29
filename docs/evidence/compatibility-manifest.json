@@ -1,8 +1,8 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-10-29.1",
+ "manifest_version": "ai-key/2026-10-29.2",
  "processor_profile": "ai-key",
- "base_commit": "de1324b",
+ "base_commit": "dcacb4f",
  "emulated_identity": {
   "type": "UP-AI-KEY",
   "sysid": "0xa5f0",
@@ -171,11 +171,14 @@
     "pinned integration API inventory: 11 cameras, 10 connected, eight UniFi families; complete private ID-set digest matches independent native bootstrap",
     "same adopted Key identity/config/certificate/private key after one-module inventory image replacement; control/search connected, registry fresh; four existing AI Ports untouched and connected",
     "installed older manifest reports controller evidence unknown while the adopted baseline control remains connected",
-    "native detection-nls request for person in a room returns HTTP 200 and 60 detections under clip-basic-v1; no relevance or negative-query benchmark inferred"
+    "native detection-nls request for person in a room returns HTTP 200 and 60 detections under clip-basic-v1; no relevance or negative-query benchmark inferred",
+    "G3 and G4 smartDetectZone exact events retain ramState done and nonempty ramDescription after helper-page reload; private event-ID digest join matches two completed recognizeKeyFrames worker records with nonempty descriptions within 30 minutes",
+    "G4 and G5 smartAudioDetect exact events retain ramState done and nonempty ramDescription after helper-page reload; no exact worker-ID join for these audio examples",
+    "native session statistics return 13399 sessions; bounded terminal queries return 30 results with differing private result sets; settings write/read/restore leaves Deep disabled and processor/persisted mode Basic, not a fresh Deep processing acceptance"
    ],
    "not_observed": [
     "fresh adoption or a new credential rotation on this version",
-    "new persisted video caption/audio/recognition/enhancement acceptance on 7.3.74",
+    "new persisted audio transcript, identity/enhancement, caption quality, all-camera or post-caption controller-restart acceptance on 7.3.74",
     "complete image/deep retrieval, restored-device bootstrap, host reboot, soak or ONVIF acceptance"
    ],
    "records": [
@@ -183,7 +186,8 @@
     "docs/evidence/camera-inventory-7.3.74.md",
     "docs/evidence/nas-restore-20261029.md"
    ],
-   "raw_traces_public": false
+   "raw_traces_public": false,
+   "limits": "Exact-event reload readbacks and the two video worker joins establish bounded caption persistence, not quality, whole-version parity, sustained processing or a new Deep pipeline. No raw event IDs, media or descriptions are public. The inventory-overlay deployment is unchanged."
   },
   {
    "id": "static-protect-7.2.105",
@@ -1398,7 +1402,8 @@
    "title": "Audio-event thumbnails (ramType image) answered with event-level tags and a local description",
    "status": "native-verified",
    "live": {
-    "live-protect-7.3.70": "native-verified"
+    "live-protect-7.3.70": "native-verified",
+    "live-protect-7.3.74": "indirect"
    },
    "static": [
     "static-protect-7.3.70-bundle"
@@ -1413,7 +1418,7 @@
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [],
-   "notes": "7.3.70 pushAudioTask sends recognizeKeyFrames with ramType image. Audio events have no smart objects, so saveEventTagging keeps only event-level results: a key moment without search snapshots and the description. Native readback, 30 Sep (Protect's own event records through the signed-in web app): 31 audio events saved with ramState done, event-level ramTags (7 to 15 each) and a ramDescription."
+   "notes": "7.3.70 pushAudioTask sends recognizeKeyFrames with ramType image. Audio events have no smart objects, so saveEventTagging keeps only event-level results: a key moment without search snapshots and the description. Native readback, 30 Sep (Protect's own event records through the signed-in web app): 31 audio events saved with ramState done, event-level ramTags (7 to 15 each) and a ramDescription. 29 Oct 7.3.74: G4/G5 smartAudioDetect exact events retain done/nonempty descriptions after reload. The tag content/shape, transcript and exact worker-ID join were not established in this readback."
   },
   {
    "id": "index.ram_open_vocabulary_tags",
@@ -1711,7 +1716,8 @@
    "live": {
     "live-protect-7.3.56": "not_observed",
     "live-protect-7.3.60": "native-verified",
-    "live-protect-7.3.68": "native-verified"
+    "live-protect-7.3.68": "native-verified",
+    "live-protect-7.3.74": "indirect"
    },
    "static": [
     "static-protect-7.2.105",
@@ -1731,7 +1737,7 @@
     "Effect on events that already carry native tags",
     "Persistence for events whose smart detection is supplied by a paired AI Port"
    ],
-   "notes": "G5 Flex persistence verified by exact-event GET (ramState done, ramDescription) and native panel after full page reload. G4 Instant native panel showed the exact worker caption after full page reload. On 27 Sep, after the controller moved to 7.3.68, exact-event GETs returned metadata.ramState done and a non-empty metadata.ramDescription for the G5 Flex (22 Sep), G4 Instant (23 Sep) and G6 Instant (26 Sep) caption events, with list and exact lengths equal; a 21-day per-camera scan found no other persisted caption. Persistence was verified in the UI, not by HTTP 200 alone."
+   "notes": "G5 Flex persistence verified by exact-event GET (ramState done, ramDescription) and native panel after full page reload. G4 Instant native panel showed the exact worker caption after full page reload. On 27 Sep, after the controller moved to 7.3.68, exact-event GETs returned metadata.ramState done and a non-empty metadata.ramDescription for the G5 Flex (22 Sep), G4 Instant (23 Sep) and G6 Instant (26 Sep) caption events, with list and exact lengths equal; a 21-day per-camera scan found no other persisted caption. Persistence was verified in the UI, not by HTTP 200 alone. 29 Oct 7.3.74: G3/G4 smartDetectZone exact events retain done/nonempty descriptions after reload and join privately to completed recognizeKeyFrames records. This does not establish the complete multipart/tag payload, attribution of pre-existing tags, all-camera quality or controller-restart persistence."
   },
   {
    "id": "callback.ram_description_only",
@@ -2555,6 +2561,31 @@
     "Protect's own view after the reply (its aiprocessors log no longer reporting the failure) was not read back"
    ],
    "notes": "The body shape {brightness, nightMode{onMinute, offMinute}} came from a field-name-only recorder on 7.3.70; diskInfo arrives with an empty body and still answers 95."
+  },
+  {
+   "id": "captions.persisted_description",
+   "area": "callbacks",
+   "title": "Exact native events retain nonempty descriptions after page reload",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.74": "native-verified"
+   },
+   "static": [],
+   "tests": [
+    "tests/test_basic_descriptions.py::test_real_http_caption_and_full_ram_envelope_once_across_restart",
+    "tests/test_continuous_scope_gates.py::test_a_reported_upgrade_revokes_caption_admission_despite_the_old_config_pin"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/device.py",
+    "src/aikey/protocol.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Post-caption controller-restart persistence, quality and all-camera acceptance",
+    "Full callback/tag payload and audio transcript acceptance on this version"
+   ],
+   "notes": "29 Oct 7.3.74: exact G3/G4 smartDetectZone video events retain ramState done and nonempty ramDescription after helper-page reload; both join privately to completed recognizeKeyFrames records with descriptions within 30 minutes. G4/G5 smartAudioDetect events also retain these fields after reload, but no exact audio worker-ID join is claimed. This limited persistence result does not verify every field of the full RAM callback or audio tags."
   }
  ],
  "contradictions": [

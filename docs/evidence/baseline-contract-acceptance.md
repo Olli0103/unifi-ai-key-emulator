@@ -9,10 +9,10 @@ release and operational acceptance remain under their separate open issues.
 | --- | --- |
 | Sanitized accepted/rejected commands with real framing/TLS | `tests/fixtures/compatibility/ucp4-control-v1.json` and `tests/test_compatibility_fixtures.py`: independent loopback TLS controller, token then certificate authorization, byte framing, accepted/unsupported commands, malformed frames and reconnect. Fixtures are invented, not private captures. |
 | Preserve the previously verified baseline | Dated live sources separate 7.3.56 adoption/password rotation/disabled post-adoption factory enrollment, 7.3.60 G5/G4 native captions after page reload, and 7.3.68 tokenless reconnect/persisted captions. Current 7.3.74 inventory-overlay restart preserves the adopted identity, config and key/certificate bytes. None of those dates is silently generalized to another feature or version. |
-| Unknown versions/features fail clearly without destroying adoption | Fixed version categories, unsupported target/error codes, malformed-frame close then tokenless baseline reconnect. A newly known `live_partial` version still cannot admit continuous captions without the separate caption allowlist; the 7.3.74 case explicitly exercises rejected captions alongside successful baseline `getInfo`. |
+| Unknown versions/features fail clearly without destroying adoption | Fixed version categories, unsupported target/error codes, malformed-frame close then tokenless baseline reconnect. A `live_partial` version cannot admit continuous captions without the separate caption allowlist; 7.3.56 explicitly exercises rejected captions alongside successful baseline `getInfo`. The later bounded 7.3.74 caption readbacks now support its own allowlist entry; neighboring 7.3.73/7.3.75 remain refused. |
 
-Manifest `ai-key/2026-10-29.1`, its generated matrix, runtime version
-classification and fixture metadata share one version. The focused manifest,
+Manifest `ai-key/2026-10-29.2`, its generated matrix, runtime version
+classification and fixture metadata share one version. The original focused manifest,
 framing, caption-scope and control-profile checks passed (53 tests). Tests prove
 the local contract; the separately dated native records prove only their stated
 observations. They do not convert an HTTP 200 or a capability flag into native
@@ -23,6 +23,8 @@ unobserved, while later dated sections and feature entries already recorded
 native audio-image descriptions and deep behavior. The summary now distinguishes
 initial callback-only video observations from later readbacks. The existing
 caption allowlist was **not removed or expanded** based on that stale summary.
+The subsequent 7.3.74 addition rests instead on its separately dated exact-event
+readbacks joined to completed video workers, not that correction or partial-version label.
 
 Still missing: fresh adoption on every later version, new password changes with
 search enabled, controller-upgrade/reboot recovery, video-caption acceptance

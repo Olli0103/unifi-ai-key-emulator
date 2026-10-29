@@ -69,7 +69,8 @@ def test_evidence_sources_keep_live_static_and_synthetic_separate():
 def test_partial_version_evidence_cannot_authorize_captions_without_a_persisted_path():
     manifest = load()
     caption_paths = [f for f in manifest["features"] if f["id"] in {
-        "callback.ram_full_event_tagging", "callbacks.audio_image_tagging"}]
+        "callback.ram_full_event_tagging", "callbacks.audio_image_tagging",
+        "captions.persisted_description"}]
     for version in CONTINUOUS_CAPTION_VERSIONS:
         source = next(s for s in manifest["evidence_sources"]
                       if s["kind"] == "live" and s["protect_version"] == version)

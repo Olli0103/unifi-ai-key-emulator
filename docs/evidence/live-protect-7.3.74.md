@@ -1,7 +1,8 @@
 # Protect 7.3.74 — bounded observations, 29 October 2026
 
-This is partial evidence for the AI Key contract (#2), not full compatibility
-or a new caption/search-quality acceptance. Dates and versions are not inferred
+This is partial evidence for the AI Key contract (#2), including the specific
+caption-persistence observations below, not full compatibility or caption/search
+quality acceptance. Dates and versions are not inferred
 from older 7.3.60/7.3.68/7.3.70 trials.
 
 ## Observed
@@ -84,8 +85,12 @@ post-caption restart, all cameras, overload behavior or new Deep processing.
   or a native ONVIF test. The owner has no ONVIF camera and explicitly keeps
   that requirement open.
 
-The continuous-caption version allowlist is unchanged. Recognizing this
-version as partially observed does not enable caption admission or transfer
-older feature acceptance to it. Unknown/unsupported commands still fail with
+The source continuous-caption version allowlist now includes exactly 7.3.74
+on the strength of the paired worker/native video readbacks above. Existing
+camera/model scope, fresh inventory, explicit continuous mode and budget gates
+remain required; the controller-reported version must itself be listed. No
+running service or configuration was changed by this source update. This does
+not transfer unrelated older feature acceptance to 7.3.74, or admission to
+neighboring 7.3.73/7.3.75 or other untested versions. Unknown/unsupported commands still fail with
 fixed categories without recreating the device identity. Raw media, captions,
 transcripts, biometric templates, private IDs and credentials remain private.
