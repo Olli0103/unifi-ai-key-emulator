@@ -52,6 +52,29 @@ stopped before creating the one-shot start marker. **No model request occurred
 in that attempt.** The wrapper did not retain the exact first failure stage;
 subsequent health reads separately observe active caption work, not proof of
 the original exception. The device services were
-not stopped or reconfigured to obtain an idle window. This is not a successful
-native inference or full control-site browser flow, and no real photo,
-caption, transcript, face template or other camera data is used in this test.
+not stopped or reconfigured to obtain an idle window. That first admission is
+not a native inference success; its failure is retained, not relabeled.
+
+Later on the same day, a separate health read observed naturally idle workers.
+After independently confirming that no start/result marker existed, the same
+exact candidate was admitted once. The existing local OpenVINO Model Server
+returned the generated eight-character image challenge correctly in 3,111 ms.
+The native receipt records one client attempt, no retries, no provider
+credential, no camera media, source/configuration byte checks, and the same
+adopted/search-connected device with zero active/queued/pending workers before
+and after. The durable start marker and result were independently read back;
+the temporary isolated test container had exited. They prevent repeating this
+completed test as a new admission.
+
+The tested `provider_probe.py` SHA-256 is
+`cc48f2fe80634898d09e1cfcd6f4b89ad7ef4af51c023503cc1fed5a94462f48`,
+from source commit `dcacb4f7c1bf1aef2d623b9979ecfa8e34614607` (#139).
+The candidate ran as an unprivileged, read-only, capability-dropped container
+with bounded resources, only the required read-only config/certificate and
+private receipt directory mounted; no device private key or camera-state
+directory was mounted. No deployed processor/control-site code was replaced.
+
+This establishes one native synthetic vision API-path result, not a complete
+control-site browser flow, model-internal identity, general modality, quality,
+ongoing performance or provider billing guarantee. No real photo, caption,
+transcript, face template or other camera data was used or exported.
