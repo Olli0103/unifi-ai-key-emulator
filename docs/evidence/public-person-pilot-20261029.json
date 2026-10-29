@@ -1,0 +1,311 @@
+{
+  "answered_only_calibration": {
+    "answered": 2,
+    "bins": [
+      {
+        "accuracy": 1.0,
+        "count": 2,
+        "mean_confidence": 0.99,
+        "range": [
+          0.9,
+          1.0
+        ]
+      }
+    ],
+    "brier": 0.0001,
+    "ece": 0.01
+  },
+  "calibration_scope": "Two valid non-none answers only; not all-case probability calibration",
+  "cases": [
+    {
+      "api_and_parse_ms": 8294,
+      "case_id": "coco-val2017-000000000785",
+      "coco_image_id": 785,
+      "correct": true,
+      "expected": "person",
+      "flickr_url": "http://farm8.staticflickr.com/7015/6795644157_f019453ae7_z.jpg",
+      "input_sha256": "83981537a7baeafbeb9c8cb67b3484dc26433f574b3685d021fa537e277e4726",
+      "license_id": 4,
+      "license_url": "https://creativecommons.org/licenses/by/2.0/",
+      "predicted": "person",
+      "source_url": "https://s3.amazonaws.com/images.cocodataset.org/val2017/000000000785.jpg",
+      "status": "valid"
+    },
+    {
+      "api_and_parse_ms": 4797,
+      "case_id": "coco-val2017-000000000285",
+      "coco_image_id": 285,
+      "correct": false,
+      "expected": "none",
+      "flickr_url": "http://farm8.staticflickr.com/7434/9138147604_c6225224b8_z.jpg",
+      "input_sha256": "f3a2974ce3686332609124c70e3e6a2e3aca43fccf1cd1bd7c5c03820977f57d",
+      "license_id": 4,
+      "license_url": "https://creativecommons.org/licenses/by/2.0/",
+      "predicted": null,
+      "source_url": "https://s3.amazonaws.com/images.cocodataset.org/val2017/000000000285.jpg",
+      "status": "error"
+    },
+    {
+      "api_and_parse_ms": 6808,
+      "case_id": "coco-val2017-000000000872",
+      "coco_image_id": 872,
+      "correct": false,
+      "expected": "person",
+      "flickr_url": "http://farm9.staticflickr.com/8447/7805810128_605424213d_z.jpg",
+      "input_sha256": "c2aa138ee3a59b057a7ba6fc5a6a18e62af531aa7dab78a7bfd33c1cd7e55eb6",
+      "license_id": 4,
+      "license_url": "https://creativecommons.org/licenses/by/2.0/",
+      "predicted": null,
+      "source_url": "https://s3.amazonaws.com/images.cocodataset.org/val2017/000000000872.jpg",
+      "status": "error"
+    },
+    {
+      "api_and_parse_ms": 1386,
+      "case_id": "coco-val2017-000000001993",
+      "coco_image_id": 1993,
+      "correct": true,
+      "expected": "none",
+      "flickr_url": "http://farm4.staticflickr.com/3413/3223600591_25cb6f12c6_z.jpg",
+      "input_sha256": "039f3bfb862023bde7f835a36c32d8f59a3e66488863c2a47b7b746e78c44186",
+      "license_id": 4,
+      "license_url": "https://creativecommons.org/licenses/by/2.0/",
+      "predicted": "none",
+      "source_url": "https://s3.amazonaws.com/images.cocodataset.org/val2017/000000001993.jpg",
+      "status": "valid"
+    },
+    {
+      "api_and_parse_ms": 8404,
+      "case_id": "coco-val2017-000000008021",
+      "coco_image_id": 8021,
+      "correct": false,
+      "expected": "person",
+      "flickr_url": "http://farm7.staticflickr.com/6117/6240308255_77782d0723_z.jpg",
+      "input_sha256": "235537407867a7b894e78b3aecb55b33b14b64cbb23ca376a00d34c62a1a63a6",
+      "license_id": 4,
+      "license_url": "https://creativecommons.org/licenses/by/2.0/",
+      "predicted": null,
+      "source_url": "https://s3.amazonaws.com/images.cocodataset.org/val2017/000000008021.jpg",
+      "status": "error"
+    },
+    {
+      "api_and_parse_ms": 1544,
+      "case_id": "coco-val2017-000000006012",
+      "coco_image_id": 6012,
+      "correct": true,
+      "expected": "none",
+      "flickr_url": "http://farm5.staticflickr.com/4030/4281955635_f02ce45926_z.jpg",
+      "input_sha256": "7cd0d627b15c09f373aa613d013fb2d8ae6bd20bcce0d98aa31b963e6bcca495",
+      "license_id": 4,
+      "license_url": "https://creativecommons.org/licenses/by/2.0/",
+      "predicted": "none",
+      "source_url": "https://s3.amazonaws.com/images.cocodataset.org/val2017/000000006012.jpg",
+      "status": "valid"
+    },
+    {
+      "api_and_parse_ms": 4676,
+      "case_id": "coco-val2017-000000009483",
+      "coco_image_id": 9483,
+      "correct": true,
+      "expected": "person",
+      "flickr_url": "http://farm4.staticflickr.com/3179/2986591710_d76622fdf0_z.jpg",
+      "input_sha256": "c7e6e15f4db067c3e09ab8605759be9d850e2d5c45ea4dfb9cda8f5d85308ea4",
+      "license_id": 4,
+      "license_url": "https://creativecommons.org/licenses/by/2.0/",
+      "predicted": "person",
+      "source_url": "https://s3.amazonaws.com/images.cocodataset.org/val2017/000000009483.jpg",
+      "status": "valid"
+    },
+    {
+      "api_and_parse_ms": 1350,
+      "case_id": "coco-val2017-000000006818",
+      "coco_image_id": 6818,
+      "correct": true,
+      "expected": "none",
+      "flickr_url": "http://farm3.staticflickr.com/2318/2068039201_b967c69504_z.jpg",
+      "input_sha256": "99479f61ef2931ea70e161db0859e8706c6e48f13e8cb0798959f52433b01b98",
+      "license_id": 4,
+      "license_url": "https://creativecommons.org/licenses/by/2.0/",
+      "predicted": "none",
+      "source_url": "https://s3.amazonaws.com/images.cocodataset.org/val2017/000000006818.jpg",
+      "status": "valid"
+    },
+    {
+      "api_and_parse_ms": 5693,
+      "case_id": "coco-val2017-000000011149",
+      "coco_image_id": 11149,
+      "correct": false,
+      "expected": "person",
+      "flickr_url": "http://farm4.staticflickr.com/3625/3323418866_ea5017538d_z.jpg",
+      "input_sha256": "5973b8f1d5a30de98b1dcb715f1c94928a676fff8e45283515d0474e51ac0abc",
+      "license_id": 4,
+      "license_url": "https://creativecommons.org/licenses/by/2.0/",
+      "predicted": null,
+      "source_url": "https://s3.amazonaws.com/images.cocodataset.org/val2017/000000011149.jpg",
+      "status": "error"
+    },
+    {
+      "api_and_parse_ms": 1123,
+      "case_id": "coco-val2017-000000007574",
+      "coco_image_id": 7574,
+      "correct": true,
+      "expected": "none",
+      "flickr_url": "http://farm8.staticflickr.com/7054/6924897347_7266fd119c_z.jpg",
+      "input_sha256": "4f26c847c2f49574978e96733efaec720dd1d1ba95a8220d0de012b7317eed47",
+      "license_id": 4,
+      "license_url": "https://creativecommons.org/licenses/by/2.0/",
+      "predicted": "none",
+      "source_url": "https://s3.amazonaws.com/images.cocodataset.org/val2017/000000007574.jpg",
+      "status": "valid"
+    },
+    {
+      "api_and_parse_ms": 5655,
+      "case_id": "coco-val2017-000000019402",
+      "coco_image_id": 19402,
+      "correct": false,
+      "expected": "person",
+      "flickr_url": "http://farm5.staticflickr.com/4135/5435897535_a9b3e0a053_z.jpg",
+      "input_sha256": "b08173e02dc865e7f13fecbcbed574b70271c07fef6023236d0dea8d6bf77619",
+      "license_id": 4,
+      "license_url": "https://creativecommons.org/licenses/by/2.0/",
+      "predicted": null,
+      "source_url": "https://s3.amazonaws.com/images.cocodataset.org/val2017/000000019402.jpg",
+      "status": "error"
+    },
+    {
+      "api_and_parse_ms": 1333,
+      "case_id": "coco-val2017-000000007991",
+      "coco_image_id": 7991,
+      "correct": true,
+      "expected": "none",
+      "flickr_url": "http://farm6.staticflickr.com/5283/5355551637_6638017f91_z.jpg",
+      "input_sha256": "63c6fae2e3defd4bc1c6f346806aef03eb11ccbd7c6bda3e479d1fbafd486db1",
+      "license_id": 4,
+      "license_url": "https://creativecommons.org/licenses/by/2.0/",
+      "predicted": "none",
+      "source_url": "https://s3.amazonaws.com/images.cocodataset.org/val2017/000000007991.jpg",
+      "status": "valid"
+    }
+  ],
+  "cloud_route_used": false,
+  "date": "2026-10-29",
+  "independent_model_context_metric_checks": 109,
+  "invalid_output_diagnostics": [
+    {
+      "case_id": "coco-val2017-000000000285",
+      "categories": {
+        "label:animal_like": 1
+      },
+      "category": "invalid_detection_items",
+      "maximum_absolute_reported_coordinate": 1000,
+      "rejected": {
+        "label:animal": 1
+      },
+      "valid_sibling_items": 0
+    },
+    {
+      "case_id": "coco-val2017-000000000872",
+      "categories": {},
+      "category": "invalid_detection_items",
+      "maximum_absolute_reported_coordinate": 953,
+      "rejected": {
+        "shape": 1
+      },
+      "valid_sibling_items": 0
+    },
+    {
+      "case_id": "coco-val2017-000000008021",
+      "categories": {},
+      "category": "invalid_detection_items",
+      "maximum_absolute_reported_coordinate": 1.0,
+      "rejected": {
+        "shape": 1
+      },
+      "valid_sibling_items": 1
+    },
+    {
+      "case_id": "coco-val2017-000000011149",
+      "category": "strict_json_rejected",
+      "shape_hint": "shape"
+    },
+    {
+      "case_id": "coco-val2017-000000019402",
+      "categories": {},
+      "category": "invalid_detection_items",
+      "maximum_absolute_reported_coordinate": 1000,
+      "rejected": {
+        "shape": 1
+      },
+      "valid_sibling_items": 0
+    }
+  ],
+  "local_model_directory_basename": "Qwen3-VL-8B-Instruct-int4-ov",
+  "model_alias": "qwen3-vl-8b",
+  "model_runtime": "openvino/model_server:2026.4.1-gpu",
+  "parameters": {
+    "attempts_per_case": 1,
+    "automatic_retries": 0,
+    "concurrency": 1,
+    "container_timeout_s": 30,
+    "output_token_limit": 1024,
+    "person_threshold": 0.5,
+    "socket_timeout_s": 15,
+    "warmups": 0
+  },
+  "private_camera_media_used": false,
+  "production_configuration_changed": false,
+  "receipt_sha256": {
+    "evaluation-v1/old-parser-duplicate-replay.json": "903c018ba26a2d2ede0a8dfb03f225497324093df1bdb1396cf41312019e41c0",
+    "evaluation-v1/strict-json-diagnosis.json": "0e68ba278bbb02bd236cc08b82bcc7bc7aa615f6815d818aa48854390b6e8a74",
+    "evaluation-v1/summary.json": "48bf24519f246266a824851fdaf1eaa069ff9b827ba70d3c38901dbc2c354823",
+    "evaluation-v1/valid-only-detection-report.json": "5977c1fec4253e0d32f262e68fcec3b9dbbe4ea99d620b58cfe2e6d6fc59336b",
+    "gold-review.json": "4129b9d7d3bfb75652e6587430a128b2e710e86df66bd11ea6d8d48b43654199",
+    "image-acquisition.json": "4528f0e6545fd5fa7b9e23e5e0c1f023f2e0d2ca439aa197dba15799f9a92654",
+    "metric-review.json": "7209456c57661488ff4e3d25b31d3b66c91df308abb4ff5618050f7e2572f731",
+    "native-receipts/model-snapshot.json": "a1753b82e36022cb86fb0e7273e7cead64e86ca1445ef2e49b4efc6284bfd3da",
+    "native-receipts/run-result.json": "2ec484deb4c080dfd02dcbe21e708d0cfb9ea5adb020c1c358c3abcf85f3d1a2",
+    "native-receipts/runner-bundle/execution-manifest.json": "bab624baf56a35e4816304fa1ae4a0cbfa3c416ecaad4fc302d9871c0056aa4e",
+    "preflight-selection.json": "0580c46dbc0de2b4f003108ff28e3fe3acfc6c8d5cee20b5679d794a04203b4e",
+    "strict-json-fix-replay.json": "133c5ace8ea8865b1cca97a08de6e948f5197d4ede6ac65d1d839ca175185c9a"
+  },
+  "schema": "aikey-public-person-pilot-evidence/1",
+  "scope": "12 public COCO person-presence cases; primary fraction-box adapter; not production fallback, native event quality or hardware equivalence",
+  "source_commit": "a13ade9c0fcc9f80b7822074c5fa42ae7d055fdc",
+  "summary": {
+    "all_scheduled_accuracy_errors_count_incorrect": 0.5833333333333334,
+    "all_scheduled_correct": 7,
+    "api_and_parse_latency_ms": {
+      "max": 8404,
+      "min": 1123,
+      "p50_nearest_rank": 4676,
+      "p95_nearest_rank": 8404
+    },
+    "client_attempts": 12,
+    "errors": 5,
+    "planned_cases": 12,
+    "provider_reported_charge_usd": null,
+    "terminal_results": 12,
+    "valid_only_accuracy": 1.0,
+    "valid_response_coverage": 0.5833333333333334,
+    "valid_results": 7
+  },
+  "sut_image_source_commit": "9df78964480b3228e6724af4ce5d1b3e870d7e0e",
+  "upstream_checkpoint_revision": null,
+  "valid_class_coverage": {
+    "none": {
+      "all_scheduled_correct": 5,
+      "errors": 1,
+      "scheduled": 6,
+      "valid": 5,
+      "valid_correct": 5,
+      "valid_coverage": 0.8333333333333334
+    },
+    "person": {
+      "all_scheduled_correct": 2,
+      "errors": 4,
+      "scheduled": 6,
+      "valid": 2,
+      "valid_correct": 2,
+      "valid_coverage": 0.3333333333333333
+    }
+  }
+}
