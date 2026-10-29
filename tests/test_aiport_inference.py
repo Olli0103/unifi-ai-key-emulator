@@ -203,7 +203,15 @@ async def test_one_inference_failure_disables_only_that_camera():
 
 
 @pytest.mark.asyncio
-async def test_provider_failure_keeps_camera_available_for_next_frame():
+@pytest.mark.parametrize("error_code,expected", [
+    ("api_detection_request_failed", "api_detection_request_failed"),
+    ("api_detection_dns_unavailable", "api_detection_dns_unavailable"),
+    ("api_detection_dns_timeout", "api_detection_dns_timeout"),
+    ("api_detection_resolver_unavailable", "api_detection_resolver_unavailable"),
+    ("api_detection_address_refused", "api_detection_address_refused"),
+    ("SYNTHETIC-PRIVATE-PAYLOAD-CANARY", "api_detection_failure"),
+])
+async def test_provider_failure_keeps_camera_available_for_next_frame(error_code, expected):
     calls = []
     results = []
     unavailable = []
@@ -212,7 +220,7 @@ async def test_provider_failure_keeps_camera_available_for_next_frame():
         def detect_for_camera(self, camera, frame):
             calls.append((camera, frame))
             if frame == b"fail":
-                raise ApiDetectionError("api_detection_request_failed")
+                raise ApiDetectionError(error_code)
             return ()
 
     async def on_result(camera, *_args):
@@ -235,9 +243,10 @@ async def test_provider_failure_keeps_camera_available_for_next_frame():
     assert calls[0] == (FIRST, b"fail")
     assert set(calls[1:]) == {(FIRST, b"next"), (SECOND, b"other")}
     assert scheduler.snapshot()["api_failures"] == 1
-    assert scheduler.snapshot()["last_api_error_code"] == "api_detection_request_failed"
+    assert scheduler.snapshot()["last_api_error_code"] == expected
     assert scheduler.camera_snapshot()[0]["api_failures"] == 1
-    assert scheduler.camera_snapshot()[0]["last_api_error_code"] == "api_detection_request_failed"
+    assert scheduler.camera_snapshot()[0]["last_api_error_code"] == expected
+    assert "CANARY" not in str(scheduler.snapshot()) + str(scheduler.camera_snapshot())
     assert scheduler.snapshot()["failed_cameras"] == 0
     await scheduler.close()
 
