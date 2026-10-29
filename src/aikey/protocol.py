@@ -16,15 +16,23 @@ RECOGNIZE_ANYTHING_PATH = "/internal/aiprocessors/recognize-anything"
 _RECORD = struct.Struct(">BBBBI")
 
 # Must equal docs/evidence/compatibility-manifest.json; a test enforces this.
-COMPATIBILITY_MANIFEST_VERSION = "ai-key/2026-09-23.2"
+COMPATIBILITY_MANIFEST_VERSION = "ai-key/2026-10-03.1"
 # Evidence scope per Protect version. "live_partial" means some behaviors were
 # observed on a live controller; it never means every feature is compatible.
 # "static_only" means source inspection without a live controller of that version.
 CONTROLLER_VERSION_EVIDENCE = {
     "7.3.56": "live_partial",
     "7.3.60": "live_partial",
+    "7.3.68": "live_partial",
+    "7.3.70": "live_partial",
     "7.2.105": "static_only",
 }
+# Versions where a worker caption was read back natively after a page reload
+# (G5 Flex, G4 Instant, G6 Instant), and 7.3.70, whose unchanged inventory and
+# caption callbacks were accepted live; its native readback is still owed
+# (docs/evidence/live-protect-7.3.70.md). Continuous captions require the
+# version the controller itself reports to be one of these, not a config label.
+CONTINUOUS_CAPTION_VERSIONS = frozenset({"7.3.60", "7.3.68", "7.3.70"})
 _VERSION = re.compile(r"[0-9]{1,4}(?:\.[0-9]{1,6}){1,3}")
 
 
@@ -118,7 +126,10 @@ def decode_message(wire, *, max_record_bytes=MAX_RECORD_BYTES):
             raise ContractError("Truncated record header")
         record_type, fmt, compression, reserved, size = _RECORD.unpack_from(wire, offset)
         offset += _RECORD.size
-        if (record_type, fmt, compression, reserved) != (expected_type, 1, 0, 0):
+        # Protect's UCP4 library sends error replies with an empty string body
+        # (format 2): sendError(id, code, text) -> body "". Treat that as empty.
+        empty_string_body = expected_type == 2 and fmt == 2 and size == 0
+        if (record_type, compression, reserved) != (expected_type, 0, 0) or (fmt != 1 and not empty_string_body):
             raise ContractError("Unsupported record type, format, or flags")
         if size > max_record_bytes:
             raise ContractError("Record exceeds local byte limit")

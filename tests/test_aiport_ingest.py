@@ -6,6 +6,7 @@ from pathlib import Path
 import shlex
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -47,7 +48,9 @@ def restartable_decoder(tmp_path: Path) -> tuple[str, Path]:
         "import pathlib, sys, time\n"
         f"p = pathlib.Path({str(attempts)!r})\n"
         "n = int(p.read_text()) + 1 if p.exists() else 1\n"
-        "p.write_text(str(n))\n"
+        "pending = p.with_name(p.name + '.pending')\n"
+        "pending.write_text(str(n))\n"
+        "pending.replace(p)\n"
         f"sys.stdout.buffer.write({FRAME!r})\n"
         "sys.stdout.buffer.flush()\n"
         "time.sleep(0.5 if n == 1 else 30)\n"
@@ -106,9 +109,38 @@ async def test_ingress_recovers_decoder_exit_without_new_stream_command(tmp_path
         assert ingress.total_frames_decoded >= 1
         assert ingress.restart_attempts == 1
         assert ingress.restart_successes == 1
+        assert sum(ingress.restart_observed_states.values()) == 1
+        assert ingress.restart_failures == {}
         assert await ingress.control({"streaming": False, "deviceID": CAMERA_MAC}) == {
             "status": "stopped", "usedPoints": 0}
         assert ingress.list_streams() == []
+    finally:
+        await ingress.close()
+
+
+@pytest.mark.asyncio
+async def test_stale_stream_restart_records_fixed_timeout_without_changing_recovery(tmp_path):
+    decoder, _ = fake_decoder(tmp_path)
+    ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
+                           ffmpeg_path=decoder, start_timeout=1.0)
+    try:
+        await ingress.control(start_payload())
+        # The first decoder is live. Replace only the next invocation with a
+        # decoder that never yields a frame, then force the stale-frame clock.
+        fake_decoder(tmp_path, emit_frame=False)
+        ingress._session.last_frame_at = time.monotonic() - 20
+
+        async def timed_out() -> None:
+            while ingress.restart_failures.get("stream_start_timeout", 0) < 1:
+                await asyncio.sleep(0.05)
+
+        await asyncio.wait_for(timed_out(), timeout=4)
+        assert ingress.restart_observed_states == {
+            "process_exited": 0, "reader_stopped": 0, "no_recent_frame": 1}
+        assert ingress.restart_attempts >= 1
+        assert ingress.restart_successes == 0
+        assert ingress.list_streams() == []
+        assert "SyntheticAlias123" not in repr(ingress.restart_failures)
     finally:
         await ingress.close()
 
@@ -158,6 +190,18 @@ async def test_pool_recovers_one_decoder_without_interrupting_other(tmp_path):
         assert pool.reserved_points == 4
         assert pool.restart_attempts == 1
         assert pool.restart_successes == 1
+        diagnostics = pool.camera_diagnostics((CAMERA_MAC, other_mac))
+        assert diagnostics[0]["stream_restart_attempts"] == 1
+        assert diagnostics[1]["stream_restart_attempts"] == 0
+        assert diagnostics[1]["stream_active"] is True
+        assert diagnostics[1]["stream_points"] == 2      # 1920x1080 request
+        # The negotiated geometry shows which Protect channel was paired (#6).
+        assert diagnostics[1]["stream_geometry"] == {"width": 1920, "height": 1080, "fps": 30.0}
+        assert CAMERA_MAC not in repr(diagnostics)
+        assert "7447" not in repr(diagnostics) and SOURCE_IP not in repr(diagnostics)
+        reversed_rows = pool.camera_diagnostics((other_mac, CAMERA_MAC))
+        assert reversed_rows[0]["stream_restart_attempts"] == 0
+        assert reversed_rows[1]["stream_restart_attempts"] == 1
     finally:
         await pool.close()
 
@@ -196,6 +240,12 @@ async def test_optional_observer_receives_frame_and_is_cancelled_on_stop(tmp_pat
 @pytest.mark.parametrize("changes,code", [
     ({"ip": "192.168.10.2"}, "stream_source_not_authorized"),
     ({"port": "7441"}, "stream_source_not_authorized"),
+    # An ONVIF camera streams from its own address and RTSP port; the ingest
+    # accepts only Protect's relay on the controller (#28).
+    ({"ip": "192.168.10.77", "port": "554"}, "stream_source_not_authorized"),
+    ({"port": 554}, "stream_source_not_authorized"),
+    ({"port": "8554"}, "stream_source_not_authorized"),
+    ({"port": "7447 "}, "stream_source_not_authorized"),
     ({"deviceID": "0123456789AB"}, "camera_not_authorized"),
     ({"uri": "../camera"}, "invalid_stream_alias"),
     ({"uri": "name?token=secret"}, "invalid_stream_alias"),
@@ -212,14 +262,17 @@ async def test_ingress_rejects_untrusted_control_before_process(tmp_path, change
 
 
 @pytest.mark.asyncio
-async def test_ingress_never_reports_started_without_a_frame(tmp_path):
+async def test_a_start_without_a_first_frame_is_accepted_but_never_listed_until_it_decodes(tmp_path):
+    # Several streams starting at once can miss the first-frame deadline, and
+    # Protect never repeats a refused UiStreamControl (1 Oct): accept and retry.
     decoder, _ = fake_decoder(tmp_path, emit_frame=False)
     ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
                            ffmpeg_path=decoder, start_timeout=0.1)
-    with pytest.raises(IngressError, match="stream_start_timeout"):
-        await ingress.control(start_payload())
-    assert ingress.list_streams() == []
-    await ingress.close()
+    try:
+        assert (await ingress.control(start_payload()))["status"] == "started"
+        assert ingress.list_streams() == [] and ingress.deferred_starts == 1
+    finally:
+        await ingress.close()
 
 
 @pytest.mark.asyncio
@@ -228,7 +281,6 @@ async def test_ingress_never_reports_started_without_a_frame(tmp_path):
      ("describe", "failed", "rtsp", "unauthorized")),
     ("[rtsp] method DESCRIBE failed: 404 Not Found", "rtsp_stream_not_found", (),
      ("describe", "failed", "found", "not", "rtsp")),
-    ("Connection refused", "rtsp_connect_failed", (), ("connection", "refused")),
     ("Option rw_timeout not found", "decoder_option_missing", (),
      ("found", "not", "option", "timeout")),
     ("[rtsp] method DESCRIBE failed: 454 Session Not Found", "rtsp_status_454", (),
@@ -242,10 +294,15 @@ async def test_decoder_failure_is_classified_without_exposing_private_output(
     decoder, _ = fake_decoder(tmp_path, emit_frame=False, stderr_text=stderr_text)
     ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
                            ffmpeg_path=decoder, start_timeout=2)
-    with pytest.raises(IngressError) as failure:
-        await ingress.control(start_payload())
-    assert failure.value.code == code
-    assert "private-alias-123" not in str(failure.value)
+    if code == "stream_ended":
+        # A failure a later attempt can overcome is accepted and retried.
+        assert (await ingress.control(start_payload()))["status"] == "started"
+        assert ingress.deferred_starts == 1
+    else:
+        with pytest.raises(IngressError) as failure:
+            await ingress.control(start_payload())
+        assert failure.value.code == code
+        assert "private-alias-123" not in str(failure.value)
     assert ingress.last_decoder_exit_code == 0
     assert ingress.last_decoder_stderr_seen
     assert ingress.last_decoder_error_markers == markers
@@ -356,3 +413,200 @@ async def test_new_websocket_requires_fresh_parameter_agreement(tmp_path):
         "functionName": "UiStreamControl", "messageId": 6,
         "payload": {"streaming": False, "deviceID": CAMERA_MAC}}).encode())
     assert len(sink.messages) == before
+
+
+def test_latest_frame_honours_a_maximum_age():
+    ingress = AiPortIngress(camera_mac="2A1122334455", source_ip="192.168.10.1",
+                            ffmpeg_path=sys.executable)
+    session = SimpleNamespace(healthy=True, latest_frame=b"\xff\xd8x",
+                              last_frame_at=time.monotonic() - 6)
+    ingress._session = session
+    assert ingress.latest_frame() == b"\xff\xd8x"
+    assert ingress.latest_frame(max_age=5) is None
+    session.last_frame_at = time.monotonic()
+    assert ingress.latest_frame(max_age=5) == b"\xff\xd8x"
+    session.healthy = False                          # decoder down or restarting
+    assert ingress.latest_frame(max_age=5) is None
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_stream_reports_no_geometry(tmp_path):
+    decoder, _ = fake_decoder(tmp_path)
+    pool = AiPortIngressPool([{"camera_mac": CAMERA_MAC, "source_ip": SOURCE_IP,
+                               "ffmpeg_path": decoder}])
+    try:
+        await pool.control(start_payload(width=2688, height=1512, fps=20))
+        assert pool.camera_diagnostics((CAMERA_MAC,))[0]["stream_geometry"] == {
+            "width": 2688, "height": 1512, "fps": 20.0}
+        await pool.control({"streaming": False, "deviceID": CAMERA_MAC})
+        assert pool.camera_diagnostics((CAMERA_MAC,))[0]["stream_geometry"] is None
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_a_refused_relay_connection_is_accepted_and_retried_until_it_decodes(tmp_path):
+    # Protect 7.3.70 sent UiStreamControl before its RTSP relay listened and
+    # never repeated it; the stream must recover once the relay comes up.
+    decoder, _ = fake_decoder(tmp_path, emit_frame=False, stderr_text="Connection refused")
+    ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
+                           ffmpeg_path=decoder, start_timeout=2)
+    try:
+        assert (await ingress.control(start_payload()))["status"] == "started"
+        assert ingress.deferred_starts == 1 and ingress.list_streams() == []
+        fake_decoder(tmp_path)                       # the relay now answers
+
+        async def decoding() -> None:
+            while not ingress.list_streams():
+                await asyncio.sleep(0.05)
+
+        await asyncio.wait_for(decoding(), timeout=8)
+        assert ingress.restart_successes == 1
+    finally:
+        await ingress.close()
+
+
+@pytest.mark.asyncio
+async def test_a_stop_ends_the_retries_of_a_deferred_start(tmp_path):
+    decoder, _ = fake_decoder(tmp_path, emit_frame=False, stderr_text="Connection refused")
+    ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP,
+                           ffmpeg_path=decoder, start_timeout=2)
+    try:
+        await ingress.control(start_payload())
+        await ingress.control({"streaming": False, "deviceID": CAMERA_MAC})
+        assert ingress.reserved_points == 0 and ingress._restart_task is None
+    finally:
+        await ingress.close()
+
+
+FULL_FRAME = b"\xff\xd8synthetic-full-resolution-frame\xff\xd9"
+
+
+def twin_decoder(tmp_path: Path) -> tuple[str, Path]:
+    """Writes the detection frame to stdout and its twin to the pipe named last."""
+    executable = tmp_path / "twin-decoder"
+    script = tmp_path / "twin-decoder.py"
+    args_file = tmp_path / "decoder-args.json"
+    script.write_text(
+        "import json, os, sys, time\n"
+        "from pathlib import Path\n"
+        f"Path({str(args_file)!r}).write_text(json.dumps(sys.argv[1:]))\n"
+        "fd = int([a for a in sys.argv[1:] if a.startswith('pipe:') and a != 'pipe:1'][0][5:])\n"
+        f"os.write(fd, {FULL_FRAME!r})\n"
+        f"sys.stdout.buffer.write({FRAME!r})\nsys.stdout.buffer.flush()\n"
+        "time.sleep(30)\n")
+    executable.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+                          + shlex.quote(str(script)) + ' "$@"\n')
+    executable.chmod(0o700)
+    return str(executable), args_file
+
+
+@pytest.mark.asyncio
+async def test_a_face_camera_gets_each_frame_at_full_resolution_on_a_second_pipe(tmp_path):
+    decoder, args_file = twin_decoder(tmp_path)
+    ingress = AiPortIngress(camera_mac=CAMERA_MAC, source_ip=SOURCE_IP, ffmpeg_path=decoder,
+                            start_timeout=2, full_frames=True)
+    try:
+        await ingress.control(start_payload(width=2688, height=1512))
+        frame = ingress.latest_frame()
+        for _ in range(40):
+            if ingress.full_frame_for(frame) is not None:
+                break
+            await asyncio.sleep(0.05)
+        assert frame == FRAME and ingress.full_frame_for(frame) == FULL_FRAME
+        assert ingress.full_frame_for(b"\xff\xd8other\xff\xd9") is None    # only held frames pair
+        assert ingress.full_frame_count == 1
+        args = json.loads(args_file.read_text())
+        graph = args[args.index("-filter_complex") + 1]
+        assert "fps=2,split=2" in graph and "min(iw,1280)" in graph and "min(iw,2688)" in graph
+        assert "-vf" not in args and args.count("image2pipe") == 2
+        await ingress.control({"streaming": False, "deviceID": CAMERA_MAC})
+        assert ingress.full_frame_for(frame) is None
+    finally:
+        await ingress.close()
+
+
+@pytest.mark.asyncio
+async def test_only_listed_pool_cameras_decode_a_full_resolution_twin(tmp_path):
+    decoder, args_file = fake_decoder(tmp_path)
+    other_mac = "2A1122334466"
+    pool = AiPortIngressPool([
+        {"camera_mac": CAMERA_MAC, "source_ip": SOURCE_IP, "ffmpeg_path": decoder},
+        {"camera_mac": other_mac, "source_ip": SOURCE_IP, "ffmpeg_path": decoder}],
+        full_frame_cameras=frozenset({other_mac}))
+    try:
+        await pool.control(start_payload())
+        args = json.loads(args_file.read_text())
+        assert "-vf" in args and "-filter_complex" not in args          # detection-only camera
+        assert pool._ingresses[other_mac].full_frames and not pool._ingresses[CAMERA_MAC].full_frames
+        rows = pool.camera_diagnostics((CAMERA_MAC, other_mac))
+        assert rows[0]["stream_full_frames"] is None and rows[1]["stream_full_frames"] == 0
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_the_full_resolution_pipe_keeps_draining_and_positions_aligned():
+    from aikey.aiport_ingest import _Session
+    session = _Session(None, "/usr/bin/ffmpeg", full_frames=True)
+    reader = asyncio.StreamReader(limit=64)
+    good1, good2 = b"\xff\xd8first\xff\xd9", b"\xff\xd8fourth\xff\xd9"
+    reader.feed_data(good1 + b"garbage-not-a-jpeg\xff\xd9"
+                     + b"\xff\xd8" + b"x" * 300 + b"\xff\xd9" + good2)   # 2: malformed, 3: oversized
+    reader.feed_eof()
+    await asyncio.wait_for(session._read_full_frames(reader), timeout=2)
+    assert session._full == {1: good1, 4: good2}
+    assert session.full_frame_count == 2 and session.full_frames_dropped == 2
+
+
+def test_a_twin_stays_available_for_fifteen_seconds_of_frames():
+    from aikey.aiport_ingest import _FULL_PAIRS, _Session
+    session = _Session(None, "/usr/bin/ffmpeg", full_frames=True)
+    frames = [bytes([0xFF, 0xD8, n % 256, 0xFF, 0xD9]) for n in range(_FULL_PAIRS + 5)]
+    for index, frame in enumerate(frames, start=1):
+        session._pairs.append((frame, index))
+        session._full[index] = b"full-%d" % index
+        session._full.pop(index - _FULL_PAIRS, None)
+    assert _FULL_PAIRS >= 30                                            # 15 s at 2 fps
+    assert session.full_frame_for(frames[-_FULL_PAIRS + 1]) == b"full-%d" % (len(frames) - _FULL_PAIRS + 2)
+    assert session.full_frame_for(frames[0]) is None                    # older frames are released
+
+
+
+def test_a_twin_reports_whether_it_is_ready_still_encoding_or_gone():
+    from aikey.aiport_ingest import _Session
+    session = _Session(None, "/usr/bin/ffmpeg", full_frames=True)
+    first, second = b"\xff\xd8a\xff\xd9", b"\xff\xd8b\xff\xd9"
+    session._pairs.extend([(first, 1), (second, 2)])
+    session._full, session._full_index = {1: b"full-a"}, 1
+    assert session.full_frame_state(first) == ("ready", b"full-a")
+    assert session.full_frame_state(second) == ("pending", None)        # twin still encoding
+    assert session.full_frame_state(b"\xff\xd8c\xff\xd9") == ("gone", None)
+    session._full_index = 2                                              # twin 2 was dropped
+    assert session.full_frame_state(second) == ("gone", None)
+
+
+
+def test_only_transient_start_failures_are_retried():
+    from aikey.aiport_ingest import _retryable_start
+    for code in ("rtsp_connect_failed", "stream_start_timeout", "stream_ended", "rtsp_invalid_data",
+                 "rtsp_status_503"):
+        assert _retryable_start(code), code
+    for code in ("rtsp_access_denied", "rtsp_stream_not_found", "rtsp_protocol_rejected",
+                 "decoder_option_missing", "rtsp_status_454", "stream_capacity_exceeded"):
+        assert not _retryable_start(code), code
+
+
+@pytest.mark.asyncio
+async def test_a_plate_camera_decodes_its_twin_at_native_width(tmp_path):
+    decoder, args_file = twin_decoder(tmp_path)
+    pool = AiPortIngressPool([{"camera_mac": CAMERA_MAC, "source_ip": SOURCE_IP,
+                               "ffmpeg_path": decoder}],
+                             native_frame_cameras=frozenset({CAMERA_MAC}))
+    try:
+        await pool.control(start_payload(width=3840, height=2160))
+        graph = json.loads(args_file.read_text())
+        graph = graph[graph.index("-filter_complex") + 1]
+        assert "min(iw,3840)" in graph and "min(iw,1280)" in graph
+    finally:
+        await pool.close()

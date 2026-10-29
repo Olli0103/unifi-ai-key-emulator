@@ -80,6 +80,10 @@ async def test_camera_shape_categories_never_retain_values(tmp_path, value, shap
 
 @pytest.mark.parametrize("error,phase,reason,code", [
     (WorkerError("recognizeKeyFrames video must span at most 10 seconds"), "worker_rejected", "video_interval", 5),
+    (WorkerError("recognizeKeyFrames image tasks are not processed"), "worker_rejected", "image_variant_refused", 5),
+    (WorkerError("multipleImages camera is not a Find Anything index camera"), "worker_rejected", "unindexed_camera", 5),
+    (WorkerError("recognizeKeyFrames image tasks are not processed; private"), "worker_rejected",
+     "unclassified_worker_error", 5),                                       # exact match only
     (WorkerError("private-token=canary; https://private.invalid/value"), "worker_rejected", "unclassified_worker_error", 5),
     (ValueError("private-token=canary"), "admission_exception", None, 22),
     (asyncio.TimeoutError("private-token=canary"), "admission_timeout", None, 110),
@@ -149,7 +153,8 @@ async def test_native_metadata_and_video_frame_shapes_are_bucketed_without_value
             "personMeta": [{"private_id": "secret-canary"}], "faceMeta": [], "vehicleMeta": []}
     await device.handle_message(wire("recognizeKeyFrames", body))
     detail = device.status["recognize_key_frames"]
-    assert detail["metadata_presence_counts"] == {"personMeta": 1, "faceMeta": 1, "vehicleMeta": 1}
+    assert detail["metadata_presence_counts"] == {"personMeta": 1, "faceMeta": 1, "vehicleMeta": 1,
+                                                  "thumbnailMeta": 0}
     assert detail["video_interval_counts"]["over_10_seconds"] == 1
     assert detail["duration_limit_counts"]["within"] == 1
     assert detail["key_moments_counts"]["above_sampling_limit"] == 1

@@ -1,8 +1,9 @@
 """Read-only capacity and listener plan for an independent AI Port profile.
 
 This module does not claim an adopted device, pair cameras, or open sockets.
-Its conservative capacity limits follow the published AI Port FAQ. Unknown
-camera resolution reserves the maximum supported resolution's capacity.
+Its conservative capacity limits follow the published AI Port FAQ. For exact
+known Protect models, published maximum pixels bound an unknown recording
+resolution; other unknown models reserve maximum capacity.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import json
 from pathlib import Path
 import re
 
+from .aiport_ingest import stream_capacity_points
 from .camera_inventory import InventoryError, fetch_inventory
 
 
@@ -24,6 +26,7 @@ AI_PORT_CONTAINER_PORT = 8443
 AI_PORT_DISCOVERY_PORT = 10001
 AI_PORT_CONTROLLER_WS_PORT = 7442
 AI_PORT_PROTECT_RTSP_PORT = 7447
+ONVIF_BLOCKER = "onvif_ingest_not_implemented"
 _CAMERA_ID = re.compile(r"[0-9a-fA-F]{24}\Z")
 _G3_G5_MODEL = re.compile(r"UVC G[345](?:\s|\Z)")
 _SCOPES = frozenset({"legacy-only", "legacy-and-g3-g5"})
@@ -32,6 +35,20 @@ _CAPACITY = {
                 "4K": Fraction(1, 2), None: Fraction(1, 2)},
     "onvif": {"HD": Fraction(1, 3), "2K": Fraction(1, 2),
               "4K": Fraction(1), None: Fraction(1)},
+}
+# Exact Protect model names and published camera maximums. These dimensions
+# bound a missing recording resolution; they are not a claim about the current
+# stream. The live ingress independently enforces its ten-point limit.
+_PROTECT_MODEL_MAX_PIXELS = {
+    "UVC G3 Instant": (1920, 1080),
+    "UVC G4 Instant": (2688, 1512),
+    "UVC G4 Pro": (3840, 2160),
+    "UVC G4 Bullet": (2688, 1512),
+    "UVC G4 Dome": (2688, 1512),
+    "UVC G5 Flex": (2688, 1512),
+    # Main-lens channel 0 that Protect 7.3.68 streams to a paired AI Port
+    # (Haustür, 26 Sep 2026); without it the doorbell counted as 4K.
+    "UVC G4 Doorbell Pro": (1600, 1200),
 }
 
 
@@ -90,7 +107,12 @@ def _eligible(report: dict, camera_scope: str) -> tuple[
         resolution = row.get("recording_resolution")
         if resolution not in _CAPACITY[source]:
             raise AiPortPlanError("Camera resolution must be HD, 2K, 4K or unknown")
-        groups[source].append((camera_id, resolution, _CAPACITY[source][resolution]))
+        weight = _CAPACITY[source][resolution]
+        if resolution is None and source == "protect":
+            maximum = _PROTECT_MODEL_MAX_PIXELS.get(row.get("model"))
+            if maximum is not None:
+                weight = Fraction(stream_capacity_points(*maximum), 10)
+        groups[source].append((camera_id, resolution, weight))
         legacy_count += int(is_legacy)
         enhancement_count += int(is_enhancement)
     return groups, legacy_count, enhancement_count
@@ -198,6 +220,12 @@ def plan_ai_ports(report: dict, *, device_ips: list[str] | None = None,
             "management_tcp": AI_PORT_MANAGEMENT_PORT,
             "apple_publish": (f"{address}:443:{AI_PORT_CONTAINER_PORT}/tcp" if address else None),
             "state": "planned_only",
+            # The ingest accepts only Protect's RTSP relay (port 7447 on the
+            # controller). An ONVIF camera streams from its own address and
+            # port, which no slot can decode yet, so ONVIF capacity is planned
+            # but not deployed (#28).
+            "deployable": allocation["source_kind"] == "protect",
+            **({"blocked_by": ONVIF_BLOCKER} if allocation["source_kind"] == "onvif" else {}),
         })
     assigned_addresses = [item["host_ip"] for item in instances if item["host_ip"]]
     if (len(set(assigned_addresses)) != len(assigned_addresses)

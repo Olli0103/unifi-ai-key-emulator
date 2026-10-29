@@ -58,7 +58,7 @@ Raw UBV is not decoded. Optional `worker.request_mp4_exports=true` adapts an uns
 | `inference.api_key` | Optional hydrated secret. Keep persistent secrets in the root configuration's supported secret file. |
 | `worker.max_queue`, `worker.max_concurrency` | 8 waiting jobs, 1 active job. |
 | `worker.timeout_s` | 120 seconds, further capped by RequestAI `timeoutMs`. |
-| `worker.max_media_bytes`, `worker.max_video_bytes` | 10 MiB per image and 100 MiB per video. |
+| `worker.max_media_bytes`, `worker.max_video_bytes` | 10 MiB per image and 100 MiB per video. A deep-mode close pass over a session longer than 30 s fetches short exports around its object times instead of the whole session: one per cluster of times less than 5 s apart, with a second either side, at most 16, otherwise the whole export. Health counts them as `deep.export_windows`. |
 | `worker.max_images` | 4 media inputs. |
 | `worker.max_description_chars` | 8192. Truncated/incomplete model responses are rejected. |
 | `worker.ffmpeg_path` | Required for video jobs. |

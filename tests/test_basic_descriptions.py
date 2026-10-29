@@ -133,7 +133,7 @@ async def test_rejects_unrelated_work_before_any_media_or_inference(services, tm
         "foreign_media": {"reqUrl": "https://unapproved.invalid/internal/aiprocessors/video/export"},
         "image_path": {"reqUrl": "/internal/aiprocessors/image/fixture"},
         "too_long": {"end": 121001}, "bool_timestamp": {"keyMoments": [True]},
-        "outside_timestamp": {"keyMoments": [11000]}, "too_many_frames": {"keyMoments": [6000] * 129},
+        "outside_timestamp": {"keyMoments": [11001]}, "too_many_frames": {"keyMoments": [6000] * 129},
         "unknown_variant": {"ramType": "unrecognizedVariant"},
         "images": {"ramType": "multipleImages"}, "no_summary": {"postVLM": False},
         "audio": {"mute": False}, "channel": {"channel": 1}, "format": {"format": "jpeg"},

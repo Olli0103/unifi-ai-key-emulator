@@ -224,11 +224,16 @@ async def test_expired_inference_is_cancelled_and_does_not_restore_budget(servic
     services.release.clear()
     worker = processor(services, tmp_path, monkeypatch)
     item = command()
-    item["timeoutMs"] = 100
+    # The HTTP fixture can take more than 100 ms to reach inference on CI.
+    # Wait until the blocked model has received the request before asserting
+    # that the job expires there, rather than racing its media fetch.
+    item["timeoutMs"] = 3000
     assert worker._normalize(command())[-1] == 15
+    pending = asyncio.create_task(worker.handle(item))
     try:
-        with pytest.raises(WorkerError):
-            await worker.handle(item)
+        await asyncio.wait_for(services.entered.wait(), 2)
+        with pytest.raises(WorkerError, match="timed out"):
+            await pending
         assert len(services.model) == 1
         assert services.callbacks == []
         with pytest.raises(WorkerError, match="consumed"):
@@ -237,6 +242,9 @@ async def test_expired_inference_is_cancelled_and_does_not_restore_budget(servic
             await worker.submit(command("another-task"))
     finally:
         services.release.set()
+        if not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
         await worker.stop()
 
 

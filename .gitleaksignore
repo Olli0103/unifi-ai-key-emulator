@@ -2,3 +2,6 @@
 # `key-2.2.8` followed by the Protect version as an API-key assignment.
 67aa5e8941d7162c06ea65c5020e124e089ac547:src/aikey/worker.py:generic-api-key:291
 67aa5e8941d7162c06ea65c5020e124e089ac547:tests/test_worker.py:generic-api-key:279
+# False positive: a synthetic, never-issued test credential in the #8 isolation
+# doubles (commit 0f519e4); later commits build it without a key literal.
+0f519e43dec3d0cc2534f6c4f250b279b19b7304:tests/test_credential_isolation.py:generic-api-key:22

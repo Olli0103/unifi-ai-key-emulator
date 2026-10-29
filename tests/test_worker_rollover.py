@@ -124,3 +124,76 @@ async def test_uncertain_record_is_never_archived_for_capacity(services, tmp_pat
         assert not (tmp_path / "caption-budget.json").exists()
     finally:
         await worker.stop()
+
+
+# --- #12 the ledger rolls over outside continuous mode too -----------------
+
+from test_basic_descriptions import options  # noqa: E402
+
+DAY = 24 * 3600
+
+
+def seed(worker, name, state, age_s):
+    job_id, fingerprint, *_ = worker._normalize(command(name))
+    record = {"jobId": job_id, "fingerprint": fingerprint, "state": state,
+              "updatedAt": time.time() - age_s, "operation": "describe"}
+    (worker.state_dir / f"{job_id}.json").write_text(json.dumps(record))
+    worker._history[job_id] = record
+    return job_id
+
+
+async def test_old_records_leave_the_ledger_outside_continuous_mode(services, tmp_path):
+    worker = JobProcessor(options(services), tmp_path)
+    assert not worker.continuous
+    ids = {
+        "old_done": seed(worker, "old-done", "completed", 2 * DAY),
+        "new_done": seed(worker, "new-done", "completed", 3600),
+        "recent_fail": seed(worker, "recent-fail", "failed", 2 * DAY),
+        "old_fail": seed(worker, "old-fail", "failed", 8 * DAY),
+        "old_uncertain": seed(worker, "old-uncertain", "callback_uncertain", 30 * DAY),
+    }
+    try:
+        worker._rollover_history()
+        archived = {name for name, job_id in ids.items() if worker._archive_path(job_id).is_file()}
+        assert archived == {"old_done", "old_fail"}
+        # A recent failure stays for Protect's retry; an uncertain callback stays for review.
+        assert {"new_done", "recent_fail", "old_uncertain"} <= {
+            name for name, job_id in ids.items() if job_id in worker._history}
+        # Replays of archived work are answered, never re-run or re-charged.
+        assert (await worker.submit(command("old-done")))["duplicate"] is True
+        with pytest.raises(WorkerError, match="cannot be replayed"):
+            await worker.submit(command("old-fail"))
+        with pytest.raises(WorkerError, match="Callback outcome is uncertain"):
+            await worker.submit(command("old-uncertain"))
+        assert services.requests == [] and services.callbacks == []
+    finally:
+        await worker.stop()
+
+
+async def test_a_full_ledger_of_old_completed_work_no_longer_blocks_admission(services, tmp_path):
+    config = options(services)
+    config["worker"]["max_ledger_entries"] = 2
+    worker = JobProcessor(config, tmp_path)
+    seed(worker, "done-1", "completed", 2 * DAY)
+    seed(worker, "done-2", "completed", 2 * DAY)
+    try:
+        # Before #12 these stayed forever outside continuous mode and this was refused
+        # with "journal is full"; now the day-old records roll over first.
+        worker._rollover_history()
+        assert len(worker._history) == 0
+        assert len(list(worker.archive_dir.rglob("*.json"))) == 2
+    finally:
+        await worker.stop()
+
+
+async def test_uncertain_records_still_fill_the_ledger_and_say_so(services, tmp_path):
+    config = options(services)
+    config["worker"]["max_ledger_entries"] = 1
+    worker = JobProcessor(config, tmp_path)
+    seed(worker, "stuck", "callback_uncertain", 30 * DAY)
+    try:
+        with pytest.raises(WorkerError, match="journal is full"):
+            await worker.submit(command("next-one"))
+        assert worker.status()["ledger"] == 1
+    finally:
+        await worker.stop()

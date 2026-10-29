@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from fractions import Fraction
 import hashlib
 import json
 from pathlib import Path
@@ -17,9 +18,12 @@ import subprocess
 import time
 from typing import Callable
 
-from .aiport_candidate import CandidateError, _private_file
-from .aiport_deployment import AiPortPlanError, plan_ai_ports
+from .aiport_candidate import CandidateError, _private_file, load_config
+from .aiport_deployment import (
+    AI_PORT_CONTAINER_PORT, AiPortPlanError, _eligible, _ip, plan_ai_ports,
+)
 from .aiport_nas_compose import NasComposeError, build_nas_compose
+from .aiport_ingest import IngressError, normalize_mac
 from .camera_inventory import InventoryError, fetch_inventory
 
 
@@ -60,6 +64,105 @@ def _read_json(path: Path) -> dict:
     return value
 
 
+def _verify_external_slot_capacity(plan: dict, report: dict,
+                                   selected: dict[int, Path]) -> None:
+    """Permit unknown live resolution only for slots this apply cannot touch."""
+    fresh = plan_ai_ports(report, ai_key_ip=plan["ai_key"]["host_ip"],
+                          camera_scope=plan["camera_scope"])
+    for field in ("schema", "camera_scope", "selected_camera_count", "ai_key",
+                  "host_discovery_udp", "controller_websocket_tcp", "camera_pairing",
+                  "camera_stream_ports", "adoption"):
+        if plan.get(field) != fresh[field]:
+            raise ReconcileError("Protect camera inventory or capacity changed; review a new plan")
+    # An AI Port can make a previously legacy camera advertise smart types.
+    # The initial legacy/enhancement split is descriptive; exact IDs, source
+    # and selected-slot capacity below remain mandatory.
+    if (plan.get("legacy_camera_count") + plan.get("enhancement_camera_count")
+            != plan["selected_camera_count"]):
+        raise ReconcileError("Protect camera inventory or capacity changed; review a new plan")
+    slots = plan["instances"]
+    if (plan.get("ai_port_instances_required") != len(slots)
+            or plan.get("ai_port_instances_without_address") != sum(
+                slot.get("host_ip") is None for slot in slots)):
+        raise ReconcileError("Protect camera inventory or capacity changed; review a new plan")
+    groups, _, _ = _eligible(report, plan["camera_scope"])
+    current = {camera_id: (source, resolution, weight)
+               for source, cameras in groups.items()
+               for camera_id, resolution, weight in cameras}
+    assigned: set[str] = set()
+    addresses: set[str] = set()
+    for index, slot in enumerate(slots, start=1):
+        if (not isinstance(slot, dict) or slot.get("slot") != index
+                or slot.get("source_kind") not in groups
+                or not isinstance(slot.get("camera_ids"), list)
+                or not slot["camera_ids"] or slot.get("management_tcp") != 443
+                or slot.get("state") != "planned_only"):
+            raise ReconcileError("Protect camera inventory or capacity changed; review a new plan")
+        address = slot.get("host_ip")
+        if address is not None:
+            address = _ip(address)
+            if address in addresses or address == plan["ai_key"]["host_ip"]:
+                raise ReconcileError("Protect camera inventory or capacity changed; review a new plan")
+            addresses.add(address)
+        if slot.get("apple_publish") != (
+                f"{address}:443:{AI_PORT_CONTAINER_PORT}/tcp" if address else None):
+            raise ReconcileError("Protect camera inventory or capacity changed; review a new plan")
+        rows = []
+        for camera_id in slot["camera_ids"]:
+            if camera_id in assigned or camera_id not in current:
+                raise ReconcileError("Protect camera inventory or capacity changed; review a new plan")
+            assigned.add(camera_id)
+            row = current[camera_id]
+            if row[0] != slot["source_kind"]:
+                raise ReconcileError("Protect camera inventory or capacity changed; review a new plan")
+            rows.append(row)
+        load = sum((row[2] for row in rows), Fraction())
+        try:
+            reserved = Fraction(slot["reserved_capacity"])
+        except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
+            raise ReconcileError("Protect camera inventory or capacity changed; review a new plan") from exc
+        if not 0 < reserved <= 1 or reserved > load:
+            raise ReconcileError("Protect camera inventory or capacity changed; review a new plan")
+        if index in selected or all(row[1] is not None for row in rows):
+            if (reserved != load or type(slot.get("resolution_unverified")) is not bool
+                    or all(row[1] is not None for row in rows)
+                    and slot["resolution_unverified"]):
+                raise ReconcileError("Selected NAS slot lacks verified camera capacity")
+    if assigned != set(current):
+        raise ReconcileError("Protect camera inventory or capacity changed; review a new plan")
+
+
+def _verify_configured_cameras(plan: dict, report: dict, states: dict[int, Path],
+                               controller_ip: str) -> None:
+    """A selected slot cannot accept a camera outside its fresh plan assignment."""
+    rows = {row.get("id"): row for row in report["cameras"] if isinstance(row, dict)}
+    configured_across_slots: set[str] = set()
+    for slot, state_dir in states.items():
+        try:
+            config = load_config(Path(state_dir) / "config.json",
+                                 check_decoder_executable=False)
+            streams = ([config["paired_stream"]] if "paired_stream" in config else
+                       config.get("paired_streams", []))
+            if not streams:
+                continue
+            planned = plan["instances"][slot - 1]
+            allowed = {normalize_mac(rows[camera_id]["mac"])
+                       for camera_id in planned["camera_ids"]}
+            if len(allowed) != len(planned["camera_ids"]):
+                raise ValueError
+            for stream in streams:
+                camera = stream["camera_mac"]
+                if (camera not in allowed or camera in configured_across_slots
+                        or planned["source_kind"] == "protect"
+                        and stream["source_ip"] != controller_ip):
+                    raise ValueError
+                configured_across_slots.add(camera)
+        except (CandidateError, IngressError, KeyError, IndexError, TypeError,
+                ValueError, OSError) as exc:
+            raise ReconcileError(
+                "Configured AI Port camera is outside its verified slot") from exc
+
+
 def verify_inputs(plan: dict, manifest: dict, report: dict,
                   states: dict[int, Path], options: dict,
                   *, now: int | None = None) -> list[str]:
@@ -75,11 +178,27 @@ def verify_inputs(plan: dict, manifest: dict, report: dict,
     if not isinstance(plan, dict) or not isinstance(plan.get("instances"), list):
         raise ReconcileError("A complete AI Port plan is required")
     try:
-        rebuilt = plan_ai_ports(report,
-                                ai_key_ip=plan["ai_key"]["host_ip"],
-                                camera_scope=plan["camera_scope"], previous_plan=plan)
-        if rebuilt != plan:
-            raise ReconcileError("Protect camera inventory or capacity changed; review a new plan")
+        try:
+            rebuilt = plan_ai_ports(report,
+                                    ai_key_ip=plan["ai_key"]["host_ip"],
+                                    camera_scope=plan["camera_scope"], previous_plan=plan)
+        except AiPortPlanError as exc:
+            if str(exc) != "An existing AI Port slot exceeds current camera capacity":
+                raise
+            _verify_external_slot_capacity(plan, report, states)
+        else:
+            # Pairing can make a formerly legacy G3-G5 camera advertise smart
+            # types. That only changes these descriptive counts; the exact
+            # camera IDs, slots, addresses and capacity must still match.
+            descriptive = {"legacy_camera_count", "enhancement_camera_count"}
+            counts = tuple(plan.get(key) for key in sorted(descriptive))
+            if (any(type(value) is not int or value < 0 for value in counts)
+                    or sum(counts) != plan.get("selected_camera_count")
+                    or {key: value for key, value in rebuilt.items()
+                        if key not in descriptive} != {
+                            key: value for key, value in plan.items()
+                            if key not in descriptive}):
+                raise ReconcileError("Protect camera inventory or capacity changed; review a new plan")
         expected = build_nas_compose(plan, states, **options)
     except (AiPortPlanError, NasComposeError, KeyError, TypeError, ValueError) as exc:
         if isinstance(exc, ReconcileError):
@@ -87,6 +206,7 @@ def verify_inputs(plan: dict, manifest: dict, report: dict,
         raise ReconcileError("Plan, camera inventory or slot identity no longer matches") from exc
     if manifest != expected:
         raise ReconcileError("Compose manifest differs from verified plan and slot identities")
+    _verify_configured_cameras(plan, report, states, options["controller_ip"])
     if not expected["services"]:
         raise ReconcileError("No NAS services selected")
     return sorted(expected["services"])

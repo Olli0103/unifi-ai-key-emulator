@@ -109,6 +109,19 @@ def configuration(services):
                        "legacy_profile": "protect-7.2.105"}}
 
 
+@pytest.fixture
+def forbidden_video_decoder(tmp_path, monkeypatch):
+    """Invalid media must be rejected before any decoder is launched."""
+    decoder = tmp_path / "decoder-must-not-run"
+    decoder.write_text("Synthetic placeholder, not an executable.\n")
+
+    async def refuse_execution(*args, **kwargs):
+        raise AssertionError("Decoder must not run for unsupported media")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", refuse_execution)
+    return str(decoder)
+
+
 def command(task="task-1"):
     return {"targetUri": ":7968/describe", "timeoutMs": 5000,
             "resUrl": f"/internal/aiprocessors/descriptions/{task}",
@@ -325,9 +338,10 @@ async def test_stop_cancels_queued_and_running_work_without_callback(services, t
 
 
 @pytest.mark.asyncio
-async def test_ubv_rejected_without_vendor_program_execution(services, tmp_path):
+async def test_ubv_rejected_without_vendor_program_execution(
+        services, tmp_path, forbidden_video_decoder):
     config = configuration(services)
-    config["worker"]["ffmpeg_path"] = shutil.which("ffmpeg") or "/bin/false"
+    config["worker"]["ffmpeg_path"] = forbidden_video_decoder
     request = command()
     request["payload"].pop("images")
     request["payload"]["videos"] = [{"reqUrl": "/internal/aiprocessors/video/export?start=1000"}]
@@ -341,9 +355,10 @@ async def test_ubv_rejected_without_vendor_program_execution(services, tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_on_demand_failure_callback_is_explicit_and_not_replayed(services, tmp_path):
+async def test_on_demand_failure_callback_is_explicit_and_not_replayed(
+        services, tmp_path, forbidden_video_decoder):
     config = configuration(services)
-    config["worker"]["ffmpeg_path"] = shutil.which("ffmpeg") or "/bin/false"
+    config["worker"]["ffmpeg_path"] = forbidden_video_decoder
     request = {"targetUri": ":7968/on_demand_inference", "resUrl": "/internal/camera-upload/failure",
                "payload": {"cameraId": "c", "eventId": "e", "timestamp": 1000,
                            "videoUrl": "/internal/aiprocessors/video/export?start=1000"}}
