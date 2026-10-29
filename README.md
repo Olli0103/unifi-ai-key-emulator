@@ -85,11 +85,21 @@ That command makes a TLS handshake to the configured controller, sends no HTTP c
 | --- | --- | --- |
 | Management/control | HTTPS info/adoption, stable identity, UCP4, time sync, credential rotation and reconnect observed on 7.3.56 | Additional controller commands and longer recovery testing |
 | Discovery | Read-only v1 queries, exact controller allowlist, optional Linux multicast and macOS host companion; native candidate and address observed | Other network layouts and NAS discovery |
-| Descriptions | Bounded queue, configurable vision provider, image/MP4 input; native on-demand and two automatic captions on distinct camera families verified | Continuous operation and longer recovery testing |
-| Search | Matched E5 document/query adapter, 384 dimensions, model guard, query socket | Matching actual controller profile and retrieval quality |
-| Search database | PostgreSQL/pgvector preparation and credential rotation hook | Docker execution, controller migrations and restart recovery |
+| Descriptions | Bounded queue, explicit provider/model, image/MP4 input; dated native caption persistence on selected versions/cameras | All-camera endurance, ground-truth quality and complete restart/recovery acceptance |
+| Search | E5 and separate CLIP/basic paths; dated native session/image-query observations, explicit profile/model guards | Labeled relevance/negative-query quality, fresh Deep processing and complete migration acceptance |
+| Search database | Private NAS PostgreSQL/hybrid-search deployment, source upgrade and offline component restore documented | Full controller/host recovery and supported model/index migration qualification |
 
-Unsupported capabilities default to disabled. The controller source inspected here couples VLM and deep-mode flags, so the build does not automatically advertise full intelligence. Face/plate recognition, audio, legacy CLIP image search, hybrid BM25/reranking and full legacy-camera enhancement are not implemented.
+Unsupported capabilities default to disabled. The inspected controller couples
+VLM and deep-mode flags, so the build does not automatically advertise full
+intelligence. Source paths now exist for face/plate processing, speech, CLIP
+image queries, hybrid search and enhancement; that is not blanket native parity
+or quality acceptance. See the dated [7.3.70 record](docs/evidence/live-protect-7.3.70.md),
+[7.3.74 observations](docs/evidence/live-protect-7.3.74.md),
+[speech acceptance limits](docs/evidence/speech-acceptance-20261029.md) and
+[search evidence](docs/evidence/search-evidence.md). Named enrollment, plate
+quality, complete native event routing/zone ground truth, ONVIF and full
+legacy-camera enhancement remain open. Existing verified camera scopes are not
+permission to enable new processing or remote destinations.
 
 For video, set `worker.ffmpeg_path` to an absolute executable path. `worker.request_mp4_exports=true` changes only the verified AI export route's supported `format=ubv` parameter to MP4, retaining its other allowed parameters. Arbitrary UBV files are rejected. Protect 7.3.60 accepted this MP4 export in the native on-demand test.
 
@@ -103,7 +113,12 @@ For the tested Mac deployment, use the separate [Apple container guide](docs/app
 
 See [NAS setup](docs/nas-deployment.md). Compose uses Linux host networking so Protect can address management, discovery and the dedicated search database at the emulator's advertised NAS IP. This requires checking port availability on the NAS first. It adds no vision-model service, so an existing local inference server can be used.
 
-The Linux ARM64 image was built and run with Apple's container runtime. Docker and Compose execution on the NAS, including the optional PostgreSQL deployment, remain unverified.
+Linux ARM64/Apple-container trials and Linux AMD64/NAS deployment have separate
+dated evidence. The [NAS source upgrade](docs/evidence/nas-source-upgrade-20261029.md)
+and [five-processor follow-up](docs/evidence/key-port-batch165-20261030.md)
+include real Docker/Compose and PostgreSQL continuity observations. They do not
+validate every example command, a fresh independent installation, full native
+disaster recovery, a public release or a sustained pilot.
 
 ## Engineering records
 

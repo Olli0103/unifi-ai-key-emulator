@@ -1,6 +1,22 @@
-# UGREEN NAS deployment plan
+# UGREEN NAS deployment guide
 
 Target platform: UGREEN NAS and UDM Pro Max with Protect 7.3.56. No NAS or controller changes occurred during the local build. Verify the NAS paths, account UID/GID and free ports before deployment. Choose a vision provider below.
+
+That target and the recipe below describe the initial deployment preparation,
+not the current tested controller version or a transcript of all commands run.
+Later [29 October NAS observations](evidence/nas-source-upgrade-20261029.md)
+record real Docker/Compose, PostgreSQL and selected native paths on Protect
+7.3.74. The [follow-up through #165](evidence/key-port-batch165-20261030.md)
+records Key/four-Port rolling upgrades with existing identity/pairing retention.
+Neither establishes every recipe command, a fresh independent install, all
+search/recognition quality, host/controller disaster recovery or a sustained pilot.
+
+Fresh standalone AI Key preparation can use [offline setup](first-run.md).
+It creates a new directory only and does not configure Compose, search/database,
+controller-channel trust, discovery or adoption. Use it in the eventual runtime
+namespace so generated absolute state/secret paths remain valid; the existing
+`/state` mount recipe below is not automatically converted. Never reinitialize
+adopted state to switch installation methods.
 
 The example addresses `192.0.2.1` and `192.0.2.110` are documentation placeholders. Replace them with the actual console and NAS addresses in every command and configuration file.
 
@@ -53,7 +69,7 @@ docker compose run --rm --no-deps emulator trust --config /state/config.json --f
 docker compose up -d emulator
 ```
 
-7. For discovery, explicitly enable it, use the NAS interface address and set `allowed_controller_ips` to the exact UDM IPv4. Multicast is optional and restricted to device mode on Linux. Before clicking Adopt, prepare the database section below if search is intended. New configurations use management username `ui`, matching the ordinary AI processor adoption path in inspected Protect 7.2.105. Supply the random password from the private `state/management-password` file through credentialed adoption; a factory-password-only attempt will fail. Existing explicit usernames remain unchanged and need deliberate alignment or a verified controller username override. Target 7.3.56 behavior still needs a live check. Protect may rotate the management password after adoption; that initial file is not updated to the controller-managed password. Do not paste credentials into chat or logs.
+7. For discovery, explicitly enable it, use the NAS interface address and set `allowed_controller_ips` to the exact UDM IPv4. Multicast is optional and restricted to device mode on Linux. Before clicking Adopt, prepare the database section below if search is intended. New configurations use management username `ui`, matching the ordinary AI processor adoption path in inspected Protect 7.2.105. Supply the random password from the private `state/management-password` file through credentialed adoption; a factory-password-only attempt will fail. Existing explicit usernames remain unchanged and need deliberate alignment or a verified controller username override. The initial recipe was not itself a native test; use the dated version-specific records above for later observations. Protect may rotate the management password after adoption; that initial file is not updated to the controller-managed password. Do not paste credentials into chat or logs.
 
 ## Prepare search before adopting the processor
 
