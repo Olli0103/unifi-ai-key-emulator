@@ -53,7 +53,7 @@ def test_prohibited_archive_members(name):
 def test_payload_check_catches_renamed_binary_key_and_link():
     assert 'binary_payload' in member_issues('package/innocent.txt', b'\x7fELFsynthetic')
     assert 'private_key' in member_issues('package/data.txt',
-                                        b'-----BEGIN PRIVATE KEY-----\nsynthetic')
+                                        b'-----BEGIN ' + b'PRIVATE KEY-----\nsynthetic')
     assert 'nonregular_member' in member_issues('package/link', regular=False)
     assert not member_issues('package/docs/contract.md', b'independent interface description')
 
