@@ -7,7 +7,7 @@ RUN apt-get update \
     && groupadd --gid 10001 aikey \
     && useradd --uid 10001 --gid 10001 --create-home aikey
 WORKDIR /app
-COPY pyproject.toml /app/
+COPY pyproject.toml LICENSE /app/
 COPY requirements-runtime.lock /app/
 COPY src /app/src
 RUN pip install -r requirements-runtime.lock && pip install --no-deps .

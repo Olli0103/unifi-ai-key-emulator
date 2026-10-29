@@ -4,7 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates openssl \
     && rm -rf /var/lib/apt/lists/*
-COPY pyproject.toml /app/
+COPY pyproject.toml LICENSE /app/
 COPY requirements-runtime.lock /app/
 COPY src /app/src
 RUN pip install -r requirements-runtime.lock && pip install --no-deps .
