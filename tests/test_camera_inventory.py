@@ -118,7 +118,7 @@ def test_invalid_inventory_fails_as_a_whole(rows):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("version", ["7.3.60", "7.3.68", "7.3.70"])
+@pytest.mark.parametrize("version", ["7.3.60", "7.3.68", "7.3.70", "7.3.74"])
 async def test_pinned_read_only_inventory_has_no_processing_scope(tmp_path, monkeypatch,
                                                                    version):
     async with synthetic_protect(tmp_path, monkeypatch, meta_version=version,
@@ -197,3 +197,34 @@ async def test_controller_must_be_an_explicit_private_ipv4(tmp_path):
         with pytest.raises(InventoryError, match="private IPv4"):
             await fetch_inventory(host, api_key_file=tmp_path / "missing",
                                   trust_file=tmp_path / "missing", cert_file=tmp_path / "missing")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", ["7.3.73", "7.3.75", "7.4.0", "7.3.74-preview", None])
+async def test_unvalidated_neighbouring_versions_stop_before_camera_read(tmp_path, monkeypatch, version):
+    async with synthetic_protect(tmp_path, monkeypatch, meta_version=version) as env:
+        with pytest.raises(InventoryError, match="no validated camera inventory contract"):
+            await fetch_inventory("127.0.0.1", api_key_file=env["key"],
+                                  trust_file=env["trust"], cert_file=env["ca"])
+        assert [path for path, _ in env["seen"]] == ["/proxy/protect/integration/v1/meta/info"]
+
+
+@pytest.mark.asyncio
+async def test_7374_inventory_preserves_all_observed_model_families_and_offline_camera(tmp_path, monkeypatch):
+    models = ["UVC G4 Bullet", "UVC G4 Bullet", "UVC G4 Pro", "UVC G3 Instant",
+              "UVC G3 Instant", "UVC G4 Instant", "UVC G4 Instant", "UVC G5 Flex",
+              "UVC G4 Doorbell Pro", "UVC G6 Instant", "UVC G4 Dome"]
+    rows = []
+    for number, model in enumerate(models, 1):
+        row = camera(number, state="DISCONNECTED" if number == 1 else "CONNECTED",
+                     smart=() if model == "UVC G3 Instant" else ("person",))
+        row["type"] = model
+        rows.append(row)
+    async with synthetic_protect(tmp_path, monkeypatch, meta_version="7.3.74", rows=rows) as env:
+        report = await fetch_inventory("127.0.0.1", api_key_file=env["key"],
+                                       trust_file=env["trust"], cert_file=env["ca"])
+        assert report["summary"] == {"total": 11, "smart_event_candidates": 8,
+                                     "legacy_ingress_needed": 2, "offline": 1}
+        assert len({c["model"] for c in report["cameras"]}) == 8
+        assert {c["id"] for c in report["cameras"]} == {r["id"] for r in rows}
+        assert report["processing_enabled"] is False
