@@ -90,7 +90,9 @@ def _page(title: str, body: str) -> web.Response:
 
 
 def _private_bytes(path: Path, limit: int) -> bytes:
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    # A FIFO blocks in open() before fstat can reject its type. Non-blocking
+    # opening lets the same descriptor/type/owner/mode checks refuse it safely.
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor, "rb") as source:
         info = os.fstat(source.fileno())
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()

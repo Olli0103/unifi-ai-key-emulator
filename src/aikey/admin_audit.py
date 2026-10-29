@@ -44,7 +44,7 @@ class AuditLog:
         try:
             self._rotate_if_needed(len(line))
             descriptor = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT
-                                 | getattr(os, "O_NOFOLLOW", 0), 0o600)
+                                 | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0), 0o600)
             try:
                 info = os.fstat(descriptor)
                 if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
