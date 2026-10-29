@@ -1,4 +1,4 @@
-"""One explicitly requested synthetic vision API probe; never camera data/activation."""
+"""One explicitly requested synthetic API probe; never camera data/activation."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import hashlib
 from io import BytesIO
 import secrets
 import time
+import wave
 
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
@@ -76,6 +77,71 @@ def _challenge() -> tuple[bytes, str]:
     return output.getvalue(), answer
 
 
+async def _read_reply(response):
+    if (response.status != 200 or response.headers.get("Content-Encoding", "identity") != "identity"
+            or not (response.content_type == "application/json"
+                    or response.content_type.endswith("+json"))):
+        raise ProbeError("probe_unavailable")
+    body = bytearray()
+    async for chunk in response.content.iter_chunked(8192):
+        body.extend(chunk)
+        if len(body) > MAX_REPLY_BYTES:
+            raise ProbeError("probe_unavailable")
+    return _json_object(bytes(body))
+
+
+def _silence() -> bytes:
+    """One second of generated mono 16-bit/16-kHz PCM, no recorded audio."""
+    output = BytesIO()
+    with wave.open(output, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(16000)
+        audio.writeframes(bytes(32000))
+    return output.getvalue()
+
+
+async def probe_speech(provider) -> dict:
+    """One silence upload with the saved role's adapter, no transcript returned.
+
+    Empty parsed speech is a silence-path match, not a voice-recognition,
+    general modality, quality, model identity or billing verification.
+    """
+    started = time.monotonic()
+    deadline = started + TOTAL_SECONDS
+    attempted = False
+    try:
+        async with asyncio.timeout(TOTAL_SECONDS):
+            form = aiohttp.FormData()
+            for name, value in provider.form_fields():
+                form.add_field(name, value)
+            form.add_field("file", _silence(), filename="synthetic-silence.wav",
+                           content_type="audio/wav")
+            async with aiohttp.ClientSession(connector=ProviderConnector(), trust_env=False,
+                    cookie_jar=aiohttp.DummyCookieJar(), auto_decompress=False,
+                    headers={"Accept-Encoding": "identity"},
+                    timeout=aiohttp.ClientTimeout(total=TOTAL_SECONDS, connect=3)) as session:
+                attempted = True
+                async with session.post(provider.url, headers=provider.headers, data=form,
+                                        allow_redirects=False) as response:
+                    reply = await _read_reply(response)
+                    if reply.get("error") is not None:
+                        raise ProbeError("probe_unavailable")
+                    segments = provider.parse(reply, 1000)
+            finished = time.monotonic()
+            if not started <= finished < deadline:
+                raise ProbeError("probe_unavailable")
+            return {"synthetic_silence_matched": not segments,
+                    "elapsed_ms": round((finished - started) * 1000),
+                    "model_identity_verified": False, "quality_verified": False}
+    except ProbeError:
+        raise
+    except ProviderAddressError:
+        raise ProbeError("probe_not_started") from None
+    except Exception:
+        raise ProbeError("probe_unavailable" if attempted else "probe_not_started") from None
+
+
 async def probe_vision(provider) -> dict:
     """One small synthetic image, no retry/fallback and no returned model text.
 
@@ -99,16 +165,7 @@ async def probe_vision(provider) -> dict:
                 attempted = True
                 async with session.post(url, headers=headers, json=payload,
                                         allow_redirects=False) as response:
-                    if (response.status != 200 or response.headers.get("Content-Encoding", "identity") != "identity"
-                            or not (response.content_type == "application/json"
-                                    or response.content_type.endswith("+json"))):
-                        raise ProbeError("probe_unavailable")
-                    body = bytearray()
-                    async for chunk in response.content.iter_chunked(8192):
-                        body.extend(chunk)
-                        if len(body) > MAX_REPLY_BYTES:
-                            raise ProbeError("probe_unavailable")
-                    reply = provider.parse_response(_json_object(bytes(body)))
+                    reply = provider.parse_response(await _read_reply(response))
             finished = time.monotonic()
             if not started <= finished < deadline:
                 raise ProbeError("probe_unavailable")
