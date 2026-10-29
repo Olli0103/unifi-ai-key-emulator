@@ -40,6 +40,7 @@ import math
 import os
 from pathlib import Path
 import re
+import stat
 import tempfile
 import time
 from typing import Any, Awaitable, Callable, Protocol
@@ -542,33 +543,86 @@ def _require_approval(*, readback: bool) -> None:
 
 
 def _latest_backup(backups_dir: Path | None, live_rows: int | None, now: float) -> dict:
-    if backups_dir is None or not Path(backups_dir).is_dir():
+    def unavailable(reason):
         return {"latest": None, "verified": False, "matches_live": None,
-                "reason": "No backup directory is configured"}
-    manifests = sorted(Path(backups_dir).glob("search-*.json"), key=lambda p: p.name, reverse=True)
-    for path in manifests:
+                "reason": reason}
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate backup field")
+            result[key] = value
+        return result
+
+    if backups_dir is None:
+        return unavailable("No backup directory is configured")
+    try:
+        directory = os.open(backups_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return unavailable("The backup directory is unavailable or unsafe")
+    try:
+        manifests = []
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if entry.name.startswith("search-") and entry.name.endswith(".json"):
+                    manifests.append(entry.name)
+                    if len(manifests) > 512:
+                        return unavailable("Too many backup manifests; review the backup directory")
+        if not manifests:
+            return unavailable("No backup manifest found")
+        name = max(manifests)
+        # Never hide a damaged newest record by silently selecting an older one.
+        if not re.fullmatch(r"search-[0-9]{8}T[0-9]{6}\.json", name):
+            return unavailable("The latest backup manifest is invalid or unsafe")
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
         try:
-            value = json.loads(path.read_text())
+            descriptor = os.open(name, flags, dir_fd=directory)
+            with os.fdopen(descriptor, "rb") as manifest:
+                meta = os.fstat(manifest.fileno())
+                if not stat.S_ISREG(meta.st_mode) or meta.st_size > 64 * 1024:
+                    raise ValueError("invalid backup manifest")
+                raw = manifest.read(64 * 1024 + 1)
+            if len(raw) > 64 * 1024:
+                raise ValueError("oversized backup manifest")
+            value = json.loads(raw, object_pairs_hook=unique)
+            if not isinstance(value, dict) or value.get("dump") != name[:-5] + ".dump":
+                raise ValueError("invalid dump reference")
             counts = value["counts"]
-            dump = Path(backups_dir) / value["dump"]
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-        rows = (counts.get("tables") or {}).get("ramDetections")
+            if not isinstance(counts, dict) or not isinstance(counts.get("tables"), dict):
+                raise ValueError("invalid backup counts")
+            rows, embeddings = counts["tables"]["ramDetections"], counts["embeddings"]
+            if any(type(count) is not int or count < 0 for count in (rows, embeddings)):
+                raise ValueError("invalid backup counts")
+        except (OSError, ValueError, KeyError, TypeError, RecursionError):
+            return unavailable("The latest backup manifest is invalid or unsafe")
         verified = isinstance(value.get("verified"), dict) and value["verified"].get("restore_counts_match") is True
-        matches = None if live_rows is None else rows == live_rows == counts.get("embeddings")
-        age = max(0, int(now - path.stat().st_mtime))
+        matches = (rows == live_rows == embeddings
+                   if type(live_rows) is int and live_rows >= 0 else None)
+        age = max(0, int(now - meta.st_mtime))
+        try:
+            descriptor = os.open(value["dump"], flags, dir_fd=directory)
+            try:
+                regular_dump = stat.S_ISREG(os.fstat(descriptor).st_mode)
+            finally:
+                os.close(descriptor)
+        except OSError:
+            regular_dump = False
         reason = None
-        if not dump.is_file():
-            reason = "The latest backup's dump file is missing"
+        if not regular_dump:
+            reason = "The latest backup's dump file is missing or unsafe"
         elif not verified:
             reason = "The latest backup has no recorded scratch-restore verification"
         elif matches is False:
             reason = f"The latest backup holds {rows} rows; the live index holds {live_rows}"
         elif matches is None:
             reason = "Live row count unavailable; cannot compare with the backup"
-        return {"latest": path.name, "rows": rows, "age_s": age, "verified": verified and dump.is_file(),
+        return {"latest": name, "rows": rows, "age_s": age, "verified": verified and regular_dump,
                 "matches_live": matches, "reason": reason}
-    return {"latest": None, "verified": False, "matches_live": None, "reason": "No backup manifest found"}
+    except OSError:
+        return unavailable("The backup directory is unavailable or unsafe")
+    finally:
+        os.close(directory)
 
 
 def migration_plan(state_dir: Path, *, backups_dir: Path | None = None, live_rows: int | None = None,
