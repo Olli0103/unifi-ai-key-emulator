@@ -50,12 +50,14 @@ def _calls(name):
     return found
 
 
-def test_every_row_is_complete_and_no_row_claims_automatic_expiry():
+def test_every_output_type_has_a_named_current_lifecycle_and_destination():
     assert set(ROW) == {"search_backups", "worker_archive", "face_store", "transcripts",
-                        "provider_keys"}
+                        "provider_keys", "media_frames", "aiport_buffers", "captions", "plates",
+                        "live_search", "enhancements", "admin_audit", "device_state", "state_backups"}
     for row in ROWS:
-        assert row["expiry"] in EXPIRY_KINDS                   # "automatic" is not a kind
+        assert row["expiry"] in EXPIRY_KINDS
         assert row["category"] and row["local"] and row["detail"] and row["owner_decision"]
+        assert row["destination"] and row["default"]
         assert row["evidence"], row["key"]
         for reference in row["evidence"]:
             assert _resolve(reference) is not None, reference   # the mechanism still exists
@@ -125,15 +127,17 @@ def test_live_status_is_counts_only(tmp_path):
     FaceStore(root).enroll("Private Name", [1.0] + [0.0] * 127)
     (root / "worker-jobs").mkdir(mode=0o700)
     (root / "worker-jobs" / f"{AUDIO_TEMP_PREFIX}crash1").mkdir()
+    (root / "worker-jobs" / "aikey-video-crash2").mkdir()
     backups = tmp_path / "backups"
     backups.mkdir()
     (backups / "search-20260901T010000.json").write_text("{}")
     status = live_status(root, backups)
-    assert status == {"search_backups": {"backups": 1},
-                      "worker_archive": {"markers": 0, "problems": 0},
-                      "face_store": {"identities": 1},
-                      "transcripts": {"audio_leftovers": 1},
-                      "provider_keys": None}                 # no config.json in this state
+    expected = dict.fromkeys(ROW)
+    expected.update(search_backups={"backups": 1},
+                    worker_archive={"markers": 0, "problems": 0},
+                    face_store={"identities": 1}, transcripts={"audio_leftovers": 1},
+                    media_frames={"video_leftovers": 1})
+    assert status == expected                                 # no config.json in this state
     (root / "config.json").write_text(json.dumps({"inference": {"api_key_file": "/state/provider-key-aa"}}))
     (root / "provider-key-aa").write_text("x")
     (root / "provider-key-bb").write_text("y")
@@ -166,7 +170,9 @@ async def test_the_page_shows_categories_and_counts_never_values_or_paths(tmp_pa
         for row in ROWS:
             assert row["category"].split(" (")[0] in page
         assert "identities: 1" in page and "Manual only (not scheduled)" in page
-        assert page.count("needs_evidence") == 4
+        assert page.count("needs_evidence") == sum(row["controller_decides"] for row in ROWS)
+        assert "Product defaults (not current activation)" in page
+        assert "File permissions are not encryption" in page
         assert "Private Name" not in page and str(tmp_path) not in page
         assert "<form" not in page.split("Data flow and retention</h1>")[1]
         assert (await client.post("/data-retention", headers={"Origin": site.origin})).status == 405

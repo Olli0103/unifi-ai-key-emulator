@@ -2,6 +2,14 @@
 
 The control site is a separate loopback HTTP service for the AI Key and one or more AI Port configuration files. It has administrator sign-in, a signed session, CSRF protection, revision-checked saves and write-only API-key replacement. It manages the vision provider, model and endpoint for AI Key descriptions and AI Port object detections. OpenAI, Claude/Anthropic, Ollama and an OpenAI-compatible endpoint are selectable. Each AI Port form also manages classes, score threshold and an optional API-request cost cap (empty means no cap) for that instance only. Object events have no per-camera cap, and a save keeps the local fallback, plate cameras and held-package mode. A configured AI Key speech role has its own provider form, described below. The site does not manage embeddings, audio camera opt-ins, face/plate models, adoption, camera pairing or service restarts yet. Those controls remain open work under [issue #17](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17).
 
+## Data flow and retention
+
+The signed-in [data-flow and retention page](data-retention.md) separately shows
+all output/state categories, other destinations, product defaults and current
+lifecycle mechanisms. It is read-only: unavailable counts are not zero, local
+file permissions are not encryption, and deleting a local copy does not delete
+Protect, model-server, host-log or backup copies.
+
 ## Speech provider
 
 If `speech_to_text` already contains a valid explicit camera allowlist, the Speech provider form changes only that role's provider, model, API base URL, optional language, private-network permission and write-only key. The existing camera list and clip-length policy stay unchanged. No form is offered for an unconfigured role; this is not audio enrollment or permission management.

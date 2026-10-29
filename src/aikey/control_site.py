@@ -185,17 +185,21 @@ class ControlSite:
             raise web.HTTPSeeOther("/login")
         status = await asyncio.to_thread(live_status, self.aikey_state_dir, self.search_backups_dir)
         labels = {"manual": "Manual only (not scheduled)", "none": "No expiry",
-                  "per_job": "Removed after each job", "not_stored": "Not stored locally"}
+                  "per_job": "Removed after each job", "not_stored": "Not stored locally",
+                  "on_admission": "Rollover on startup/admission (not a timer)",
+                  "size_rotation": "Size rotation (not time expiry)",
+                  "process": "Volatile process buffers"}
 
         def counts(value):
             if value is None:
-                return "not configured"
+                return "not measured or not configured"
             return ", ".join(f"{_safe(key.replace('_', ' '))}: "
                              f"{_safe(item if item is not None else 'unavailable')}"
                              for key, item in value.items())
         rows = "".join(
             "<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in (
                 row["category"], row["local"], row["protect"] or "No Protect copy",
+                row["destination"], row["default"],
                 labels[row["expiry"]] + " · " + row["detail"],
                 "Controller decides Protect's copy (needs_evidence)" if row["controller_decides"]
                 else "Local only")) + f"<td>{counts(status[row['key']])}</td>"
@@ -204,9 +208,15 @@ class ControlSite:
                 "<p class='muted'>Read-only. Shows data categories, how each expires today and "
                 "counts; never names, text, embeddings or paths. Nothing is deleted from this "
                 "page, and no retention period is chosen here.</p>"
-                "<table><tr><th>Data</th><th>Local copy</th><th>Protect copy</th>"
+                "<p>Provider settings show the configured destination before a role is changed. "
+                "Local/private endpoints do not prove local processing or provider deletion. "
+                "A provider's retention terms depend on its account and service; they are not "
+                "verified here. File permissions are not encryption. Protect, model servers, "
+                "host logs, snapshots and backups require separate deletion/expiry checks.</p>"
+                "<div class='scroll'><table><tr><th>Data</th><th>Local copy</th><th>Protect copy</th>"
+                "<th>Other destinations</th><th>Product defaults (not current activation)</th>"
                 "<th>Current expiry</th><th>Retention owner</th><th>Live count</th>"
-                "<th>Operator decision</th></tr>" + rows + "</table>")
+                "<th>Operator decision</th></tr>" + rows + "</table></div>")
         return _page("Data flow and retention", body)
 
     def _audit(self, action: str, result: str, profile: str | None = None) -> None:
