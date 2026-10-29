@@ -30,7 +30,7 @@ This is additional loading validation, not a provider-authentication result.
   actual-reader FIFO timeouts after confirmed process entry. Five existing
   positive/refusal controls pass. No provider was contacted: the embedding
   session double fails immediately if its `post` is reached.
-- Fixed targeted run: **100 passed** across loader, configuration/TLS,
+- Final targeted run: **117 passed** across readiness, loader, configuration/TLS,
   embedding/search and real loopback credential-isolation/route tests.
   Additional controls verify the exact UTF-8 byte limit, growth after `fstat`,
   closed descriptors on refusal and directory refusal. The existing embedding
@@ -57,3 +57,11 @@ The actual value stayed inside the container and was never returned. Config
 bytes, container ID/image/restart count stayed unchanged, with zero writes or
 model requests. This does not activate the fix, test provider authentication
 or validate other installations, inactive roles or future file replacements.
+
+The initial full Linux CI caught one readiness-report regression: rejecting an
+empty credential during hydration left the existing `vision_configuration_valid`
+error field absent. That field now has a fixed non-sensitive explanation when
+credentials cannot load. The existing test keeps its failure/success/no-network/
+redaction assertions; its synthetic key file now explicitly has mode 0600 rather
+than depending on the host's default umask. The original failed run is retained,
+not relabeled successful; a new exact-head required CI run follows the fix.

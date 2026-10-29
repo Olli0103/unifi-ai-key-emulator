@@ -425,6 +425,9 @@ def readiness(config: dict) -> dict:
             errors["vision_configuration_valid"] = str(exc)
     else:
         checks["vision_configuration_valid"] = False
+        errors["vision_configuration_valid"] = (
+            "Vision configuration cannot be validated until required credentials are readable"
+        )
     return {"ready_for_device_start": all(checks.values()), "checks": checks, "errors": errors,
             "target": {"console": "UDM Pro Max", "protect": config["controller"].get("protect_version"),
                        "deployment": config["runtime"].get("deployment", "unspecified")},
