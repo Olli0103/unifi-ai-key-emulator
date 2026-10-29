@@ -2495,10 +2495,10 @@ class JobProcessor:
                 raise WorkerError(f"Re-ID server returned HTTP {response.status}")
             body = json.loads(await self._read_response(response, 131072))
         vector = body.get("embedding") if isinstance(body, dict) else None
-        if (not isinstance(vector, list)
-                or any(type(v) not in (int, float) or not math.isfinite(v) for v in vector)):
-            raise WorkerError("Re-ID server returned an invalid vector")
-        return deep_mode.padded_reid([float(v) for v in vector])
+        try:
+            return deep_mode.padded_reid(vector)
+        except deep_mode.DeepModeError as exc:
+            raise WorkerError("Re-ID server returned an invalid vector") from exc
 
     def _vision_image(self, data):
         """The image, re-encoded as JPEG only when larger than the video frames."""

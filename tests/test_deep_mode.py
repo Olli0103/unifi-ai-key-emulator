@@ -7,6 +7,7 @@ import base64
 import hashlib
 import io
 import json
+import math
 
 from aiohttp import web
 import pytest
@@ -67,6 +68,17 @@ def test_malformed_prompt_configs_are_refused(change):
         deep_mode.validate_prompts({**prompts_body(), **change})
 
 
+@pytest.mark.parametrize("field", [
+    "temperature", "topK", "topP", "minP", "repeatPenalty", "presencePenalty", "bboxMargin",
+])
+@pytest.mark.parametrize("value", [float("inf"), -float("inf"), 10 ** 400])
+def test_local_prompt_validation_requires_representable_finite_sampling(field, value):
+    body = prompts_body()
+    body["describePrompts"]["person"][field] = value
+    with pytest.raises(deep_mode.DeepModeError):
+        deep_mode.validate_prompts(body)
+
+
 def test_the_label_list_is_bounded_for_guided_decoding_without_touching_protects_schema():
     schema = {"type": "object", "required": ["description", "labels"], "properties": {
         "description": {"type": "string"}, "labels": {"type": "array", "items": {"type": "string"}}}}
@@ -77,6 +89,12 @@ def test_the_label_list_is_bounded_for_guided_decoding_without_touching_protects
         "type": "array", "items": {"type": "string"}, "maxItems": 10}}}
     assert deep_mode.bounded_schema(already) == already
     assert deep_mode.bounded_schema({"type": "object"}) == {"type": "object"}
+
+
+@pytest.mark.parametrize("properties", [[], "not-a-properties-map"])
+def test_label_bounding_does_not_crash_or_claim_to_validate_other_schema_shapes(properties):
+    schema = {"properties": properties}
+    assert deep_mode.bounded_schema(schema) is schema
 
 
 def test_the_model_answer_becomes_a_description_and_clean_labels():
@@ -158,6 +176,66 @@ async def test_describe_prompts_are_stored_and_their_hash_echoed(tmp_path):
     assert (await send(service, "changeDescribePrompts", {**body, "configHash": "x"}, "b"))[0] != 0
 
 
+@pytest.mark.parametrize("schema", [
+    "[]", "null", "true", '{"default": NaN}', '{"default": 1e309}',
+    '{"type": "object", "type": "array"}',
+    '{"properties": {"labels": {"maxItems": 1, "maxItems": 2}}}',
+])
+async def test_encoded_invalid_schema_cannot_replace_saved_prompts(tmp_path, schema):
+    async def admit(body):
+        return {"accepted": True}
+    service = DeviceService(deep_device_config(), tmp_path, admit)
+    baseline = prompts_body()
+    assert (await send(service, "changeDescribePrompts", baseline))[0] == 0
+    saved = (tmp_path / deep_mode.PROMPTS_FILE).read_bytes()
+    state = service.state_path.read_bytes()
+    change = prompts_body()
+    change["configHash"] = "a" * 40
+    change["describePrompts"]["person"]["describeSchema"] = b64(schema)
+    # The outer protocol record is finite, unambiguous JSON: the unsafe
+    # schema is nested inside its base64 string and must be checked too.
+    assert (await send(service, "changeDescribePrompts", change, "invalid-schema"))[0] != 0
+    assert (tmp_path / deep_mode.PROMPTS_FILE).read_bytes() == saved
+    assert service.state_path.read_bytes() == state
+    assert service.get_info()["featureFlags"]["describeConfigHash"] == baseline["configHash"]
+
+
+@pytest.mark.parametrize("coord", [
+    [-1, 0, 10, 10], [1000, 0, 1, 1], [0, 1000, 1, 1],
+    [0, 0, 0, 10], [0, 0, 10, -1], [0, 0, 1001, 1],
+    [0, 0, float("inf"), 1], [0, 0, float("nan"), 1], [0, 0, True, 1],
+])
+async def test_invalid_deep_video_regions_are_refused_before_admission(controller, tmp_path, coord):
+    worker = JobProcessor(worker_config(controller), tmp_path, camera_registry=Registry())
+    request = describe_request(images=[], videos=[{
+        "reqUrl": "/internal/aiprocessors/video/export?camera=" + CAMERA,
+        "objects": [{"coord": coord, "ts": 1_700_000_000_000, "objectType": "person"}],
+    }])
+    before = set(tmp_path.rglob("*"))
+    try:
+        with pytest.raises(WorkerError, match="describe object|finite JSON"):
+            await worker.handle(request)
+        assert set(tmp_path.rglob("*")) == before
+        assert not worker.deep_counts["describe_tasks"]
+    finally:
+        await worker.stop()
+    assert controller.callbacks == [] and controller.chat_requests == []
+
+
+@pytest.mark.parametrize("magnitude", [1e308, 5e-324])
+def test_reid_normalization_is_stable_for_finite_extreme_magnitudes(magnitude):
+    vector = deep_mode.padded_reid([magnitude] * 256)
+    assert vector[:256] == [0.0625] * 256
+    assert vector[256:] == [0.0] * 256
+    assert math.hypot(*vector) == pytest.approx(1)
+
+
+@pytest.mark.parametrize("vector", [[float("inf")], [float("nan")], [True], ["1"], [10 ** 400]])
+def test_reid_normalization_refuses_invalid_scalars(vector):
+    with pytest.raises(deep_mode.DeepModeError):
+        deep_mode.padded_reid(vector)
+
+
 async def test_a_key_without_deep_models_stays_basic(tmp_path):
     async def admit(body):
         return {"accepted": True}
@@ -179,6 +257,7 @@ class Controller:
         self.reid_status, self.chat_content = 200, json.dumps(
             {"description": "A person in a red hoodie walks to the door.",
              "labels": ["top:hoodie", "topColor:red"]})
+        self.reid_embedding = [0.6, 0.8] + [0.0] * 254
 
     async def crop(self, request):
         out = io.BytesIO()
@@ -189,7 +268,7 @@ class Controller:
         self.reid_calls += 1
         if self.reid_status != 200:
             return web.json_response({}, status=self.reid_status)
-        return web.json_response({"embedding": [0.6, 0.8] + [0.0] * 254, "dim": 256})
+        return web.json_response({"embedding": self.reid_embedding, "dim": 256})
 
     async def chat(self, request):
         self.chat_requests.append(await request.json())
@@ -290,6 +369,30 @@ async def test_a_failing_reid_server_reports_failed_objects(controller, tmp_path
         await worker.stop()
     [(_, body)] = controller.callbacks
     assert body["embeddings"] == [] and [f["objectId"] for f in body["failed"]] == ["obj1", "obj2"]
+
+
+@pytest.mark.parametrize("vector,valid", [
+    ([1e308] * 256, True), ([5e-324] * 256, True), ([10 ** 400], False),
+    ([True], False), ([0.0] * 256, False),
+])
+async def test_reid_callback_never_publishes_zero_or_invalid_normalized_vectors(
+        controller, tmp_path, vector, valid):
+    controller.reid_embedding = vector
+    worker = JobProcessor(worker_config(controller), tmp_path, camera_registry=Registry())
+    try:
+        await worker.handle(embed_request())
+    finally:
+        await worker.stop()
+    [(_, body)] = controller.callbacks
+    if valid:
+        assert body["failed"] == [] and len(body["embeddings"]) == 2
+        for embedding in body["embeddings"]:
+            assert all(math.isfinite(v) for v in embedding["reidEmbed"])
+            assert math.hypot(*embedding["reidEmbed"]) == pytest.approx(1, abs=1e-5)
+    else:
+        assert body["embeddings"] == []
+        assert body["failed"] == [{"objectId": "obj1", "reason": "reid_failed"},
+                                  {"objectId": "obj2", "reason": "reid_failed"}]
 
 
 @pytest.mark.parametrize("change", [
