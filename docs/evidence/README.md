@@ -9,6 +9,9 @@ These records describe the interface observations used by the implementation. Th
 - [AI Port controller contract](ai-port-controller-contract.md) and [AI Port firmware/discovery evidence](ai-port-firmware-contract.md)
 - [29 October reviewed-source Key/four-Port deployment](key-port-batch159-20261029.md): preserved native identities/pairings and checked cold backups, not quality or full native recovery.
 
+- [29 October public person adapter pilot](public-person-pilot-20261029.md): all twelve attempts, including five errors; not native/fallback quality or hardware parity.
+- [Detection JSON ambiguity fix](detection-json-ambiguity-20261029.md): duplicate/nonfinite rejection before normalization.
+
 ## Compatibility manifest
 
 The manifest records the currently inventoried AI Key profile features as `native-verified`, `fixture-tested`, `implemented`, `unsupported` or `needs_evidence`. Live results are recorded separately for each live trial (Protect 7.3.56 adoption and control, Protect 7.3.60 captions). Static Protect 7.2.105 and AI Key 2.2.8 references never count as native evidence. A feature is `native-verified` only when a named live trial recorded that behavior, and only for that version and condition. A capability flag or a callback HTTP 200 is never sufficient.

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import math
 import re
 from io import BytesIO
 import os
@@ -119,10 +120,44 @@ FALLBACK_REASONS = ("http_429", "http_5xx", "request_failed", "dns_unavailable",
 _FALLBACK_BACKOFF_S = (30, 300)
 
 
+def _detection_json(text: str) -> object:
+    """Reject ambiguity before field selection or coordinate normalization."""
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("ambiguous_detection_json")
+            result[key] = value
+        return result
+
+    def invalid_constant(_value):
+        raise ValueError("nonfinite_detection_json")
+
+    def finite_float(value):
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("nonfinite_detection_json")
+        return number
+
+    def finite_int(value):
+        number = int(value)
+        try:
+            finite = math.isfinite(number)
+        except OverflowError:
+            finite = False
+        if not finite:
+            raise ValueError("nonfinite_detection_json")
+        return number
+
+    return json.loads(text, object_pairs_hook=unique_fields,
+                      parse_constant=invalid_constant, parse_float=finite_float,
+                      parse_int=finite_int)
+
+
 def fallback_to_fractions(text: str) -> str:
     """The fallback reply in the shared schema, with 0..1000 boxes as fractions."""
     try:
-        result = json.loads(text)
+        result = _detection_json(text)
         items = result["detections"] if isinstance(result, dict) else None
         if not isinstance(items, list):
             raise ValueError
@@ -379,7 +414,7 @@ def _parse_failure(text: str) -> str:
     if text.lstrip().startswith("```"):
         return "fenced"
     try:
-        value = json.loads(text)
+        value = _detection_json(text)
     except ValueError:
         return "not_json"
     if not isinstance(value, dict):
@@ -418,7 +453,7 @@ def parse_detections(text: str, *, threshold: float,
     counted under a fixed reason in ``rejected`` (no content is retained).
     """
     try:
-        result = json.loads(text)
+        result = _detection_json(text)
         if not isinstance(result, dict) or set(result) != {"detections"}:
             raise ValueError
         entries = result["detections"]

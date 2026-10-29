@@ -2,6 +2,10 @@
 
 `python -m aikey.benchmark score <cases.json>` scores labelled predictions. It never reads media and never calls a provider. The owner produces predictions locally from consented or synthetic material, and only the labelled records are scored. Private footage stays out of the repository.
 
+The [29 October public person adapter pilot](evidence/public-person-pilot-20261029.md)
+records twelve real local predictions: seven usable/correct and five errors. It
+is separate from owner-camera quality and the deployed fallback route.
+
 ## Case file (`aikey-benchmark-cases/1`)
 
 ```json
@@ -22,7 +26,9 @@
   - per-label TP, FP, FN, precision and recall. An undefined ratio is `null`, never 0 or 1.
   - false alarms and their rate on negative cases;
   - missed and misclassified positives.
-- Calibration over answered cases: expected calibration error (10 bins) and the Brier score.
+- Calibration over answered non-`none` predictions only: expected calibration error
+  (10 bins) and the Brier score. Report valid-response/class coverage and errors
+  separately; valid-only metrics must not be presented as all-scheduled accuracy.
 - The output is deterministic, so the same records give the same report in any case order.
 
 `python -m aikey.benchmark compare <report> <reference>` reports differences only when both reports scored the same corpus (equal `corpus_sha256`). Otherwise it refuses. This is how "no comparative claim without comparative evidence" is enforced.
