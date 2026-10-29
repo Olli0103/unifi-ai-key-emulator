@@ -54,21 +54,26 @@ _STYLE = """
 :root { font-family: system-ui, sans-serif; color: #192430; background: #f4f7fb; }
 body { max-width: 1100px; margin: 2rem auto; padding: 0 1.2rem; }
 h1 { margin-bottom: .25rem; } p { line-height: 1.45; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 1rem; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 1rem; }
+.grid > * { min-width: 0; }
 section { background: white; border: 1px solid #d9e2eb; border-radius: 12px;
           padding: 1.3rem; box-shadow: 0 2px 8px #1a35450a; }
 label { display: block; font-weight: 600; margin-top: 1rem; }
 input, select { box-sizing: border-box; width: 100%; margin-top: .35rem; padding: .6rem;
-                font: inherit; border: 1px solid #9aaebe; border-radius: 6px; }
+                font: inherit; border: 1px solid #65788b; border-radius: 6px; }
 input[type=checkbox] { width: auto; margin-right: .4rem; }
 .checks label { display: inline-block; margin-right: .9rem; font-weight: 400; }
 button { margin-top: 1.2rem; border: 0; border-radius: 6px; padding: .7rem 1rem;
          background: #075bd8; color: white; font: inherit; cursor: pointer; }
 .muted { color: #4f6173; } .error { color: #a1231b; } .notice { color: #195c31; }
-.row { display: flex; gap: .8rem; align-items: center; justify-content: space-between; }
+.row { display: flex; flex-wrap: wrap; gap: .8rem; align-items: center; justify-content: space-between; }
 table { width: 100%; border-collapse: collapse; background: white; }
 th, td { padding: .65rem; text-align: left; border-bottom: 1px solid #d9e2eb; }
-.scroll { overflow-x: auto; }
+.scroll, .table-scroll { max-width: 100%; overflow-x: auto; }
+:focus-visible { outline: 3px solid #075bd8; outline-offset: 3px; }
+.skip-link { position: absolute; top: .5rem; left: .5rem; transform: translateY(-200%);
+             background: white; color: #075bd8; padding: .6rem; z-index: 1; }
+.skip-link:focus { transform: none; }
 """
 
 
@@ -76,7 +81,10 @@ def _safe(value: object) -> str:
     return html.escape(str(value if value is not None else ""), quote=True)
 
 
-def _page(title: str, body: str) -> web.Response:
+def _page(title: str, body: str, *, landmark: bool = True) -> web.Response:
+    if landmark:
+        body = ("<a class='skip-link' href='#main'>Skip to main content</a>"
+                f"<main id='main' tabindex='-1'>{body}</main>")
     markup = ("<!doctype html><html lang='en'><head><meta charset='utf-8'>"
               "<meta name='viewport' content='width=device-width,initial-scale=1'>"
               f"<title>{_safe(title)}</title><style>{_STYLE}</style></head>"
@@ -1083,10 +1091,12 @@ class ControlSite:
                     control = _safe(self._ROLE_REASONS.get(info["reason"], info["reason"]))
                 rows.append(f"<tr><td>{_safe(title)}</td><td>{_safe(label)}</td>"
                             f"<td>{_safe(info['model'] or '—')}</td><td>{control}</td></tr>")
-        return ("<section><h2>Models by role</h2><p class='muted'>Changes only the model of one role; "
+        return ("<section><h2 id='models-by-role'>Models by role</h2><p class='muted'>Changes only the model of one role; "
                 "the provider, endpoint and key stay as they are. Search encoders are pinned by the "
-                "index.</p><table><tr><th>Profile</th><th>Role</th><th>Model</th><th>Change</th></tr>"
-                + "".join(rows) + "</table></section>")
+                "index.</p><div class='scroll' role='region' aria-labelledby='models-by-role' tabindex='0'>"
+                "<table><tr><th scope='col'>Profile</th><th scope='col'>Role</th>"
+                "<th scope='col'>Model</th><th scope='col'>Change</th></tr>"
+                + "".join(rows) + "</table></div></section>")
 
     def _probe_form(self, csrf, profile, role, revision, destination, model) -> str:
         if role not in {"caption", "detection", "speech"}:

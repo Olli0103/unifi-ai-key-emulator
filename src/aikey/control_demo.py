@@ -75,7 +75,7 @@ def demo_page() -> web.Response:
 </main>
 <footer><p>Demo only. Closing this server ends the preview; there is no adoption
 identity or application data to restore.</p></footer>
-""")
+""", landmark=False)
     # The shared real-site page permits same-origin forms. This preview has no
     # mutation routes, and additionally refuses all form submission in the browser.
     response.headers["Content-Security-Policy"] = (

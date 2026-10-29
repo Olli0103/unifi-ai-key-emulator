@@ -6,6 +6,29 @@ and cannot read deployment state or send a provider request.
 
 The control site is a separate loopback HTTP service for the AI Key and optional AI Port configuration files. It has administrator sign-in, a signed session, CSRF protection, revision-checked saves and write-only API-key replacement. It manages the vision provider, model and endpoint for AI Key descriptions and AI Port object detections. OpenAI, Claude/Anthropic, Ollama and an OpenAI-compatible endpoint are selectable. Each AI Port form also manages classes, score threshold and an optional API-request cost cap (empty means no cap) for that instance only. Object events have no per-camera cap, and a save keeps the local fallback, plate cameras and held-package mode. A configured AI Key speech role has its own provider form, described below. The site does not manage embeddings, audio camera opt-ins, face/plate models, adoption, camera pairing or service restarts yet. Those controls remain open work under [issue #17](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17).
 
+## Navigation and accessibility status
+
+The administrative renderer supplies one main landmark and a keyboard skip link
+to it, an explicit visible focus outline, and normal keyboard tab order. The
+synthetic demo keeps its own main landmark instead of nesting another one.
+The model-role table has a named, keyboard-focusable horizontal scroll region
+and column headers. Grid cards may shrink below 340 pixels; header actions wrap
+instead of requiring a fixed desktop width. Catalog/retention scroll containers
+share the same overflow rule.
+
+Static tests inspect actual signed-in HTML for unique IDs, one main/skip target,
+named inputs/selects, no positive tabindex and no provider request/config change.
+Declared text colors are checked using the WCAG sRGB relative-luminance formula
+for 4.5:1 normal text and 3:1 input boundaries/focus against the declared light
+surfaces. These are fixed-palette checks, not observed computed styles, every
+hover/disabled/error state or a WCAG conformance certificate. Native control
+widgets, forced colors, zoom/reflow, real mobile browsers and keyboard/screen
+reader use still require direct acceptance. No browser test is claimed from
+these source/HTML checks.
+
+English remains the implemented page language. Further localization and the
+complete first-run/feature-control workflow remain open.
+
 ## Search index and backup status
 
 The read-only Search index migration page reports historical scratch-restore
