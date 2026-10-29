@@ -81,6 +81,17 @@ come from the unchanged r30 inventory-overlay deployment, not deployment of
 the later source/admin changes. They do not prove caption quality, a fresh
 post-caption restart, all cameras, overload behavior or new Deep processing.
 
+## Later bounded basic-search filter observation, 30 October
+
+The separate [three-search-GET readback](native-search-filters-20261030.md)
+records one preserved client-parameter refusal and two successful basic searches.
+The `person yesterday` result has an exact Europe/Berlin local-day window with
+all returned timestamps inside it, but includes 47 person/one vehicle/two animal
+entries: no strict person-only or relevance-quality PASS. Native identity/pairing
+baselines match before/after. No negative/camera-filter test or new restart was
+added; the bound was not extended and the original public detector pilot was
+not rerun.
+
 ## Not observed / not authorized by this evidence
 
 - Fresh adoption, a new management-password rotation, or a controller upgrade

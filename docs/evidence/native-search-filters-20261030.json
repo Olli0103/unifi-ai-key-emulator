@@ -1,0 +1,63 @@
+{
+  "schema": "native-search-filter-observation/v1",
+  "observed_date": "2026-10-30",
+  "protect_version": "7.3.74",
+  "previously_verified_runtime_source": "5a459230c68809835f1781d006b62030d9694059",
+  "runtime_modules_rehashed_in_this_observation": false,
+  "search_get_limit": 3,
+  "search_gets_attempted": 3,
+  "terminal": true,
+  "records": [
+    {
+      "case": "initial_wrong_query_parameter",
+      "status": 400,
+      "elapsed_ms": 15,
+      "parameter_name": "query",
+      "attribution": "client_request_contract_mismatch_not_a_proven_product_defect"
+    },
+    {
+      "case": "a car",
+      "status": 200,
+      "elapsed_ms": 526,
+      "parameter_name": "searchText",
+      "min_similarity": 35,
+      "returned_count": 50,
+      "native_type_counts": {"person": 0, "vehicle": 50, "animal": 0, "other": 0}
+    },
+    {
+      "case": "person yesterday",
+      "status": 200,
+      "elapsed_ms": 244,
+      "parameter_name": "searchText",
+      "min_similarity": 35,
+      "returned_count": 50,
+      "native_type_counts": {"person": 47, "vehicle": 1, "animal": 2, "other": 0},
+      "returned_time_window_typed": true,
+      "window_matches_browser_local_yesterday": true,
+      "browser_timezone_matches_Europe_Berlin": true,
+      "detection_timestamps_typed": true,
+      "all_returned_detections_inside_declared_window": true,
+      "strict_person_only_results": false
+    }
+  ],
+  "configuration_actions": 0,
+  "media_uploads": 0,
+  "private_descriptions_media_or_identifiers_exported": false,
+  "owned_raw_browser_result_references_released": true,
+  "physical_erasure_verified": false,
+  "before_and_after_native_baseline": {
+    "key_identity_unchanged": true,
+    "port_identities_pairings_unchanged": true,
+    "key_count": 1,
+    "port_count": 4,
+    "pair_count": 9,
+    "adopted_connected": 5
+  },
+  "encoder_request_count": null,
+  "provider_reported_charge": null,
+  "relevance_ground_truth_verified": false,
+  "negative_query_verified": false,
+  "camera_filter_verified": false,
+  "restart_round_trip_performed": false,
+  "independent_tester_or_hardware_comparison": false
+}
