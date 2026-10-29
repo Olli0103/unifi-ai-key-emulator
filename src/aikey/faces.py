@@ -1,8 +1,9 @@
 """Private face identities for the AI Key's local face recognition (#20).
 
 Templates are SFace embeddings kept in ``<state>/faces/identities.json``
-(directory 0700, file 0600). They never leave the machine, are never logged,
-and every identity can be deleted, or all of them purged. Matching uses
+(directory 0700, file 0600). This store does not transmit or log templates;
+separate backup and enrollment-server copies need their own policy. Every
+identity can be explicitly deleted, or all of them purged. Matching uses
 cosine similarity with OpenCV's recommended SFace threshold; a face below
 it stays unknown rather than being given the nearest name.
 """
@@ -14,6 +15,7 @@ import json
 import math
 import os
 import re
+import stat
 import sys
 import tempfile
 import time
@@ -30,6 +32,7 @@ _DIMENSION = 128
 _MAX_IDENTITIES = 50
 _MAX_TEMPLATES = 20
 _MAX_EMBED_REPLY_BYTES = 256 * 1024
+_MAX_STORE_BYTES = 8 * 1024 * 1024
 _NAME = re.compile(r"[^\x00-\x1f\x7f]{1,64}\Z")
 
 
@@ -59,13 +62,30 @@ class FaceStore:
         self.path = self.directory / "identities.json"
 
     def _load(self) -> dict:
-        if not self.path.exists():
+        try:
+            descriptor = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
             return {"schema": 1, "identities": {}}
-        if self.path.is_symlink() or self.path.stat().st_mode & 0o077:
-            raise FaceStoreError("face_store_not_private")
-        data = json.loads(self.path.read_text())
-        if not isinstance(data, dict) or data.get("schema") != 1:
+        except OSError:
+            raise FaceStoreError("face_store_unavailable") from None
+        try:
+            with os.fdopen(descriptor, "rb") as source:
+                info = os.fstat(source.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                        or info.st_mode & 0o077):
+                    raise FaceStoreError("face_store_not_private")
+                if not 0 < info.st_size <= _MAX_STORE_BYTES:
+                    raise FaceStoreError("face_store_invalid")
+                raw = source.read(_MAX_STORE_BYTES + 1)
+        except OSError:
+            raise FaceStoreError("face_store_unavailable") from None
+        if not 0 < len(raw) <= _MAX_STORE_BYTES:
             raise FaceStoreError("face_store_invalid")
+        try:
+            data = _json_object(raw)
+            _validate_store(data)
+        except (ValueError, TypeError, KeyError, OverflowError):
+            raise FaceStoreError("face_store_invalid") from None
         return data
 
     def _save(self, data: dict) -> None:
@@ -122,6 +142,26 @@ class FaceStore:
                 scores.append((name, round(best, 4)))
         scores.sort(key=lambda item: -item[1])
         return (scores[0][0] if scores else None), scores[:3]
+
+
+def _validate_store(data):
+    """Reject malformed saved state; never silently normalize/repair templates."""
+    if (set(data) != {"schema", "identities"} or type(data["schema"]) is not int
+            or data["schema"] != 1 or not isinstance(data["identities"], dict)
+            or len(data["identities"]) > _MAX_IDENTITIES):
+        raise FaceStoreError("face_store_invalid")
+    for name, entry in data["identities"].items():
+        if (not isinstance(name, str) or name != name.strip() or not _NAME.fullmatch(name)
+                or not isinstance(entry, dict) or set(entry) != {"templates", "created"}
+                or type(entry["created"]) is not int or not 0 <= entry["created"] <= 2 ** 63 - 1
+                or not isinstance(entry["templates"], list)
+                or not 1 <= len(entry["templates"]) <= _MAX_TEMPLATES):
+            raise FaceStoreError("face_store_invalid")
+        for template in entry["templates"]:
+            if (not isinstance(template, list) or len(template) != _DIMENSION
+                    or any(type(v) not in (int, float) or not math.isfinite(v) for v in template)
+                    or not math.isclose(math.hypot(*template), 1.0, rel_tol=1e-6, abs_tol=1e-6)):
+                raise FaceStoreError("face_store_invalid")
 
 
 def _private_server(url: str) -> str:
