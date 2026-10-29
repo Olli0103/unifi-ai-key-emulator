@@ -54,12 +54,32 @@ queue. Therefore this proves the settings write/read/restore path, not Deep
 processing, description persistence, a restart round trip or quality. No new
 processing-mode acceptance or version allowlist entry follows from it.
 
+## Additional persisted captions, later on 29 October
+
+Read-only native event samples find non-empty `metadata.ramDescription` with
+`ramState: done` for G4 and G5 `smartAudioDetect` events. Exact GETs for the
+same two event IDs, compared inside the authenticated browser after a helper
+page reload, still return those fields. This is audio-event image-caption
+persistence, not transcript or general audio-quality acceptance. The worker
+journal's description-only summaries do not provide an exact ID join for those
+two audio examples; that association is not claimed.
+
+A separate filtered video-event sample finds G3 and G4 `smartDetectZone`
+captions. Both exact events remain captioned on independent native GETs after
+reload. Their event-ID digests match completed `recognizeKeyFrames` records
+with non-empty descriptions in the private worker journal, within 30 minutes.
+Only counts, generations, state/type and booleans leave the browser/NAS; no
+event/camera IDs, descriptions or media are published. These observations
+come from the unchanged r30 inventory-overlay deployment, not deployment of
+the later source/admin changes. They do not prove caption quality, a fresh
+post-caption restart, all cameras, overload behavior or new Deep processing.
+
 ## Not observed / not authorized by this evidence
 
 - Fresh adoption, a new management-password rotation, or a controller upgrade
   from a captured before-state on 7.3.74.
-- A new persisted 7.3.74 video caption, audio transcript, identity/enhancement
-  workflow, image query, deep-session round trip or comparative quality result.
+- A new persisted 7.3.74 audio transcript, identity/enhancement workflow,
+  image query, deep-session round trip or comparative quality result.
 - Complete restored-device/controller bootstrap, host reboot, sustained pilot,
   or a native ONVIF test. The owner has no ONVIF camera and explicitly keeps
   that requirement open.
