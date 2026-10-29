@@ -12,9 +12,11 @@ The configuration operation uses optimistic concurrency, existing validation,
 private atomic replacement, immutable history and exact one-step rollback.
 A key is retained only for the same speech provider and endpoint, never copied
 from vision. Changed destinations lose the old reference. The rollback checks
-both prior vision and speech references. A failed replacement reconciles the
-persisted key reference before deleting a newly created speech file; uncertain
-state retains the file rather than breaking a possibly committed configuration.
+both prior vision and speech references. An uncertain replacement retains the
+new speech file: a later archived revision may still need it for rollback,
+even if the current config no longer references it. Only a proven pre-apply
+or revision-conflict rejection removes an unused new key. See the
+[provider-key recovery evidence](provider-key-save-recovery.md).
 
 Synthetic tests cover endpoint/key changes, exact undo, preservation of camera
 policy and other roles, absent camera opt-in, malformed/unsupported settings,

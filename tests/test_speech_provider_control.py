@@ -175,7 +175,9 @@ async def test_uncertain_replacement_never_deletes_a_live_speech_key(tmp_path, m
             assert len(files) == 1 and files[0].name == Path(live).name
             assert files[0].read_text().strip() == SECRET
         else:
-            assert not files and path.read_bytes() == before
+            # The generic apply error does not prove whether replacement began.
+            # Keep the private file even if this synthetic case did not commit.
+            assert len(files) == 1 and path.read_bytes() == before
     finally:
         await client.close()
         await server.close()
