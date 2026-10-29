@@ -40,6 +40,7 @@ from .config_store import (
 from .index_rebuild import migration_plan
 from .model_catalog import CatalogError, catalog_provider, fetch_catalog
 from .providers import DEFAULT_BASE_URLS
+from .provider_probe import ProbeError, ProbeGrants, probe_vision
 
 
 _COOKIE = "aikey_admin_local"
@@ -143,6 +144,7 @@ class ControlSite:
         self.audit = AuditLog(audit_log) if audit_log is not None else None
         self._catalog_lock = asyncio.Lock()
         self._catalog_next_at = 0.0
+        self._probe_grants = ProbeGrants()
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=8192)
@@ -163,6 +165,7 @@ class ControlSite:
         app.router.add_post("/role-model", self.save_role_model)
         app.router.add_post("/speech-provider", self.save_speech_provider)
         app.router.add_post("/model-catalog", self.model_catalog)
+        app.router.add_post("/provider-probe", self.provider_probe)
         app.router.add_post("/logout", self.logout)
         app.router.add_get("/healthz", self.health)
         return app
@@ -916,6 +919,8 @@ class ControlSite:
                                     f"<p>Catalog destination: {_safe(destination)}. Uses only this role's "
                                     "credential. Sends no camera media and runs no inference.</p>"
                                     "<button>List available model IDs</button></form>")
+                        control += self._probe_form(csrf, profile, role, revision,
+                                                    destination, saved.get("model"))
                     except (ConfigurationStoreError, AiPortConfigurationError):
                         pass
                 else:
@@ -926,6 +931,107 @@ class ControlSite:
                 "the provider, endpoint and key stay as they are. Search encoders are pinned by the "
                 "index.</p><table><tr><th>Profile</th><th>Role</th><th>Model</th><th>Change</th></tr>"
                 + "".join(rows) + "</table></section>")
+
+    def _probe_form(self, csrf, profile, role, revision, destination, model) -> str:
+        if role not in {"caption", "detection"}:
+            return "<p>A synthetic test for this role is not available.</p>"
+        if not isinstance(model, str) or not model.strip():
+            return "<p>Save a vision model before running a synthetic test.</p>"
+        grant = self._probe_grants.issue(profile, role, revision, csrf)
+        if grant is None:
+            return "<p>Synthetic test forms are temporarily full. Reload settings later.</p>"
+        hidden = {"csrf": csrf, "profile": profile, "role": role,
+                  "revision": revision, "grant": grant}
+        return ("<form method='post' action='/provider-probe'>"
+                + "".join(f"<input type='hidden' name='{name}' value='{_safe(value)}'>"
+                          for name, value in hidden.items())
+                + f"<p>Synthetic test destination: {_safe(destination)}; model: {_safe(model)}. "
+                  "Sends one generated image, not camera media. Tests one API path, not general "
+                  "modality, model identity or recognition quality.</p>"
+                  "<label><input type='checkbox' name='acknowledge_cost' value='yes' required> "
+                  "Send this synthetic test. Provider charges may apply, separately from camera "
+                  "caption/request caps.</label>"
+                  "<button>Run one synthetic vision test</button></form>")
+
+    async def provider_probe(self, request: web.Request) -> web.Response:
+        fields = await request.post()
+        if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
+            self._audit("provider_probe", "forbidden")
+            raise web.HTTPForbidden()
+        expected = {"csrf", "profile", "role", "revision", "grant", "acknowledge_cost"}
+        if (set(fields) != expected or any(len(fields.getall(k)) != 1 for k in expected)
+                or not all(isinstance(fields[k], str) for k in expected)
+                or fields["acknowledge_cost"] != "yes" or fields["role"] not in {"caption", "detection"}):
+            self._audit("provider_probe", "invalid_request")
+            raise web.HTTPBadRequest(text="A fresh synthetic-test form and cost acknowledgement are required")
+        profile, role, revision = fields["profile"], fields["role"], fields["revision"]
+        store = self.aikey if profile == "aikey" else self.aiports.get(profile)
+        if store is None:
+            raise web.HTTPBadRequest(text="Unknown profile")
+        try:
+            selection, runtime_state, lab = await asyncio.to_thread(
+                store.catalog_configuration, revision, role)
+        except (ConfigurationStoreError, AiPortConfigurationError):
+            self._audit("provider_probe", "stale", profile)
+            raise web.HTTPConflict(text="The configured role changed. Reload settings before testing.")
+        if not isinstance(selection.get("model"), str) or not selection["model"].strip():
+            raise web.HTTPBadRequest(text="Save a vision model before testing")
+        try:
+            self._probe_grants.begin(fields["grant"], profile, role, revision, fields["csrf"])
+        except ProbeError as exc:
+            if str(exc) == "probe_busy":
+                self._audit("provider_probe", "busy", profile)
+                raise web.HTTPTooManyRequests(headers={"Retry-After": "30"})
+            self._audit("provider_probe", "grant_refused", profile)
+            raise web.HTTPConflict(text="The synthetic-test form expired or was already used. Reload settings.")
+        self._audit("provider_probe", "started", profile)
+        try:
+            provider = await asyncio.to_thread(catalog_provider, selection, speech=False,
+                host_state=store.path.parent, runtime_state=runtime_state, lab=lab)
+            report = await probe_vision(provider)
+        except (CatalogError, OSError):
+            self._audit("provider_probe", "preflight_unavailable", profile)
+            return _page("Synthetic test unavailable", "<h1>Synthetic test unavailable</h1>"
+                         "<p>The configured role or credential could not be verified. No provider "
+                         "request was started and nothing changed. Reload settings for a new test.</p>"
+                         "<p><a href='/'>Settings</a></p>")
+        except ProbeError as exc:
+            if str(exc) == "probe_not_started":
+                self._audit("provider_probe", "preflight_unavailable", profile)
+                return _page("Synthetic test unavailable", "<h1>Synthetic test unavailable</h1>"
+                             "<p>The test was refused before HTTP. No provider request was sent and "
+                             "nothing changed. Reload settings for a new explicit test.</p>"
+                             "<p><a href='/'>Settings</a></p>")
+            self._audit("provider_probe", "unavailable", profile)
+            return _page("Synthetic test unavailable", "<h1>Synthetic test unavailable</h1>"
+                         "<p>The bounded test could not be verified. A provider request may have been "
+                         "charged. Nothing was activated or changed; no automatic retry occurred. "
+                         "Reload settings for a new explicit test.</p><p><a href='/'>Settings</a></p>")
+        finally:
+            self._probe_grants.finish()
+        if self._session(request) is None:
+            raise web.HTTPForbidden()
+        try:
+            current_revision = (await asyncio.to_thread(store.snapshot)).revision
+        except (ConfigurationStoreError, AiPortConfigurationError, OSError):
+            current_revision = None
+        if current_revision != revision:
+            self._audit("provider_probe", "stale", profile)
+            return _page("Synthetic result is stale", "<h1>Synthetic result is stale</h1>"
+                         "<p>The settings changed during the test. Its result is not current. "
+                         "A request may have been charged; no settings were activated or changed.</p>"
+                         "<p><a href='/'>Settings</a></p>")
+        matched = report["synthetic_image_matched"]
+        self._audit("provider_probe", "matched" if matched else "mismatch", profile)
+        return _page("Synthetic vision test", "<h1>Synthetic vision test</h1>"
+                     + f"<p>Profile: {_safe(profile)}; role: {_safe(role)}; "
+                       f"model: {_safe(selection['model'])}; destination: {_safe(provider.base_url)}.</p>"
+                     + ("<p>The generated image answer matched.</p>" if matched else
+                        "<p>The API replied, but the generated image answer did not match.</p>")
+                     + f"<p>Elapsed: {report['elapsed_ms']} ms. This tests one synthetic API path, "
+                       "not general modality, internal model identity or recognition quality. "
+                       "No model was selected and no configuration changed. No camera media was sent. "
+                       "Provider charges may apply.</p><p><a href='/'>Settings</a></p>")
 
     async def model_catalog(self, request: web.Request) -> web.Response:
         fields = await request.post()
