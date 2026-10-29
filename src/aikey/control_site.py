@@ -7,6 +7,8 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 import getpass
+import hashlib
+import hmac
 import html
 import json
 import os
@@ -37,7 +39,7 @@ from .camera_inventory import InventoryError, fetch_inventory
 from .config import atomic_private, load_config
 from .data_policy import ROWS, live_status
 from .config_store import (
-    ConfigurationStore, ConfigurationStoreError, RevisionConflict,
+    ConfigurationStore, ConfigurationStoreError, RevisionConflict, UnsafeConfigurationChange,
 )
 from .index_rebuild import migration_plan
 from .model_catalog import CatalogError, catalog_provider, fetch_catalog
@@ -171,6 +173,8 @@ class ControlSite:
         app.router.add_post("/provider/rollback", self.rollback_provider)
         app.router.add_post("/role-model", self.save_role_model)
         app.router.add_post("/speech-provider", self.save_speech_provider)
+        app.router.add_get("/speech-permissions", self.speech_permissions)
+        app.router.add_post("/speech-permissions", self.restrict_speech_permissions)
         app.router.add_post("/model-catalog", self.model_catalog)
         app.router.add_post("/provider-probe", self.provider_probe)
         app.router.add_post("/logout", self.logout)
@@ -845,7 +849,9 @@ class ControlSite:
                           for name, label in (("openai-compatible", "Local compatible API"),
                                                ("openai", "OpenAI")))
         configured = bool(current.get("api_key_file", {}).get("configured"))
-        return ("<section><h2>Speech provider</h2><p>Only already permitted cameras are affected. "
+        return ("<section><h2>Speech provider</h2>"
+                "<p><a href='/speech-permissions'>Remove saved audio permissions</a></p>"
+                "<p>Only already permitted cameras are affected. "
                 "Their audio is sent to the API base URL below. Choosing OpenAI sends audio "
                 "to OpenAI and may incur charges; it does not use the caption budget. "
                 "Saving does not test the provider or enable more cameras.</p>"
@@ -868,6 +874,114 @@ class ControlSite:
                 "<label><input name='allow_cloud_audio' type='checkbox'>I allow audio from "
                 "the already permitted cameras to be sent to OpenAI if selected</label>"
                 "<button>Save speech provider</button></form></section>")
+
+    def _speech_camera_tokens(self, cookie: str, snapshot) -> dict[str, str]:
+        # Opaque selection labels, NOT independent authorization. Session,
+        # origin, CSRF, revision and the server's current allowlist remain required.
+        speech = snapshot.configuration.get("speech_to_text") or {}
+        key = self.security.csrf_token(cookie).encode()
+        return {hmac.new(key, f"speech-camera:{snapshot.revision}:{camera}".encode(),
+                         hashlib.sha256).hexdigest(): camera
+                for camera in speech.get("camera_ids", [])}
+
+    async def speech_permissions(self, request: web.Request) -> web.Response:
+        cookie = self._session(request)
+        if cookie is None:
+            raise web.HTTPSeeOther("/login")
+        snapshot = await asyncio.to_thread(self.aikey.snapshot)
+        current = snapshot.configuration.get("speech_to_text")
+        warning = ("<p class='notice'><strong>Saved settings only.</strong> Audio may still be "
+                   "processed by the running worker until you restart the AI Key. This page "
+                   "does not stop live work, delete recordings or transcripts, remove backups "
+                   "or revoke provider keys.</p>")
+        body = "<h1>Remove saved audio permissions</h1><p><a href='/'>Settings</a></p>" + warning
+        if not isinstance(current, dict):
+            return _page("Saved audio permissions", body +
+                         "<p>Speech is not configured in the saved settings. "
+                         "Running-worker status is not verified here.</p>")
+        labels = {}
+        if self.inventory_loader is not None:
+            try:
+                report = await self.inventory_loader()
+                if (isinstance(report, dict) and report.get("schema") == "aikey-camera-preflight/1"
+                        and isinstance(report.get("cameras"), list) and len(report["cameras"]) <= 256):
+                    for camera in report["cameras"]:
+                        if not isinstance(camera, dict):
+                            continue
+                        identifier, name = camera.get("id"), camera.get("name")
+                        if (isinstance(identifier, str) and isinstance(name, str) and 0 < len(name) <= 128
+                                and identifier not in name):
+                            labels[identifier] = name
+            except Exception:
+                pass  # An inventory outage must never block disabling saved audio.
+        tokens = self._speech_camera_tokens(cookie, snapshot)
+        csrf = self.security.csrf_token(cookie)
+        destination = current.get("base_url") or (
+            "https://api.openai.com/v1" if current.get("provider") == "openai" else "not configured")
+        hidden = (f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
+                  f"<input type='hidden' name='revision' value='{_safe(snapshot.revision)}'>")
+        confirmation = ("<label><input type='checkbox' name='confirm' required>"
+                        "I understand this changes saved permissions only; I must restart "
+                        "the AI Key to change running audio processing.</label>")
+        body += (f"<p>{len(tokens)} cameras currently permitted in saved settings. "
+                 f"Destination: {_safe(destination)}. No audio is sent by this page.</p>")
+        if all(camera in labels for camera in tokens.values()):
+            checks = "".join(f"<label><input type='checkbox' name='keep_camera' value='{token}' checked>"
+                             f"Keep permission: {_safe(labels[camera])}</label>"
+                             for token, camera in tokens.items())
+            body += ("<form method='post' action='/speech-permissions'>" + hidden +
+                     "<input type='hidden' name='mode' value='restrict'>"
+                     "<p>Uncheck cameras to remove their saved audio permission. "
+                     "Unchecking every camera disables the saved speech role.</p>" + checks +
+                     confirmation + "<button>Save reduced permissions</button></form>")
+        else:
+            body += ("<p class='muted'>Camera names are unavailable. Restore camera inventory "
+                     "to select individual cameras, or disable all saved audio permissions below.</p>")
+        body += ("<form method='post' action='/speech-permissions'>" + hidden +
+                 "<input type='hidden' name='mode' value='disable_all'>" + confirmation +
+                 "<button>Disable all saved speech permissions</button></form>"
+                 "<p>These controls cannot add cameras, change other features or replace provider "
+                 "settings. Private key files and configuration history remain for recovery.</p>")
+        return _page("Saved audio permissions", body)
+
+    async def restrict_speech_permissions(self, request: web.Request) -> web.Response:
+        fields = await request.post()
+        cookie = self._session(request, mutate=True, csrf=fields.get("csrf"))
+        if cookie is None:
+            self._audit("speech_permissions", "forbidden", "aikey")
+            raise web.HTTPForbidden()
+        apply_started = False
+        try:
+            if (set(fields) - {"csrf", "revision", "mode", "confirm", "keep_camera"}
+                    or any(len(fields.getall(key)) != 1 for key in ("csrf", "revision", "mode", "confirm"))
+                    or fields.get("confirm") != "on" or fields.get("mode") not in {"restrict", "disable_all"}):
+                raise ValueError
+            snapshot = await asyncio.to_thread(self.aikey.snapshot)
+            if snapshot.revision != fields["revision"]:
+                raise RevisionConflict("Saved configuration changed")
+            tokens = self._speech_camera_tokens(cookie, snapshot)
+            selected = fields.getall("keep_camera", [])
+            if (len(selected) > 32 or any(not isinstance(token, str) or token not in tokens for token in selected)
+                    or len(set(selected)) != len(selected)
+                    or fields["mode"] == "disable_all" and selected):
+                raise ValueError
+            retained = [tokens[token] for token in selected]
+            preview = await asyncio.to_thread(self.aikey.preview_speech_restriction,
+                                              fields["revision"], retained)
+            apply_started = True
+            result = await asyncio.to_thread(self.aikey.restrict_speech, fields["revision"], retained)
+            if result.revision != preview.resulting_revision:
+                raise ConfigurationStoreError("Saved revision could not be verified")
+        except (KeyError, ValueError, TypeError, OSError, ConfigurationStoreError) as exc:
+            certain = not apply_started or isinstance(exc, (RevisionConflict, UnsafeConfigurationChange))
+            self._audit("speech_permissions", "rejected" if certain else "uncertain", "aikey")
+            title = "Audio permissions not saved" if certain else "Audio permission save outcome uncertain"
+            return _page(title, f"<h1>{title}</h1><p class='error'>Reload the current settings "
+                         "before retrying. Check the selection, confirmation and configuration revision. "
+                         "The running worker has not been stopped.</p>"
+                         "<p><a href='/speech-permissions'>Saved audio permissions</a></p>")
+        self._audit("speech_permissions", "saved", "aikey")
+        raise web.HTTPSeeOther("/speech-permissions?saved=1")
 
     async def save_speech_provider(self, request: web.Request) -> web.Response:
         fields = await request.post()

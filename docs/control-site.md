@@ -24,7 +24,7 @@ Protect, model-server, host-log or backup copies.
 
 ## Speech provider
 
-If `speech_to_text` already contains a valid explicit camera allowlist, the Speech provider form changes only that role's provider, model, API base URL, optional language, private-network permission and write-only key. The existing camera list and clip-length policy stay unchanged. No form is offered for an unconfigured role; this is not audio enrollment or permission management.
+If `speech_to_text` already contains a valid explicit camera allowlist, the Speech provider form changes only that role's provider, model, API base URL, optional language, private-network permission and write-only key. The existing camera list and clip-length policy stay unchanged. No provider form is offered for an unconfigured role. Initial audio enrollment remains unsupported; the separate remove-only permission controls are described below.
 
 Choose OpenAI's official API or a local compatible speech server. Every OpenAI save requires the separate audio-sharing checkbox, including a model-only change through this form. Audio may incur provider charges independently of the caption budget. The form shows its destination; it does not send a connection test, audio or any provider request when saved. Local-network HTTP needs an explicit checkbox and remains unencrypted. Existing provider URL validation rejects arbitrary public compatible servers.
 
@@ -33,6 +33,34 @@ Speech keys are separate from vision keys. With an empty new-key field, the exis
 For every provider form (AI Key vision, AI Port detection and AI Key speech), an interrupted save is not a confirmed rollback. Once configuration apply was attempted, a generic failure retains the new private key file: the active config **or a later archived revision** may need it. Reload settings and check the recorded revision before retrying. Only a rejection before apply or a proven revision conflict deletes the unused newly written key. An uncertain failure may therefore leave an unused file; there is no automatic orphan-key pruning. Before manual cleanup, check active and archived configuration references, and separately revoke obsolete provider credentials where appropriate. No key value is included in the error page or audit record.
 
 These settings take effect after the affected processor restarts. A successful save does not establish model compatibility, transcription quality, native persistence or a live deployment change.
+
+## Remove saved audio permissions
+
+For an already configured speech role, **Remove saved audio permissions** opens
+a separate signed-in page. Uncheck cameras to remove their saved permission;
+unchecking all removes the saved speech role. This operation cannot add cameras,
+change the provider/model/clip policy or alter another feature's permissions.
+Existing camera names are shown when inventory is available. If names cannot be
+loaded, disabling all saved speech remains available; individual selection is
+not presented with ambiguous camera labels.
+
+**This edits saved configuration, not the running worker.** The page requires
+acknowledgement that the AI Key must be restarted to change active processing.
+It does not stop or restart a service, cancel in-flight work, delete recordings
+or transcripts, clean backups, remove key files or revoke provider credentials.
+No audio or inference request is sent by loading or saving it; name lookup may
+read the configured Protect inventory. Initial audio enrollment remains unsupported.
+
+Selection values are opaque and bound to the signed-in session/configuration
+revision. Raw camera IDs are not put into selection values or URLs/audit entries.
+Unknown, repeated, cross-session or stale selections fail. A no-op preserves
+the configuration bytes. Existing private history/keys remain available for
+recovery; an old provider Undo is invalidated by a permission revision and cannot
+silently restore removed scope. A later provider-only Undo preserves that reduced
+scope. An uncertain save is reported as uncertain: reload before retrying.
+
+These are source/HTTP integration results, not native live revocation, browser
+visual/mobile acceptance or a deployed permission change. See [checks and limits](evidence/speech-permission-restrictions-20261029.md).
 
 ## Model catalogs
 

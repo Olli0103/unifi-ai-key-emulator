@@ -289,6 +289,41 @@ class ConfigurationStore:
             self._write_provider_journal(_revision(content), _revision(persisted))
             return ConfigurationSnapshot(_revision(persisted), _public(checked))
 
+    def _speech_restriction_patch(self, expected_revision: str, retained: list[str]) -> dict:
+        content, current = self._read(self.path)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(_revision(content), expected_revision)):
+            raise RevisionConflict("Configuration changed since it was read")
+        speech = current.get("speech_to_text")
+        if not isinstance(speech, dict):
+            raise UnsafeConfigurationChange("Speech camera permissions are not configured")
+        if (not isinstance(retained, list) or len(retained) > 32
+                or any(not isinstance(camera, str) for camera in retained)
+                or len(set(retained)) != len(retained)
+                or not set(retained) <= set(speech["camera_ids"])):
+            raise UnsafeConfigurationChange("This operation can only remove existing speech permissions")
+        if not retained:
+            return {"speech_to_text": None}
+        # Preserve original order so retaining the same set is a true no-op.
+        return {"speech_to_text": {"camera_ids": [camera for camera in speech["camera_ids"]
+                                                if camera in retained]}}
+
+    def preview_speech_restriction(self, expected_revision: str,
+                                   retained: list[str]) -> ConfigurationPreview:
+        """Preview removal only; never change provider, keys or other permissions."""
+        patch = self._speech_restriction_patch(expected_revision, retained)
+        return self.preview(expected_revision, patch)
+
+    def restrict_speech(self, expected_revision: str, retained: list[str]) -> ConfigurationSnapshot:
+        """Restrict saved audio scope, requiring a processor restart to take effect.
+
+        Generic apply rechecks the same revision under its lock. No provider undo
+        record is created: a previous provider undo cannot regrant removed scope.
+        Existing private keys/history are retained, not deleted or revoked.
+        """
+        patch = self._speech_restriction_patch(expected_revision, retained)
+        return self.apply(expected_revision, patch)
+
     def role_models(self) -> dict[str, dict[str, Any]]:
         """Each AI Key model role, its current model and whether it may be edited here."""
         _, current = self._read(self.path)
