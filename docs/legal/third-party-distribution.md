@@ -4,17 +4,18 @@ This is a scope inventory, not a completed license audit. The existing runtime
 CycloneDX SBOM covers its isolated Python environment, not OS packages, optional
 extras, model weights, external services or the complete image. Passing a
 vulnerability scan is not license clearance. The [core license observations](runtime-license-observations.json)
-record all 14 exact lock versions from the isolated CI SBOM at run 36674537757,
+record 14 historical lock versions from the isolated CI SBOM at run 36674537757,
 with the artifact hash and source commit. These are upstream metadata
 declarations, not license grants or a reviewed notice/source bundle. Missing
 or ambiguous declarations remain open; none of those rows is an approval.
 
-The SBOM declares `LGPL-3.0-only` for both psycopg and psycopg-binary 3.3.6.
+That historical SBOM declares `LGPL-3.0-only` for both psycopg and psycopg-binary 3.3.6.
 Those components must retain their own terms; the project's Apache license does
 not replace them. Binary wheels also need their bundled native-library review.
-The multidict row contains no license declaration, and aiosignal is represented
-by a generic Apache classifier without an exact SPDX expression. Retrieve the
-exact distribution's license files and resolve these gaps before distribution.
+Its multidict row contains no license declaration, and aiosignal is represented
+by a generic Apache classifier without an exact SPDX expression. The later
+exact-image file observation below resolves the missing **file evidence**, not
+all distribution obligations.
 
 | Distribution | Declared input | Still required |
 | --- | --- | --- |
@@ -55,3 +56,31 @@ artifact. Source-only and image releases need separate distribution decisions.
 See [FFmpeg's primary guidance](https://ffmpeg.org/legal.html) and each exact
 upstream distribution's license. All distribution approvals remain
 `needs_evidence` in [release evidence](release-evidence.json).
+
+## Actual Linux runtime license files — 29 October 2026
+
+[Current file observations](runtime-license-files-20261029.json) bind all **15**
+current lock versions to the already-built AMD64 image from source `ad4fb8e`,
+the lock digest, metadata digests and 20 installed license/notice file digests.
+The earlier 14-row SBOM remains historical (including aiohttp 3.14.3); it must
+not be described as the current 15-package runtime (aiohttp 3.14.5).
+
+Collection used a temporary network-none read-only container of the exact
+retained image, with no state/secret mounts, processor startup or download.
+Complete upstream license-file texts are retained in the external receipt whose
+digest is recorded. Public JSON contains file identities/hashes, declarations
+and observations, not a fabricated reviewer's approval or a complete public
+notice/source bundle.
+
+The actual multidict 6.9.1 and aiosignal 1.4.0 license files contain Apache 2.0
+text and attribution, even though their metadata lacks an exact SPDX expression.
+The same file observation applies to frozenlist; propcache and yarl also carry
+separate NOTICE files. aiohappyeyeballs carries PSF and historical Python terms;
+do not reduce its full file to an assumed single license. Existing LGPL
+psycopg terms are unchanged. These observations do not rewrite upstream metadata.
+
+Still missing: bundled native-library terms and corresponding-source/notice
+obligations, optional extras, OS/FFmpeg/base-image inventory, model-weight rights,
+complete package/image delivery review and the independent origin/legal gates.
+All release clearance fields remain `needs_evidence`; no package/image is
+published by this inventory update.

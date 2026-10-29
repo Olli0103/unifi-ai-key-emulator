@@ -1,0 +1,262 @@
+{
+  "scope": "actual Linux AMD64 image distribution license files, not bundled native library clearance",
+  "packages": [
+    {
+      "name": "aiohappyeyeballs",
+      "version": "2.7.1",
+      "declared_expression": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Python Software Foundation License"
+      ],
+      "files": [
+        {
+          "path": "aiohappyeyeballs-2.7.1.dist-info/licenses/LICENSE",
+          "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+        }
+      ],
+      "metadata_utf8_sha256": "e68d1bf48aec9dcc2767343dedec25e12860085cba180e10bc3d3bdd031602ba",
+      "file_observation": "PSF license and historical Python license texts; retain the complete file",
+      "distribution_clearance": "needs_evidence"
+    },
+    {
+      "name": "aiohttp",
+      "version": "3.14.5",
+      "declared_expression": "Apache-2.0 AND MIT",
+      "license_classifiers": [],
+      "files": [
+        {
+          "path": "aiohttp-3.14.5.dist-info/licenses/LICENSE.txt",
+          "sha256": "2e4be5fc6c4c72a466fcb665d726e049a6891981fe536c4f04b6366749461d23"
+        },
+        {
+          "path": "aiohttp-3.14.5.dist-info/licenses/vendor/llhttp/LICENSE",
+          "sha256": "628168d68bb5a8a17e0bbefb3bd74e326e1edc20583d76f52f457c82c921867d"
+        }
+      ],
+      "metadata_utf8_sha256": "50b29a2268649f7ce5b22c0a41b60896d246fee58e2a74b468f66848e469834c",
+      "file_observation": "License files collected; declared expression retained separately",
+      "distribution_clearance": "needs_evidence"
+    },
+    {
+      "name": "aiosignal",
+      "version": "1.4.0",
+      "declared_expression": null,
+      "license_classifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "files": [
+        {
+          "path": "aiosignal-1.4.0.dist-info/licenses/LICENSE",
+          "sha256": "6fd5243e92dd7f98ec69c7ac377728e74905709ff527a5bf98d6d0263c04f5b6"
+        }
+      ],
+      "metadata_utf8_sha256": "09247ef1da8bc696728d47130e702e4307f6f7d101d6c485bff9f3a71ce7008d",
+      "file_observation": "Apache License 2.0 text with named copyright notice",
+      "distribution_clearance": "needs_evidence"
+    },
+    {
+      "name": "attrs",
+      "version": "26.1.0",
+      "declared_expression": "MIT",
+      "license_classifiers": [],
+      "files": [
+        {
+          "path": "attrs-26.1.0.dist-info/licenses/LICENSE",
+          "sha256": "882115c95dfc2af1eeb6714f8ec6d5cbcabf667caff8729f42420da63f714e9f"
+        }
+      ],
+      "metadata_utf8_sha256": "4cd40e690f23bf37cbcad34efd6758e062df1df07c86833f7e3ce95bf1fa38cc",
+      "file_observation": "License files collected; declared expression retained separately",
+      "distribution_clearance": "needs_evidence"
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1",
+      "declared_expression": "MIT-0",
+      "license_classifiers": [],
+      "files": [
+        {
+          "path": "cffi-2.1.1.dist-info/licenses/LICENSE",
+          "sha256": "5ba24ddc57067f9249add644c3afc41a5d6dc37e23433ef759d95df370b0af63"
+        }
+      ],
+      "metadata_utf8_sha256": "558bafb9093a8e790175d9ecff9688382981d744877dad86fd6770db0f4dc918",
+      "file_observation": "License files collected; declared expression retained separately",
+      "distribution_clearance": "needs_evidence"
+    },
+    {
+      "name": "cryptography",
+      "version": "50.0.1",
+      "declared_expression": "Apache-2.0 OR BSD-3-Clause",
+      "license_classifiers": [],
+      "files": [
+        {
+          "path": "cryptography-50.0.1.dist-info/licenses/LICENSE",
+          "sha256": "3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb"
+        },
+        {
+          "path": "cryptography-50.0.1.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+        },
+        {
+          "path": "cryptography-50.0.1.dist-info/licenses/LICENSE.BSD",
+          "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+        }
+      ],
+      "metadata_utf8_sha256": "8e9b5570da4686848ee5c6bb83fffc224bcddf9793136731dd050ce0c05fffe2",
+      "file_observation": "License files collected; declared expression retained separately",
+      "distribution_clearance": "needs_evidence"
+    },
+    {
+      "name": "frozenlist",
+      "version": "1.8.0",
+      "declared_expression": null,
+      "license_classifiers": [],
+      "files": [
+        {
+          "path": "frozenlist-1.8.0.dist-info/licenses/LICENSE",
+          "sha256": "6fd5243e92dd7f98ec69c7ac377728e74905709ff527a5bf98d6d0263c04f5b6"
+        }
+      ],
+      "metadata_utf8_sha256": "946c22dc9f7e2c76f2d698f00a4306dbe49a820e2b3f1a0e22fe5286cbec35f1",
+      "file_observation": "Apache License 2.0 text with named copyright notice",
+      "distribution_clearance": "needs_evidence"
+    },
+    {
+      "name": "idna",
+      "version": "3.20",
+      "declared_expression": "BSD-3-Clause",
+      "license_classifiers": [],
+      "files": [
+        {
+          "path": "idna-3.20.dist-info/licenses/LICENSE.md",
+          "sha256": "1a9a4f0e3d479a27240ddd59a9137a66ab4a0f9dfdc8ca6188cc0bfd85187f04"
+        }
+      ],
+      "metadata_utf8_sha256": "dbd8c14c1e4ca1e0c9824a6dbc7cbbf78884f38eb52d91148cd3025f671e4b85",
+      "file_observation": "License files collected; declared expression retained separately",
+      "distribution_clearance": "needs_evidence"
+    },
+    {
+      "name": "multidict",
+      "version": "6.9.1",
+      "declared_expression": null,
+      "license_classifiers": [],
+      "files": [
+        {
+          "path": "multidict-6.9.1.dist-info/licenses/LICENSE",
+          "sha256": "2e4be5fc6c4c72a466fcb665d726e049a6891981fe536c4f04b6366749461d23"
+        }
+      ],
+      "metadata_utf8_sha256": "b52756a8e05f6cf5e429cb0133ea395f252aee4a30b748506dd354a5ad2d4af2",
+      "file_observation": "Apache License 2.0 text with aio-libs contributor notice",
+      "distribution_clearance": "needs_evidence"
+    },
+    {
+      "name": "pillow",
+      "version": "13.0.0",
+      "declared_expression": "MIT-CMU",
+      "license_classifiers": [],
+      "files": [
+        {
+          "path": "pillow-13.0.0.dist-info/licenses/LICENSE",
+          "sha256": "dda12a98c1979cf3d94df1cff45d27a4cb3f04a60c76f76902ac54cac03ec0ce"
+        }
+      ],
+      "metadata_utf8_sha256": "dba7fdfe24e302f46bae562f55d66cc367c0618abae9894a1ebec93dc8f0e511",
+      "file_observation": "License files collected; declared expression retained separately",
+      "distribution_clearance": "needs_evidence"
+    },
+    {
+      "name": "propcache",
+      "version": "0.5.4",
+      "declared_expression": null,
+      "license_classifiers": [],
+      "files": [
+        {
+          "path": "propcache-0.5.4.dist-info/licenses/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "path": "propcache-0.5.4.dist-info/licenses/NOTICE",
+          "sha256": "56d6ac6c8105c0a51304c21db060e361af9a8ea0af9a75c239c28b5d13693838"
+        }
+      ],
+      "metadata_utf8_sha256": "6ed3bac0ad43050ceaf8bd09878ba3d673c94c4da0d4498f903f86c36cc6fb57",
+      "file_observation": "Apache License 2.0 plus a separate NOTICE",
+      "distribution_clearance": "needs_evidence"
+    },
+    {
+      "name": "psycopg",
+      "version": "3.3.6",
+      "declared_expression": "LGPL-3.0-only",
+      "license_classifiers": [],
+      "files": [
+        {
+          "path": "psycopg-3.3.6.dist-info/licenses/LICENSE.txt",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "metadata_utf8_sha256": "351960397d6b386beae931f5bfd945e8c1212e9505017d1b15c72d4c33bb00af",
+      "file_observation": "License files collected; declared expression retained separately",
+      "distribution_clearance": "needs_evidence"
+    },
+    {
+      "name": "psycopg-binary",
+      "version": "3.3.6",
+      "declared_expression": "LGPL-3.0-only",
+      "license_classifiers": [],
+      "files": [
+        {
+          "path": "psycopg_binary-3.3.6.dist-info/licenses/LICENSE.txt",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+        }
+      ],
+      "metadata_utf8_sha256": "0a1fb529c1e27ca41655413e669c964bd0d7069e8cc2ab32b192fc98baf37fd5",
+      "file_observation": "License files collected; declared expression retained separately",
+      "distribution_clearance": "needs_evidence"
+    },
+    {
+      "name": "pycparser",
+      "version": "3.0",
+      "declared_expression": "BSD-3-Clause",
+      "license_classifiers": [],
+      "files": [
+        {
+          "path": "pycparser-3.0.dist-info/licenses/LICENSE",
+          "sha256": "0c846399369ea76ddd7b5c44fe6d16497415fcf015f5cbb508c24bf98b81c5b1"
+        }
+      ],
+      "metadata_utf8_sha256": "f547a60b0ab54cc2f242213d1f87960ad80df7dd5dfeb98d17a444d48bfb6b93",
+      "file_observation": "License files collected; declared expression retained separately",
+      "distribution_clearance": "needs_evidence"
+    },
+    {
+      "name": "yarl",
+      "version": "1.25.1",
+      "declared_expression": null,
+      "license_classifiers": [],
+      "files": [
+        {
+          "path": "yarl-1.25.1.dist-info/licenses/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "path": "yarl-1.25.1.dist-info/licenses/NOTICE",
+          "sha256": "56d6ac6c8105c0a51304c21db060e361af9a8ea0af9a75c239c28b5d13693838"
+        }
+      ],
+      "metadata_utf8_sha256": "fd6baa258a11c4d7e7008272a69180d4d34aa04a6a5afda36ac5e55aa0aa4f41",
+      "file_observation": "Apache License 2.0 plus a separate NOTICE",
+      "distribution_clearance": "needs_evidence"
+    }
+  ],
+  "image_digest": "sha256:52e564ef612ffb586f872beb083ad8db76791419a4e06022256e22f0335204e2",
+  "runtime_lock_sha256": "7d1871cd3d7a52bc60896cba442280857a36a69b49e5ff6b64ddc8b9aaae4700",
+  "schema": "aikey-runtime-license-files/1",
+  "observed_date": "2026-10-29",
+  "collection": "Existing immutable Linux AMD64 image; temporary network-none read-only container, no state mounts or device startup",
+  "source_commit": "ad4fb8e18390c9aa3ff2aea3cd2bcff44272fe2b",
+  "retained_full_text_receipt_sha256": "0d3fa2fe79b0f91f8c5d2a955b5ba111b47a955acf2fae8650bd79939fd849e3",
+  "clearance": "needs_evidence"
+}
