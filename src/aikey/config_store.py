@@ -227,6 +227,17 @@ class ConfigurationStore:
 
     # --- per-role model settings (#17) -------------------------------------
 
+    def catalog_configuration(self, expected_revision: str, role: str) -> tuple[dict, Path, bool]:
+        """Internal-only provider settings/references, never an HTTP response."""
+        content, current = self._read(self.path)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(_revision(content), expected_revision)):
+            raise RevisionConflict("Configuration changed since it was read")
+        section = {"caption": "inference", "speech": "speech_to_text"}.get(role)
+        if section is None or not isinstance(current.get(section), dict):
+            raise UnsafeConfigurationChange("Catalog role is not configured")
+        return deepcopy(current[section]), Path(current["runtime"]["state_dir"]), current["runtime"]["mode"] == "lab"
+
     def _speech_candidate(self, current: dict[str, Any], selection: dict) -> dict:
         previous = current.get("speech_to_text")
         if not isinstance(previous, dict):

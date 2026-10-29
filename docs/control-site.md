@@ -14,6 +14,32 @@ For every provider form (AI Key vision, AI Port detection and AI Key speech), an
 
 These settings take effect after the affected processor restarts. A successful save does not establish model compatibility, transcription quality, native persistence or a live deployment change.
 
+## Model catalogs
+
+Each configured editable API role has a **List available model IDs** action in
+Models by role. The form shows the saved destination before the request. This
+action is authenticated, same-origin/CSRF checked and bound to the configuration
+revision and role. It accepts no endpoint or credential from the form. A stale
+revision fails before contact; a configuration changed during the request makes
+the result unavailable rather than presenting an old catalog as current.
+
+The action makes only catalog GET requests with that role's configured key. It
+sends no camera media or inference prompt, selects no model and changes no
+settings. OpenAI/compatible APIs use `/models`, Anthropic uses its bounded
+`after_id` pagination, and Ollama uses `/api/tags`. Unsupported, malformed,
+oversized or incomplete catalogs fail without a partial list or fallback. Manual
+model IDs remain available. At most one catalog request is in flight for the
+site, with a five-second cooldown. The whole fetch has a 15-second deadline,
+eight-page/512-model and 256-KiB response limits; redirects and response
+decompression are disabled. Keys remain private files with the same documented
+host-state/container-state mapping as provider saves.
+
+Catalog availability is not tested modality, quality, cost or deployment
+compatibility. The page separately labels provider-advertised image support and
+Ollama remote markers when supplied. An omitted remote marker does not prove a
+local model or zero upstream cost. No returned model is automatically selected,
+and the site does not automatically validate or change an index/model space.
+
 With optional pinned Protect inventory settings, the signed-in site has a read-only Cameras page. Each refresh fetches the current inventory, calculates the number of AI Port instances needed for connected legacy and G3–G5 targets, and shows which configured instance, if any, contains each camera MAC in its validated local stream allowlist. Exact known single-stream model maximums and conservative unknown-model reservations determine the count; an unknown camera source shows `needs_evidence` instead of inventing a slot. The count does not create device identities or pair cameras. An allowlisted camera is not necessarily paired or streaming in Protect. The page never enables processing or sends camera media. If Protect is unavailable or its version changes, it shows an error instead of stale camera data.
 
 The site can run on the host while each processor runs in a container. Give it the host paths to the two private configuration files. It writes new key files into the corresponding host state folder with mode 600 and stores the processor-visible path in the config. AI Key reads its processor state path from `runtime.state_dir`; pass AI Port's processor path with `--aiport-runtime-state-dir`. Both processor mounts must expose the host state folders at those paths. Never expose the current loopback listener through a LAN port publish or reverse proxy; LAN administration needs authenticated HTTPS and a separate security review.

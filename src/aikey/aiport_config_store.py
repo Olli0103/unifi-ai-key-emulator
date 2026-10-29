@@ -115,6 +115,17 @@ class AiPortConfigurationStore:
         content, value = self._read()
         return self._public(content, value)
 
+    def catalog_configuration(self, expected_revision: str, role: str) -> tuple[dict, Path, bool]:
+        """Internal-only detection settings/references, never an HTTP response."""
+        content, current = self._read()
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(self._revision(content), expected_revision)):
+            raise AiPortRevisionConflict("aiport_config_changed")
+        detector = current.get("live_pool_detector", {})
+        if role != "detection" or detector.get("inference_backend") != "vision_api":
+            raise AiPortConfigurationError("catalog_role_not_configured")
+        return deepcopy(detector["provider_config"]), self.runtime_state_dir, False
+
     def configured_camera_macs(self) -> frozenset[str]:
         """Return the validated local allowlist, not Protect pairing state."""
         _, value = self._read()
