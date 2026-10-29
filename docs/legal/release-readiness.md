@@ -3,12 +3,15 @@
 The aim is a useful, independently implemented local AI processor compatible
 with UniFi Protect. This branch responds to the owner's legal first assessment
 of commit `4c71b732723ce2ccaec0a540736675789db9173d` on 30 September 2026.
-It reduces technical risks, proposes the owner's selected Apache-2.0 license
+It reduces technical risks, includes the owner's selected Apache-2.0 license
 for project code and records missing evidence. It does not declare the project
 legally cleared or grant rights on behalf of unknown third-party rightsholders.
 
-The audit baseline is the reviewed main commit. Opus's separate feature PR
-#123 is outside this audit snapshot. After incorporating it or changing any
+The historical audit baseline is the reviewed main commit. Feature PR #123
+and index recovery PR #125 were incorporated during integration on
+29 October 2026. They are not covered by the historical origin/rights review.
+Current automated source/package/dependency checks are separate from that
+review; the release approval fingerprint remains unset. After changing any
 release input, refresh the dependency/content/origin review and fingerprint.
 A prior approval must not silently extend to new code or model components.
 
@@ -39,7 +42,7 @@ protected-expression comparison or rights clearance.
 | Interoperability scope | Missing public information, necessity, minimum analyzed parts and permitted disclosure for each finding | `needs_evidence` |
 | Contributor rights | All contributors' rights and consent to the chosen license, including historical contributions | `needs_evidence` |
 | Employer rights | Owner confirms development outside assigned duties without employer code; agreement-specific questions remain for the legal review | Owner statement recorded |
-| Project license | Owner-selected Apache-2.0 text and package metadata included in this draft; contributor/origin review remains separate | Proposal prepared |
+| Project license | Owner-selected Apache-2.0 text and package metadata included; contributor/origin review remains separate | Included; no release clearance |
 | AI Port adoption | Separate test identity, generated keys, regular administrator token, pinned reconnect and rejection cases on an unmodified controller | `needs_evidence` |
 | Dependencies | Exact resolved distributions, licenses, source and notice obligations for core and extras | `needs_evidence` |
 | Images | Exact digest, base/OS packages, FFmpeg build flags, applicable license and corresponding source/notice delivery | `needs_evidence` |
@@ -64,7 +67,7 @@ python tools/community_release_check.py --dist dist
 The first two audits are automated content/structure checks. CI runs these and
 regression tests; passing them does not approve publication. The final command
 is intentionally blocked until the required evidence and an active `LICENSE`
-are recorded. This draft now includes the proposed Apache license, but other
+are recorded. The source includes the owner-selected Apache license, but other
 required evidence remains missing. Its source fingerprint must match the approved source inputs. A change
 to tracked inputs invalidates the fingerprint. This records review of a
 specific tree; it cannot prove the truth or legal sufficiency of attestations.

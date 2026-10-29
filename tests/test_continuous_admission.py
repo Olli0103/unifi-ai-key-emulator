@@ -110,6 +110,9 @@ async def test_device_gate_tracks_fresh_camera_registry(tmp_path):
 
     device = DeviceService(config, tmp_path, submit, camera_registry=registry)
     assert "recognizeKeyFrames" in device.status["supported_commands"]
+    console = decode_message(await device.handle_message(
+        wire("setConsoleInfo", {"controller": {"protectVersion": "7.3.60"}}, "console")))
+    assert console.header["errorCode"] == 0
     first = decode_message(await device.handle_message(
         wire("recognizeKeyFrames", command("one")["payload"], "request-one")))
     assert first.header["errorCode"] == 0
@@ -219,3 +222,231 @@ async def test_inventory_change_during_start_never_reserves_or_fetches(services,
         assert not services.requests and not services.callbacks
     finally:
         await worker.stop()
+
+
+async def test_a_busy_camera_cannot_take_the_permits_held_for_a_quiet_one(services, tmp_path, monkeypatch):
+    config = continuous_options(services, tmp_path)
+    registry = MutableRegistry("camera-fixture", "camera-fixture-two")
+    worker = JobProcessor(config, tmp_path, camera_registry=registry)
+    release = asyncio.Event()
+
+    async def execute(job):
+        await release.wait()
+        return {"status": "processed"}
+
+    monkeypatch.setattr(worker, "_execute", execute)
+    try:
+        for index in range(11):
+            assert (await worker.submit(command(f"busy-{index}")))["accepted"] is True
+        with pytest.raises(WorkerError, match="held for cameras not yet served"):
+            await worker.submit(command("busy-11"))
+        quiet = second_camera(command("quiet-0"), "camera-fixture-two")
+        assert (await worker.submit(quiet))["accepted"] is True
+        with pytest.raises(WorkerError, match="budget is exhausted"):
+            await worker.submit(command("busy-12"))
+        assert worker.status()["captions"] == {"admitted": 12, "exhausted": 1, "deferred_fair_share": 1}
+        assert not services.requests and not services.callbacks
+    finally:
+        release.set()
+        await worker.wait_for_idle()
+        await worker.stop()
+
+
+async def test_registry_explains_why_each_camera_cannot_caption(monkeypatch, tmp_path):
+    now = [1000.0]
+    rows = [{"id": "cam-a", "model": "Fixture G5", "state": "CONNECTED",
+             "processing_class": "smart_event_candidate"},
+            {"id": "cam-b", "model": "Fixture G4", "state": "CONNECTED",
+             "processing_class": "legacy_ingress_needed"},
+            {"id": "cam-c", "model": "Fixture G5", "state": "DISCONNECTED",
+             "processing_class": "offline"},
+            {"id": "cam-d", "model": "Fixture G6", "state": "CONNECTED",
+             "processing_class": "smart_event_candidate"}]
+
+    async def fetch(*args, **kwargs):
+        if rows is None:
+            raise InventoryError("synthetic failure")
+        return {"cameras": deepcopy(rows)}
+
+    monkeypatch.setattr(camera_registry, "fetch_inventory", fetch)
+    registry = CameraRegistry("127.0.0.1", policy(tmp_path), clock=lambda: now[0])
+    await registry.refresh_once()
+    assert registry.eligibility("cam-a") == {"caption": {"eligible": True, "reason": None}}
+    reasons = {camera: registry.eligibility(camera)["caption"]["reason"]
+               for camera in ("cam-b", "cam-c", "cam-d", "cam-e")}
+    assert reasons == {"cam-b": "legacy_ingress_needed", "cam-c": "offline",
+                       "cam-d": "model_not_allowed", "cam-e": "not_in_inventory"}
+    assert all(registry.eligibility(c)["caption"]["eligible"] is False for c in reasons)
+    status = registry.status()
+    assert status["eligible_cameras"] == 1 and status["caption_ineligible"] == {
+        "legacy_ingress_needed": 1, "model_not_allowed": 1, "offline": 1}
+    assert not any(camera in json.dumps(status) for camera in ("cam-a", "cam-b", "cam-c"))
+    # A camera coming online is re-classified on the next read without any ID edit.
+    rows[2]["state"], rows[2]["processing_class"] = "CONNECTED", "smart_event_candidate"
+    await registry.refresh_once()
+    assert registry.eligibility("cam-c")["caption"]["eligible"] is True
+    # Stale or failed inventory: every camera is ineligible, and no old reasons are reported.
+    now[0] += 120
+    assert registry.eligibility("cam-a")["caption"]["reason"] == "inventory_stale"
+    assert registry.status()["caption_ineligible"] == {}
+    rows = None
+    await registry.refresh_once()
+    assert registry.eligibility("cam-c")["caption"]["reason"] == "inventory_stale"
+    assert registry.status() == {"fresh": False, "eligible_cameras": 0, "caption_ineligible": {},
+                                 "last_error": "InventoryError"}
+
+
+def _integration_row(number, model, smart):
+    return {"id": f"{number:024x}", "modelKey": "camera", "state": "CONNECTED",
+            "name": f"Synthetic {number}", "type": model, "mac": f"02:00:00:00:01:{number:02x}",
+            "featureFlags": {"smartDetectTypes": list(smart), "smartDetectAudioTypes": []}}
+
+
+@pytest.mark.parametrize("paired_g3_smart", [(), ("person", "vehicle", "animal", "package")])
+async def test_a_paired_g3_never_enters_caption_scope_without_an_explicit_model_policy(
+        monkeypatch, tmp_path, paired_g3_smart):
+    """#9: an AI Port-paired G3 Instant reports the same camera fields as a native
+    smart camera once Protect lists AI Port-supplied types. The registry cannot tell
+    the source apart, so only the explicit camera_models policy may admit it."""
+    from aikey.camera_inventory import parse_cameras
+    native = _integration_row(1, "UVC G4 Bullet", ("person", "vehicle", "animal", "package"))
+    paired_g3 = _integration_row(2, "UVC G3 Instant", paired_g3_smart)
+    cameras = [camera.public() for camera in parse_cameras([native, paired_g3])]
+
+    async def fetch(*args, **kwargs):
+        return {"cameras": deepcopy(cameras)}
+
+    monkeypatch.setattr(camera_registry, "fetch_inventory", fetch)
+    options = dict(policy(tmp_path), camera_models=["UVC G4 Bullet"])
+    registry = CameraRegistry("127.0.0.1", options, clock=lambda: 1000.0)
+    await registry.refresh_once()
+    assert registry.allows(native["id"])                              # native smart, in policy
+    assert not registry.allows(paired_g3["id"])                       # paired G3, either inventory
+    expected = "model_not_allowed" if paired_g3_smart else "legacy_ingress_needed"
+    assert registry.eligibility(paired_g3["id"])["caption"]["reason"] == expected
+    # A native model outside the policy is refused the same way; no ID edit admits it.
+    options = dict(policy(tmp_path), camera_models=["UVC G3 Instant"])
+    narrow = CameraRegistry("127.0.0.1", options, clock=lambda: 1000.0)
+    await narrow.refresh_once()
+    assert not narrow.allows(native["id"])
+    assert narrow.eligibility(native["id"])["caption"]["reason"] == "model_not_allowed"
+    assert narrow.allows(paired_g3["id"]) is bool(paired_g3_smart)
+
+
+def test_unmetered_captions_need_a_local_caption_model(tmp_path):
+    config = defaults(tmp_path / "state", "020000000001")
+    config["controller"]["protect_version"] = "7.3.68"
+    config["worker"].update(callback_mode="enabled", request_mp4_exports=True,
+                            continuous=dict(policy(tmp_path), unmetered=True))
+    config["inference"].update(provider="ollama", base_url="http://127.0.0.1:11434",
+                               model="qwen3-vl:8b-instruct")
+    assert validate_config(deepcopy(config))["worker"]["continuous"]["unmetered"] is True
+    # OpenVINO Model Server on the NAS backend network is local and free too.
+    ovms = deepcopy(config)
+    ovms["inference"].update(provider="openai-compatible", base_url="http://172.30.50.13:8000/v3",
+                             allow_remote=True, allow_insecure_http=True)
+    assert validate_config(ovms)["worker"]["continuous"]["unmetered"] is True
+    for mutation in (lambda value: value["inference"].update(provider="openai-compatible",
+                                                             base_url="https://api.groq.com/openai/v1"),
+                     lambda value: value["inference"].update(provider="openai",
+                                                             base_url="https://api.openai.com/v1"),
+                     lambda value: value["worker"]["continuous"].update(unmetered=False),
+                     lambda value: value["worker"]["continuous"].update(unmetered="yes")):
+        bad = deepcopy(config)
+        mutation(bad)
+        with pytest.raises(ConfigError):
+            validate_config(bad)
+
+
+async def test_unmetered_captions_are_not_limited_to_twelve_an_hour(services, tmp_path, monkeypatch):
+    config = continuous_options(services, tmp_path)
+    config["worker"]["continuous"]["unmetered"] = True
+    registry = MutableRegistry("camera-fixture", "camera-fixture-two")
+    worker = JobProcessor(config, tmp_path, camera_registry=registry)
+    release = asyncio.Event()
+
+    async def execute(job):
+        await release.wait()
+        return {"status": "processed"}
+
+    monkeypatch.setattr(worker, "_execute", execute)
+    try:
+        for index in range(15):
+            assert (await worker.submit(command(f"local-{index}")))["accepted"] is True
+        assert worker.caption_budget is None
+        assert not (tmp_path / "caption-budget.json").exists()
+    finally:
+        release.set()
+        await worker.wait_for_idle()
+        await worker.stop()
+
+
+def on_demand(camera="camera-fixture", **query_changes):
+    from urllib.parse import urlencode
+    query = {"camera": camera, "channel": "0", "type": "rotating", "mute": "true",
+             "format": "ubv", "createEvent": "false", "event": "event-fixture",
+             "start": "1000", "end": "11000"}
+    query.update(query_changes)
+    return {"targetUri": ":7968/on_demand_inference", "timeoutMs": 30000,
+            "resUrl": "/internal/camera-upload/summary-token",
+            "payload": {"cameraId": camera, "eventId": "event-fixture", "timestamp": 6000,
+                        "videoUrl": "/internal/aiprocessors/video/export?" + urlencode(query)}}
+
+
+async def test_the_player_summary_button_works_in_continuous_mode(services, tmp_path, monkeypatch):
+    config = continuous_options(services, tmp_path)
+    config["worker"]["continuous"]["unmetered"] = True
+    worker = JobProcessor(config, tmp_path, camera_registry=MutableRegistry("camera-fixture"))
+    try:
+        normalized = worker._normalize(on_demand())
+        assert normalized[2] == "on_demand" and normalized[5] == "on_demand"
+        # 30 Sep: a manual summary of a longer event was refused by the old
+        # 10 s export rule; continuous mode allows a caption-length export.
+        assert worker._normalize(on_demand(end="99000"))[2] == "on_demand"
+        assert worker._normalize(on_demand(start="1000", end="6000"))[2] == "on_demand"   # moment at the end
+        assert worker._normalize(on_demand(mute="false"))[2] == "on_demand"                # player asks with audio
+        assert worker._normalize(on_demand(channel="1"))[2] == "on_demand"
+        for bad in (on_demand(camera="other-camera"),            # not in caption scope
+                    on_demand(end="130000"),                     # past max_video_duration_ms
+                    on_demand(start="7000", end="9000"),         # moment outside the export
+                    on_demand(createEvent="true"),
+                    on_demand(channel="3"), on_demand(type="timelapse"), on_demand(format="avi"),
+                    dict(on_demand(), targetUri=":7968/describe")):
+            with pytest.raises(WorkerError):
+                worker._normalize(bad)
+    finally:
+        await worker.stop()
+
+
+async def test_a_metered_summary_reserves_the_paid_budget(services, tmp_path, monkeypatch):
+    config = continuous_options(services, tmp_path)
+    worker = JobProcessor(config, tmp_path, camera_registry=MutableRegistry("camera-fixture"))
+    release = asyncio.Event()
+
+    async def execute(job):
+        await release.wait()
+        return {"status": "processed"}
+
+    monkeypatch.setattr(worker, "_execute", execute)
+    try:
+        assert (await worker.submit(on_demand()))["accepted"] is True
+        reservations = json.loads((tmp_path / "caption-budget.json").read_text())["reservations"]
+        assert len(reservations) == 1
+    finally:
+        release.set()
+        await worker.wait_for_idle()
+        await worker.stop()
+
+
+async def test_caption_timeout_is_configurable_for_slow_local_models(services, tmp_path):
+    config = continuous_options(services, tmp_path)
+    worker = JobProcessor(config, tmp_path, camera_registry=MutableRegistry("camera-fixture"))
+    assert worker.caption_timeout_s == 30
+    await worker.stop()
+    config["worker"].update(caption_timeout_s=180, timeout_s=300)
+    worker = JobProcessor(config, tmp_path, camera_registry=MutableRegistry("camera-fixture"))
+    assert worker.caption_timeout_s == 180
+    await worker.stop()
+    config["worker"]["caption_timeout_s"] = 0
+    with pytest.raises(WorkerError):
+        JobProcessor(config, tmp_path, camera_registry=MutableRegistry("camera-fixture"))

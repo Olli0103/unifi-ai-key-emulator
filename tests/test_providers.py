@@ -24,7 +24,7 @@ OPENAI_RESPONSE = {
 
 def provider_config(provider):
     config = {"provider": provider, "model": "explicit-fixture-vision-model"}
-    if provider == "openai":
+    if provider in {"openai", "anthropic"}:
         config["api_key"] = "synthetic-fixture-secret"
     return config
 
@@ -44,6 +44,23 @@ def test_openai_responses_wire_shape_with_multiple_images():
         ]}],
     }
     assert provider.parse_response(OPENAI_RESPONSE) == TEXT
+
+
+def test_anthropic_messages_wire_shape_and_complete_text_only():
+    provider = VisionProvider({**provider_config("anthropic"), "max_output_tokens": 384})
+    url, headers, body = provider.build_request([PNG], "Describe.")
+    assert url == "https://api.anthropic.com/v1/messages"
+    assert headers == {"x-api-key": "synthetic-fixture-secret",
+                       "anthropic-version": "2023-06-01"}
+    assert body == {"model": "explicit-fixture-vision-model", "max_tokens": 384,
+                    "messages": [{"role": "user", "content": [
+                        {"type": "image", "source": {"type": "base64",
+                         "media_type": "image/png", "data": base64.b64encode(PNG).decode()}},
+                        {"type": "text", "text": "Describe."}]}]}
+    assert provider.parse_response({"type": "message", "role": "assistant",
+                                    "stop_reason": "end_turn",
+                                    "content": [{"type": "thinking", "thinking": "internal"},
+                                                {"type": "text", "text": TEXT}]}) == TEXT
 
 
 def test_ollama_native_wire_shape_and_configured_output_budget():
@@ -75,6 +92,9 @@ def test_default_compatible_provider_preserves_chat_completions_contract():
     ({"provider": "unknown"}, "provider"),
     ({"model": ""}, "inference.model"),
     ({"provider": "openai"}, "api_key_file"),
+    ({"provider": "anthropic"}, "api_key_file"),
+    ({"provider": "anthropic", "api_key": "fixture", "base_url": "https://wrong.example/v1"}, "Anthropic requires"),
+    ({"provider": "anthropic", "api_key": "fixture", "temperature": 0}, "temperature"),
     ({"provider": "openai", "api_key": "fixture", "base_url": "https://wrong.example/v1"}, "OpenAI requires"),
     ({"provider": "openai", "api_key": "fixture", "base_url": "http://127.0.0.1:8888/v1"}, "OpenAI requires"),
     ({"provider": "ollama", "base_url": "http://localhost:11434/v1"}, "server root"),
@@ -112,6 +132,19 @@ def test_openai_commentary_is_not_published_as_scene_description():
                                "phase": "commentary", "content": [{"type": "output_text",
                                "text": "I will inspect this image."}]})
     assert VisionProvider(provider_config("openai")).parse_response(result) == TEXT
+
+
+@pytest.mark.parametrize("result", [
+    {"type": "message", "role": "assistant", "stop_reason": "max_tokens",
+     "content": [{"type": "text", "text": "Partial"}]},
+    {"type": "message", "role": "assistant", "stop_reason": "refusal",
+     "content": [{"type": "text", "text": "No"}]},
+    {"type": "message", "role": "assistant", "stop_reason": "end_turn",
+     "content": [{"type": "tool_use", "name": "something"}]},
+])
+def test_anthropic_partial_refusal_and_tool_blocks_are_rejected(result):
+    with pytest.raises(ProviderError, match="complete, nonempty"):
+        VisionProvider(provider_config("anthropic")).parse_response(result)
 
 
 @pytest.mark.parametrize("provider,result", [
@@ -152,7 +185,7 @@ async def services():
 
     app = web.Application()
     app.router.add_get("/internal/aiprocessors/image/fixture", media)
-    for path in ("/v1/responses", "/api/chat", "/v1/chat/completions"):
+    for path in ("/v1/responses", "/v1/messages", "/api/chat", "/v1/chat/completions"):
         app.router.add_post(path, model)
     app.router.add_post("/internal/aiprocessors/descriptions/fixture", callback)
     app.router.add_route("*", "/unexpected-redirect", unexpected)
@@ -184,6 +217,9 @@ def command():
 
 @pytest.mark.parametrize("provider,path,response", [
     ("openai", "/v1/responses", OPENAI_RESPONSE),
+    ("anthropic", "/v1/messages", {"type": "message", "role": "assistant",
+                                   "stop_reason": "end_turn",
+                                   "content": [{"type": "text", "text": TEXT}]}),
     ("ollama", "/api/chat", {"done": True, "done_reason": "stop", "message": {"content": TEXT}}),
     ("openai-compatible", "/v1/chat/completions", {"choices": [{"finish_reason": "stop", "message": {"content": TEXT}}]}),
 ])
@@ -196,7 +232,12 @@ async def test_worker_dispatches_exact_provider_and_keeps_credentials_separate(s
         assert result["callback"] == "http_accepted"
         model_path, model_headers, payload = services["model"][0]
         assert model_path == path
-        assert model_headers["Authorization"] == "Bearer synthetic-fixture-secret"
+        if provider == "anthropic":
+            assert model_headers["x-api-key"] == "synthetic-fixture-secret"
+            assert model_headers["anthropic-version"] == "2023-06-01"
+            assert "Authorization" not in model_headers
+        else:
+            assert model_headers["Authorization"] == "Bearer synthetic-fixture-secret"
         assert "x-ident" not in model_headers
         assert all("Authorization" not in headers for headers in services["media"])
         callback_headers, callback_body = services["callback"][0]
@@ -209,7 +250,7 @@ async def test_worker_dispatches_exact_provider_and_keeps_credentials_separate(s
         await processor.stop()
 
 
-@pytest.mark.parametrize("provider", ["openai", "ollama", "openai-compatible"])
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "ollama", "openai-compatible"])
 @pytest.mark.parametrize("status", [302, 429])
 async def test_provider_http_failure_has_no_fallback_or_callback(services, tmp_path, provider, status):
     services["status"] = status

@@ -1,0 +1,48 @@
+name: Bug report
+description: Something in the emulator behaves wrongly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste credentials, API keys, device passwords, camera images, recordings, transcripts, face or plate data, private hostnames or support files.** Security problems go through SECURITY.md, not an issue.
+  - type: input
+    id: commit
+    attributes:
+      label: Emulator commit or image tag
+      placeholder: e.g. 41d5840 or local-aikey:findanything17
+    validations:
+      required: true
+  - type: input
+    id: protect
+    attributes:
+      label: Protect version
+      placeholder: e.g. 7.3.68
+    validations:
+      required: true
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Profile
+      options: ["AI Key", "AI Port", "Control site", "Other"]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Counters, error codes and states from /healthz or logs. Remove IDs, hostnames and any content before pasting.
+      render: json
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: This report contains no credentials, media, transcripts, identities or private network details.
+          required: true

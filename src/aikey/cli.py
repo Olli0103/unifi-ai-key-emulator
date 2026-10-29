@@ -20,7 +20,7 @@ def _parser():
     init.add_argument("--controller", help="Controller hostname or LAN IP, without contacting it")
     init.add_argument("--device-ip", help="Emulator advertised and bind IP")
     provider = commands.add_parser("provider", help="Configure a vision provider without calling it")
-    provider.add_argument("name", choices=("openai", "ollama", "openai-compatible"))
+    provider.add_argument("name", choices=("openai", "anthropic", "ollama", "openai-compatible"))
     provider.add_argument("--config", type=Path, default=Path("config.json"))
     provider.add_argument("--model", required=True, help="A vision-capable model available to this provider")
     provider.add_argument("--base-url", help="API base URL; required for a generic compatible provider")
@@ -102,14 +102,15 @@ def main(argv=None):
                               "summary": report["summary"], "processing_enabled": False}))
             return 0
         if args.command == "provider":
-            if args.name == "openai" and args.api_key_file is None:
-                raise ConfigError("OpenAI requires --api-key-file; do not pass a key in a command argument")
+            if args.name in {"openai", "anthropic"} and args.api_key_file is None:
+                raise ConfigError("Hosted provider requires --api-key-file; do not pass a key in a command argument")
             if args.name == "openai-compatible" and not args.base_url:
                 raise ConfigError("An OpenAI-compatible provider requires --base-url")
             inference = {"provider": args.name, "model": args.model,
                 "base_url": args.base_url or {"openai": "https://api.openai.com/v1",
+                                              "anthropic": "https://api.anthropic.com/v1",
                                               "ollama": "http://127.0.0.1:11434"}.get(args.name),
-                "allow_remote": args.allow_remote or args.name == "openai",
+                "allow_remote": args.allow_remote or args.name in {"openai", "anthropic"},
                 "allow_insecure_http": args.allow_insecure_http}
             if args.api_key_file:
                 inference["api_key_file"] = str(args.api_key_file.expanduser().resolve())

@@ -10,10 +10,29 @@ import secrets
 import time
 from urllib.parse import urlsplit
 
+from .protocol import CONTINUOUS_CAPTION_VERSIONS
+
 
 class ConfigError(ValueError):
     pass
 
+
+
+def _local_inference(inference: dict) -> bool:
+    """A caption model with no per-request cost: Ollama or OpenAI-compatible on a private address."""
+    import ipaddress
+    from urllib.parse import urlsplit
+    provider = inference.get("provider")
+    if provider == "ollama":
+        return True
+    if provider != "openai-compatible" or not isinstance(inference.get("base_url"), str):
+        return False
+    try:
+        address = ipaddress.ip_address(urlsplit(inference["base_url"]).hostname or "")
+    except ValueError:
+        return False
+    return any(address in ipaddress.ip_network(net) for net in (
+        "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"))
 
 def atomic_private(path: Path, content: str | bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -131,6 +150,12 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
             if field in options and type(options[field]) is not bool:
                 raise ConfigError(f"{section}.{field} must be a JSON boolean")
     runtime, device, controller = config["runtime"], config["device"], config["controller"]
+    if "diagnostic_command_fingerprints_until" in device:
+        until = device["diagnostic_command_fingerprints_until"]
+        if (type(until) is not int or until <= 0
+                or until > time.time() + 14 * 24 * 3600):
+            raise ConfigError("device.diagnostic_command_fingerprints_until must be a Unix time "
+                              "at most 14 days ahead")
     if "max_video_duration_ms" in config["worker"]:
         duration = config["worker"]["max_video_duration_ms"]
         if type(duration) is not int or duration <= 0:
@@ -150,7 +175,7 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
         required = {"enabled", "api_key_file", "web_trust_file", "web_cert_file",
                     "camera_models"}
         if (not isinstance(policy, dict) or not required <= set(policy)
-                or set(policy) - required - {"refresh_seconds"}
+                or set(policy) - required - {"refresh_seconds", "camera_ids", "unmetered"}
                 or policy["enabled"] is not True):
             raise ConfigError("worker.continuous requires model families and three private files")
         if "test_scope" in config["worker"] or "test_scopes" in config["worker"]:
@@ -165,14 +190,29 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
                        or not model.isprintable() for model in models)
                 or len(models) != len(set(models))):
             raise ConfigError("worker.continuous.camera_models requires distinct model names")
+        if "camera_ids" in policy:
+            ids = policy["camera_ids"]
+            if (not isinstance(ids, list) or not 1 <= len(ids) <= 16 or len(ids) != len(set(ids))
+                    or any(not isinstance(value, str) or not 1 <= len(value) <= 64
+                           or not value.isprintable() or any(ch.isspace() for ch in value)
+                           for value in ids)):
+                raise ConfigError("worker.continuous.camera_ids requires distinct camera IDs")
+        # The 12-per-hour budget caps provider cost. A local model (Ollama, or an
+        # OpenAI-compatible server such as OpenVINO Model Server on a private
+        # address) has none, so the owner may run it unmetered; a paid or
+        # public provider cannot.
+        if "unmetered" in policy and (policy["unmetered"] is not True
+                                      or not _local_inference(config.get("inference", {}))):
+            raise ConfigError("worker.continuous.unmetered requires a local caption model")
         interval = policy.get("refresh_seconds", 60)
         if type(interval) is not int or not 30 <= interval <= 300:
             raise ConfigError("worker.continuous.refresh_seconds must be 30 to 300")
         policy["refresh_seconds"] = interval
-        if (config["controller"].get("protect_version") != "7.3.60"
+        if (config["controller"].get("protect_version") not in CONTINUOUS_CAPTION_VERSIONS
                 or config["worker"].get("callback_mode") != "enabled"
                 or config["worker"].get("request_mp4_exports") is not True):
-            raise ConfigError("worker.continuous requires Protect 7.3.60, callbacks and MP4 exports")
+            raise ConfigError("worker.continuous requires a Protect version with caption evidence, "
+                              "callbacks and MP4 exports")
     if runtime.get("mode") not in ("device", "lab"):
         raise ConfigError("runtime.mode must be device or lab")
     if "deployment" in runtime:
@@ -221,6 +261,14 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
         pin = controller.get("expected_fingerprint", "").replace(":", "")
         if not re.fullmatch(r"[0-9a-fA-F]{64}", pin):
             raise ConfigError("Disabling hostname checks requires an explicit controller SHA-256 pin")
+    # Protect serves its search WebSocket port with its own certificate (7.3.x:
+    # CN=unifi.local on 7443, CN=localhost on 7442), so it may carry its own trust.
+    if ("search_ca_file" in controller) != ("search_expected_fingerprint" in controller):
+        raise ConfigError("controller.search_ca_file and search_expected_fingerprint go together")
+    if "search_expected_fingerprint" in controller:
+        pin = controller["search_expected_fingerprint"]
+        if not isinstance(pin, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", pin.replace(":", "")):
+            raise ConfigError("controller.search_expected_fingerprint must be a SHA-256 pin")
     if runtime["mode"] == "lab" and host:
         try:
             is_loopback = ipaddress.ip_address(host).is_loopback
@@ -229,6 +277,8 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
         if not is_loopback:
             raise ConfigError("Lab controller must be loopback")
     base = base or Path.cwd()
+    if controller.get("search_ca_file"):
+        controller["search_ca_file"] = str((base or Path.cwd()) / Path(controller["search_ca_file"]).expanduser())
     for section, key in ((runtime, "state_dir"), (device, "management_password_file"),
                          (controller, "ca_file")):
         raw = section.get(key)
@@ -237,8 +287,14 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
         section[key] = str((base / Path(raw).expanduser()).resolve())
     if device.get("management_password"):
         raise ConfigError("Store management credentials in management_password_file")
+    speech = config.get("speech_to_text")
+    if speech is not None and not isinstance(speech, dict):
+        raise ConfigError("speech_to_text must be a configuration object")
+    if speech is not None and speech.get("api_key"):
+        raise ConfigError("Use speech_to_text.api_key_file instead of an inline API key")
     for section, key in ((config["inference"], "api_key_file"),
-                         (config["embeddings"], "bearer_token_file")):
+                         (config["embeddings"], "bearer_token_file"),
+                         (speech or {}, "api_key_file")):
         if section.get(key):
             p = (base / Path(section[key]).expanduser()).resolve()
             section[key] = str(p)
@@ -255,7 +311,7 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
             if u.scheme not in ("http", "https") or not u.hostname or u.username or u.password:
                 raise ConfigError("Inference/embedding URLs must be HTTP(S), without credentials")
     if config["inference"].get("provider", "openai-compatible") not in {
-            "openai", "ollama", "openai-compatible"}:
+            "openai", "anthropic", "ollama", "openai-compatible"}:
         raise ConfigError("Unknown vision provider")
     if config["inference"].get("api_key"):
         raise ConfigError("Use inference.api_key_file instead of an inline API key")
@@ -269,6 +325,21 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
         validate_inference_config(inference, lab=runtime["mode"] == "lab", require_api_key=False)
     except ProviderError as exc:
         raise ConfigError(str(exc)) from None
+    if speech is not None:
+        from .speech import SpeechError, validate_speech_config
+        try:
+            validate_speech_config(speech, lab=runtime["mode"] == "lab", require_api_key=False)
+        except SpeechError as exc:
+            raise ConfigError(str(exc)) from None
+    profile = config["search"].get("profile", "e5-session-v1")
+    if profile not in ("e5-session-v1", "clip-basic-v1"):
+        raise ConfigError("search.profile must be e5-session-v1 or clip-basic-v1")
+    if config.get("find_anything") is not None or profile == "clip-basic-v1":
+        from .clip import ClipError, validate_find_anything_config
+        try:
+            config["find_anything"] = validate_find_anything_config(config.get("find_anything"))
+        except ClipError as exc:
+            raise ConfigError(str(exc)) from None
     if config["embeddings"].get("backend", "http") == "http":
         from .search import EmbeddingError, EmbeddingService
         try:
@@ -298,6 +369,9 @@ def hydrate_secrets(config: dict) -> dict:
     key_path = config["inference"].get("api_key_file")
     if key_path:
         config["inference"]["api_key"] = Path(key_path).read_text().strip()
+    speech = config.get("speech_to_text")
+    if isinstance(speech, dict) and speech.get("api_key_file"):
+        speech["api_key"] = Path(speech["api_key_file"]).read_text().strip()
     return config
 
 
@@ -313,7 +387,7 @@ def readiness(config: dict) -> dict:
         "vision_model_configured": bool(config["inference"].get("model")),
     }
     provider = config["inference"].get("provider", "openai-compatible")
-    if provider == "openai":
+    if provider in {"openai", "anthropic"}:
         checks["vision_api_key_file"] = Path(config["inference"].get("api_key_file", "")).is_file()
     errors = {}
     try:

@@ -1,16 +1,17 @@
-# Proposed project license and contributor rights
+# Project license and contributor rights
 
 The owner selected Apache-2.0 during release preparation on 30 September 2026.
-This draft PR includes its unmodified text as root `LICENSE` and declares it
-in package metadata. It proposes licensing the project-authored material under
-those terms. Main remains unchanged until a maintainer merges the PR.
+The unmodified text is included as root `LICENSE` and declared in package
+metadata for project-authored material. The owner requested merging the
+license and safeguards on 29 October 2026. This integration does not certify
+rights to third-party material or approve a public product release.
 
 License selection is not a certification of rights to every historical or
 third-party contribution. The origin, contributor-rights and legal-review
 release gates remain open. Dependency/model/vendor material is not relicensed
 by the project license.
 
-## Before merging the license proposal
+## Outstanding rights and release review
 
 1. Resolve historical contributor rights and review the owner's retained
    development statement. The owner has confirmed personal development outside

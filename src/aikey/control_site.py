@@ -1,0 +1,995 @@
+"""Loopback administration site for AI Key and AI Port provider settings."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
+import getpass
+import html
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import signal
+import stat
+import time
+
+from aiohttp import web
+
+from .admin_audit import AuditLog
+from .caption_preflight import preflight as caption_preflight
+from .state_backup_preflight import inventory as backup_inventory
+from .admin_security import AdminSecurity
+from .aiport_config_store import (
+    AiPortConfigurationError, AiPortConfigurationStore, AiPortRevisionConflict,
+)
+from .aiport_deployment import AiPortPlanError, plan_ai_ports
+from .aiport_rollout import (
+    PlanChanged, RolloutError, apply_if_current, load_rollout_config,
+    compute as compute_rollout, public as public_rollout,
+)
+from .camera_inventory import InventoryError, fetch_inventory
+from .config import atomic_private, load_config
+from .data_policy import ROWS, live_status
+from .config_store import (
+    ConfigurationStore, ConfigurationStoreError, RevisionConflict,
+)
+from .index_rebuild import migration_plan
+
+
+_COOKIE = "aikey_admin_local"
+_G3_G5_MODEL = re.compile(r"UVC G[345](?:\s|\Z)")
+_INSTANCE_NAME = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
+_STYLE = """
+:root { font-family: system-ui, sans-serif; color: #192430; background: #f4f7fb; }
+body { max-width: 1100px; margin: 2rem auto; padding: 0 1.2rem; }
+h1 { margin-bottom: .25rem; } p { line-height: 1.45; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 1rem; }
+section { background: white; border: 1px solid #d9e2eb; border-radius: 12px;
+          padding: 1.3rem; box-shadow: 0 2px 8px #1a35450a; }
+label { display: block; font-weight: 600; margin-top: 1rem; }
+input, select { box-sizing: border-box; width: 100%; margin-top: .35rem; padding: .6rem;
+                font: inherit; border: 1px solid #9aaebe; border-radius: 6px; }
+input[type=checkbox] { width: auto; margin-right: .4rem; }
+.checks label { display: inline-block; margin-right: .9rem; font-weight: 400; }
+button { margin-top: 1.2rem; border: 0; border-radius: 6px; padding: .7rem 1rem;
+         background: #075bd8; color: white; font: inherit; cursor: pointer; }
+.muted { color: #4f6173; } .error { color: #a1231b; } .notice { color: #195c31; }
+.row { display: flex; gap: .8rem; align-items: center; justify-content: space-between; }
+table { width: 100%; border-collapse: collapse; background: white; }
+th, td { padding: .65rem; text-align: left; border-bottom: 1px solid #d9e2eb; }
+.scroll { overflow-x: auto; }
+"""
+
+
+def _safe(value: object) -> str:
+    return html.escape(str(value if value is not None else ""), quote=True)
+
+
+def _page(title: str, body: str) -> web.Response:
+    markup = ("<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+              "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+              f"<title>{_safe(title)}</title><style>{_STYLE}</style></head>"
+              f"<body>{body}</body></html>")
+    return web.Response(text=markup, content_type="text/html", headers={
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
+                                   "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+        "Cache-Control": "no-store",
+    })
+
+
+def _private_bytes(path: Path, limit: int) -> bytes:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, "rb") as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_mode & 0o077 or not 0 < info.st_size <= limit):
+            raise ValueError("Invalid private administrator file")
+        return source.read(limit + 1)
+
+
+def _private_directory(path: Path) -> None:
+    info = path.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+            or info.st_mode & 0o077):
+        raise ValueError("Provider state directory is not private")
+
+
+class ControlSite:
+    def __init__(self, aikey_config: Path, aiport_config: Path, *,
+                 signing_key: bytes, password_record: str, port: int,
+                 aiport_runtime_state_dir: Path | None = None,
+                 aiport_instances: dict[str, Path] | None = None,
+                 inventory_loader: Callable[[], Awaitable[dict]] | None = None,
+                 rollout_path: Path | None = None,
+                 search_state_dir: Path | None = None,
+                 search_backups_dir: Path | None = None,
+                 search_live_rows: Callable[[], Awaitable[int]] | None = None,
+                 aikey_state_dir: Path | None = None,
+                 audit_log: Path | None = None):
+        if type(port) is not int or not 1024 <= port <= 65535:
+            raise ValueError("Invalid control-site port")
+        self.origin = f"http://127.0.0.1:{port}"
+        self.security = AdminSecurity(signing_key, self.origin, allow_loopback_http=True)
+        self.password_record = password_record
+        self.aikey = ConfigurationStore(aikey_config)
+        self.aiport = AiPortConfigurationStore(
+            aiport_config, runtime_state_dir=aiport_runtime_state_dir)
+        self.aiports = {"aiport": self.aiport}
+        paths = {self.aiport.path}
+        for name, path in (aiport_instances or {}).items():
+            if (not isinstance(name, str) or not _INSTANCE_NAME.fullmatch(name)
+                    or name == "default"):
+                raise ValueError("Invalid AI Port instance name")
+            store = AiPortConfigurationStore(
+                path, runtime_state_dir=aiport_runtime_state_dir)
+            if store.path in paths:
+                raise ValueError("Duplicate AI Port configuration")
+            paths.add(store.path)
+            self.aiports[f"aiport:{name}"] = store
+        self.inventory_loader = inventory_loader
+        self.rollout_path = rollout_path
+        self.search_state_dir = search_state_dir
+        self.search_backups_dir = search_backups_dir
+        self.search_live_rows = search_live_rows
+        # The Key's host state sits next to its config unless given (#12).
+        self.aikey_state_dir = aikey_state_dir or self.aikey.path.parent
+        self.audit = AuditLog(audit_log) if audit_log is not None else None
+
+    def app(self) -> web.Application:
+        app = web.Application(client_max_size=8192)
+        app.router.add_get("/", self.index)
+        app.router.add_get("/cameras", self.cameras)
+        app.router.add_get("/aiport-rollout", self.rollout_page)
+        app.router.add_post("/aiport-rollout", self.rollout_apply)
+        # Read-only: no POST route exists, so nothing can be applied from here (#18).
+        app.router.add_get("/index-migration", self.index_migration)
+        app.router.add_get("/data-retention", self.data_retention)
+        app.router.add_get("/audit", self.audit_page)
+        app.router.add_get("/caption-preflight", self.caption_preflight_page)
+        app.router.add_get("/state-backup-preflight", self.state_backup_page)
+        app.router.add_get("/login", self.login_page)
+        app.router.add_post("/login", self.login)
+        app.router.add_post("/provider", self.save_provider)
+        app.router.add_post("/provider/rollback", self.rollback_provider)
+        app.router.add_post("/role-model", self.save_role_model)
+        app.router.add_post("/logout", self.logout)
+        app.router.add_get("/healthz", self.health)
+        return app
+
+    async def health(self, _: web.Request) -> web.Response:
+        return web.json_response({"service": "control-site"})
+
+    async def _rollout_plan(self) -> tuple[dict, dict]:
+        report = await self.inventory_loader()
+        rollout = load_rollout_config(self.rollout_path)
+        plan, _ = await asyncio.to_thread(compute_rollout, rollout, report)
+        return rollout, plan
+
+    async def data_retention(self, request: web.Request) -> web.Response:
+        """Read-only data-flow and retention table (#5): categories and counts only."""
+        if self._session(request) is None:
+            raise web.HTTPSeeOther("/login")
+        status = await asyncio.to_thread(live_status, self.aikey_state_dir, self.search_backups_dir)
+        labels = {"manual": "Manual only (not scheduled)", "none": "No expiry",
+                  "per_job": "Removed after each job", "not_stored": "Not stored locally"}
+
+        def counts(value):
+            if value is None:
+                return "not configured"
+            return ", ".join(f"{_safe(key.replace('_', ' '))}: "
+                             f"{_safe(item if item is not None else 'unavailable')}"
+                             for key, item in value.items())
+        rows = "".join(
+            "<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in (
+                row["category"], row["local"], row["protect"] or "No Protect copy",
+                labels[row["expiry"]] + " · " + row["detail"],
+                "Controller decides Protect's copy (needs_evidence)" if row["controller_decides"]
+                else "Local only")) + f"<td>{counts(status[row['key']])}</td>"
+            f"<td>{_safe(row['owner_decision'])}</td></tr>" for row in ROWS)
+        body = ("<h1>Data flow and retention</h1><p><a href='/'>Settings</a></p>"
+                "<p class='muted'>Read-only. Shows data categories, how each expires today and "
+                "counts; never names, text, embeddings or paths. Nothing is deleted from this "
+                "page, and no retention period is chosen here.</p>"
+                "<table><tr><th>Data</th><th>Local copy</th><th>Protect copy</th>"
+                "<th>Current expiry</th><th>Retention owner</th><th>Live count</th>"
+                "<th>Operator decision</th></tr>" + rows + "</table>")
+        return _page("Data flow and retention", body)
+
+    def _audit(self, action: str, result: str, profile: str | None = None) -> None:
+        if self.audit is not None:
+            self.audit.record(action, result, profile=profile)
+
+    async def audit_page(self, request: web.Request) -> web.Response:
+        """Read-only view of recent administrative actions (#13)."""
+        if self._session(request) is None:
+            raise web.HTTPSeeOther("/login")
+        if self.audit is None:
+            return _page("Audit log", "<h1>Audit log</h1><p><a href='/'>Settings</a></p>"
+                         "<p class='muted'>No audit log is configured for this control site.</p>")
+        rows = "".join(
+            "<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in (
+                time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(entry["at"])),
+                entry["action"].replace("_", " "), entry.get("profile", "—"), entry["result"]))
+            + "</tr>" for entry in self.audit.recent(50)) or "<tr><td colspan='4'>No entries</td></tr>"
+        failures = (f"<p class='error'>{self.audit.failures} audit entries could not be written "
+                    "since this site started.</p>" if self.audit.failures else "")
+        return _page("Audit log", "<h1>Audit log</h1><p><a href='/'>Settings</a></p>"
+                     "<p class='muted'>Newest first. Records the action, profile and result only; "
+                     "never passwords, keys, paths, settings or network addresses.</p>" + failures
+                     + "<table><tr><th>Time</th><th>Action</th><th>Profile</th><th>Result</th></tr>"
+                     + rows + "</table>")
+
+    async def caption_preflight_page(self, request: web.Request) -> web.Response:
+        """Read-only continuous-caption preflight (#12): reason codes and counts only."""
+        if self._session(request) is None:
+            raise web.HTTPSeeOther("/login")
+
+        def run():
+            path = self.aikey.path
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 256 * 1024:
+                raise ValueError("config")
+            return caption_preflight(self.aikey_state_dir, json.loads(path.read_text()),
+                                     check_health=False)
+        try:
+            report = await asyncio.to_thread(run)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return _page("Caption preflight", "<h1>Caption preflight</h1><p><a href='/'>Settings</a></p>"
+                         "<p class='error'>The preflight could not read the AI Key state "
+                         "(reason: state_unreadable). Nothing was changed.</p>")
+        scope, permits = report["scope"], report["permits"]
+        budget, ledger = report["budget"], report["ledger"]
+
+        def rows(pairs):
+            return "".join(f"<tr><th>{_safe(k)}</th><td>{_safe(v)}</td></tr>" for k, v in pairs)
+        blockers = "".join(f"<tr><td><code>{_safe(code)}</code></td><td>{_safe(text)}</td></tr>"
+                           for code, text in zip(report["blocker_codes"], report["blockers"]))
+        body = ("<h1>Continuous caption preflight</h1><p><a href='/'>Settings</a> · "
+                "<a href='/caption-preflight'>Refresh</a></p>"
+                "<p class='muted'>Read-only. Reason codes and counts only; no camera, event or job "
+                "identifiers, media, captions or credentials. Nothing is enabled or changed here.</p>"
+                f"<p><strong>Ready: {'yes' if report['ready'] else 'no'}</strong></p>"
+                "<h2>Blockers</h2><table><tr><th>Code</th><th>Detail</th></tr>"
+                + (blockers or "<tr><td colspan='2'>None</td></tr>") + "</table>"
+                "<h2>Scope</h2><table>" + rows([
+                    ("Continuous mode configured", "yes" if scope["continuous_configured"] else "no"),
+                    ("One-use scopes", scope["one_use_scopes"]),
+                    ("Camera model policies", scope["camera_models_policy"]),
+                    ("One-use permits (consumed / total)", f"{permits['consumed']} / {permits['total']}")])
+                + "</table><h2>Global caption budget</h2><table>" + rows([
+                    ("Budget journal present", "yes" if budget.get("journal") else "no"),
+                    ("Captions in the last hour", budget.get("last_hour", "unavailable")),
+                    ("Remaining this hour", budget.get("remaining", "unavailable"))])
+                + "</table><h2>Job journal</h2><table>" + rows([
+                    ("Entries / cap", f"{ledger['entries']} / {ledger['cap']} ({ledger['percent']}%)"),
+                    ("Due for rollover", ledger["due_for_rollover"]),
+                    ("Uncertain callbacks awaiting review", ledger["uncertain_callbacks"]),
+                    ("Days to full at the uncertain rate",
+                     ledger["days_to_full_at_uncertain_rate"] if ledger["days_to_full_at_uncertain_rate"]
+                     is not None else "not growing")])
+                + "</table><p class='muted'>Key health is not read by the control site; run "
+                  "<code>python -m aikey.caption_preflight --health</code> for it.</p>")
+        return _page("Caption preflight", body)
+
+    def _backup_profiles(self) -> dict:
+        profiles = {"aikey": ("aikey", self.aikey_state_dir)}
+        for profile, store in self.aiports.items():
+            profiles[profile] = ("aiport", store.path.parent)
+        return profiles
+
+    async def state_backup_page(self, request: web.Request) -> web.Response:
+        """Read-only backup/restore preflight (#13): counts and reason codes only."""
+        if self._session(request) is None:
+            raise web.HTTPSeeOther("/login")
+        report = await asyncio.to_thread(backup_inventory, self._backup_profiles())
+        rows = []
+        for label, item in report["profiles"].items():
+            if not item.get("readable"):
+                counts = "unreadable"
+            else:
+                counts = (f"required {item['required_present']}/{item['required']} · secrets "
+                          f"{item['secrets_present']}/{item['secret_references']} · journals "
+                          f"{item['journals_present']} · sensitive {item['sensitive_present']}")
+            codes = ", ".join(f"<code>{_safe(code)}</code>" for code in item["problems"]) or "none"
+            rows.append(f"<tr><td>{_safe(label)}</td><td>{_safe(item['kind'])}</td>"
+                        f"<td>{counts}</td><td>{codes}</td></tr>")
+        body = ("<h1>Backup and restore preflight</h1><p><a href='/'>Settings</a></p>"
+                "<p class='muted'>Read-only. Lists whether each profile's config, adopted identity, "
+                "TLS key, controller trust, referenced secrets and journals are in place for a safe "
+                "backup. Counts and reason codes only; nothing is exported, restored or changed.</p>"
+                f"<p><strong>Ready for backup: {'yes' if report['ready_for_backup'] else 'no'}</strong></p>"
+                "<table><tr><th>Profile</th><th>Kind</th><th>Present</th><th>Problems</th></tr>"
+                + "".join(rows) + "</table>"
+                "<p class='muted'>A candidate backup is checked with "
+                "<code>aikey.state_backup_preflight.validate</code> for identity, stale revision, "
+                "missing secrets, partial archive and cross-slot contamination.</p>")
+        return _page("Backup preflight", body)
+
+    async def index_migration(self, request: web.Request) -> web.Response:
+        cookie = self._session(request)
+        if cookie is None:
+            raise web.HTTPSeeOther("/login")
+        if self.search_state_dir is None:
+            raise web.HTTPNotFound()
+        live_rows = None
+        if self.search_live_rows is not None:
+            try:
+                live_rows = await self.search_live_rows()
+            except Exception:            # counts are optional; the plan says so
+                live_rows = None
+        plan = migration_plan(self.search_state_dir, backups_dir=self.search_backups_dir,
+                              live_rows=live_rows)
+        live, backup, rollback = plan["live"], plan["backup"], plan["rollback"]
+        rows = "".join(
+            "<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in (
+                g["generation"], g.get("state"), g.get("from", "—"), g.get("to", "—"),
+                "—" if "coverage" not in g else
+                f"{g['coverage']['embedded']} embedded, {g['coverage']['no_source']} without source"
+                + (f", {g['coverage']['percent']}% of {g['coverage']['live_rows']}"
+                   if g["coverage"].get("percent") is not None else ""),
+                "; ".join(g["problems"]) or "—")) + "</tr>"
+            for g in plan["generations"]) or "<tr><td colspan='6'>No staged generation</td></tr>"
+        steps = "".join(f"<li><strong>{_safe(s['status'])}</strong> · {_safe(s['step'])}"
+                        + (f"<br><span class='muted'>{_safe(s['detail'])}</span>" if s["detail"] else "")
+                        + "</li>" for s in plan["steps"])
+        reasons = "".join(f"<li>{_safe(reason)}</li>" for reason in plan["apply"]["reasons"])
+        body = ("<h1>Search index migration</h1><p><a href='/'>Settings</a> · "
+                "<a href='/index-migration'>Refresh</a></p>"
+                "<p class='muted'>Read-only status and dry-run plan. Nothing is staged, cut over, "
+                "rolled back or restarted from this page.</p>"
+                "<section><h2>Live index</h2><p>Encoder revision "
+                f"<strong>{_safe(live['revision'] or 'not pinned')}</strong> · rows "
+                f"{_safe(live['rows'] if live['rows'] is not None else 'unavailable')}</p></section>"
+                "<h2>Generations</h2><table><tr><th>Generation</th><th>State</th><th>From</th>"
+                "<th>To</th><th>Coverage</th><th>Problems</th></tr>" + rows + "</table>"
+                "<h2>Backup and rollback</h2><ul>"
+                f"<li>Latest backup: {_safe(backup['latest'] or 'none')}"
+                + (f" · {_safe(backup.get('rows'))} rows · verified {'yes' if backup['verified'] else 'no'}"
+                   if backup["latest"] else "") + "</li>"
+                f"<li>Rollback ready: {'yes' if rollback['ready'] else 'no'}"
+                + (f" — {_safe(rollback['reason'])}" if rollback["reason"] else "")
+                + f"<br><span class='muted'>{_safe(rollback['note'])}</span></li></ul>"
+                "<h2>Dry-run plan</h2><ol>" + steps + "</ol>"
+                "<h2>Apply is unavailable</h2><ul>" + reasons + "</ul>"
+                + ("<p>No migration exists: this plan is a no-op.</p>" if plan["no_op"] else ""))
+        return _page("Search index migration", body)
+
+    async def rollout_page(self, request: web.Request) -> web.Response:
+        cookie = self._session(request)
+        if cookie is None:
+            raise web.HTTPSeeOther("/login")
+        if self.inventory_loader is None or self.rollout_path is None:
+            raise web.HTTPNotFound()
+        csrf = self.security.csrf_token(cookie)
+        try:
+            _, plan = await self._rollout_plan()
+        except (InventoryError, RolloutError, OSError, ValueError):
+            return _page("AI Port rollout unavailable", "<h1>AI Port rollout unavailable</h1>"
+                         "<p class='error'>Check Protect connectivity, the rollout file and "
+                         "the slot state directories.</p><p><a href='/'>Settings</a></p>")
+        view = public_rollout(plan)
+        rows = "".join(
+            "<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in (
+                label, slot["target"], slot["load"],
+                "yes" if slot.get("observed") else "no — unchanged",
+                ", ".join(slot["keep"]) or "—", ", ".join(slot["add"]) or "—",
+                ", ".join(slot["remove"]) or "—",
+                ", ".join(slot["awaiting_pairing"]) or "—")) + "</tr>"
+            for label, slot in sorted(view["slots"].items()))
+        rows += "".join(
+            "<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in (
+                slot["label"] + " (new)", slot["target"], slot["load"], "not deployed",
+                "—", ", ".join(slot["add"]), "—", "—")) + "</tr>"
+            for slot in view["new_slots"])
+        local = [a for a in view["actions"] if a["automated"]]
+        manual = [a for a in view["actions"] if not a["automated"]]
+
+        def items(actions: list[dict]) -> str:
+            def detail(action: dict) -> str:
+                if action["kind"] != "compose_add_service":
+                    return ""
+                # The exact service appended to the private Compose copy.
+                return ("<br><span class='muted'>" + _safe(
+                    f"service {action['service']} · {action['ipv4_address']} · "
+                    f"{action['mac_address']} · state {action['bind_source']}")
+                    + "</span><pre>" + _safe(action["block"]) + "</pre>")
+            return "".join("<li>" + _safe(" · ".join(str(a[k]) for k in (
+                "kind", "slot", "camera", "target") if a.get(k))) + detail(a) + "</li>"
+                for a in actions) or "<li>None</li>"
+        basis = "".join(
+            f"<li>{_safe(slot['label'])}: capacity {_safe(slot['capacity_basis'])}</li>"
+            for slot in view["new_slots"] if "capacity_basis" in slot)
+        form = ("<form method='post' action='/aiport-rollout'>"
+                f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
+                f"<input type='hidden' name='revision' value='{_safe(view['revision'])}'>"
+                "<button>Apply local changes</button></form>" if local else
+                "<p>No local change is needed: this plan is a no-op.</p>")
+        body = ("<h1>AI Port rollout</h1><p><a href='/'>Settings</a> · "
+                "<a href='/aiport-rollout'>Refresh</a></p>"
+                "<p class='muted'>Derived from Protect's eligible cameras and each slot's "
+                "pinned health. Paired cameras and slot identities never move. Nothing is "
+                "paired, adopted, uploaded or restarted from here.</p>"
+                "<table><tr><th>Slot</th><th>Target</th><th>Load</th><th>Observed</th>"
+                "<th>Keep</th><th>Add</th><th>Remove</th><th>Awaiting pairing</th></tr>"
+                + rows + "</table>" + (f"<ul>{basis}</ul>" if basis else "")
+                + "<h2>Applied by this page (local files only)</h2><ul>"
+                + items(local) + "</ul><h2>Requires you</h2><ul>" + items(manual) + "</ul>"
+                + form + f"<p class='muted'>Plan revision {_safe(view['revision'][:12])}</p>")
+        return _page("AI Port rollout", body)
+
+    async def rollout_apply(self, request: web.Request) -> web.Response:
+        fields = await request.post()
+        if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
+            self._audit("rollout_apply", "forbidden")
+            raise web.HTTPForbidden()
+        if self.inventory_loader is None or self.rollout_path is None:
+            raise web.HTTPNotFound()
+        try:
+            report = await self.inventory_loader()
+            # The revision is compared under the rollout lock, after re-reading
+            # the slot files, so two tabs cannot both apply one plan (#13).
+            await asyncio.to_thread(apply_if_current, self.rollout_path, report,
+                                    fields.get("revision"))
+        except PlanChanged:
+            self._audit("rollout_apply", "plan_changed")
+            return _page("Plan changed", "<h1>The plan changed</h1><p>Review the "
+                         "refreshed plan before applying.</p>"
+                         "<p><a href='/aiport-rollout'>Review</a></p>")
+        except (InventoryError, RolloutError, OSError, ValueError):
+            self._audit("rollout_apply", "refused")
+            return _page("Rollout not applied", "<h1>Rollout not applied</h1>"
+                         "<p class='error'>No pairing was changed. Check the slot files.</p>")
+        self._audit("rollout_apply", "applied")
+        raise web.HTTPSeeOther("/aiport-rollout")
+
+    async def cameras(self, request: web.Request) -> web.Response:
+        if self._session(request) is None:
+            raise web.HTTPSeeOther("/login")
+        if self.inventory_loader is None:
+            raise web.HTTPNotFound()
+        try:
+            report = await self.inventory_loader()
+            configured = {}
+            for profile, store in self.aiports.items():
+                title = ("this AI Port" if profile == "aiport" else
+                         "AI Port " + profile.partition(":")[2])
+                for mac in store.configured_camera_macs():
+                    configured.setdefault(mac, []).append(title)
+            if (not isinstance(report, dict)
+                    or report.get("schema") != "aikey-camera-preflight/1"
+                    or not isinstance(report.get("cameras"), list)):
+                raise InventoryError("Invalid camera inventory")
+        except (InventoryError, AiPortConfigurationError):
+            return _page("Camera inventory unavailable", "<h1>Camera inventory unavailable</h1>"
+                         "<p class='error'>Check Protect connectivity and the private trust files.</p>"
+                         "<p><a href='/'>Back to settings</a></p>")
+        try:
+            capacity = plan_ai_ports(report, camera_scope="legacy-and-g3-g5")
+        except AiPortPlanError:
+            capacity_note = ("<p>AI Port capacity: needs_evidence. Check the camera IDs, "
+                             "source types and recording limits before assigning slots.</p>")
+        else:
+            capacity_note = (f"<p>AI Port capacity plan: "
+                             f"{capacity['ai_port_instances_required']} instance(s) for "
+                             f"{capacity['selected_camera_count']} connected target camera(s). "
+                             "This plans capacity only; create each identity and pair its cameras "
+                             "in Protect.</p>")
+        rows = []
+        target_count = 0
+        configured_count = 0
+        for camera in sorted(report["cameras"], key=lambda item: (
+                (item.get("name") or "").casefold(), item.get("id") or "")):
+            state = camera.get("state")
+            model = camera.get("model") or "Unknown"
+            legacy = camera.get("processing_class") == "legacy_ingress_needed"
+            g3_g5 = isinstance(model, str) and _G3_G5_MODEL.match(model) is not None
+            target = state == "CONNECTED" and (legacy or g3_g5)
+            assigned = configured.get(camera.get("mac"), ())
+            allowed = bool(assigned)
+            target_count += int(target)
+            configured_count += int(allowed)
+            scope = ("Offline" if state != "CONNECTED" else
+                     "Legacy camera target" if legacy else
+                     "G3–G5 target" if g3_g5 else "Outside AI Port target scope")
+            cells = (camera.get("name") or "Unnamed", model, state or "Unknown", scope,
+                     "Configured for " + ", ".join(assigned) if allowed
+                     else ("Not configured on this AI Port" if len(self.aiports) == 1
+                           else "Not configured on any AI Port"),
+                     ", ".join(camera.get("smart_detect_types") or ()) or "None")
+            rows.append("<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in cells)
+                        + "</tr>")
+        fetched = datetime.fromtimestamp(report["fetched_at"], timezone.utc).strftime(
+            "%Y-%m-%d %H:%M UTC")
+        body = ("<h1>Protect cameras</h1><p><a href='/'>Settings</a> · "
+                "<a href='/cameras'>Refresh</a></p>"
+                f"<p>Protect {_safe(report['protect_version'])} · Fetched {_safe(fetched)}</p>"
+                f"<p>{len(rows)} cameras · {target_count} connected legacy / G3–G5 targets · "
+                f"{configured_count} configured across {len(self.aiports)} AI Port "
+                "instance(s).</p>"
+                + capacity_note +
+                "<p class='muted'>Protect pairing and stream health are separate. "
+                "Configured means the camera is in a local instance allowlist. "
+                "Protect-reported smart types may reflect AI Port processing.</p>"
+                "<div class='scroll'><table><thead><tr><th>Camera</th><th>Model</th>"
+                "<th>State</th><th>AI Port scope</th><th>Instance</th>"
+                "<th>Protect-reported smart types</th></tr></thead><tbody>"
+                + "".join(rows) + "</tbody></table></div>")
+        return _page("Protect cameras", body)
+
+    def _same_host(self, request: web.Request) -> bool:
+        return request.host == self.origin.removeprefix("http://")
+
+    def _session(self, request: web.Request, *, mutate: bool = False,
+                 csrf: str | None = None) -> str | None:
+        if not self._same_host(request):
+            return None
+        cookie = request.cookies.get(_COOKIE, "")
+        origin = request.headers.get("Origin", "") if mutate else self.origin
+        decision = self.security.authorize(
+            "POST" if mutate else "GET", origin, cookie, csrf)
+        return cookie if decision.allowed else None
+
+    async def login_page(self, request: web.Request) -> web.Response:
+        if not self._same_host(request):
+            raise web.HTTPForbidden()
+        return _page("Sign in", "<h1>Local AI processor</h1><section>"
+                     "<h2>Administrator sign in</h2><form method='post' action='/login'>"
+                     "<label for='password'>Password</label>"
+                     "<input id='password' name='password' type='password' required "
+                     "autocomplete='current-password'><button>Sign in</button></form></section>")
+
+    async def login(self, request: web.Request) -> web.Response:
+        if not self._same_host(request):
+            raise web.HTTPForbidden()
+        fields = await request.post()
+        password = fields.get("password", "")
+        decision = self.security.login(request.remote or "local", password,
+                                       self.password_record,
+                                       request.headers.get("Origin", ""))
+        if not decision.allowed or decision.credentials is None:
+            self._audit("login", decision.reason if decision.reason else "refused")
+            return _page("Sign in failed", "<h1>Sign in failed</h1>"
+                         "<p class='error'>Check the password and try again.</p>"
+                         "<p><a href='/login'>Back to sign in</a></p>")
+        self._audit("login", "signed_in")
+        response = web.HTTPSeeOther("/")
+        response.set_cookie(_COOKIE, decision.credentials.cookie, httponly=True,
+                            secure=False, samesite="Strict", path="/",
+                            max_age=self.security.session_ttl)
+        raise response
+
+    async def index(self, request: web.Request) -> web.Response:
+        cookie = self._session(request)
+        if cookie is None:
+            raise web.HTTPSeeOther("/login")
+        csrf = self.security.csrf_token(cookie)
+        assert csrf is not None
+        try:
+            key = self.aikey.snapshot()
+            ports = {profile: store.snapshot()
+                     for profile, store in self.aiports.items()}
+        except (ConfigurationStoreError, AiPortConfigurationError):
+            return _page("Configuration unavailable", "<h1>Configuration unavailable</h1>"
+                         "<p class='error'>Check the private profile config files.</p>")
+        inference = key.configuration["inference"]
+        key_configured = bool(inference.get("api_key_file", {}).get("configured"))
+        notice = ("<p class='notice'>Settings saved. Restart the affected service to apply them.</p>"
+                  if request.query.get("saved") == "1" else
+                  "<p class='notice'>The previous provider settings were restored locally. Restart "
+                  "the affected service to apply them; deployed NAS copies are not changed.</p>"
+                  if request.query.get("rolledback") == "1" else "")
+        undo_form = self._undo_form("aikey", "AI Key", self.aikey.provider_rollback_status(), csrf)
+        body = ("<div class='row'><div><h1>Local AI processor</h1>"
+                "<p class='muted'>Provider and model settings for both Protect profiles.</p>"
+                "</div><form method='post' action='/logout'>"
+                f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
+                "<button>Sign out</button></form></div>" + notice +
+                "<p>Changes are saved with a revision check. They take effect after a service "
+                "restart. Pairings and device identities stay in place.</p>"
+                + ("<p><a href='/cameras'>View current Protect cameras</a></p>"
+                   if self.inventory_loader is not None else "")
+                + ("<p><a href='/index-migration'>Search index migration (read-only)</a></p>"
+                   if self.search_state_dir is not None else "")
+                + "<p><a href='/data-retention'>Data flow and retention (read-only)</a> · "
+                  "<a href='/audit'>Audit log</a> · "
+                  "<a href='/caption-preflight'>Caption preflight</a> · "
+                  "<a href='/state-backup-preflight'>Backup preflight</a></p>"
+                + undo_form + self._role_models_section(csrf)
+                + "<div class='grid'>")
+        body += self._provider_form("AI Key", "aikey", key.revision, inference,
+                                    key_configured, csrf)
+        for profile, port in ports.items():
+            title = ("AI Port" if profile == "aiport" else
+                     "AI Port " + profile.partition(":")[2])
+            if port.camera_count >= 2:
+                current = {"provider": port.provider or "openai",
+                           "model": port.model or "gpt-6-luna",
+                           "base_url": port.base_url or "https://api.openai.com/v1",
+                           "allow_remote": port.allow_remote if port.provider else True,
+                           "allow_insecure_http": port.allow_insecure_http,
+                           "max_output_tokens": port.max_output_tokens or 256,
+                           "threshold": port.threshold if port.threshold is not None else .8,
+                           "smart_types": port.smart_types or ("person",),
+                           "max_requests_per_hour": port.max_requests_per_hour}
+                body += self._provider_form(title, profile, port.revision, current,
+                                            port.key_configured, csrf,
+                                            camera_count=port.camera_count,
+                                            backend=port.backend)
+                body += self._undo_form(profile, title, self.aiports[profile].provider_rollback_status(),
+                                        csrf)
+            else:
+                body += (f"<section><h2>{_safe(title)}</h2><p>No camera pool is configured. "
+                         "Provider settings become available after configuring at least two streams."
+                         "</p></section>")
+        return _page("Local AI processor", body + "</div>")
+
+    @staticmethod
+    def _provider_form(title: str, profile: str, revision: str, current: dict,
+                       key_configured: bool, csrf: str, *, camera_count: int = 0,
+                       backend: str | None = None) -> str:
+        provider = current.get("provider", "openai")
+        options = "".join(
+            f"<option value='{name}'{' selected' if name == provider else ''}>{label}</option>"
+            for name, label in (("openai", "OpenAI"), ("anthropic", "Claude / Anthropic"),
+                                ("ollama", "Ollama"),
+                                ("openai-compatible", "Compatible API")))
+        detail = (f"<p>{camera_count} configured camera slots. "
+                  f"Configured detector: {_safe(backend or 'off')}.</p>"
+                  if camera_count else "")
+        if profile.startswith("aiport") and backend != "vision_api":
+            detail += ("<p class='muted'>Saving provider settings switches AI Port "
+                       "to API detection after its next restart. The current local "
+                       "detector keeps running until then.</p>")
+        output_limit = 32768 if profile == "aikey" else 512
+        form = (f"<section><h2>{_safe(title)}</h2>{detail}<p class='muted'>"
+                f"Key reference configured: {'yes' if key_configured else 'no'}. "
+                "A new key is write-only and replaces the previous reference.</p>"
+                "<form method='post' action='/provider'>"
+                f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
+                f"<input type='hidden' name='profile' value='{profile}'>"
+                f"<input type='hidden' name='revision' value='{_safe(revision)}'>"
+                f"<label>Provider<select name='provider'>{options}</select></label>"
+                f"<label>Model ID<input name='model' required maxlength='128' "
+                f"value='{_safe(current.get('model'))}'></label>"
+                f"<label>API base URL<input name='base_url' required maxlength='512' "
+                f"value='{_safe(current.get('base_url'))}'></label>"
+                "<label>New API key, if needed<input name='api_key' type='password' "
+                "autocomplete='new-password'></label>"
+                f"<label>Maximum output tokens<input name='max_output_tokens' type='number' "
+                f"min='1' max='{output_limit}' "
+                f"value='{_safe(current.get('max_output_tokens', 256))}'></label>"
+                "<div class='checks'><label><input name='allow_remote' type='checkbox' "
+                + ("checked" if current.get("allow_remote") else "") + ">Allow remote API</label>"
+                "<label><input name='allow_insecure_http' type='checkbox' "
+                + ("checked" if current.get("allow_insecure_http") else "") +
+                ">Allow unencrypted remote HTTP</label></div>")
+        if profile.startswith("aiport"):
+            form += (f"<label>Score threshold<input name='threshold' type='number' "
+                     f"min='0.01' max='1' step='0.01' value='{_safe(current['threshold'])}'></label>"
+                     "<div class='checks'><p>Detection classes</p>" + "".join(
+                         f"<label><input name='smart_types' type='checkbox' value='{kind}'"
+                         f"{' checked' if kind in current['smart_types'] else ''}>{kind.title()}</label>"
+                         for kind in ("person", "vehicle", "animal", "package")) + "</div>"
+                     "<label>Optional API request cost cap per camera per hour "
+                     "(empty = no cap)<input name='max_requests_per_hour' type='number' "
+                     "min='2' max='3600' value='"
+                     + ("" if current.get("max_requests_per_hour") is None
+                        else _safe(current["max_requests_per_hour"])) + "'></label>")
+        return form + "<button>Save provider settings</button></form></section>"
+
+    async def save_provider(self, request: web.Request) -> web.Response:
+        fields = await request.post()
+        cookie = self._session(request, mutate=True, csrf=fields.get("csrf"))
+        if cookie is None:
+            self._audit("provider_save", "forbidden")
+            raise web.HTTPForbidden()
+        profile = fields.get("profile")
+        if profile != "aikey" and profile not in self.aiports:
+            self._audit("provider_save", "unknown_profile")
+            raise web.HTTPBadRequest(text="Unknown profile")
+        is_port = profile != "aikey"
+        store = self.aiports[profile] if is_port else self.aikey
+        created_key: Path | None = None
+        committed = False
+        try:
+            provider = fields["provider"]
+            base_url = fields["base_url"].strip()
+            selection: dict = {
+                "provider": provider, "model": fields["model"].strip(),
+                "base_url": base_url, "allow_remote": "allow_remote" in fields,
+                "allow_insecure_http": "allow_insecure_http" in fields,
+                "max_output_tokens": int(fields["max_output_tokens"]),
+            }
+            if is_port:
+                selection.update({
+                    "threshold": float(fields["threshold"]),
+                    "smart_types": fields.getall("smart_types", []),
+                    "max_requests_per_hour": (
+                        int(fields["max_requests_per_hour"])
+                        if fields.get("max_requests_per_hour", "").strip() else None),
+                })
+            key_value = fields.get("api_key", "")
+            if key_value:
+                if (not isinstance(key_value, str) or not 8 <= len(key_value) <= 4096
+                        or any(ch.isspace() for ch in key_value)):
+                    raise ValueError
+                host_state = (self.aikey.path.parent if profile == "aikey"
+                              else store.path.parent)
+                runtime_state = (Path(load_config(self.aikey.path)["runtime"]["state_dir"])
+                                 if profile == "aikey" else store.runtime_state_dir)
+                _private_directory(host_state)
+                key_name = f"provider-key-{secrets.token_hex(8)}"
+                created_key = host_state / key_name
+                selection["api_key_file"] = str(runtime_state / key_name)
+            if provider in {"openai", "anthropic"} and created_key is None:
+                current = store.snapshot()
+                if profile == "aikey":
+                    saved = current.configuration["inference"]
+                    configured = bool(saved.get("api_key_file", {}).get("configured"))
+                    same = saved.get("provider") == provider and saved.get("base_url") == base_url
+                else:
+                    configured = current.key_configured
+                    same = current.provider == provider and current.base_url == base_url
+                if not configured or not same:
+                    raise ValueError
+            preview = (store.preview_inference(fields["revision"], selection)
+                       if profile == "aikey" else store.preview(fields["revision"], selection))
+            if created_key is not None:
+                atomic_private(created_key, key_value + "\n")
+            result = (store.apply_inference(fields["revision"], selection)
+                      if profile == "aikey" else store.apply(fields["revision"], selection))
+            committed = True
+            if result.revision != preview.resulting_revision:
+                raise ValueError
+        except (KeyError, ValueError, TypeError, OSError, ConfigurationStoreError,
+                AiPortConfigurationError, RevisionConflict, AiPortRevisionConflict):
+            if created_key is not None and not committed:
+                created_key.unlink(missing_ok=True)
+            self._audit("provider_save", "rejected", profile)
+            return _page("Settings not saved", "<h1>Settings not saved</h1>"
+                         "<p class='error'>Check the provider, model, key and request limits. "
+                         "The configuration may also have changed in another session.</p>"
+                         "<p><a href='/'>Back to settings</a></p>")
+        self._audit("provider_save", "saved", profile)
+        raise web.HTTPSeeOther("/?saved=1")
+
+    @staticmethod
+    def _undo_form(profile: str, title: str, status: dict, csrf: str) -> str:
+        """One revision-checked undo button; carries no path, key or setting."""
+        if not status.get("available"):
+            return ""
+        return ("<form method='post' action='/provider/rollback'>"
+                f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
+                f"<input type='hidden' name='profile' value='{_safe(profile)}'>"
+                f"<input type='hidden' name='revision' value='{_safe(status['revision'])}'>"
+                f"<button>Roll back the last {_safe(title)} provider change</button></form>")
+
+    _ROLE_LABELS = {"caption": "Captions (vision)", "speech": "Speech to text",
+                    "detection": "AI Port detection", "search_image_text": "Search image/text encoder",
+                    "text_embedding": "Text embeddings"}
+    _ROLE_REASONS = {"index_migration_required": "Pinned by the search index; change it through the "
+                     "index migration", "role_not_configured": "Not configured",
+                     "vision_provider_not_configured": "No vision provider configured"}
+
+    def _role_models_section(self, csrf: str) -> str:
+        """Per-role models, one revision-checked form per editable role (#17)."""
+        rows = []
+        stores = [("aikey", "AI Key", self.aikey)] + [
+            (profile, "this AI Port" if profile == "aiport" else "AI Port " + profile.partition(":")[2],
+             store) for profile, store in self.aiports.items()]
+        for profile, title, store in stores:
+            try:
+                revision = store.snapshot().revision
+                roles = store.role_models()
+            except (ConfigurationStoreError, AiPortConfigurationError):
+                rows.append(f"<tr><td>{_safe(title)}</td><td colspan='3'>unavailable</td></tr>")
+                continue
+            for role, info in roles.items():
+                label = self._ROLE_LABELS.get(role, role)
+                if info["editable"]:
+                    control = ("<form method='post' action='/role-model'>"
+                               f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
+                               f"<input type='hidden' name='profile' value='{_safe(profile)}'>"
+                               f"<input type='hidden' name='role' value='{_safe(role)}'>"
+                               f"<input type='hidden' name='revision' value='{_safe(revision)}'>"
+                               f"<input name='model' required maxlength='128' "
+                               f"value='{_safe(info['model'] or '')}' aria-label='{_safe(label)} model'>"
+                               "<button>Save model</button></form>")
+                else:
+                    control = _safe(self._ROLE_REASONS.get(info["reason"], info["reason"]))
+                rows.append(f"<tr><td>{_safe(title)}</td><td>{_safe(label)}</td>"
+                            f"<td>{_safe(info['model'] or '—')}</td><td>{control}</td></tr>")
+        return ("<section><h2>Models by role</h2><p class='muted'>Changes only the model of one role; "
+                "the provider, endpoint and key stay as they are. Search encoders are pinned by the "
+                "index.</p><table><tr><th>Profile</th><th>Role</th><th>Model</th><th>Change</th></tr>"
+                + "".join(rows) + "</table></section>")
+
+    async def save_role_model(self, request: web.Request) -> web.Response:
+        fields = await request.post()
+        if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
+            self._audit("role_model", "forbidden")
+            raise web.HTTPForbidden()
+        profile = fields.get("profile", "")
+        store = self.aikey if profile == "aikey" else self.aiports.get(profile)
+        if store is None:
+            self._audit("role_model", "unknown_profile")
+            raise web.HTTPBadRequest(text="Unknown profile")
+        try:
+            await asyncio.to_thread(store.apply_role_model, fields.get("revision"),
+                                    fields.get("role"), fields.get("model"))
+        except (ConfigurationStoreError, RevisionConflict, AiPortConfigurationError,
+                AiPortRevisionConflict, OSError):
+            self._audit("role_model", "rejected", profile)
+            return _page("Model not saved", "<h1>Model not saved</h1><p class='error'>The role, "
+                         "model name or revision was not accepted. Nothing was changed.</p>"
+                         "<p><a href='/'>Back to settings</a></p>")
+        self._audit("role_model", "saved", profile)
+        raise web.HTTPSeeOther("/?saved=1")
+
+    async def rollback_provider(self, request: web.Request) -> web.Response:
+        """Restore one profile's local settings from before its last provider save (#17)."""
+        fields = await request.post()
+        if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
+            self._audit("provider_rollback", "forbidden")
+            raise web.HTTPForbidden()
+        profile = fields.get("profile", "aikey")
+        store = self.aikey if profile == "aikey" else self.aiports.get(profile)
+        if store is None:
+            self._audit("provider_rollback", "unknown_profile")
+            raise web.HTTPBadRequest(text="Unknown profile")
+        try:
+            await asyncio.to_thread(store.rollback_provider, fields.get("revision"))
+        except (ConfigurationStoreError, RevisionConflict, AiPortConfigurationError,
+                AiPortRevisionConflict, OSError):
+            self._audit("provider_rollback", "refused", profile)
+            return _page("Rollback not applied", "<h1>Rollback not applied</h1>"
+                         "<p class='error'>The settings changed in another session, or the "
+                         "previous provider key is no longer stored. Nothing was changed.</p>"
+                         "<p><a href='/'>Back to settings</a></p>")
+        self._audit("provider_rollback", "rolled_back", profile)
+        raise web.HTTPSeeOther("/?rolledback=1")
+
+    async def logout(self, request: web.Request) -> web.Response:
+        fields = await request.post()
+        if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
+            self._audit("logout", "forbidden")
+            raise web.HTTPForbidden()
+        self._audit("logout", "signed_out")
+        response = web.HTTPSeeOther("/login")
+        response.del_cookie(_COOKIE, path="/")
+        raise response
+
+
+def _cli() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Local-only AI processor control site")
+    commands = parser.add_subparsers(dest="command", required=True)
+    initial = commands.add_parser("init", help="Set an administrator password locally")
+    initial.add_argument("--state-dir", required=True, type=Path)
+    initial.add_argument("--generate", action="store_true",
+                         help="Generate a private one-time bootstrap password file")
+    run = commands.add_parser("run", help="Serve provider settings on loopback")
+    run.add_argument("--state-dir", required=True, type=Path)
+    run.add_argument("--aikey-config", required=True, type=Path)
+    run.add_argument("--aiport-config", required=True, type=Path)
+    run.add_argument("--aiport-runtime-state-dir", type=Path,
+                     help="AI Port state path inside its processor container")
+    run.add_argument("--aiport-instance", action="append", default=[], metavar="NAME=CONFIG",
+                     help="Add another AI Port instance with a private host config path")
+    run.add_argument("--port", type=int, default=8765)
+    run.add_argument("--aiport-rollout", type=Path,
+                     help="Private AI Port rollout slot file (needs the inventory settings)")
+    run.add_argument("--search-state-dir", type=Path,
+                     help="AI Key state directory holding search-profile.json (read-only)")
+    run.add_argument("--search-backups", type=Path, help="search_backup output directory (read-only)")
+    run.add_argument("--aikey-state-dir", type=Path,
+                     help="AI Key state directory, for read-only retention counts")
+    run.add_argument("--search-container",
+                     help="PostgreSQL container for a read-only live row count")
+    run.add_argument("--inventory-controller")
+    run.add_argument("--inventory-api-key-file", type=Path)
+    run.add_argument("--inventory-web-trust-file", type=Path)
+    run.add_argument("--inventory-web-cert-file", type=Path)
+    return parser
+
+
+def _live_rows(container: str) -> Callable[[], Awaitable[int]]:
+    import subprocess
+    from .search_backup import counts
+
+    async def read() -> int:
+        value = await asyncio.to_thread(counts, subprocess.run, container)
+        return int(value["tables"]["ramDetections"])
+    return read
+
+
+async def _run(site: ControlSite, port: int) -> None:
+    runner = web.AppRunner(site.app(), access_log=None)
+    await runner.setup()
+    listener = web.TCPSite(runner, "127.0.0.1", port)
+    await listener.start()
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(signum, stop.set)
+    try:
+        await stop.wait()
+    finally:
+        await runner.cleanup()
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _cli().parse_args(argv)
+    state = args.state_dir.expanduser().absolute()
+    try:
+        if args.command == "init":
+            state.mkdir(mode=0o700, parents=True, exist_ok=True)
+            _private_directory(state)
+            record_path = state / "admin-password-record"
+            key_path = state / "admin-signing-key"
+            bootstrap_path = state / "admin-bootstrap-password"
+            if record_path.exists() or key_path.exists() or bootstrap_path.exists():
+                raise ValueError("Administrator already initialized")
+            if args.generate:
+                password = secrets.token_urlsafe(32)
+            else:
+                password = getpass.getpass("New administrator password: ")
+                repeated = getpass.getpass("Repeat administrator password: ")
+                if password != repeated:
+                    raise ValueError("Passwords do not match")
+            record = AdminSecurity.create_password_record(password)
+            atomic_private(key_path, secrets.token_bytes(32))
+            atomic_private(record_path, record + "\n")
+            if args.generate:
+                atomic_private(bootstrap_path, password + "\n")
+            print(json.dumps({"initialized": True, "state_dir": str(state),
+                              "bootstrap_password_file": str(bootstrap_path)
+                              if args.generate else None}))
+            return 0
+        _private_directory(state)
+        signing_key = _private_bytes(state / "admin-signing-key", 64)
+        record = _private_bytes(state / "admin-password-record", 4096).decode().strip()
+        inventory_fields = (args.inventory_controller, args.inventory_api_key_file,
+                            args.inventory_web_trust_file, args.inventory_web_cert_file)
+        if any(value is not None for value in inventory_fields) and not all(
+                value is not None for value in inventory_fields):
+            raise ValueError("Complete pinned inventory settings are required")
+        inventory_loader = (lambda: fetch_inventory(
+            args.inventory_controller, api_key_file=args.inventory_api_key_file,
+            trust_file=args.inventory_web_trust_file,
+            cert_file=args.inventory_web_cert_file)) if all(
+                value is not None for value in inventory_fields) else None
+        instances = {}
+        for assignment in args.aiport_instance:
+            name, separator, config_path = assignment.partition("=")
+            if not separator or not config_path or name in instances:
+                raise ValueError("Invalid AI Port instance assignment")
+            instances[name] = Path(config_path)
+        site = ControlSite(args.aikey_config, args.aiport_config,
+                           signing_key=signing_key, password_record=record, port=args.port,
+                           aiport_runtime_state_dir=args.aiport_runtime_state_dir,
+                           aiport_instances=instances,
+                           inventory_loader=inventory_loader,
+                           rollout_path=args.aiport_rollout,
+                           search_state_dir=args.search_state_dir,
+                           search_backups_dir=args.search_backups,
+                           aikey_state_dir=args.aikey_state_dir,
+                           audit_log=state / "admin-audit.jsonl",
+                           search_live_rows=_live_rows(args.search_container)
+                           if args.search_container else None)
+        site.aikey.snapshot()
+        for port_store in site.aiports.values():
+            port_store.snapshot()
+        print(json.dumps({"control_site": site.origin, "loopback_only": True}))
+        asyncio.run(_run(site, args.port))
+        return 0
+    except (OSError, ValueError, ConfigurationStoreError, AiPortConfigurationError) as exc:
+        print(f"Control site unavailable: {type(exc).__name__}")
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

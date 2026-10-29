@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Olli0103/unifi-ai-key-emulator/blob/main/SECURITY.md
+    about: Never report a vulnerability in a public issue. Follow SECURITY.md.

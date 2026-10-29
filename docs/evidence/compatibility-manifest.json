@@ -1,8 +1,8 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-09-23.2",
+ "manifest_version": "ai-key/2026-10-03.1",
  "processor_profile": "ai-key",
- "base_commit": "54160ce",
+ "base_commit": "7241dcb",
  "emulated_identity": {
   "type": "UP-AI-KEY",
   "sysid": "0xa5f0",
@@ -83,6 +83,82 @@
    "raw_traces_public": false
   },
   {
+   "id": "live-protect-7.3.68",
+   "kind": "live",
+   "protect_version": "7.3.68",
+   "date": "2026-09-26",
+   "console": "UDM Pro Max",
+   "camera_family": "G6 Instant (one persisted caption)",
+   "vision_provider": "OpenAI Responses; the exact model identifier is not in the public records",
+   "operator": "integration owner",
+   "observed": [
+    "reconnect after three emulator container replacements on the same state, staying adopted and connected",
+    "controller version reported and classified unknown before this manifest listed 7.3.68; the supported baseline stayed active",
+    "getInfo, getTaskQueueInfo, setConsoleInfo and updateTimezone answered with result 0 in device health counters",
+    "changeAiInferAgentSettings, networkStatus, sshService, unknown function names and RequestAI answered 95",
+    "one automatic G6 Instant recognizeKeyFrames event with a full RAM callback; exact-event GET returned metadata.ramState done and a non-empty metadata.ramDescription, with the camera's own detections kept",
+    "a description-only RAM result from 23 Sep read back as ramState done with an empty ramDescription",
+    "recognizeKeyFrames key moments placed exactly at the export end in 13 of 39 requests",
+    "four Wohnzimmer (G6 Instant) alrmSpeak audio events dispatched speechToText; the local Whisper backend answered; Protect saved 10, 13, 6 and 6 transcription rows (35, equal to the posted segments), all with text and times inside their events, and set metadata sttState done, sttDetected and sttSearchable (26 Sep, readback by the event transcriptions route)",
+    "search host: after the AI Key connected with database rotation enabled, Protect ran its aiprocessor migrations on the Key's PostgreSQL (pgvector) at the Key's address, created 6 tables and set isSearchHost true (26 Sep 15:00)",
+    "changeUserPassword on connect carried the device's current password as the new one; the credential rotation hook applied it to the real unifi-protect role (result 0) and Protect's connect-time PostgreSQL login then succeeded",
+    "basic Find Anything text search: NL_PARSE with model clip-ViT-L-14 answered with a 768-value local CLIP text vector; Protect's detection-nls vector search returned person objects for person queries and 0 hits for unrelated text at minSimilarity 35, before and after relay restarts",
+    "search snapshots: keyMomentsTags searchSnapshots with image parts made Protect create thumbnails and smart-detect objects and store their 768-value embeddings in ramDetections (7 rows at first readback, later more); thumbnailMeta was empty on 6 of 7 key-moment tasks and region entries carry roi lists",
+    "search by image: with featureFlags.supportImageSearch enabled, Protect sent IMAGE_SEARCH with an imgUri on its cameraHttps port; the uploaded query (Protect's own saved thumbnail of an indexed object) returned that object first at similarity 92, and a synthetic image returned 0 hits at minSimilarity 70",
+    "AI Key face parts: after list-shaped person regions were accepted, Protect saved AI Key face results as face thumbnails linked to person trackers and placed them in face groups (2 at readback); none named",
+    "capability flags: with supportTts, supportFaceRecognition and supportRecognizeAnything sent enabled, Protect's AI Key Camera Coverage showed Speech to Text 1 and Face Recognition 0 instead of Off; License Plate Recognition stayed Off with the flag disabled"
+   ],
+   "not_observed": [
+    "fresh adoption, a password change to a new value, or factory-login changes on 7.3.68",
+    "deep mode, E5 session search, hybrid search, /describe tasks or on-demand RequestAI targets",
+    "a retroactive processing run (a stored 22 Sep run was left untouched)",
+    "continuous multi-camera caption admission",
+    "persistence across a controller restart, including the search host",
+    "named face recognition and AI Key plate recognition"
+   ],
+   "limits": "Captions: one persisted caption on one camera family under a single-use permit. Search: one Mac-hosted PostgreSQL search host behind a source-filtering relay, a local CLIP ViT-L/14 encoder, and a small index; retrieval quality is not benchmarked.",
+   "records": [
+    "docs/evidence/live-protect-7.3.68.md",
+    "docs/basic-descriptions.md",
+    "docs/evidence/find-anything-contract.md",
+    "docs/evidence/ai-key-capability-status.md"
+   ],
+   "raw_traces_public": false
+  },
+  {
+   "id": "live-protect-7.3.70",
+   "kind": "live",
+   "protect_version": "7.3.70",
+   "date": "2026-09-30",
+   "console": "UDM Pro Max",
+   "camera_family": "AI Port-paired G3/G4/G5 cameras and a G6 Instant",
+   "vision_provider": "local Ollama qwen3-vl 8B instruct on the NAS iGPU",
+   "operator": "integration owner",
+   "observed": [
+    "adopted and connected on the same state files after moving from a Mac Apple container to a NAS Docker container; no re-adoption",
+    "changeUserPassword answered 13 until the restored search role got the device's stored password, then 0 on the next connect",
+    "the local integration API camera inventory parsed under the 7.3.68 contract (10 smart-event candidates, 1 offline, no unknown types); the registry went fresh with 10 eligible cameras once 7.3.70 was listed",
+    "worker journal only: postVLM tasks were refused as video_contract while the registry was stale; afterwards 9 recognizeKeyFrames caption jobs reached completed, which means Protect answered each callback 2xx, and one failed on a persistent media 503",
+    "worker journal only: speechToText and recognizeFaces jobs reached completed (callback answered 2xx)",
+    "the unhandled connect-time commands are diskInfo and updateLcmSettings (bounded fingerprint window, matched against Protect's AI processor log); updateLcmSettings answered 0 after the Key stored it",
+    "search index row counts grew on the Key's PostgreSQL, including 2 rows for the native face camera after the face-task search tags change; counts do not attribute rows to that change",
+    "1 Oct 2026: deep understanding enabled on all cameras; session descriptions, re-ID vectors and descriptions saved natively; hybrid session search (BM25 plus rerank) returns ranked sessions; a manual face enhancement saved natively"
+   ],
+   "not_observed": [
+    "a caption read back from the exact-event record (metadata.ramDescription) on 7.3.70",
+    "transcription rows or face thumbnails read back per event on 7.3.70",
+    "an independently read-back player AI summary; the owner reported one rendered in the Büro player (screenshot, 09:09 local), while 4 on-demand jobs timed out earlier and 7 more after a restart with a caption backlog",
+    "the body or expected reply of diskInfo",
+    "deep mode, /describe tasks or a reverified event on 7.3.70"
+   ],
+   "limits": "Worker journal states, callback status codes and counters from one controller over about one day. A 2xx callback, a completed job or a growing row count is not a native saved caption, transcript, face or summary.",
+   "records": [
+    "docs/evidence/live-protect-7.3.70.md",
+    "docs/planning/nas-final-cutover.md"
+   ],
+   "raw_traces_public": false
+  },
+  {
    "id": "static-protect-7.2.105",
    "kind": "static",
    "protect_version": "7.2.105",
@@ -141,15 +217,62 @@
     {
      "name": "ubntbox 0.1.7",
      "sha256": "e16b4d5bae3b440221b7a20fc2bbee19fa732af451c8d787ff6d76956bc23807"
+    },
+    {
+     "name": "ui-websocketd 0.1.47.1 syswrapper.sh",
+     "sha256": "10fdc7d888b2051d6baf50424ce7c60a5aef47c8d33ca7fb0fbcf3a01c890da5"
+    },
+    {
+     "name": "ui-stt-agent 0.0.3.6 stt_app.py",
+     "sha256": "cafaa7a98b0f261eed49da785c68e9b4c7eb919f0b4c4f5e31c429c4d57b0639"
+    },
+    {
+     "name": "ui-ai-infer-agent 0.0.24.4",
+     "sha256": "b08e983a556ea90485c6b2d49570004778ed5bb22bc6860107c40d719fc6b886"
     }
    ],
    "records": [
     "docs/evidence/adoption-evidence.md",
     "docs/evidence/search-evidence.md",
     "docs/device-contract.md",
-    "docs/worker-contract.md"
+    "docs/worker-contract.md",
+    "docs/evidence/speech-to-text-contract.md"
    ],
    "note": "Static inspection only. Firmware was not executed. Nothing is redistributed here."
+  },
+  {
+   "id": "static-protect-7.3.60-bundle",
+   "kind": "static",
+   "bundle_version": "7.3.60",
+   "date": "2026-09-26",
+   "artifacts": [
+    {
+     "name": "usr/share/unifi-protect/app/service.js",
+     "version": "Protect 7.3.60",
+     "sha256": "9364cc9e37cd2ef283228f9f92e0efcc58c61f665c77224c7dfc158c0a358291"
+    }
+   ],
+   "records": [
+    "docs/evidence/speech-to-text-contract.md"
+   ],
+   "note": "Static inspection of the 7.3.60 controller bundle for the speech-to-text path. Live 7.3.60 evidence is a separate source; this does not change that version's classification. Nothing is redistributed here."
+  },
+  {
+   "id": "static-protect-7.3.70-bundle",
+   "kind": "static",
+   "bundle_version": "7.3.70",
+   "date": "2026-09-30",
+   "artifacts": [
+    {
+     "name": "usr/share/unifi-protect/app/service.js",
+     "version": "Protect 7.3.70",
+     "sha256": "b2dbea8740a201826b66d427e26cc428651751fcf1c4bda6de9b26765e558c16"
+    }
+   ],
+   "records": [
+    "docs/evidence/live-protect-7.3.70.md"
+   ],
+   "note": "The owner copied service.js from his console for private interoperability inspection of the AI Key connect-time commands (onAiprocessorConnected). Nothing is redistributed here."
   },
   {
    "id": "vendor-docs",
@@ -182,7 +305,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "indirect",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-aikey-2.2.8"
@@ -232,7 +356,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "indirect",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
@@ -257,7 +382,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "native-verified",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
@@ -302,7 +428,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "native-verified",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105"
@@ -327,7 +454,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105"
@@ -351,7 +479,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [
@@ -373,7 +502,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "indirect",
-    "live-protect-7.3.60": "indirect"
+    "live-protect-7.3.60": "indirect",
+    "live-protect-7.3.68": "indirect"
    },
    "static": [
     "static-protect-7.2.105",
@@ -399,7 +529,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105"
@@ -424,7 +555,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "native-verified",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [
@@ -448,7 +580,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "native-verified",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
@@ -473,7 +606,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "native-verified",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
@@ -499,7 +633,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "native-verified",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [
@@ -519,7 +654,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "native-verified",
-    "live-protect-7.3.60": "native-verified"
+    "live-protect-7.3.60": "native-verified",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-protect-7.2.105",
@@ -546,7 +682,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [
@@ -568,7 +705,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [
@@ -588,10 +726,11 @@
    "id": "lifecycle.unknown_controller_version",
    "area": "lifecycle",
    "title": "Unknown or unrecognized Protect versions in setConsoleInfo are reported as fixed categories; adoption and the baseline continue",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [],
    "tests": [
@@ -606,7 +745,7 @@
    "missing_evidence": [
     "The exact protectVersion value, if any, sent by 7.3.56 or 7.3.60 in setConsoleInfo was not recorded"
    ],
-   "notes": "Report, not refuse: a supported baseline must keep working on a newer controller. No feature is gated on version yet."
+   "notes": "Report, not refuse: a supported baseline must keep working on a newer controller. No feature is gated on version yet. On 7.3.68, before it was listed, health reported evidence unknown while the processor stayed adopted, reconnected and persisted a caption. 27 Sep readback: controller_version 7.3.68, evidence live_partial, adopted and connected (1 connection, no close code)."
   },
   {
    "id": "lifecycle.controller_upgrade",
@@ -615,7 +754,8 @@
    "status": "needs_evidence",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [],
@@ -630,29 +770,39 @@
    "id": "lifecycle.emulator_upgrade",
    "area": "lifecycle",
    "title": "Adoption and identity survive an emulator version upgrade",
-   "status": "needs_evidence",
-   "live": {},
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.70": "native-verified"
+   },
    "static": [],
    "tests": [
-    "tests/test_config_tls.py::test_incomplete_identity_is_not_regenerated"
+    "tests/test_config_tls.py::test_incomplete_identity_is_not_regenerated",
+    "tests/test_state_schema.py::test_a_migration_preserves_identity_and_keeps_one_backup",
+    "tests/test_state_schema.py::test_a_newer_schema_is_refused_and_never_rewritten",
+    "tests/test_state_schema.py::test_an_interrupted_write_keeps_the_original_and_the_retry_converges",
+    "tests/test_state_schema.py::test_rollback_restores_the_pre_upgrade_state_from_a_copy"
    ],
    "implementation": [
     "src/aikey/device.py",
-    "src/aikey/tls.py"
+    "src/aikey/tls.py",
+    "src/aikey/state_schema.py"
    ],
    "activation": "default",
    "missing_evidence": [
-    "No release-to-release upgrade exists yet; state schema 1 has no migration path (issue #24)"
-   ]
+    "A rollback to the previous release, read back in Protect",
+    "A release with a real state migration (current releases are schema 1 with no migrations)"
+   ],
+   "notes": " 1 Oct 2026 (7.3.70): seven Key image replacements (r19 to r25) on the same state files kept adoption and identity; Protect showed the same AI Key connected and adopted after each, with no re-adoption (readback 2 Oct)."
   },
   {
    "id": "control.get_info",
    "area": "control",
    "title": "getInfo returns type, sysid, version, MAC, uptime, poeType, storageSize and featureFlags",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "indirect",
-    "live-protect-7.3.60": "indirect"
+    "live-protect-7.3.60": "indirect",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-protect-7.2.105",
@@ -667,17 +817,19 @@
    ],
    "activation": "default",
    "missing_evidence": [
-    "The getInfo exchange and the capability state Protect stored were not recorded on either live version"
-   ]
+    "The getInfo exchange body was not recorded on any live version; the stored capability state is recorded for 7.3.68 only"
+   ],
+   "notes": "27 Sep 7.3.68 readback (N2): Protect's stored aiprocessors featureFlags equal the flags derived from the live Key configuration: supportImageSearch, supportRecognizeAnything, supportRetroactiveProcessing, supportTts, supportFaceRecognition and supportAiSummary enabled; supportFaceEnhancement, supportLicensePlateRecognition, supportVlm and supportDeepMode explicitly false; aiMode basic, describeConfigHash empty."
   },
   {
    "id": "control.get_task_queue_info",
    "area": "control",
    "title": "getTaskQueueInfo reports the six observed queue fields",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-protect-7.2.105",
@@ -700,10 +852,11 @@
    "id": "control.set_console_info",
    "area": "control",
    "title": "setConsoleInfo stores consoleName, id, protectVersion and supportsDbCredential locally",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-protect-7.2.105",
@@ -718,9 +871,10 @@
    ],
    "activation": "default",
    "missing_evidence": [
-    "The live body shape; a 7.3.x controller sending an extra field would currently receive errorCode 22"
+    "The 7.3.56 and 7.3.60 body shapes were not recorded; a controller sending an extra field would receive errorCode 22"
    ],
-   "rejection": "Any other controller field returns errorCode 22 and leaves stored metadata unchanged."
+   "rejection": "Any other controller field returns errorCode 22 and leaves stored metadata unchanged.",
+   "notes": "27 Sep 7.3.68 readback (N1): one setConsoleInfo, result code 0; the stored controller object has exactly consoleName, id, protectVersion and supportsDbCredential, so the allowlist matches 7.3.68."
   },
   {
    "id": "control.set_info",
@@ -729,7 +883,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-aikey-2.2.8"
@@ -750,10 +905,11 @@
    "id": "control.update_timezone",
    "area": "control",
    "title": "updateTimezone accepts only {timezone} as logical metadata",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-aikey-2.2.8"
@@ -777,7 +933,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "native-verified"
+    "live-protect-7.3.60": "native-verified",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
@@ -796,7 +953,8 @@
    "activation": "experimental_opt_in",
    "missing_evidence": [
     "Unscoped or repeated on-demand operation",
-    "Other camera families"
+    "Other camera families",
+    "A successful player AI summary after 7.3.60: it failed natively on 7.3.68 (28 Sep, owner report of \"Failed to generate\" summaries) and all 4 on-demand jobs on 7.3.70 timed out (30 Sep) behind a speech backlog"
    ],
    "notes": "Verified once, under a single-use on-demand scope for one camera."
   },
@@ -804,10 +962,12 @@
    "id": "control.request_ai.describe",
    "area": "control",
    "title": "RequestAI :7968/describe session task with image or video inputs",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed",
+    "live-protect-7.3.70": "native-verified"
    },
    "static": [
     "static-protect-7.2.105"
@@ -822,10 +982,8 @@
     "src/aikey/worker.py"
    ],
    "activation": "default",
-   "missing_evidence": [
-    "Whether 7.3.60 dispatches /describe at all (issue #10)",
-    "promptProfile session-v1 behavior is not reproduced"
-   ]
+   "missing_evidence": [],
+   "notes": "1 Oct 2026 (7.3.70): RequestAI :7968/describe with promptProfile session-v1 dispatched and answered."
   },
   {
    "id": "control.request_ai.unknown_target",
@@ -834,7 +992,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
@@ -855,23 +1014,58 @@
    "notes": "Before this change an unimplemented target surfaced as errorCode 5 'Command failed'."
   },
   {
+   "id": "control.request_ai.second_stage_verification",
+   "area": "control",
+   "title": "RequestAI second_verifier_mlabel classify (Second Stage Verification) answered by local CLIP zero-shot",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "not_observed",
+    "live-protect-7.3.70": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.60-bundle"
+   ],
+   "tests": [
+    "tests/test_find_anything.py::test_second_stage_verification_is_answered_by_local_clip",
+    "tests/test_find_anything.py::test_second_stage_verification_is_refused_unless_opted_in",
+    "tests/test_find_anything.py::test_malformed_verification_requests_are_refused_before_media",
+    "tests/test_find_anything.py::test_a_single_thumbnail_reverification_exports_the_second_after_it",
+    "tests/test_find_anything.py::test_a_reverification_longer_than_the_video_bound_verifies_its_first_window",
+    "tests/test_find_anything.py::test_a_long_reverification_without_regions_is_still_refused_before_media",
+    "tests/test_find_anything.py::test_a_reverification_thumbnail_at_the_export_end_is_judged_on_the_last_frame"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "An unsure verdict (detectedAs none) leaving a live event unchanged has not been read back",
+    "Zero-shot accuracy on real low-confidence crops is not measured",
+    "No verdict for an AI Port-sourced track has been saved yet"
+   ],
+   "notes": "Unsure or background verdicts answer detectedAs none, which saveReverification ignores, so the event is unchanged; a different type is sent only at a zero-shot probability of 0.9 or more. 3 Oct 2026: Protect asked to verify a Wohnzimmer (G6) animal thumbnail; the Key confirmed it (callback 200) and Protect saved preReverificationObjectType animal and preReverificationConfidence 72, now showing 99 %. A track longer than max_video_duration_ms is verified in the window from its first object."
+  },
+  {
    "id": "control.recognize_key_frames",
    "area": "control",
    "title": "recognizeKeyFrames video caption command within explicit one-use camera scopes",
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "native-verified"
+    "live-protect-7.3.60": "native-verified",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
    ],
    "tests": [
-    "tests/test_basic_descriptions.py::test_real_http_caption_and_full_ram_envelope_once_across_restart",
-    "tests/test_basic_descriptions.py::test_native_video_metadata_and_longer_timeline_use_bounded_frames",
     "tests/test_basic_descriptions.py::test_device_admits_explicit_wrapper_and_sanitizes_bounded_diagnostics",
+    "tests/test_basic_descriptions.py::test_native_video_metadata_and_longer_timeline_use_bounded_frames",
+    "tests/test_basic_descriptions.py::test_real_http_caption_and_full_ram_envelope_once_across_restart",
     "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect",
+    "tests/test_key_moment_boundaries.py::test_a_key_moment_at_end_decodes_the_exports_last_frame",
+    "tests/test_key_moment_boundaries.py::test_worker_guard_boundaries",
     "tests/test_two_camera_scope.py::test_each_camera_spends_only_its_own_permit_and_replays_after_restart"
    ],
    "implementation": [
@@ -892,7 +1086,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [
@@ -902,7 +1097,10 @@
     "tests/test_continuous_admission.py::test_global_budget_charges_twelve_before_media_across_cameras_and_restart",
     "tests/test_continuous_admission.py::test_continuous_real_loopback_callback_and_duplicate_no_extra_charge",
     "tests/test_continuous_admission.py::test_orphaned_reservation_cannot_repeat_a_paid_call",
-    "tests/test_continuous_admission.py::test_inventory_change_during_start_never_reserves_or_fetches"
+    "tests/test_continuous_admission.py::test_inventory_change_during_start_never_reserves_or_fetches",
+    "tests/test_continuous_scope_gates.py::test_a_listed_camera_is_admitted_and_a_same_model_sibling_is_not",
+    "tests/test_continuous_scope_gates.py::test_a_reconnecting_same_model_camera_does_not_widen_the_scope",
+    "tests/test_continuous_scope_gates.py::test_an_unreported_or_unevidenced_controller_version_blocks_admission"
    ],
    "implementation": [
     "src/aikey/camera_registry.py",
@@ -915,9 +1113,10 @@
    "missing_evidence": [
     "Native Protect dispatch and persistence under continuous admission",
     "Preservation of existing native recognition tags on additional model families",
-    "Fair scheduling and a multi-day live endurance run"
+    "Fair scheduling and a multi-day live endurance run",
+    "Caption persistence on an AI Port-sourced event: 0 of 128 post-pairing G5 Flex events carry a caption (none was in scope); the only G5 caption predates pairing"
    ],
-   "notes": "Not deployed. Only connected smart-event cameras in the explicit model-family allowlist can be admitted while the pinned 7.3.60 inventory is fresh. Twelve new paid attempts per rolling hour are reserved before media or inference; uncertain attempts are not refunded. Protect-side camera policies are separate."
+   "notes": "Not deployed. Only connected smart-event cameras in the explicit model-family allowlist, and in the optional camera_ids pin, can be admitted while the inventory is fresh and the controller itself reported a version with native caption evidence (7.3.60 or 7.3.68). Twelve new paid attempts per rolling hour are reserved before media or inference; uncertain attempts are not refunded. Protect-side camera policies are separate. Rollout plan: docs/planning/continuous-caption-rollout.md."
   },
   {
    "id": "worker.private_journal_rollover",
@@ -926,7 +1125,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [],
    "tests": [
@@ -948,10 +1148,13 @@
   {
    "id": "control.recognize_key_frames.other_variants",
    "area": "control",
-   "title": "recognizeKeyFrames image, multipleImages, audio and retroactive variants",
+   "title": "recognizeKeyFrames image variant (one cropped audio-event thumbnail)",
    "status": "unsupported",
-   "live": {},
+   "live": {
+    "live-protect-7.3.68": "indirect"
+   },
    "static": [
+    "static-protect-7.3.60-bundle",
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
    ],
@@ -964,9 +1167,35 @@
    ],
    "activation": "default",
    "missing_evidence": [
-    "Which variants 7.3.60 sends in normal operation"
+    "Dispatched live on 7.3.68 for audio events (216 in one morning), but the thumbnail has no tracker ID, so no object match for an embedding is established"
    ],
-   "rejection": "Worker rejects before media or inference; the UCP response is errorCode 5 with generic text."
+   "rejection": "Refused before media with result 5 (unsupported payload fields); nothing is posted."
+  },
+  {
+   "id": "control.recognize_key_frames.multiple_images",
+   "area": "control",
+   "title": "recognizeKeyFrames multipleImages (retroactive backfill of saved object crops)",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.60-bundle"
+   ],
+   "tests": [
+    "tests/test_find_anything.py::test_retroactive_crops_are_embedded_locally_as_thumbnail_tags",
+    "tests/test_find_anything.py::test_malformed_retroactive_tasks_are_refused_before_media",
+    "tests/test_find_anything.py::test_completed_index_jobs_roll_over_so_a_backfill_never_fills_the_ledger",
+    "tests/test_find_anything.py::test_retroactive_image_and_unindexed_camera_tasks_are_refused_before_any_fetch"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Crops of older events can be gone (HTTP 404); those events stay unindexed",
+    "39 events whose tasks were dropped at a mid-run Key swap stay unindexed; Protect does not retry timed-out tasks"
+   ]
   },
   {
    "id": "control.host_management",
@@ -991,9 +1220,11 @@
   {
    "id": "control.ai_settings_commands",
    "area": "control",
-   "title": "changeAiInferAgentSettings, changeDescribePrompts, networkStatus and sshService",
+   "title": "networkStatus and sshService",
    "status": "unsupported",
-   "live": {},
+   "live": {
+    "live-protect-7.3.68": "indirect"
+   },
    "static": [],
    "tests": [
     "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
@@ -1005,14 +1236,213 @@
    "missing_evidence": [
     "These names appear in the device diagnostic allowlist, but no public record states their source or when Protect sends them"
    ],
-   "rejection": "errorCode 95 with an empty body; counted in fixed diagnostics."
+   "rejection": "errorCode 95 with an empty body; counted in fixed diagnostics.",
+   "notes": "changeDescribePrompts moved to control.deep_mode (Protect 7.3.70 syncDescribePrompts)."
+  },
+  {
+   "id": "control.change_ai_infer_agent_settings",
+   "area": "control",
+   "title": "changeAiInferAgentSettings stored and answered 0",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "not_observed"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect",
+    "tests/test_command_fingerprints.py::test_ai_infer_agent_settings_are_stored_and_malformed_ones_refused"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Protect's aiprocessors log no longer reporting \"Failed to updateAiSettings\" after a connect (not read back)"
+   ],
+   "notes": "Protect 7.3.70 updateAiSettings sends {deepModeSupported, enableFaceEnhance, enableFaceRecognize, enableLprRecognize, enableRAM, enableSTT, region} on connect. The Key validates the exact field set and stores it; which engines it runs stays governed by its own configuration."
+  },
+  {
+   "id": "control.deep_mode",
+   "area": "control",
+   "title": "Deep understanding: supportDeepMode, aiMode switch and describe prompt sync",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.70": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_deep_mode.py::test_a_deep_capable_key_switches_mode_and_echoes_it",
+    "tests/test_deep_mode.py::test_describe_prompts_are_stored_and_their_hash_echoed",
+    "tests/test_deep_mode.py::test_a_key_without_deep_models_stays_basic"
+   ],
+   "implementation": [
+    "src/aikey/device.py",
+    "src/aikey/deep_mode.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [],
+   "notes": "getInfo reports supportDeepMode/supportVlm only with deep_understanding.reid_server, an http E5 backend and an OpenAI-compatible describer. aiMode and describeConfigHash echo what Protect last set; changeDescribePrompts is stored privately in describe-prompts.json. 1 Oct 2026 (7.3.70): with the deepUnderstanding policy enabled, Protect switched the Key with changeAiInferAgentSettings {modelMode: deep}; getInfo echoes aiMode deep and describeConfigHash 9fec385b7771."
+  },
+  {
+   "id": "worker.deep_reid_embeddings",
+   "area": "worker",
+   "title": "generate-embeddings: person re-ID vectors for dedup sessions",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.70": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_deep_mode.py::test_person_crops_get_padded_reid_vectors",
+    "tests/test_deep_mode.py::test_a_failing_reid_server_reports_failed_objects",
+    "tests/test_deep_mode.py::test_malformed_embed_requests_are_refused_before_media",
+    "tests/test_vision_server.py::test_a_person_crop_gets_a_normalized_reid_vector"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/deep_mode.py",
+    "src/aikey/vision_server.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Grouping quality against Protect's native 512-value model"
+   ],
+   "notes": "RequestAI :7445/generate-embeddings; callback /internal/aiprocessors/embeddings/{taskId} with {camera, event, embeddings:[{objectId, objectType, reidEmbed, model, dim}], failed}. smartDetectSessionObjects.reidEmbedding on the Key's search host is vector(512) (read back 30 Sep). 1 Oct 2026: generate-embeddings tasks answered with NPU re-ID vectors; the search host stored them in smartDetectSessionObjects.reidEmbedding (213 tasks, 271 crops, 1 failed by 14:44)."
+  },
+  {
+   "id": "worker.deep_session_describe",
+   "area": "worker",
+   "title": "session-v1 describe: open and close passes with Protect's prompts and schema",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.70": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_deep_mode.py::test_an_open_pass_is_described_with_protects_prompt_and_schema",
+    "tests/test_deep_mode.py::test_a_close_pass_crops_each_object_box_from_the_video_export",
+    "tests/test_deep_mode.py::test_describing_before_protect_synced_prompts_fails",
+    "tests/test_deep_mode.py::test_a_describer_answer_without_json_fails_the_task"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/deep_mode.py",
+    "src/aikey/providers.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [],
+   "notes": "The prompt for the sorted object-type combination (describeComboKey) is sent with its sampling and describeSchema as response_format json_schema to the local OpenAI-compatible model; the reply {description, labels} gets an E5 passage descEmbedding (384 values) and goes to /internal/aiprocessors/descriptions/{taskId}. 1 Oct 2026: open and close passes described with Protect's prompts and schema; Protect read back 184 of 190 sessions described. Label lists are bounded (maxItems 32) for guided decoding; 391 of 391 described after r24/r25."
+  },
+  {
+   "id": "search.e5_session_query",
+   "area": "search",
+   "title": "E5 session search queries next to basic CLIP search",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.70": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_deep_mode.py::test_session_search_gets_an_e5_vector_under_the_clip_profile"
+   ],
+   "implementation": [
+    "src/aikey/search.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [],
+   "notes": "7.3.70 encodeSessionSearchQuery sends NL_PARSE with model multilingual-e5-small and requires a 384-value txtEmbed; the clip-basic-v1 profile now answers it from the configured E5 backend. 1 Oct 2026: session NLS search returns ranked sessions natively (e.g. 30 results, top confidence 99 for a matching description) once the search host has the hybrid objects."
+  },
+  {
+   "id": "callbacks.audio_image_tagging",
+   "area": "callbacks",
+   "title": "Audio-event thumbnails (ramType image) answered with event-level tags and a local description",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.70": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_find_anything.py::test_an_audio_event_thumbnail_gets_event_level_ram_tags",
+    "tests/test_find_anything.py::test_a_continuous_unmetered_key_also_describes_the_audio_thumbnail",
+    "tests/test_find_anything.py::test_malformed_audio_image_tasks_are_refused_before_media"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [],
+   "notes": "7.3.70 pushAudioTask sends recognizeKeyFrames with ramType image. Audio events have no smart objects, so saveEventTagging keeps only event-level results: a key moment without search snapshots and the description. Native readback, 30 Sep (Protect's own event records through the signed-in web app): 31 audio events saved with ramState done, event-level ramTags (7 to 15 each) and a ramDescription."
+  },
+  {
+   "id": "index.ram_open_vocabulary_tags",
+   "area": "search",
+   "title": "RAM++ open-vocabulary tags for scenes, objects and crops",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.70": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_find_anything.py::test_index_jobs_carry_scene_tags_and_ram_tags_per_object",
+    "tests/test_find_anything.py::test_a_failing_tag_server_never_fails_the_job",
+    "tests/test_vision_server.py::test_a_jpeg_gets_ram_tags"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/vision_server.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Protect's ramTags table was not read; tags it does not know are skipped with a warning (saveEventTagging)"
+   ],
+   "notes": "RAM++ Swin-L 14M (OpenVINO, NPU) with its own per-class thresholds; its 4585-tag list is public. The class tag stays first. Native readback, 30 Sep (Protect's own event records through the signed-in web app): 31 audio events saved with ramState done, event-level ramTags (7 to 15 each) and a ramDescription."
+  },
+  {
+   "id": "control.disk_info",
+   "area": "control",
+   "title": "diskInfo answered with the storage size in GB",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "not_observed"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect",
+    "tests/test_command_fingerprints.py::test_connect_time_sync_commands_keep_only_their_field_shape"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "featureFlags.storageSize read back from Protect after a connect"
+   ],
+   "notes": "Protect 7.3.70 syncStorageSize sends diskInfo {} and parses {storageSize: string} with parseInt into featureFlags.storageSize (GB, default 128; a UP-AI-KEY with 128 is shown as the UP-AI-KEY-128 platform). The Key answers device.storage_size_gb, default 128, so Protect's stored value is unchanged."
   },
   {
    "id": "control.unknown_command",
    "area": "control",
    "title": "Any other command name",
    "status": "unsupported",
-   "live": {},
+   "live": {
+    "live-protect-7.3.68": "indirect"
+   },
    "static": [],
    "tests": [
     "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect",
@@ -1032,7 +1462,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "indirect",
-    "live-protect-7.3.60": "indirect"
+    "live-protect-7.3.60": "indirect",
+    "live-protect-7.3.68": "indirect"
    },
    "static": [
     "static-aikey-2.2.8"
@@ -1137,7 +1568,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "native-verified"
+    "live-protect-7.3.60": "native-verified",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-protect-7.2.105"
@@ -1180,7 +1612,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105"
@@ -1220,7 +1653,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "native-verified"
+    "live-protect-7.3.60": "native-verified",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
@@ -1234,7 +1668,9 @@
     "src/aikey/worker.py"
    ],
    "activation": "default",
-   "missing_evidence": [],
+   "missing_evidence": [
+    "An on-demand result delivered to the caller on 7.3.68 or 7.3.70"
+   ],
    "notes": "The caller receives the description. On-demand results are not persisted by design."
   },
   {
@@ -1244,7 +1680,8 @@
    "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "native-verified"
+    "live-protect-7.3.60": "native-verified",
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
     "static-protect-7.2.105",
@@ -1261,45 +1698,47 @@
    "missing_evidence": [
     "Persistence after a controller restart",
     "Repeated or simultaneous jobs under continuous operation",
-    "Effect on events that already carry native tags"
+    "Effect on events that already carry native tags",
+    "Persistence for events whose smart detection is supplied by a paired AI Port"
    ],
-   "notes": "G5 Flex persistence verified by exact-event GET (ramState done, ramDescription) and native panel after full page reload. G4 Instant native panel showed the exact worker caption after full page reload; no exact-event GET was run for it. Persistence was verified in the UI, not by HTTP 200 alone."
+   "notes": "G5 Flex persistence verified by exact-event GET (ramState done, ramDescription) and native panel after full page reload. G4 Instant native panel showed the exact worker caption after full page reload. On 27 Sep, after the controller moved to 7.3.68, exact-event GETs returned metadata.ramState done and a non-empty metadata.ramDescription for the G5 Flex (22 Sep), G4 Instant (23 Sep) and G6 Instant (26 Sep) caption events, with list and exact lengths equal; a 21-day per-camera scan found no other persisted caption. Persistence was verified in the UI, not by HTTP 200 alone."
   },
   {
    "id": "callback.ram_description_only",
    "area": "callbacks",
    "title": "Legacy description-only multipart profiles key-2.2.8 and protect-7.2.105",
-   "status": "fixture-tested",
+   "status": "unsupported",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed"
    },
    "static": [
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
    ],
    "tests": [
-    "tests/test_worker.py::test_explicit_legacy_multipart_profiles",
-    "tests/test_protocol.py::DescriptionTests::test_receiver_profile_rejects_device_shape_missing_camera"
+    "tests/test_two_camera_scope.py::test_description_only_scope_is_refused_because_protect_7_3_does_not_save_it"
    ],
    "implementation": [
     "src/aikey/protocol.py",
     "src/aikey/worker.py"
    ],
    "activation": "explicit_opt_in",
-   "missing_evidence": [
-    "Live receiver behavior for either profile",
-    "Description-only updates existing rows only; no initial insert"
-   ]
+   "missing_evidence": [],
+   "rejection": "refused at configuration: Protect 7.3.x saves ramState done with an empty ramDescription for a result without keyMomentsTags",
+   "notes": "Observed on 7.3.60 (23 Sep G6 event) and read back on 7.3.68: ramState done, ramDescription empty. The 7.3.60 bundle routes results without keyMomentsTags to a handler that only updates an existing RAM row."
   },
   {
    "id": "callback.task_description",
    "area": "callbacks",
    "title": "Session description JSON at /internal/aiprocessors/descriptions/<taskId>",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed",
+    "live-protect-7.3.70": "native-verified"
    },
    "static": [
     "static-protect-7.2.105"
@@ -1313,9 +1752,8 @@
     "src/aikey/worker.py"
    ],
    "activation": "default",
-   "missing_evidence": [
-    "A live controller task ledger entry; unknown task IDs are dropped after HTTP 200"
-   ]
+   "missing_evidence": [],
+   "notes": "1 Oct 2026 (7.3.70): descriptions posted to /internal/aiprocessors/descriptions/<taskId> were saved as session descriptions and labels (readback, not HTTP 200)."
   },
   {
    "id": "callback.origin_allowlist",
@@ -1359,26 +1797,25 @@
   {
    "id": "capability.explicit_disabled_flags",
    "area": "capabilities",
-   "title": "Object capabilities advertised as {enabled:false, version:v1} because the controller fills missing flags as enabled",
+   "title": "Capability flags derived from served features; unserved ones sent explicitly disabled",
    "status": "fixture-tested",
    "live": {
-    "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.68": "indirect"
    },
    "static": [
     "static-protect-7.2.105"
    ],
    "tests": [
-    "tests/test_device.py::test_info_reports_observed_fields_and_explicit_disabled_capabilities",
-    "tests/test_compatibility_fixtures.py::test_fixture_commands_over_tls_keep_adoption_identity_and_reconnect"
+    "tests/test_find_anything.py::test_capability_flags_follow_the_served_features"
    ],
    "implementation": [
     "src/aikey/device.py"
    ],
    "activation": "default",
    "missing_evidence": [
-    "The capability state Protect displayed or stored on either live version"
-   ]
+    "The capability state Protect stored on 7.3.56 and 7.3.60 was not recorded"
+   ],
+   "notes": "27 Sep 7.3.68 readback (N2): Protect's stored aiprocessors featureFlags equal the flags derived from the live Key configuration: supportImageSearch, supportRecognizeAnything, supportRetroactiveProcessing, supportTts, supportFaceRecognition and supportAiSummary enabled; supportFaceEnhancement, supportLicensePlateRecognition, supportVlm and supportDeepMode explicitly false; aiMode basic, describeConfigHash empty. A stored flag is not proof that the feature works, so this stays fixture-tested."
   },
   {
    "id": "capability.ai_mode_basic",
@@ -1398,7 +1835,8 @@
    "activation": "default",
    "missing_evidence": [
     "How 7.3.x interprets aiMode"
-   ]
+   ],
+   "notes": " Since 1 Oct 2026 the live Key runs aiMode deep at Protect's request; basic stays the default without a deep configuration."
   },
   {
    "id": "capability.support_ai_summary",
@@ -1407,7 +1845,8 @@
    "status": "fixture-tested",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "indirect"
    },
    "static": [
     "static-protect-7.2.105"
@@ -1421,54 +1860,66 @@
    "activation": "experimental_opt_in",
    "missing_evidence": [
     "Whether supportAiSummary was advertised as enabled during the 7.3.60 caption trial is not in the public records"
-   ]
+   ],
+   "notes": "27 Sep 7.3.68: with the explicit opt-in and a configured caption path, Protect stored supportAiSummary enabled (N2). A stored flag is not proof that the feature works, so this stays fixture-tested."
   },
   {
    "id": "capability.deep_mode_vlm",
    "area": "capabilities",
    "title": "supportDeepMode / supportVlm",
-   "status": "unsupported",
-   "live": {},
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "indirect"
+   },
    "static": [
     "static-protect-7.2.105"
    ],
    "tests": [
-    "tests/test_device.py::test_info_reports_observed_fields_and_explicit_disabled_capabilities"
+    "tests/test_device.py::test_info_reports_observed_fields_and_explicit_disabled_capabilities",
+    "tests/test_deep_mode.py::test_a_deep_capable_key_switches_mode_and_echoes_it"
    ],
    "implementation": [
     "src/aikey/device.py"
    ],
    "activation": "default",
    "missing_evidence": [
-    "Whether 7.3.x still couples the two flags"
+    "Whether 7.3.x still couples supportDeepMode and supportVlm"
    ],
-   "rejection": "Both false. Protect 7.2.105 couples them (supportDeepMode ?? supportVlm), so they cannot be advertised independently."
+   "notes": "The flag is advertised with deep models configured; the behavior behind it is control.deep_mode (native-verified on 7.3.70)."
   },
   {
    "id": "capability.face_recognition",
    "area": "capabilities",
-   "title": "Face grouping, enrollment and recognition",
-   "status": "unsupported",
-   "live": {},
+   "title": "supportFaceRecognition advertised with local face recognition",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.68": "indirect"
+   },
    "static": [
     "static-protect-7.2.105"
    ],
-   "tests": [],
+   "tests": [
+    "tests/test_find_anything.py::test_capability_flags_follow_the_served_features",
+    "tests/test_local_faces.py::test_a_camera_with_native_face_detection_gets_no_ai_key_face_and_no_fetch"
+   ],
    "implementation": [
     "src/aikey/device.py"
    ],
-   "activation": "default",
+   "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Native contract (issue #20)"
-   ],
-   "rejection": "supportFaceRecognition disabled; faceMeta accepted and ignored."
+    "Fresh native readback after the native-face skip (27 Sep 00:21 UTC): new Wohnzimmer events with camera faces and no new AI Key faces",
+    "AI Key faces carry no faceEmbed, so Protect puts each in its own group (65 singleton groups on 26 Sep); grouping needs Protect's camera-model embedding, which the Key cannot produce",
+    "Named recognition needs an owner-named group and an eligible legacy camera; none is eligible today"
+   ]
   },
   {
    "id": "capability.license_plate_recognition",
    "area": "capabilities",
    "title": "License-plate recognition",
    "status": "unsupported",
-   "live": {},
+   "live": {
+    "live-protect-7.3.68": "indirect"
+   },
    "static": [
     "static-protect-7.2.105"
    ],
@@ -1478,48 +1929,90 @@
    ],
    "activation": "default",
    "missing_evidence": [
-    "Native contract (issue #19)"
+    "The Protect 7.3.68 AI Key plate task, result shape and save callback (LPR_LEGACY dispatch); the backend source is not available locally (issue #19)",
+    "An approved local plate reader on the host; the AI Port reads plates only through the external vision provider (issue #19)",
+    "A connected, unpaired legacy camera offered under Legacy Camera Enhancement, and an owner decision (issues #2, #19)"
    ],
-   "rejection": "supportLicensePlateRecognition disabled; vehicleMeta accepted and ignored."
+   "rejection": "supportLicensePlateRecognition sent disabled: the Key has no plate reader, and no connected camera is eligible (unpaired G4/G5 or Doorbell Lite). Paired cameras get plates from the AI Port (issue #19)."
   },
   {
    "id": "capability.face_enhancement",
    "area": "capabilities",
-   "title": "Automatic and manual face enhancement",
-   "status": "unsupported",
-   "live": {},
+   "title": "Manual face enhancement (enhanceImage)",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "indirect"
+   },
    "static": [
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
    ],
-   "tests": [],
+   "tests": [
+    "tests/test_face_enhancement.py::test_an_enhanced_face_is_uploaded_as_a_separate_derivative",
+    "tests/test_vision_server.py::test_an_aligned_face_is_restored_and_pasted_back_at_least_crop_size"
+   ],
    "implementation": [
-    "src/aikey/device.py"
+    "src/aikey/device.py",
+    "src/aikey/worker.py",
+    "src/aikey/vision_server.py"
    ],
-   "activation": "default",
+   "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Native contract (issue #23)"
+    "Whether Protect ever dispatches enhanceImage automatically"
    ],
-   "rejection": "supportFaceEnhancement disabled."
+   "notes": "The flag is advertised with a configured local enhancer; the behavior behind it is callback.enhanced_face_image."
+  },
+  {
+   "id": "callback.enhanced_face_image",
+   "area": "callbacks",
+   "title": "enhanceImage answered with an enhanced face derivative at /internal/aiprocessors/image/enhanced",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.70": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.70-bundle"
+   ],
+   "tests": [
+    "tests/test_face_enhancement.py::test_an_enhanced_face_is_uploaded_as_a_separate_derivative",
+    "tests/test_face_enhancement.py::test_declined_or_unsafe_output_uploads_no_modification",
+    "tests/test_vision_server.py::test_an_aligned_face_is_restored_and_pasted_back_at_least_crop_size"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/vision_server.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Whether Protect ever dispatches enhanceImage automatically"
+   ],
+   "notes": "1 Oct 2026 (7.3.70): Protect's Enhance action sent enhanceImage; GFPGAN on the NPU (aligned to its FFHQ template) produced a derivative that Protect saved (faceEnhanceState done, enhancedImageId set; readback, not HTTP 200). Protect's multipart parser keeps only parts typed exactly text/plain."
   },
   {
    "id": "capability.retroactive_processing",
    "area": "capabilities",
-   "title": "Retroactive processing of older footage",
-   "status": "unsupported",
-   "live": {},
+   "title": "supportRetroactiveProcessing opt-in for Find Anything backfill",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.68": "indirect"
+   },
    "static": [
-    "static-protect-7.2.105"
+    "static-protect-7.3.60-bundle"
    ],
-   "tests": [],
+   "tests": [
+    "tests/test_find_anything.py::test_retroactive_processing_is_advertised_only_on_opt_in",
+    "tests/test_retroactive_plan.py::test_a_completed_run_cannot_be_continued_or_restarted"
+   ],
    "implementation": [
-    "src/aikey/device.py"
+    "src/aikey/device.py",
+    "src/aikey/clip.py",
+    "src/aikey/retroactive_plan.py"
    ],
-   "activation": "default",
+   "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Native media forms for retroactive jobs"
-   ],
-   "rejection": "supportRetroactiveProcessing disabled."
+    "The stored run completed on an empty batch query at an 18 Sep 19:10 cursor although 2109 older tracker-crop events have no RAM task state; the cause needs Protect's aiprocessorTasks rows or 7.3.68 runner source",
+    "Protect does not allow continuing older events once a run is completed without re-adopting the AI Key (start requires not_started on every processor; nothing resets it)"
+   ]
   },
   {
    "id": "capability.recognize_anything_tagging",
@@ -1540,54 +2033,131 @@
    "missing_evidence": [
     "Structured object results (issue #14)"
    ],
-   "rejection": "supportRecognizeAnything disabled; captions report keyMomentsTags [] and never invent tags."
+   "rejection": "No Recognize Anything model: since 9de93fd each indexed object carries only its class (person, vehicle, animal or package) as one RAM tag, and no open-vocabulary tag words are produced. supportRecognizeAnything is sent enabled only with Find Anything object indexing, which supplies embeddings."
   },
   {
    "id": "capability.audio_speech",
    "area": "capabilities",
-   "title": "Audio detection and speech transcription",
-   "status": "unsupported",
-   "live": {},
+   "title": "Speech transcription (speechToText)",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.68": "indirect"
+   },
    "static": [
-    "static-protect-7.2.105",
-    "vendor-docs"
+    "static-protect-7.3.60-bundle",
+    "static-aikey-2.2.8"
    ],
-   "tests": [],
+   "tests": [
+    "tests/test_speech_to_text.py::test_a_speech_event_is_transcribed_and_posted_in_protects_shape",
+    "tests/test_speech_to_text.py::test_silence_noise_and_repeated_hallucinations_post_no_transcript",
+    "tests/test_speech_to_text.py::test_a_failing_backend_posts_nothing",
+    "tests/test_speech_to_text.py::test_anything_but_the_exact_native_task_is_refused_before_media_or_audio",
+    "tests/test_speech_to_text.py::test_the_device_routes_speech_to_text_only_for_allowed_cameras"
+   ],
    "implementation": [
-    "src/aikey/worker.py"
+    "src/aikey/speech.py",
+    "src/aikey/worker.py",
+    "src/aikey/device.py"
    ],
-   "activation": "default",
+   "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Native contract (issue #15)",
-    "Vendor camera eligibility differs between sources"
+    "Speech on AI Port-paired legacy cameras, which raise no alrmSpeak",
+    "The capability flag itself is never native-verified by the matrix rules; the transcripts it enables are (callback.speech_to_text_transcriptions)"
    ],
-   "rejection": "Audio variants rejected before media or inference."
+   "notes": "Protect dispatches speechToText only for an alrmSpeak audio event and only to an AI processor whose speechToTextSettings list the camera; no capability flag is involved. Refused unless speech_to_text lists the camera."
+  },
+  {
+   "id": "callback.speech_to_text_transcriptions",
+   "area": "callbacks",
+   "title": "speechToText callback saved as native transcription rows",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.60-bundle",
+    "static-aikey-2.2.8"
+   ],
+   "tests": [
+    "tests/test_speech_to_text.py::test_a_speech_event_is_transcribed_and_posted_in_protects_shape",
+    "tests/test_speech_to_text.py::test_a_failing_backend_posts_nothing"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/speech.py",
+    "src/aikey/whisper_server.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Persistence after a controller restart",
+    "Non-German speech, noise and overlapping speakers on live events",
+    "Transcript text search: Protect 7.3.68 basic mode has none (events filters ignore searchText, keyword and labels; detection-nls searches object vectors only); only the transcript label and per-event viewer exist"
+   ],
+   "notes": "Verified by transcription rows read back per event (counts and time bounds only, no text inspected), not by HTTP 200. Backend: local whisper.cpp; audio never left the Mac."
+  },
+  {
+   "id": "callback.face_recognition_part",
+   "area": "callbacks",
+   "title": "face multipart callback saved as native face thumbnails linked to person trackers",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.60-bundle"
+   ],
+   "tests": [
+    "tests/test_local_faces.py::test_live_list_shaped_person_regions_reach_local_faces",
+    "tests/test_local_faces.py::test_without_face_regions_the_face_is_searched_in_person_regions_and_linked",
+    "tests/test_local_faces.py::test_face_processing_is_local_only"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/faces.py",
+    "src/aikey/face_server.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Named matches (owner must name a face group)",
+    "Persistence after a controller restart"
+   ],
+   "notes": "Verified by face thumbnails with AI Key tracker range and Protect face groups read back as types and counts; no image or name inspected. Faces never reached the vision provider."
   },
   {
    "id": "capability.ai_alarms",
    "area": "capabilities",
    "title": "AI query matches in Alarm Manager",
-   "status": "unsupported",
+   "status": "fixture-tested",
    "live": {},
-   "static": [],
-   "tests": [],
-   "implementation": [],
+   "static": [
+    "static-protect-7.3.60-bundle"
+   ],
+   "tests": [
+    "tests/test_find_anything.py::test_key_tags_name_the_class_of_object_words_only",
+    "tests/test_find_anything.py::test_class_tags_cover_supported_classes_and_nothing_else",
+    "tests/test_find_anything.py::test_objects_are_embedded_locally_and_posted_as_thumbnail_tags"
+   ],
+   "implementation": [
+    "src/aikey/search.py",
+    "src/aikey/worker.py"
+   ],
    "activation": "default",
    "missing_evidence": [
-    "Native contract (issue #26)"
+    "An owner-created AI Trigger alarm on an AI Key-indexed camera, its ai_nls trigger on the original event, and a negative control of another class (no alarm has been created)",
+    "ramDetections rows with non-empty ramTagIds after 9de93fd"
    ],
-   "rejection": "Not implemented."
+   "notes": "Protect 7.3.60 matchRules needs at least one RAM tag shared between the rule sentence's keyTags (NL_PARSE) and the detection's tags, then compares embeddings. Since 9de93fd, NL_PARSE returns class keyTags (person, vehicle, animal, package; English and German) and indexed objects carry their class as one RAM tag. Only class words are matched; no vendor tag vocabulary is shipped."
   },
   {
    "id": "database.credential_rotation_hook",
    "area": "database",
    "title": "PostgreSQL unifi-protect role rotated before management-password rotation",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
-    "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.68": "native-verified"
    },
    "static": [
+    "static-protect-7.3.60-bundle",
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
    ],
@@ -1601,16 +2171,19 @@
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "A real PostgreSQL transaction",
-    "Protect connecting with the rotated password"
-   ]
+    "Protect only re-sent the current password; a change to a genuinely new value was not observed",
+    "Pending/uncertain rotation recovery on a live controller"
+   ],
+   "notes": "Protect's per-connect changeUserPassword (credential confirmation) was applied to the real unifi-protect role, after which Protect's own PostgreSQL login succeeded."
   },
   {
    "id": "database.supports_db_credential_handoff",
    "area": "database",
    "title": "supportsDbCredential console capability and controller access-rule update",
    "status": "needs_evidence",
-   "live": {},
+   "live": {
+    "live-protect-7.3.68": "indirect"
+   },
    "static": [
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
@@ -1621,53 +2194,72 @@
    ],
    "activation": "default",
    "missing_evidence": [
-    "Live setConsoleInfo sequence and flag value",
-    "Access-rule behavior expected by 7.3.x"
+    "setConsoleInfo stored supportsDbCredential true on 7.3.68, but the access-rule behavior 7.3.x expects from it is not established"
    ],
-   "notes": "setConsoleInfo stores the flag; no access rules are edited."
+   "notes": "setConsoleInfo stores the flag (27 Sep: true, boolean); no access rules are edited."
   },
   {
    "id": "database.controller_migrations",
    "area": "database",
    "title": "Protect migrations and extensions applied to the processor database",
-   "status": "needs_evidence",
-   "live": {},
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "native-verified"
+   },
    "static": [
+    "static-protect-7.3.60-bundle",
     "static-protect-7.2.105"
    ],
-   "tests": [],
-   "implementation": [],
-   "activation": "default",
+   "tests": [
+    "tests/test_pg_relay.py::test_an_allowed_peer_reaches_postgres_and_bytes_pass_unchanged",
+    "tests/test_pg_relay.py::test_other_sources_are_refused_before_any_upstream_connection"
+   ],
+   "implementation": [
+    "src/aikey/pg_relay.py",
+    "deployment/postgres/entrypoint.sh"
+   ],
+   "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Real PostgreSQL/pgvector execution",
-    "Migration acceptance and restart recovery on 7.3.x"
-   ]
+    "Migration replay after a controller upgrade or restart",
+    "Hybrid search objects (pg_tokenizer, vchord_bm25) are not installed"
+   ],
+   "notes": "Observed as isSearchHost true and Protect-created tables on the Key's PostgreSQL; table contents were read only as row counts."
   },
   {
    "id": "database.bm25_rerank",
    "area": "database",
    "title": "pg_tokenizer, vchord_bm25 and rerank function",
-   "status": "unsupported",
-   "live": {},
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.70": "native-verified"
+   },
    "static": [
     "static-protect-7.2.105"
    ],
-   "tests": [],
-   "implementation": [],
-   "activation": "default",
-   "missing_evidence": [
-    "Whether 7.3.x requires hybrid search"
+   "tests": [
+    "tests/test_rerank_relay.py::test_protects_request_is_relayed_and_scores_come_back_in_order",
+    "tests/test_vision_server.py::test_rerank_scores_every_document_in_order_including_empty_ones"
    ],
-   "rejection": "Not provisioned; controllers expecting hybrid search may return no results."
+   "implementation": [
+    "src/aikey/rerank_relay.py",
+    "src/aikey/vision_server.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Rerank calibration against the vendor cross-encoder"
+   ],
+   "notes": "1 Oct 2026: search-host image with vchord_bm25 0.3.0, pg_tokenizer 0.1.1, plpython3u and the E5 tokenizer; Protect provisioned descBm25, its BM25 index and rerank() itself, and rerank() reaches the Key relay on 127.0.0.1:8123 (mmarco-mMiniLMv2-L12 cross-encoder on the NPU)."
   },
   {
    "id": "search.e5_nl_parse",
    "area": "search",
    "title": "NL_PARSE with multilingual-e5-small returns a 384-value query embedding",
-   "status": "fixture-tested",
+   "status": "native-verified",
    "live": {
     "live-protect-7.3.56": "not_observed",
-    "live-protect-7.3.60": "not_observed"
+    "live-protect-7.3.60": "not_observed",
+    "live-protect-7.3.68": "not_observed",
+    "live-protect-7.3.70": "native-verified"
    },
    "static": [
     "static-protect-7.2.105"
@@ -1682,16 +2274,18 @@
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Which search path 7.3.60 uses (issue #10)",
     "Encoder compatibility with vendor vectors"
-   ]
+   ],
+   "notes": "1 Oct 2026 (7.3.70): E5 NL_PARSE queries answered for session search with 0 failures."
   },
   {
    "id": "search.description_embedding",
    "area": "search",
    "title": "384-value passage embedding attached to task descriptions",
-   "status": "fixture-tested",
-   "live": {},
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.70": "native-verified"
+   },
    "static": [
     "static-protect-7.2.105"
    ],
@@ -1704,64 +2298,150 @@
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Document preprocessing used by the vendor",
-    "Native retrieval with positive and negative examples"
-   ]
+    "Document preprocessing used by the vendor"
+   ],
+   "notes": "1 Oct 2026: the 384-value passage embedding sent with each session description is stored in smartDetectSessionsSearch.descEmbedding and used by Protect's dense retrieval."
   },
   {
    "id": "search.legacy_clip_image",
    "area": "search",
-   "title": "Legacy 768-value CLIP text/image search and IMAGE_SEARCH",
-   "status": "unsupported",
-   "live": {},
+   "title": "768-value CLIP ViT-L/14 NL_PARSE text vectors and IMAGE_SEARCH image vectors (basic Find Anything)",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "native-verified"
+   },
    "static": [
+    "static-protect-7.3.60-bundle",
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
    ],
    "tests": [
-    "tests/test_search.py::test_unsupported_queries_have_error_without_fake_success"
+    "tests/test_find_anything.py::test_nl_parse_is_answered_with_a_local_clip_text_vector",
+    "tests/test_find_anything.py::test_search_by_image_returns_a_local_clip_vector",
+    "tests/test_find_anything.py::test_search_by_image_fetches_only_the_console_upload_route",
+    "tests/test_find_anything.py::test_real_clip_weights_rank_the_matching_text_first"
    ],
    "implementation": [
-    "src/aikey/search.py"
+    "src/aikey/search.py",
+    "src/aikey/clip.py",
+    "src/aikey/clip_server.py"
    ],
-   "activation": "default",
-   "missing_evidence": [],
-   "rejection": "Nonzero error code without embedding data; no padded or fabricated vectors."
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Vectors come from the project's own local CLIP ViT-L/14 export; equivalence with the vendor encoder is not established, so only indexes built by this Key are compatible",
+    "Protect 7.3.56 and 7.3.60 not observed",
+    "Tag extraction and time filters remain unsupported"
+   ],
+   "notes": "Verified by Protect's own detection-nls and by-image search results read back, not by counters."
   },
   {
    "id": "search.tags_and_time_filters",
    "area": "search",
-   "title": "NL_PARSE tag extraction, object types and time filters",
-   "status": "unsupported",
-   "live": {},
+   "title": "NL_PARSE objectTypes and time window from the query text (keyTags stay empty)",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "native-verified"
+   },
    "static": [
+    "static-protect-7.3.60-bundle",
     "static-protect-7.2.105",
     "static-aikey-2.2.8"
    ],
-   "tests": [],
+   "tests": [
+    "tests/test_find_anything.py::test_query_filters_are_parsed_locally",
+    "tests/test_find_anything.py::test_nl_parse_reply_carries_protects_filter_fields",
+    "tests/test_find_anything.py::test_an_unknown_timezone_falls_back_to_utc",
+    "tests/test_find_anything.py::test_key_tags_name_the_class_of_object_words_only"
+   ],
    "implementation": [
     "src/aikey/search.py"
    ],
-   "activation": "default",
-   "missing_evidence": [],
-   "rejection": "Returned as empty arrays with exact_match false."
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Only English and German phrases; no model-based parsing",
+    "keyTags are class-level RAM tags only (person, vehicle, animal, package); an AI Trigger alarm match on them needs an owner-created rule (#26)"
+   ],
+   "notes": "Protect maps each objectType to the label smartDetectType:<type> and falls back to a pure vector search (keeping the time window) when the labels match nothing (7.3.60 searchDetections)."
   },
   {
    "id": "search.native_retrieval",
    "area": "search",
    "title": "Find Anything retrieval of processor results in Protect",
-   "status": "needs_evidence",
-   "live": {},
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "native-verified"
+   },
    "static": [
+    "static-protect-7.3.60-bundle",
     "static-protect-7.2.105"
    ],
-   "tests": [],
-   "implementation": [],
-   "activation": "default",
+   "tests": [
+    "tests/test_find_anything.py::test_key_moment_regions_become_search_snapshots_with_crops",
+    "tests/test_find_anything.py::test_nl_parse_is_answered_with_a_local_clip_text_vector",
+    "tests/test_find_anything.py::test_search_by_image_returns_a_local_clip_vector"
+   ],
+   "implementation": [
+    "src/aikey/search.py",
+    "src/aikey/worker.py",
+    "src/aikey/clip.py",
+    "src/aikey/pg_relay.py"
+   ],
+   "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Any live search result",
-    "Matched query/document encoders",
-    "Index population by the controller"
+    "Retrieval quality benchmark with labelled positives and negatives (issue #7)",
+    "Persistence of the search host across a controller restart",
+    "Deep (E5 session) and hybrid retrieval",
+    "A real host reboot of the Mac search host (relay kill and login reload were tested)"
+   ]
+  },
+  {
+   "id": "index.search_snapshots",
+   "area": "search",
+   "title": "Key-moment regions indexed as keyMomentsTags search snapshots with local CLIP crop embeddings",
+   "status": "native-verified",
+   "live": {
+    "live-protect-7.3.68": "native-verified"
+   },
+   "static": [
+    "static-protect-7.3.60-bundle"
+   ],
+   "tests": [
+    "tests/test_find_anything.py::test_key_moment_regions_become_search_snapshots_with_crops",
+    "tests/test_find_anything.py::test_live_list_shaped_thumbnail_meta_is_indexed"
+   ],
+   "implementation": [
+    "src/aikey/worker.py",
+    "src/aikey/clip.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "Face-camera recognition tasks go to local faces and are not indexed",
+    "Audio-event image tasks are not indexed",
+    "Effect of extra snapshot thumbnails on event presentation is not reviewed by the owner"
+   ],
+   "notes": "Verified by ramDetections rows with 768-value embeddings and Protect search hits linked to the created thumbnails; frames went only to the local encoder."
+  },
+  {
+   "id": "index.thumbnail_tags",
+   "area": "search",
+   "title": "thumbnailTags for existing smart-detect objects (thumbnailMeta and retroactive crops)",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.68": "not_observed"
+   },
+   "static": [
+    "static-protect-7.3.60-bundle"
+   ],
+   "tests": [
+    "tests/test_find_anything.py::test_objects_are_embedded_locally_and_posted_as_thumbnail_tags",
+    "tests/test_find_anything.py::test_retroactive_crops_are_embedded_locally_as_thumbnail_tags"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "explicit_opt_in",
+   "missing_evidence": [
+    "A live task with in-export thumbnailMeta objects or a retroactive multipleImages task"
    ]
   },
   {
@@ -1773,13 +2453,78 @@
    "static": [
     "static-protect-7.2.105"
    ],
-   "tests": [],
-   "implementation": [],
+   "tests": [
+    "tests/test_find_anything.py::test_search_pins_the_clip_revision_once_and_refuses_other_weights",
+    "tests/test_find_anything.py::test_a_changed_profile_is_not_upgraded_with_a_revision",
+    "tests/test_find_anything.py::test_worker_clip_calls_follow_the_pinned_revision",
+    "tests/test_search_backup.py::test_backup_then_verify_round_trips_through_a_scratch_database",
+    "tests/test_search_backup.py::test_a_restore_with_different_counts_fails_and_still_drops_the_scratch_database",
+    "tests/test_index_rebuild.py::test_an_interrupted_stage_resumes_without_re_embedding",
+    "tests/test_index_rebuild.py::test_verify_rejects_vectors_of_another_revision",
+    "tests/test_index_rebuild.py::test_a_failed_profile_swap_rolls_the_vectors_back",
+    "tests/test_index_rebuild.py::test_cutover_and_rollback_are_idempotent_and_restore_the_previous_index"
+   ],
+   "implementation": [
+    "src/aikey/embedding_profile.py",
+    "src/aikey/clip_server.py",
+    "src/aikey/clip.py",
+    "src/aikey/search.py",
+    "src/aikey/search_backup.py",
+    "src/aikey/index_rebuild.py"
+   ],
    "activation": "default",
    "missing_evidence": [
     "Controller reconciliation writes null embeddings and does not regenerate them (7.2.105 static)",
-    "Live recovery test"
-   ]
+    "A live staged rebuild needs an approved object-crop source; the AI Key receives crops only inside Protect tasks",
+    "Native validation of a rebuilt index is possible only after cutover (Protect searches only public.ramDetections)",
+    "A live restore into the running search host read back through Protect search (the 2 Oct drill restored into a throwaway container only)"
+   ],
+   "notes": " 2 Oct 2026 drill: a search_backup dump restored into a network-less container with the bm25 search-host image matched the live counts (5,612 CLIP vectors, 871 sessions) and served dense queries; BM25 queries worked after Protect's own hybrid setup SQL was re-run, as Protect does on every connect (the tokenizer catalog is not part of the dump)."
+  },
+  {
+   "id": "index.face_task_search_tags",
+   "area": "search",
+   "title": "Find Anything tags in the ram part of a face-recognition callback",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "not_observed"
+   },
+   "static": [
+    "static-protect-7.3.60-bundle"
+   ],
+   "tests": [
+    "tests/test_local_faces.py::test_a_native_face_camera_still_gets_its_find_anything_tags_in_the_ram_part"
+   ],
+   "implementation": [
+    "src/aikey/worker.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Native search hits for a native face camera's objects indexed through a face task (a row-count increase alone does not attribute rows)"
+   ],
+   "notes": "A camera with native face detection sends key-moment tasks only as face tasks; their search tags now travel as a ram part beside the face part (saveEventTagging and saveFaceRecognition read separate parts in the 7.3.60 bundle)."
+  },
+  {
+   "id": "control.update_lcm_settings",
+   "area": "control",
+   "title": "updateLcmSettings display settings stored and answered 0",
+   "status": "fixture-tested",
+   "live": {
+    "live-protect-7.3.70": "not_observed"
+   },
+   "static": [],
+   "tests": [
+    "tests/test_command_fingerprints.py::test_connect_time_sync_commands_keep_only_their_field_shape",
+    "tests/test_command_fingerprints.py::test_display_settings_outside_the_observed_shape_are_refused"
+   ],
+   "implementation": [
+    "src/aikey/device.py"
+   ],
+   "activation": "default",
+   "missing_evidence": [
+    "Protect's own view after the reply (its aiprocessors log no longer reporting the failure) was not read back"
+   ],
+   "notes": "The body shape {brightness, nightMode{onMinute, offMinute}} came from a field-name-only recorder on 7.3.70; diskInfo arrives with an empty body and still answers 95."
   }
  ],
  "contradictions": [
@@ -1903,6 +2648,37 @@
    ],
    "statement": "Protect 7.2.105 fills missing capability flags with enabled values, so an absent flag reads as support.",
    "resolution": "Unsupported capabilities are sent explicitly disabled. A capability flag is never treated as evidence."
+  },
+  {
+   "id": "C13",
+   "type": "stale_record",
+   "sources": [
+    "docs/evidence/find-anything-contract.md",
+    "live-protect-7.3.68"
+   ],
+   "statement": "The 26 Sep morning record said basic Find Anything was blocked on a search host and listed search as needs_evidence; the same day the Key became Protect's search host and native text and image search results were read back.",
+   "resolution": "The record keeps the blocker as history; the manifest now records search on 7.3.68 only."
+  },
+  {
+   "id": "C14",
+   "type": "static_contract",
+   "sources": [
+    "static-protect-7.3.60-bundle",
+    "docs/evidence/ai-key-capability-status.md"
+   ],
+   "statement": "Sending face, plate and object-indexing flags explicitly disabled (C12) made Protect show Speech to Text, Face and License Plate Recognition as Off although native transcripts and face results existed; supportTts, not a speech flag, drives Speech to Text.",
+   "resolution": "Flags follow the configured served features; unserved ones stay explicitly disabled. Flags remain configuration, never evidence."
+  },
+  {
+   "id": "C15",
+   "type": "stale_record",
+   "sources": [
+    "live-protect-7.3.60",
+    "live-protect-7.3.70",
+    "docs/evidence/live-protect-7.3.70.md"
+   ],
+   "statement": "control.request_ai.on_demand_inference and callback.on_demand_camera_upload are native-verified from one 7.3.60 trial, while the player's AI summary failed on 7.3.68 and every on-demand job timed out on 7.3.70.",
+   "resolution": "The 7.3.60 observation stands as history; both features list the missing post-7.3.60 success, and remaining native test N14 covers it."
   }
  ],
  "trial_activation": {
@@ -1926,13 +2702,13 @@
    {
     "source": "live-protect-7.3.60",
     "activation": "worker.test_scope (recognizeKeyFrames)",
-   "state": "single-use permit for one G5 Flex camera, consumed"
-  },
-  {
-   "source": "live-protect-7.3.60",
-   "activation": "worker.test_scopes (recognizeKeyFrames)",
-   "state": "separate single-use G4 Instant permit consumed; separate G4 Bullet permit remained unused"
-  },
+    "state": "single-use permit for one G5 Flex camera, consumed"
+   },
+   {
+    "source": "live-protect-7.3.60",
+    "activation": "worker.test_scopes (recognizeKeyFrames)",
+    "state": "separate single-use G4 Instant permit consumed; separate G4 Bullet permit remained unused"
+   },
    {
     "source": "live-protect-7.3.60",
     "activation": "worker.request_mp4_exports",
@@ -1970,7 +2746,7 @@
     "control.set_console_info",
     "database.supports_db_credential_handoff"
    ],
-   "procedure": "On the adopted test processor, read device health after connection and record compatibility.controller_version_evidence plus the setConsoleInfo result code from control_commands. Confirm whether 7.3.60 sends only the four allowlisted controller fields."
+   "procedure": "Done on 7.3.68 (27 Sep): controller_version_evidence live_partial, setConsoleInfo 1 call with result code 0, and exactly the four allowlisted controller fields. Remaining: the same readback on a 7.3.60 controller (none available; needs_evidence), and the access-rule behavior behind supportsDbCredential."
   },
   {
    "id": "N2",
@@ -1980,7 +2756,7 @@
     "capability.support_ai_summary",
     "capability.deep_mode_vlm"
    ],
-   "procedure": "Record the capability state Protect shows for the processor, and the exact device.feature_flags in effect, before any caption trial."
+   "procedure": "Done on 7.3.68 (27 Sep): Protect's stored featureFlags match the Key's derived flags, with unserved features explicitly false. Remaining: the getInfo body itself, and the same readback before a caption trial on 7.3.60 (no such controller available; needs_evidence)."
   },
   {
    "id": "N3",
@@ -2037,6 +2813,46 @@
     "worker.private_journal_rollover"
    ],
    "procedure": "In an isolated, reviewed rollout, confirm fresh model-family inventory, Protect-side dispatch, persistence, budget exhaustion, additions/removals, reconnect and journal rollover. Keep richer native-AI models excluded until tag preservation is verified."
+  },
+  {
+   "id": "N10",
+   "features": [
+    "capability.retroactive_processing",
+    "control.recognize_key_frames.multiple_images",
+    "index.thumbnail_tags"
+   ],
+   "procedure": "Completion path established (empty batch query at about 19:45 UTC on 26 Sep; the final batch, ending at the cursor, completed between 19:44 and 19:45 UTC per the Key archive). 27 Sep read-only comparison: the 2110 older and 2310 covered tracker-crop events do not differ in duration (p50 28 s vs 27 s, max 314 s both), camera mix (the same 8 cameras), thumbnail fields (croppedId, trackerId, objectId, confidence) or smartDetectTrack availability; only ramState differs. No task listing is exposed (aiprocessors carries aggregate taskStatistics only). Remaining (needs_evidence): Protect's aiprocessorTasks rows for the older events and the 7.3.68 retroactive batch query. Continuing them requires a new processor record (re-adoption), which is out of scope."
+  },
+  {
+   "id": "N11",
+   "features": [
+    "search.native_retrieval",
+    "search.index_recovery",
+    "database.controller_migrations"
+   ],
+   "procedure": "After a planned controller restart, confirm isSearchHost true, that existing ramDetections rows survive, and that a known positive text search still returns its object."
+  },
+  {
+   "id": "N13",
+   "features": [
+    "control.request_ai.second_stage_verification"
+   ],
+   "procedure": "Read back one reverified event where the Key answered detectedAs none and confirm its type and confidence were left unchanged; then one AI Port-sourced verdict."
+  },
+  {
+   "id": "N14",
+   "features": [
+    "control.request_ai.on_demand_inference",
+    "callback.on_demand_camera_upload"
+   ],
+   "procedure": "With the speech queue healthy, press the player's AI summary once on one event and record only whether the summary rendered and the matching on_demand job state; no summary text is recorded."
+  },
+  {
+   "id": "N15",
+   "features": [
+    "callback.ram_full_event_tagging"
+   ],
+   "procedure": "On 7.3.70, one exact-event GET for an event whose caption job completed after 30 Sep 06:00 local; record only metadata.ramState and whether ramDescription is non-empty."
   }
  ]
 }

@@ -1,8 +1,11 @@
 """Durable, installation-wide admission for paid caption attempts.
 
 Reservations are charged before media or a provider is contacted. A failed or
-uncertain attempt is never refunded. This module deliberately does not choose
-which camera gets the next slot; scheduling belongs at the caller boundary.
+uncertain attempt is never refunded. When the caller names the currently
+eligible cameras, the last ``FAIR_HEADROOM`` permits of each rolling hour are
+held for eligible cameras with no caption in that hour, so one busy camera
+cannot starve the rest (#12). With no other unserved camera the hold is zero,
+so a single-camera installation still gets all twelve.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from .config import atomic_private
 HOUR_NS = 3_600_000_000_000
 RETENTION_NS = 24 * HOUR_NS
 LIMIT = 12
+FAIR_HEADROOM = 4
 _MAX_RECORDS = 300
 _MAX_BYTES = 128 * 1024
 _HASH = re.compile(r"[0-9a-f]{64}")
@@ -38,6 +42,14 @@ class CaptionBudgetExhausted(CaptionBudgetError):
     def __init__(self, next_at_ns: int):
         super().__init__("Global caption budget is exhausted")
         self.next_at_ns = next_at_ns
+
+
+class CaptionBudgetDeferred(CaptionBudgetError):
+    """This camera already had a caption this hour; the rest are held for others."""
+
+    def __init__(self, held: int):
+        super().__init__("Remaining caption permits are held for cameras not yet served")
+        self.held = held
 
 
 @dataclass(frozen=True)
@@ -62,7 +74,8 @@ class CaptionBudget:
         self.clock_ns = clock_ns
         self._check_directory()
 
-    def reserve(self, job_id: str, fingerprint: str, camera_id: str) -> Reservation:
+    def reserve(self, job_id: str, fingerprint: str, camera_id: str,
+                eligible_cameras: frozenset[str] | None = None) -> Reservation:
         if not isinstance(job_id, str) or not _HASH.fullmatch(job_id):
             raise CaptionBudgetError("Job ID must be a SHA-256 identifier")
         if not isinstance(fingerprint, str) or not _HASH.fullmatch(fingerprint):
@@ -92,6 +105,11 @@ class CaptionBudget:
                 state.update(high_water_ns=now, reservations=retained)
                 self._write(state)
                 raise CaptionBudgetExhausted(min(item["at_ns"] for item in recent) + HOUR_NS)
+            if eligible_cameras is not None:
+                served = {item["camera_id"] for item in recent}
+                held = min(FAIR_HEADROOM, len(set(eligible_cameras) - served - {camera_id}))
+                if camera_id in served and LIMIT - len(recent) <= held:
+                    raise CaptionBudgetDeferred(held)
             if len(retained) >= _MAX_RECORDS:
                 raise CaptionBudgetError("Caption reservation journal is full")
             retained.append(

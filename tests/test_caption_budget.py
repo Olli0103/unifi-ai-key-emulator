@@ -107,3 +107,51 @@ def test_symlinked_state_or_budget_fails_closed(tmp_path):
     (real / "caption-budget.json").symlink_to(tmp_path / "missing")
     with pytest.raises(CaptionBudgetError, match="Cannot read"):
         budget.reserve(digest("job"), digest("input"), "fixture-camera")
+
+
+# --- #12 fairness: one busy camera cannot starve the others ----------------
+
+def test_a_busy_camera_leaves_the_held_permits_for_unserved_cameras(tmp_path):
+    from aikey.caption_budget import FAIR_HEADROOM, CaptionBudgetDeferred
+    now = [10 * HOUR_NS]
+    budget = CaptionBudget(tmp_path, clock_ns=lambda: now[0])
+    eligible = frozenset(f"fixture-camera-{n}" for n in range(6))
+    for index in range(LIMIT - FAIR_HEADROOM):
+        assert budget.reserve(digest(f"busy-{index}"), digest(f"busy-in-{index}"),
+                              "fixture-camera-0", eligible).new
+    before = (tmp_path / "caption-budget.json").read_bytes()
+    with pytest.raises(CaptionBudgetDeferred) as held:
+        budget.reserve(digest("busy-more"), digest("busy-more-in"), "fixture-camera-0", eligible)
+    assert held.value.held == FAIR_HEADROOM
+    assert (tmp_path / "caption-budget.json").read_bytes() == before      # nothing charged
+    # Each quiet camera still gets its first caption this hour.
+    for n in range(1, 1 + FAIR_HEADROOM):
+        assert budget.reserve(digest(f"quiet-{n}"), digest(f"quiet-in-{n}"),
+                              f"fixture-camera-{n}", eligible).new
+    # The global limit is unchanged: the thirteenth is refused for everyone.
+    with pytest.raises(CaptionBudgetExhausted):
+        budget.reserve(digest("late"), digest("late-in"), "fixture-camera-5", eligible)
+    # After the hour rolls, the busy camera is admitted again without a reset.
+    now[0] += HOUR_NS
+    assert budget.reserve(digest("busy-more"), digest("busy-more-in"), "fixture-camera-0", eligible).new
+
+
+def test_the_hold_shrinks_as_cameras_are_served_and_vanishes_for_one_camera(tmp_path):
+    from aikey.caption_budget import CaptionBudgetDeferred
+    now = [10 * HOUR_NS]
+    budget = CaptionBudget(tmp_path, clock_ns=lambda: now[0])
+    # A single eligible camera may use all twelve.
+    for index in range(LIMIT):
+        assert budget.reserve(digest(f"solo-{index}"), digest(f"solo-in-{index}"),
+                              "fixture-camera-0", frozenset({"fixture-camera-0"})).new
+    now[0] += HOUR_NS
+    # With one other unserved camera only one permit is held.
+    pair = frozenset({"fixture-camera-0", "fixture-camera-1"})
+    for index in range(LIMIT - 1):
+        assert budget.reserve(digest(f"pair-{index}"), digest(f"pair-in-{index}"),
+                              "fixture-camera-0", pair).new
+    with pytest.raises(CaptionBudgetDeferred):
+        budget.reserve(digest("pair-x"), digest("pair-x-in"), "fixture-camera-0", pair)
+    assert budget.reserve(digest("other"), digest("other-in"), "fixture-camera-1", pair).new
+    # A duplicate of already-charged work is never deferred or charged again.
+    assert not budget.reserve(digest("pair-0"), digest("pair-in-0"), "fixture-camera-0", pair).new

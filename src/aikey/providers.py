@@ -15,6 +15,7 @@ class ProviderError(RuntimeError):
 
 DEFAULT_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
+    "anthropic": "https://api.anthropic.com/v1",
     "ollama": "http://127.0.0.1:11434",
     "openai-compatible": "http://127.0.0.1:11434/v1",
 }
@@ -67,12 +68,18 @@ class VisionProvider:
             port = url.port or (443 if url.scheme == "https" else 80)
         except (ValueError, TypeError) as exc:
             raise ProviderError("Invalid inference.base_url") from exc
-        if self.provider == "openai":
-            official = url.scheme == "https" and url.hostname == "api.openai.com" and port == 443
+        if self.provider in {"openai", "anthropic"}:
+            official_host = ("api.openai.com" if self.provider == "openai"
+                             else "api.anthropic.com")
+            official = url.scheme == "https" and url.hostname == official_host and port == 443
             local_fixture = lab and _loopback(url.hostname)
             if not (official or local_fixture) or url.path != "/v1":
-                raise ProviderError("OpenAI requires https://api.openai.com/v1, except explicit loopback lab fixtures")
-            self.url = self.base_url + "/responses"
+                label = "OpenAI" if self.provider == "openai" else "Anthropic"
+                raise ProviderError(
+                    f"{label} requires https://{official_host}/v1, "
+                    "except explicit loopback lab fixtures")
+            self.url = self.base_url + ("/responses" if self.provider == "openai"
+                                        else "/messages")
         elif self.provider == "ollama":
             if url.path not in {"", "/api"}:
                 raise ProviderError("Ollama base_url must be the server root or end with /api")
@@ -85,13 +92,20 @@ class VisionProvider:
             key = _text(key, "inference.api_key")
             if any(ch.isspace() for ch in key):
                 raise ProviderError("Invalid inference.api_key")
-            self.headers["Authorization"] = "Bearer " + key
-        if self.provider == "openai" and require_api_key and not self.headers:
-            raise ProviderError("OpenAI requires inference.api_key_file with a nonempty API key")
-        self.max_output_tokens = config.get("max_output_tokens", 1024 if self.provider == "openai" else 256)
+            if self.provider == "anthropic":
+                self.headers["x-api-key"] = key
+            else:
+                self.headers["Authorization"] = "Bearer " + key
+        if self.provider == "anthropic":
+            self.headers["anthropic-version"] = "2023-06-01"
+        if self.provider in {"openai", "anthropic"} and require_api_key and key is None:
+            raise ProviderError(f"{self.provider} requires inference.api_key_file with a nonempty API key")
+        self.max_output_tokens = config.get("max_output_tokens", 1024 if self.provider in {"openai", "anthropic"} else 256)
         if type(self.max_output_tokens) is not int or not 1 <= self.max_output_tokens <= 32768:
             raise ProviderError("inference.max_output_tokens must be an integer between 1 and 32768")
-        self.temperature = config.get("temperature", None if self.provider == "openai" else 0)
+        self.temperature = config.get("temperature", None if self.provider in {"openai", "anthropic"} else 0)
+        if self.provider == "anthropic" and self.temperature is not None:
+            raise ProviderError("Anthropic temperature is not supported by this adapter")
         if self.temperature is not None and (type(self.temperature) not in {int, float}
                 or not math.isfinite(self.temperature) or not 0 <= self.temperature <= 2):
             raise ProviderError("inference.temperature must be between 0 and 2")
@@ -110,6 +124,12 @@ class VisionProvider:
                        "store": False, "stream": False, "max_output_tokens": self.max_output_tokens}
             if self.temperature is not None:
                 payload["temperature"] = self.temperature
+        elif self.provider == "anthropic":
+            content = [{"type": "image", "source": {"type": "base64",
+                        "media_type": mime, "data": data}} for mime, data in encoded]
+            content.append({"type": "text", "text": prompt})
+            payload = {"model": self.model, "max_tokens": self.max_output_tokens,
+                       "messages": [{"role": "user", "content": content}]}
         elif self.provider == "ollama":
             options = {"num_predict": self.max_output_tokens}
             if self.temperature is not None:
@@ -124,6 +144,35 @@ class VisionProvider:
                        "max_tokens": self.max_output_tokens, "stream": False}
             if self.temperature is not None:
                 payload["temperature"] = self.temperature
+        return self.url, dict(self.headers), payload
+
+    def build_structured_request(self, images: list[bytes], system: str, user: str, schema: dict,
+                                 sampling: dict, max_tokens: int | None = None) -> tuple[str, dict, dict]:
+        """A JSON-schema-constrained chat request (deep-mode session describe).
+
+        Only OpenAI-compatible servers (the local OpenVINO Model Server) take
+        Protect's prompts, sampling and schema as they are.
+        """
+        if self.provider != "openai-compatible":
+            raise ProviderError("Deep-mode descriptions need an OpenAI-compatible local server")
+        if not isinstance(images, list) or not images or not isinstance(schema, dict):
+            raise ProviderError("Images and a JSON schema are required")
+        content = [{"type": "image_url", "image_url": {
+            "url": f"data:{image_mime(image)};base64,{base64.b64encode(image).decode('ascii')}"}}
+            for image in images]
+        content.append({"type": "text", "text": user})
+        payload = {"model": self.model, "stream": False,
+                   "max_tokens": max_tokens or max(self.max_output_tokens, 512),
+                   "messages": [{"role": "system", "content": system},
+                                {"role": "user", "content": content}],
+                   "response_format": {"type": "json_schema", "json_schema": {
+                       "name": "session_description", "schema": schema}}}
+        names = {"temperature": "temperature", "topP": "top_p", "topK": "top_k",
+                 "repeatPenalty": "repetition_penalty", "presencePenalty": "presence_penalty"}
+        for source, target in names.items():
+            value = sampling.get(source)
+            if type(value) in (int, float) and math.isfinite(value):
+                payload[target] = value
         return self.url, dict(self.headers), payload
 
     def parse_response(self, result: Any) -> str:
@@ -150,6 +199,21 @@ class VisionProvider:
                             parts.append(content["text"])
                 if any(not isinstance(part, str) for part in parts):
                     raise ValueError
+                description = "\n".join(parts)
+            elif self.provider == "anthropic":
+                if (result.get("type") != "message" or result.get("role") != "assistant"
+                        or result.get("stop_reason") != "end_turn"):
+                    raise ValueError
+                blocks = result["content"]
+                if not isinstance(blocks, list) or not blocks:
+                    raise ValueError
+                parts = []
+                for block in blocks:
+                    if block.get("type") in {"thinking", "redacted_thinking"}:
+                        continue
+                    if block.get("type") != "text" or not isinstance(block.get("text"), str):
+                        raise ValueError
+                    parts.append(block["text"])
                 description = "\n".join(parts)
             elif self.provider == "ollama":
                 if result.get("done") is not True or result.get("done_reason", "stop") != "stop":
