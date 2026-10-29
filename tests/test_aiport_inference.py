@@ -243,6 +243,78 @@ async def test_provider_failure_keeps_camera_available_for_next_frame():
 
 
 @pytest.mark.asyncio
+async def test_failed_api_attempt_consumes_quota_and_discards_queued_followups():
+    calls = []
+    unavailable = []
+    results = []
+
+    class FailingCamera:
+        def detect_for_camera(self, camera, frame):
+            calls.append(camera)
+            if camera == FIRST:
+                raise ApiDetectionError("api_detection_request_failed")
+            return ()
+
+    async def on_result(camera, *_args):
+        results.append(camera)
+
+    async def on_unavailable(camera):
+        unavailable.append(camera)
+
+    scheduler = FairInference(
+        [FIRST, SECOND], load_detector=FailingCamera, on_result=on_result,
+        on_unavailable=on_unavailable, max_frames_per_camera=1,
+        preserve_first_pending=True)
+    await scheduler.observe(FIRST, b"first-failure", generation=1)
+    await scheduler.observe(FIRST, b"queued-followup", generation=1)
+    await scheduler.observe(FIRST, b"latest-followup", generation=1)
+    await scheduler.observe(SECOND, b"other-camera", generation=2)
+    await asyncio.wait_for(scheduler.join(), 3)
+    assert calls.count(FIRST) == 1
+    assert calls.count(SECOND) == 1
+    assert results == [SECOND]
+    assert unavailable.count(FIRST) == unavailable.count(SECOND) == 1
+    assert not scheduler.is_available(FIRST)
+    assert scheduler.snapshot()["attempts"] == 2
+    assert scheduler.snapshot()["api_failures"] == 1
+    assert scheduler.snapshot()["pending_cameras"] == 0
+    await scheduler.close()
+
+
+@pytest.mark.asyncio
+async def test_confirmation_priority_stays_fair_under_sustained_five_camera_load():
+    cameras = [f"0200000001{i:02X}" for i in range(5)]
+    served = []
+
+    class PositiveDetector:
+        def detect_for_camera(self, camera, frame):
+            return (ObjectObservation("person", "person", 0.95,
+                                      (0.2, 0.1, 0.4, 0.8)),)
+
+    async def on_result(camera, *_args):
+        served.append(camera)
+        if len(served) < 50:
+            for target in cameras:
+                for frame in (b"first-pending", b"intermediate", b"latest-pending"):
+                    await scheduler.observe(target, frame, generation=1)
+        assert scheduler.snapshot()["pending_cameras"] <= len(cameras)
+
+    scheduler = FairInference(
+        cameras, load_detector=PositiveDetector, on_result=on_result,
+        max_frames_per_camera=None, preserve_first_pending=True)
+    for camera in cameras:
+        await scheduler.observe(camera, b"initial", generation=1)
+    await asyncio.wait_for(scheduler.join(), 5)
+    # A positive result may earn one confirming turn, never indefinite priority.
+    for start in range(0, 40):
+        assert set(served[start:start + 10]) == set(cameras)
+    assert 50 <= len(served) <= 60
+    assert scheduler.snapshot()["dropped_frames"] > 0
+    assert scheduler.snapshot()["pending_cameras"] == 0
+    await scheduler.close()
+
+
+@pytest.mark.asyncio
 async def test_loader_failure_stops_all_inference_without_exposing_exception():
     loads = 0
     unavailable = []

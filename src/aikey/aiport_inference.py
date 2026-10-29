@@ -205,11 +205,15 @@ class FairInference:
                 await self._notify_unavailable(camera)
             else:
                 self._successes[camera] += 1
-                if (self._max_frames is not None
-                        and self._attempts[camera] >= self._max_frames):
-                    self._pending.pop(camera, None)
-                    self._latest_pending.pop(camera, None)
-                    await self._notify_unavailable(camera)
+            # A failed API request is still an attempt. Frames already queued
+            # before that request began must not bypass the diagnostic quota.
+            if (self._max_frames is not None and camera not in self._disabled
+                    and self._attempts[camera] >= self._max_frames):
+                self._pending.pop(camera, None)
+                self._latest_pending.pop(camera, None)
+                if self._confirmation_camera == camera:
+                    self._confirmation_camera = None
+                await self._notify_unavailable(camera)
 
     async def _notify_unavailable(self, camera: str) -> None:
         if self._on_unavailable is not None and not self._closed:
