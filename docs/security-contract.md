@@ -80,6 +80,13 @@ Model text is data. It never becomes a command, URL, path, query or configuratio
 
 ## Secrets and recovery
 
+Key management/vision/speech and E5 embedding token loading requires a private
+regular non-symlink leaf, bounded to 4,096 UTF-8 bytes with nonblocking type
+validation. Invalid inputs fail before provider contact; no automatic repair
+or rotation is performed. See the [loading checks and deployment
+limits](evidence/bounded-secret-loading-20261029.md). Other file consumers retain
+their separately documented rules; this is not a universal filesystem audit.
+
 Use different credentials for controller management, database access, vision providers, embeddings and administration. Rotation of one credential must not replace another. Keep device identity files stable through normal updates. If identity or adoption credentials are lost, stop and use a documented recovery procedure instead of silently creating a new identity.
 
 Diagnostic bundles use a field allowlist. Do not export raw configuration, environment variables, exception strings, request bodies, headers, URLs, frames or database contents. Tests use canary values to prove that controller and provider credentials do not cross clients.

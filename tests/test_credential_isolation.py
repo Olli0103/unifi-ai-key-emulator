@@ -155,6 +155,7 @@ async def test_a_redirect_never_carries_the_key_to_another_host(doubles, tmp_pat
 async def test_the_embedding_token_reaches_only_its_endpoint(tmp_path):
     token = tmp_path / "embedding-token"
     token.write_text(EMBED_KEY + "\n")
+    token.chmod(0o600)
     embed = Double("embed", {"model": "multilingual-e5-small", "data": [{"index": 0, "embedding": [1.0] + [0.0] * 383}]})
     evil = Double("evil", {})
     runners = [await serve(embed), await serve(evil)]
