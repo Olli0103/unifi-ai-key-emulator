@@ -30,6 +30,7 @@ from .worker_archive import valid_tombstone
 from .caption_budget import (CaptionBudget, CaptionBudgetDeferred, CaptionBudgetError,
                              CaptionBudgetExhausted)
 from .providers import ProviderError, validate_inference_config
+from .provider_network import ProviderConnector
 from .speech import SpeechError, validate_speech_config
 from .faces import FaceStore, FaceStoreError
 from . import clip, deep_mode
@@ -883,7 +884,8 @@ class JobProcessor:
             # cookies: a gateway cookie from one role must not reach another role's server on
             # the same host (#8). Credentials are sent per request, never as session defaults.
             self._inference_session = aiohttp.ClientSession(
-                timeout=timeout, trust_env=False, cookie_jar=aiohttp.DummyCookieJar())
+                connector=ProviderConnector(), timeout=timeout, trust_env=False,
+                cookie_jar=aiohttp.DummyCookieJar())
             self._tasks = [asyncio.create_task(self._consume()) for _ in range(self.concurrency)]
 
     def _url(self, value, purpose):

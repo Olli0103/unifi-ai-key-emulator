@@ -16,6 +16,8 @@ from __future__ import annotations
 import math
 
 import aiohttp
+
+from .provider_network import ProviderConnector
 from aiohttp import web
 
 PORT = 8123
@@ -67,7 +69,9 @@ class RerankRelay:
         return web.json_response({"scores": scores})
 
     async def start(self) -> None:
-        self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=TIMEOUT_S))
+        self._session = aiohttp.ClientSession(connector=ProviderConnector(),
+            timeout=aiohttp.ClientTimeout(total=TIMEOUT_S), trust_env=False,
+            cookie_jar=aiohttp.DummyCookieJar())
         self.runner = web.AppRunner(self.app(), access_log=None)
         await self.runner.setup()
         await web.TCPSite(self.runner, self.host, self.port).start()

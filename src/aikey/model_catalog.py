@@ -12,6 +12,7 @@ import stat
 import aiohttp
 
 from .providers import ProviderError, validate_inference_config
+from .provider_network import ProviderConnector
 from .speech import SpeechError, SpeechProvider
 
 _MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+/-]{0,199}\Z")
@@ -129,6 +130,7 @@ async def fetch_catalog(provider) -> dict:
     try:
         async with asyncio.timeout(TOTAL_SECONDS):
             async with aiohttp.ClientSession(
+                    connector=ProviderConnector(),
                     timeout=aiohttp.ClientTimeout(total=8, connect=3), trust_env=False,
                     cookie_jar=aiohttp.DummyCookieJar(), auto_decompress=False,
                     headers={"Accept-Encoding": "identity"}) as session:

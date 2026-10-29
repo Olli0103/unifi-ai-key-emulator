@@ -40,6 +40,19 @@ Ollama remote markers when supplied. An omitted remote marker does not prove a
 local model or zero upstream cost. No returned model is automatically selected,
 and the site does not automatically validate or change an index/model space.
 
+### Provider hostnames
+
+Catalogs and the asynchronous AI Key model clients accept public DNS names only
+when all resolved addresses are global unicast. A private DNS name is refused;
+use an explicit ordinary LAN/VPN IP for a private backend, or `localhost` that
+actually resolves only to loopback. Link-local metadata services and special
+addresses are not supported model backends. IDNs use their ASCII A-label form.
+Existing remote/plain-HTTP opt-ins remain necessary; this rule grants neither.
+For HTTPS, the certificate must still cover the selected hostname or IP. Do not
+disable verification to make an endpoint work. A private IP is not proof of
+local inference or zero upstream charges. No live configuration was migrated
+by adding this rule.
+
 With optional pinned Protect inventory settings, the signed-in site has a read-only Cameras page. Each refresh fetches the current inventory, calculates the number of AI Port instances needed for connected legacy and G3–G5 targets, and shows which configured instance, if any, contains each camera MAC in its validated local stream allowlist. Exact known single-stream model maximums and conservative unknown-model reservations determine the count; an unknown camera source shows `needs_evidence` instead of inventing a slot. The count does not create device identities or pair cameras. An allowlisted camera is not necessarily paired or streaming in Protect. The page never enables processing or sends camera media. If Protect is unavailable or its version changes, it shows an error instead of stale camera data.
 
 The site can run on the host while each processor runs in a container. Give it the host paths to the two private configuration files. It writes new key files into the corresponding host state folder with mode 600 and stores the processor-visible path in the config. AI Key reads its processor state path from `runtime.state_dir`; pass AI Port's processor path with `--aiport-runtime-state-dir`. Both processor mounts must expose the host state folders at those paths. Never expose the current loopback listener through a LAN port publish or reverse proxy; LAN administration needs authenticated HTTPS and a separate security review.
