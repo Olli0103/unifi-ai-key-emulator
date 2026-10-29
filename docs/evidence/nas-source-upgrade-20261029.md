@@ -60,6 +60,10 @@ policy and network addresses were checked against the baseline; PostgreSQL's
 namespace now references the new Key container. Clip and faces services remain
 running; the four existing AI Ports were not redeployed.
 
+The subsequent [separate Port rolling upgrade](aiport-source-upgrade-20261029.md)
+updated all four Ports individually, with their own backups and native
+identity/pairing checks; it did not redeploy the Key/PostgreSQL services.
+
 No automatic rollback was needed. The prepared fallback preserves the current
 compatible state/database/credentials while restoring the old image; it does
 not blindly restore old credential files after a possible controller rotation.
