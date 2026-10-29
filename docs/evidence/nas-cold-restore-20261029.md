@@ -1,5 +1,9 @@
 # Isolated cold database restore — 29 October 2026
 
+A subsequent [complete Key archive/component restore](nas-full-state-restore-20261029.md)
+adds full-state byte comparison, idle-worker/HTTPS startup and replay-state checks
+against a separate restored database, still without native controller attachment.
+
 The physical PostgreSQL backup from the [current-source NAS upgrade](nas-source-upgrade-20261029.md)
 was restored into a **new** disposable database volume. This is a completed
 isolated database/credential test, not activation of a second adopted AI Key,
