@@ -696,6 +696,7 @@ class ControlSite:
         store = self.aiports[profile] if is_port else self.aikey
         created_key: Path | None = None
         committed = False
+        apply_started = False
         try:
             provider = fields["provider"]
             base_url = fields["base_url"].strip()
@@ -741,22 +742,42 @@ class ControlSite:
                        if profile == "aikey" else store.preview(fields["revision"], selection))
             if created_key is not None:
                 atomic_private(created_key, key_value + "\n")
+            apply_started = True
             result = (store.apply_inference(fields["revision"], selection)
                       if profile == "aikey" else store.apply(fields["revision"], selection))
             committed = True
             if result.revision != preview.resulting_revision:
                 raise ValueError
         except (KeyError, ValueError, TypeError, OSError, ConfigurationStoreError,
-                AiPortConfigurationError, RevisionConflict, AiPortRevisionConflict):
-            if created_key is not None and not committed:
-                created_key.unlink(missing_ok=True)
-            self._audit("provider_save", "rejected", profile)
-            return _page("Settings not saved", "<h1>Settings not saved</h1>"
+                AiPortConfigurationError, RevisionConflict, AiPortRevisionConflict) as exc:
+            certain_rejection = self._failed_save_key(created_key, committed, apply_started, exc)
+            # Once replacement was attempted, the config or a later archived revision
+            # may already reference this key. A failed acknowledgement is not rollback.
+            title = "Settings not saved" if certain_rejection else "Save outcome uncertain"
+            self._audit("provider_save", "rejected" if certain_rejection else "uncertain", profile)
+            return _page(title, f"<h1>{title}</h1>"
                          "<p class='error'>Check the provider, model, key and request limits. "
-                         "The configuration may also have changed in another session.</p>"
+                         "Reload settings before retrying; an interrupted save may already be active.</p>"
                          "<p><a href='/'>Back to settings</a></p>")
         self._audit("provider_save", "saved", profile)
         raise web.HTTPSeeOther("/?saved=1")
+
+    @staticmethod
+    def _failed_save_key(created_key: Path | None, committed: bool,
+                         apply_started: bool, error: Exception) -> bool:
+        """Delete only a key proved unused by this attempt, never an uncertain one.
+
+        A concurrent later save may archive a just-committed key before its
+        failed acknowledgement is handled. Reading live config alone cannot
+        establish that the key is no longer needed for exact rollback.
+        """
+        certain_rejection = not apply_started or isinstance(error, (RevisionConflict, AiPortRevisionConflict))
+        if created_key is not None and not committed and certain_rejection:
+            try:
+                created_key.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return certain_rejection
 
     @staticmethod
     def _undo_form(profile: str, title: str, status: dict, csrf: str) -> str:
@@ -818,6 +839,7 @@ class ControlSite:
             raise web.HTTPForbidden()
         created_key = None
         committed = False
+        apply_started = False
         try:
             selection = {"provider": fields["provider"], "model": fields["model"].strip(),
                          "base_url": fields["base_url"].strip(),
@@ -839,22 +861,16 @@ class ControlSite:
             if created_key is not None:
                 _private_directory(self.aikey.path.parent)
                 atomic_private(created_key, key + "\n")
+            apply_started = True
             result = await asyncio.to_thread(self.aikey.apply_speech, fields["revision"], selection)
             committed = True
             if result.revision != preview.resulting_revision:
                 raise ValueError
-        except (KeyError, ValueError, TypeError, OSError, ConfigurationStoreError):
-            if created_key is not None and not committed:
-                # An uncertain atomic replacement may already reference this file.
-                # Keep it unless the persisted config proves it was not committed.
-                try:
-                    raw = load_config(self.aikey.path).get("speech_to_text") or {}
-                    if Path(raw.get("api_key_file", "/")).name != created_key.name:
-                        created_key.unlink(missing_ok=True)
-                except (OSError, ValueError):
-                    pass
-            self._audit("speech_provider", "rejected", "aikey")
-            return _page("Speech settings not saved", "<h1>Speech settings not saved</h1>"
+        except (KeyError, ValueError, TypeError, OSError, ConfigurationStoreError) as exc:
+            certain_rejection = self._failed_save_key(created_key, committed, apply_started, exc)
+            title = "Speech settings not saved" if certain_rejection else "Speech save outcome uncertain"
+            self._audit("speech_provider", "rejected" if certain_rejection else "uncertain", "aikey")
+            return _page(title, f"<h1>{title}</h1>"
                          "<p class='error'>Check the speech provider, endpoint, key, audio "
                          "permission and current revision. Reload settings before retrying.</p>"
                          "<p><a href='/'>Back to settings</a></p>")
