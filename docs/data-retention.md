@@ -25,7 +25,10 @@ controls remain limited as documented in [the control site](control-site.md).
   The archive omits caption/event details but preserves hashed replay markers
   indefinitely. `callback_uncertain` is not automatically archived or retried.
 - Protect events, transcripts, names/face groups, plates, enhanced images and
-  uploaded crops have their own lifetime. Deleting a local identity or journal
+  uploaded crops/query images have their own lifetime. Native search-by-image
+  creates a controller-side temporary upload even if the input was already a
+  native thumbnail. Its deletion/expiry was not verified by the bounded search
+  test. Deleting a local identity or journal
   does not remove those copies. Controller acceptance is not deletion proof.
 - Live databases, search-profile/migration state and logical index dumps are
   distinct copies. There is no application-wide TTL that proves their complete
