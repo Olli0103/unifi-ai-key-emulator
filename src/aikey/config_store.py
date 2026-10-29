@@ -35,6 +35,8 @@ _SENSITIVE_KEY_PARTS = ("password", "secret", "token", "api_key", "authorization
 _INFERENCE_FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
                                "allow_insecure_http", "max_output_tokens",
                                "api_key_file"})
+_SPEECH_FIELDS = frozenset({"provider", "model", "base_url", "language", "local_network",
+                            "api_key_file"})
 _IMMUTABLE_PATHS = {
     ("runtime", "mode"),
     ("runtime", "state_dir"),
@@ -225,6 +227,57 @@ class ConfigurationStore:
 
     # --- per-role model settings (#17) -------------------------------------
 
+    def _speech_candidate(self, current: dict[str, Any], selection: dict) -> dict:
+        previous = current.get("speech_to_text")
+        if not isinstance(previous, dict):
+            raise UnsafeConfigurationChange("Speech requires an existing camera opt-in")
+        if (not isinstance(selection, dict) or not {"provider", "model", "base_url"} <=
+                set(selection) or not set(selection) <= _SPEECH_FIELDS):
+            raise UnsafeConfigurationChange("Speech provider settings are incomplete")
+        if (not isinstance(selection["model"], str) or not _MODEL_ID.fullmatch(selection["model"])
+                or "local_network" in selection and type(selection["local_network"]) is not bool):
+            raise UnsafeConfigurationChange("Invalid speech provider settings")
+        candidate = deepcopy(current)
+        speech = candidate["speech_to_text"]
+        # Preserve the camera/feature policy; only this role's provider fields change.
+        for field in _SPEECH_FIELDS:
+            speech.pop(field, None)
+        speech.update(deepcopy(selection))
+        if ("api_key_file" not in selection
+                and all(previous.get(k) == selection.get(k) for k in ("provider", "base_url"))
+                and previous.get("api_key_file")):
+            speech["api_key_file"] = previous["api_key_file"]
+        reference = speech.get("api_key_file")
+        if "api_key_file" in selection and (
+                not isinstance(reference, str) or not Path(reference).is_absolute()
+                or Path(reference).parent != Path(current["runtime"]["state_dir"])):
+            raise UnsafeConfigurationChange("Speech key file must be inside the processor state directory")
+        if speech["provider"] == "openai" and not reference:
+            raise UnsafeConfigurationChange("OpenAI speech requires its own key reference")
+        return candidate
+
+    def preview_speech(self, expected_revision: str, selection: dict) -> ConfigurationPreview:
+        content, current = self._read(self.path)
+        return self._prepare_inference(content, current, expected_revision,
+                                       self._speech_candidate(current, selection))
+
+    def apply_speech(self, expected_revision: str, selection: dict) -> ConfigurationSnapshot:
+        """Replace a configured speech provider, not its per-camera audio permission."""
+        with self._locked():
+            content, current = self._read(self.path)
+            candidate = self._speech_candidate(current, selection)
+            preview = self._prepare_inference(content, current, expected_revision, candidate)
+            if not preview.changed_fields:
+                return ConfigurationSnapshot(preview.current_revision, _public(current))
+            encoded = self._encode(self._validate(candidate))
+            self._archive(content)
+            self._replace(encoded)
+            persisted, checked = self._read(self.path)
+            if _revision(persisted) != _revision(encoded):
+                raise ConfigurationStoreError("Configuration replacement could not be verified")
+            self._write_provider_journal(_revision(content), _revision(persisted))
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
+
     def role_models(self) -> dict[str, dict[str, Any]]:
         """Each AI Key model role, its current model and whether it may be edited here."""
         _, current = self._read(self.path)
@@ -301,7 +354,10 @@ class ConfigurationStore:
         return value
 
     def _prior_key_present(self, raw_target: dict[str, Any]) -> bool:
-        reference = (raw_target.get("inference") or {}).get("api_key_file")
+        return all(self._key_reference_present((raw_target.get(role) or {}).get("api_key_file"))
+                   for role in ("inference", "speech_to_text"))
+
+    def _key_reference_present(self, reference: Any) -> bool:
         if reference is None:
             return True
         if not isinstance(reference, str) or not reference:
