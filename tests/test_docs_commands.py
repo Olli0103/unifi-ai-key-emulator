@@ -17,7 +17,8 @@ DOCS = sorted([*ROOT.glob("*.md"), *(ROOT / "docs").rglob("*.md")])
 _LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)\)")
 _BLOCK = re.compile(r"```[a-z]*\n(.*?)```", re.S)
 _INLINE = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
-_ENTRY = {"local-aikey": "aikey.cli"}
+_ENTRY = {"local-aikey": "aikey.cli", "local-aikey-control": "aikey.control_site",
+          "local-aikey-demo": "aikey.control_demo"}
 
 
 class _Parsed(Exception):
