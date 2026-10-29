@@ -1262,10 +1262,16 @@ class ControlSite:
             await asyncio.to_thread(store.apply_role_model, fields.get("revision"),
                                     fields.get("role"), fields.get("model"))
         except (ConfigurationStoreError, RevisionConflict, AiPortConfigurationError,
-                AiPortRevisionConflict, OSError):
-            self._audit("role_model", "rejected", profile)
-            return _page("Model not saved", "<h1>Model not saved</h1><p class='error'>The role, "
-                         "model name or revision was not accepted. Nothing was changed.</p>"
+                AiPortRevisionConflict, OSError) as exc:
+            certain = isinstance(exc, (RevisionConflict, AiPortRevisionConflict,
+                                       UnsafeConfigurationChange))
+            self._audit("role_model", "rejected" if certain else "uncertain", profile)
+            title = "Model not saved" if certain else "Model save outcome uncertain"
+            detail = ("The role, model name or revision was not accepted. Nothing was changed."
+                      if certain else "The model change may already be saved. Reload settings "
+                      "and check the current model before taking another action. Do not "
+                      "automatically retry or undo this request.")
+            return _page(title, f"<h1>{title}</h1><p class='error'>{detail}</p>"
                          "<p><a href='/'>Back to settings</a></p>")
         self._audit("role_model", "saved", profile)
         raise web.HTTPSeeOther("/?saved=1")
@@ -1284,11 +1290,16 @@ class ControlSite:
         try:
             await asyncio.to_thread(store.rollback_provider, fields.get("revision"))
         except (ConfigurationStoreError, RevisionConflict, AiPortConfigurationError,
-                AiPortRevisionConflict, OSError):
-            self._audit("provider_rollback", "refused", profile)
-            return _page("Rollback not applied", "<h1>Rollback not applied</h1>"
-                         "<p class='error'>The settings changed in another session, or the "
-                         "previous provider key is no longer stored. Nothing was changed.</p>"
+                AiPortRevisionConflict, OSError) as exc:
+            certain = isinstance(exc, (RevisionConflict, AiPortRevisionConflict,
+                                       UnsafeConfigurationChange))
+            self._audit("provider_rollback", "refused" if certain else "uncertain", profile)
+            title = "Rollback not applied" if certain else "Rollback outcome uncertain"
+            detail = ("The settings changed or this rollback was not accepted. Nothing was changed."
+                      if certain else "The previous provider settings may already be restored. "
+                      "Reload settings and check the current provider before taking another "
+                      "action. Do not automatically retry or undo this request.")
+            return _page(title, f"<h1>{title}</h1><p class='error'>{detail}</p>"
                          "<p><a href='/'>Back to settings</a></p>")
         self._audit("provider_rollback", "rolled_back", profile)
         raise web.HTTPSeeOther("/?rolledback=1")
