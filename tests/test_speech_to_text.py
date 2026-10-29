@@ -145,6 +145,49 @@ async def test_the_exports_own_start_header_anchors_the_times(controller, tmp_pa
     assert controller.callbacks[0]["payload"]["stt"][0]["startMs"] == START + 750
 
 
+@pytest.mark.parametrize("language,text", [
+    ("de", "Bitte öffne die Tür."),
+    ("fr", "La caméra est près de la fenêtre."),
+    ("ja", "玄関に人がいます。"),
+    ("ar", "يوجد شخص عند الباب."),
+])
+async def test_multilingual_backend_text_and_explicit_language_reach_native_callback(
+        controller, tmp_path, language, text):
+    # Synthetic provider replies test mapping, not speech-recognition quality.
+    controller.reply = {"language": language, "segments": [
+        {"start": 0.5, "end": 1.75, "text": " " + text + " ", "no_speech_prob": 0.01}]}
+    options = config(controller)
+    options["speech_to_text"]["language"] = language
+    worker = JobProcessor(options, tmp_path)
+    try:
+        await worker.handle(task())
+    finally:
+        await worker.stop()
+    assert controller.transcriptions[0]["fields"]["language"] == [language]
+    assert controller.callbacks[0]["payload"]["stt"] == [
+        {"startMs": START + 500, "endMs": START + 1750, "text": text}]
+    journal = "".join(p.read_text() for p in (tmp_path / "worker-jobs").glob("*.json"))
+    assert text not in journal
+
+
+async def test_duplicate_speech_task_after_restart_does_not_repeat_export_or_callback(
+        controller, tmp_path):
+    first = JobProcessor(config(controller), tmp_path)
+    try:
+        await first.handle(task())
+        await first.handle(task())
+    finally:
+        await first.stop()
+    restarted = JobProcessor(config(controller), tmp_path)
+    try:
+        await restarted.handle(task())
+    finally:
+        await restarted.stop()
+    assert len(controller.media_requests) == 1
+    assert len(controller.transcriptions) == 1
+    assert len(controller.callbacks) == 1
+
+
 @pytest.mark.parametrize("reply", [
     {"text": "", "segments": []},
     {"text": "thanks", "segments": [{"start": 0, "end": 2, "text": "Thanks.", "no_speech_prob": 0.9}]},
