@@ -19,14 +19,24 @@ def _parser():
     init.add_argument("--state-dir", type=Path, default=Path("state"))
     init.add_argument("--controller", help="Controller hostname or LAN IP, without contacting it")
     init.add_argument("--device-ip", help="Emulator advertised and bind IP")
+    setup = commands.add_parser("setup", help="Prepare a fresh AI Key directory offline; never start or adopt")
+    setup.add_argument("--directory", type=Path, required=True, help="New directory; existing paths are refused")
+    setup.add_argument("--controller", required=True, help="Controller hostname or IP, without contacting it")
+    setup.add_argument("--device-ip", required=True, help="Explicit advertised device IP")
+    setup.add_argument("--bind", help="Explicit listener IP; defaults to --device-ip")
+    setup.add_argument("--https-port", type=int, default=8080)
+    setup.add_argument("--protect-version", required=True, help="Operator-reported version; not live verification")
+    setup.add_argument("--controller-fingerprint", help="Independently verified SHA-256 pin; not trust import")
+    setup.add_argument("--pin-only-hostname", action="store_true", help="Disable hostname matching, requiring the explicit pin")
+    setup.add_argument("--request-mp4-exports", action="store_true")
+    setup.add_argument("--ffmpeg-path", type=Path, help="Absolute path in the eventual runtime")
+    setup.add_argument("--provider", dest="name", required=True,
+                       choices=("openai", "anthropic", "ollama", "openai-compatible"))
+    _provider_arguments(setup)
     provider = commands.add_parser("provider", help="Configure a vision provider without calling it")
     provider.add_argument("name", choices=("openai", "anthropic", "ollama", "openai-compatible"))
     provider.add_argument("--config", type=Path, default=Path("config.json"))
-    provider.add_argument("--model", required=True, help="A vision-capable model available to this provider")
-    provider.add_argument("--base-url", help="API base URL; required for a generic compatible provider")
-    provider.add_argument("--api-key-file", type=Path, help="Private API key file, never the key itself")
-    provider.add_argument("--allow-remote", action="store_true", help="Allow the configured non-loopback API")
-    provider.add_argument("--allow-insecure-http", action="store_true", help="Allow unencrypted remote LAN API")
+    _provider_arguments(provider)
     for name, help_text in (("check", "Report local readiness without network access"),
                             ("run", "Start the configured management and controller connections")):
         command = commands.add_parser(name, help=help_text)
@@ -44,6 +54,29 @@ def _parser():
     inventory.add_argument("--web-cert-file", type=Path, required=True)
     inventory.add_argument("--output", type=Path, help="Private report beside the API key file by default")
     return parser
+
+
+def _provider_arguments(parser):
+    parser.add_argument("--model", required=True, help="A vision-capable model available to this provider")
+    parser.add_argument("--base-url", help="API base URL; required for a generic compatible provider")
+    parser.add_argument("--api-key-file", type=Path, help="Private API key file, never the key itself")
+    parser.add_argument("--allow-remote", action="store_true", help="Allow the configured non-loopback API")
+    parser.add_argument("--allow-insecure-http", action="store_true", help="Allow unencrypted remote LAN API")
+
+
+def _inference_options(args):
+    from .providers import DEFAULT_BASE_URLS
+    if args.name in {"openai", "anthropic"} and args.api_key_file is None:
+        raise ConfigError("Hosted provider requires --api-key-file; do not pass a key in a command argument")
+    if args.name == "openai-compatible" and not args.base_url:
+        raise ConfigError("An OpenAI-compatible provider requires --base-url")
+    inference = {"provider": args.name, "model": args.model,
+        "base_url": args.base_url or DEFAULT_BASE_URLS[args.name],
+        "allow_remote": args.allow_remote or args.name in {"openai", "anthropic"},
+        "allow_insecure_http": args.allow_insecure_http}
+    if args.api_key_file:
+        inference["api_key_file"] = str(args.api_key_file.expanduser().resolve())
+    return inference
 
 
 async def _run(config):
@@ -65,6 +98,10 @@ def main(argv=None):
     args = _parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     try:
+        if args.command == "setup":
+            from .first_run import prepare
+            print(json.dumps(prepare(args, _inference_options(args)), indent=2))
+            return 0
         if args.command == "init":
             initialize(args.config, args.state_dir, controller_host=args.controller,
                        device_ip=args.device_ip)
@@ -102,19 +139,7 @@ def main(argv=None):
                               "summary": report["summary"], "processing_enabled": False}))
             return 0
         if args.command == "provider":
-            if args.name in {"openai", "anthropic"} and args.api_key_file is None:
-                raise ConfigError("Hosted provider requires --api-key-file; do not pass a key in a command argument")
-            if args.name == "openai-compatible" and not args.base_url:
-                raise ConfigError("An OpenAI-compatible provider requires --base-url")
-            inference = {"provider": args.name, "model": args.model,
-                "base_url": args.base_url or {"openai": "https://api.openai.com/v1",
-                                              "anthropic": "https://api.anthropic.com/v1",
-                                              "ollama": "http://127.0.0.1:11434"}.get(args.name),
-                "allow_remote": args.allow_remote or args.name in {"openai", "anthropic"},
-                "allow_insecure_http": args.allow_insecure_http}
-            if args.api_key_file:
-                inference["api_key_file"] = str(args.api_key_file.expanduser().resolve())
-            config["inference"] = inference
+            config["inference"] = _inference_options(args)
             checked = validate_config(config, base=args.config.resolve().parent)
             from .providers import validate_inference_config
             validate_inference_config(checked["inference"],

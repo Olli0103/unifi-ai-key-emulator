@@ -44,6 +44,12 @@ The integrated lab uses real TLS, client certificates, HTTP and WebSocket connec
 
 ## Initialize a real configuration
 
+For a new AI Key, [offline first-run preparation](docs/first-run.md) combines
+controller/network/provider/model selection without editing JSON. It creates
+only a new directory; trust import, service startup and adoption remain explicit.
+Existing installations must not be reinitialized. The lower-level commands below
+remain available.
+
 ```sh
 .venv/bin/local-aikey init --config config.json --state-dir state
 .venv/bin/local-aikey check --config config.json
