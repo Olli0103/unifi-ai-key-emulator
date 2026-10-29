@@ -38,6 +38,8 @@ from .config_store import (
     ConfigurationStore, ConfigurationStoreError, RevisionConflict,
 )
 from .index_rebuild import migration_plan
+from .model_catalog import CatalogError, catalog_provider, fetch_catalog
+from .providers import DEFAULT_BASE_URLS
 
 
 _COOKIE = "aikey_admin_local"
@@ -139,6 +141,8 @@ class ControlSite:
         # The Key's host state sits next to its config unless given (#12).
         self.aikey_state_dir = aikey_state_dir or self.aikey.path.parent
         self.audit = AuditLog(audit_log) if audit_log is not None else None
+        self._catalog_lock = asyncio.Lock()
+        self._catalog_next_at = 0.0
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=8192)
@@ -158,6 +162,7 @@ class ControlSite:
         app.router.add_post("/provider/rollback", self.rollback_provider)
         app.router.add_post("/role-model", self.save_role_model)
         app.router.add_post("/speech-provider", self.save_speech_provider)
+        app.router.add_post("/model-catalog", self.model_catalog)
         app.router.add_post("/logout", self.logout)
         app.router.add_get("/healthz", self.health)
         return app
@@ -900,6 +905,19 @@ class ControlSite:
                                f"<input name='model' required maxlength='128' "
                                f"value='{_safe(info['model'] or '')}' aria-label='{_safe(label)} model'>"
                                "<button>Save model</button></form>")
+                    try:
+                        saved, _, _ = store.catalog_configuration(revision, role)
+                        destination = saved.get("base_url") or DEFAULT_BASE_URLS.get(saved.get("provider"))
+                        control += ("<form method='post' action='/model-catalog'>"
+                                    f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
+                                    f"<input type='hidden' name='profile' value='{_safe(profile)}'>"
+                                    f"<input type='hidden' name='role' value='{_safe(role)}'>"
+                                    f"<input type='hidden' name='revision' value='{_safe(revision)}'>"
+                                    f"<p>Catalog destination: {_safe(destination)}. Uses only this role's "
+                                    "credential. Sends no camera media and runs no inference.</p>"
+                                    "<button>List available model IDs</button></form>")
+                    except (ConfigurationStoreError, AiPortConfigurationError):
+                        pass
                 else:
                     control = _safe(self._ROLE_REASONS.get(info["reason"], info["reason"]))
                 rows.append(f"<tr><td>{_safe(title)}</td><td>{_safe(label)}</td>"
@@ -908,6 +926,65 @@ class ControlSite:
                 "the provider, endpoint and key stay as they are. Search encoders are pinned by the "
                 "index.</p><table><tr><th>Profile</th><th>Role</th><th>Model</th><th>Change</th></tr>"
                 + "".join(rows) + "</table></section>")
+
+    async def model_catalog(self, request: web.Request) -> web.Response:
+        fields = await request.post()
+        if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
+            self._audit("model_catalog", "forbidden")
+            raise web.HTTPForbidden()
+        expected_fields = {"csrf", "profile", "role", "revision"}
+        if set(fields) != expected_fields or any(len(fields.getall(k)) != 1 for k in expected_fields):
+            self._audit("model_catalog", "invalid_request")
+            raise web.HTTPBadRequest(text="Unexpected catalog fields")
+        profile, role = fields.get("profile"), fields.get("role")
+        if not isinstance(profile, str) or not isinstance(role, str):
+            self._audit("model_catalog", "unknown_profile")
+            raise web.HTTPBadRequest(text="Unknown profile or role")
+        store = self.aikey if profile == "aikey" else self.aiports.get(profile)
+        if store is None:
+            self._audit("model_catalog", "unknown_profile")
+            raise web.HTTPBadRequest(text="Unknown profile")
+        try:
+            selection, runtime_state, lab = await asyncio.to_thread(
+                store.catalog_configuration, fields.get("revision"), role)
+            if self._catalog_lock.locked() or time.monotonic() < self._catalog_next_at:
+                self._audit("model_catalog", "busy", profile)
+                raise web.HTTPTooManyRequests(headers={"Retry-After": "5"})
+            async with self._catalog_lock:
+                self._catalog_next_at = time.monotonic() + 5
+                provider = await asyncio.to_thread(
+                    catalog_provider, selection, speech=role == "speech", host_state=store.path.parent,
+                    runtime_state=runtime_state, lab=lab)
+                report = await fetch_catalog(provider)
+            # A catalog bound to an older configuration is not offered as current.
+            current = await asyncio.to_thread(store.snapshot)
+            if current.revision != fields.get("revision"):
+                raise CatalogError("catalog_configuration_changed")
+        except (CatalogError, OSError, ConfigurationStoreError, AiPortConfigurationError):
+            self._audit("model_catalog", "unavailable", profile)
+            return _page("Model catalog unavailable", "<h1>Model catalog unavailable</h1>"
+                         "<p>The configured role, revision, credential or catalog could not be "
+                         "verified. This request changed no settings. Reload before retrying; manual "
+                         "model IDs remain available.</p><p><a href='/'>Back to settings</a></p>")
+        rows = "".join("<tr><td>" + _safe(model["id"]) + "</td><td>"
+                       + ("unknown" if model["image_input_advertised"] is None else
+                          "yes" if model["image_input_advertised"] else "no")
+                       + "</td><td>" + ("yes" if model["provider_reported_remote"] is True else
+                                       "no marker" if model["provider_reported_remote"] is False else "unknown")
+                       + "</td></tr>" for model in report["models"])
+        self._audit("model_catalog", "listed", profile)
+        return _page("Available model IDs", "<h1>Available model IDs</h1>"
+                     f"<p>Profile: {_safe(profile)}; role: {_safe(role)}. "
+                     f"Catalog destination: {_safe(provider.base_url)}.</p>"
+                     "<p>This is a complete bounded API catalog, not a capability or quality test. "
+                     "Advertised capabilities and remote markers are provider claims. No inference "
+                     "ran and no model was selected. Copy an ID into Models by role if appropriate; "
+                     "a successful listing does not establish image/audio support or zero cost.</p>"
+                     "<div class='table-scroll'><table><tr><th>Model ID</th>"
+                     "<th>Provider advertises image input</th><th>Provider marks remote</th></tr>"
+                     + rows + "</table></div>"
+                     + ("<p>The API returned no models.</p>" if not rows else "")
+                     + "<p><a href='/'>Back to settings</a></p>")
 
     async def save_role_model(self, request: web.Request) -> web.Response:
         fields = await request.post()
