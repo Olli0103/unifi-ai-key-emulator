@@ -41,6 +41,21 @@ Synthetic local HTTP tests exercise all four API adapters, role-key separation,
 pagination/cookie isolation, limits, redirects, deadlines, reflected keys,
 compressed replies, unsafe key files and revision/session/origin/CSRF failures.
 HTTP/HTML checks are not visual/mobile acceptance; the earlier disposable
-loopback browser navigation remained policy-blocked. Live provider access,
+loopback browser navigation remained policy-blocked. Cloud-provider access,
 model-capability probing, arbitrary-host DNS policy, missing provider roles and
 remaining native/UI acceptance are not claimed.
+
+## Local-provider read-back
+
+After merge, the exact catalog module was mounted read-only in a disposable
+Python-only container on the NAS, sharing the Key's network context but not
+starting another device service. State was read-only; capability drops,
+unprivileged UID and resource limits remained enabled. The already configured
+local compatible API returned a complete catalog containing one model, which
+matched the configured model ID. Configuration bytes stayed unchanged. This
+role had no API-key reference, so no real provider credential was used. Only
+counts and membership booleans were returned, not the model ID, endpoint,
+camera media or inference output. The probe container was removed afterward.
+
+This verifies the catalog read/parser against that local provider, not the full
+control-site browser flow, cloud APIs, model modality, inference or billing.

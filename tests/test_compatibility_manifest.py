@@ -12,7 +12,7 @@ import sys
 import pytest
 
 from aikey.protocol import (COMPATIBILITY_MANIFEST_VERSION, CONTROLLER_VERSION_EVIDENCE,
-                            classify_controller_version)
+                            CONTINUOUS_CAPTION_VERSIONS, classify_controller_version)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +64,17 @@ def test_evidence_sources_keep_live_static_and_synthetic_separate():
     live_versions = {s["protect_version"] for s in sources.values() if s["kind"] == "live"}
     static_versions = {s.get("protect_version") for s in sources.values() if s["kind"] == "static"}
     assert live_versions.isdisjoint(static_versions)
+
+
+def test_partial_version_evidence_cannot_authorize_captions_without_a_persisted_path():
+    manifest = load()
+    caption_paths = [f for f in manifest["features"] if f["id"] in {
+        "callback.ram_full_event_tagging", "callbacks.audio_image_tagging"}]
+    for version in CONTINUOUS_CAPTION_VERSIONS:
+        source = next(s for s in manifest["evidence_sources"]
+                      if s["kind"] == "live" and s["protect_version"] == version)
+        assert any(f["live"].get(source["id"]) == "native-verified" for f in caption_paths)
+    assert classify_controller_version("7.3.74") == ("7.3.74", "live_partial")
 
 
 def _test_exists(node):
