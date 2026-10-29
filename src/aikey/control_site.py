@@ -374,8 +374,10 @@ class ControlSite:
                 "<th>To</th><th>Coverage</th><th>Problems</th></tr>" + rows + "</table>"
                 "<h2>Backup and rollback</h2><ul>"
                 f"<li>Latest backup: {_safe(backup['latest'] or 'none')}"
-                + (f" · {_safe(backup.get('rows'))} rows · verified {'yes' if backup['verified'] else 'no'}"
+                + (f" · {_safe(backup.get('rows'))} rows · scratch restore recorded {'yes' if backup['verified'] else 'no'}"
                    if backup["latest"] else "") + "</li>"
+                "<li>Recorded verification is historical. This page does not rehash or restore "
+                "the dump; verify it again before using it for recovery.</li>"
                 f"<li>Rollback ready: {'yes' if rollback['ready'] else 'no'}"
                 + (f" — {_safe(rollback['reason'])}" if rollback["reason"] else "")
                 + f"<br><span class='muted'>{_safe(rollback['note'])}</span></li></ul>"

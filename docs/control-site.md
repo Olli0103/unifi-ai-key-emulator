@@ -6,6 +6,14 @@ and cannot read deployment state or send a provider request.
 
 The control site is a separate loopback HTTP service for the AI Key and optional AI Port configuration files. It has administrator sign-in, a signed session, CSRF protection, revision-checked saves and write-only API-key replacement. It manages the vision provider, model and endpoint for AI Key descriptions and AI Port object detections. OpenAI, Claude/Anthropic, Ollama and an OpenAI-compatible endpoint are selectable. Each AI Port form also manages classes, score threshold and an optional API-request cost cap (empty means no cap) for that instance only. Object events have no per-camera cap, and a save keeps the local fallback, plate cameras and held-package mode. A configured AI Key speech role has its own provider form, described below. The site does not manage embeddings, audio camera opt-ins, face/plate models, adoption, camera pairing or service restarts yet. Those controls remain open work under [issue #17](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17).
 
+## Search index and backup status
+
+The read-only Search index migration page reports historical scratch-restore
+records and live-row comparisons. Damaged/unsafe newest metadata blocks backup
+readiness instead of silently falling back to an older record. It neither
+rehashes nor restores a dump during page loads; re-verify before recovery.
+See the [backup-status boundary and limits](evidence/index-backup-status-20261029.md).
+
 ## Data flow and retention
 
 The signed-in [data-flow and retention page](data-retention.md) separately shows
