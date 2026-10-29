@@ -92,7 +92,7 @@ by adding this rule.
 
 With optional pinned Protect inventory settings, the signed-in site has a read-only Cameras page. Each refresh fetches the current inventory, calculates the number of AI Port instances needed for connected legacy and G3–G5 targets, and shows which configured instance, if any, contains each camera MAC in its validated local stream allowlist. Exact known single-stream model maximums and conservative unknown-model reservations determine the count; an unknown camera source shows `needs_evidence` instead of inventing a slot. The count does not create device identities or pair cameras. An allowlisted camera is not necessarily paired or streaming in Protect. The page never enables processing or sends camera media. If Protect is unavailable or its version changes, it shows an error instead of stale camera data.
 
-The site can run on the host while each processor runs in a container. Give it the host path to the private AI Key configuration and any existing AI Port configurations you want to manage. It writes new key files into the corresponding host state folder with mode 600 and stores the processor-visible path in the config. AI Key reads its processor state path from `runtime.state_dir`; pass AI Port's processor path with `--aiport-runtime-state-dir`. Each configured processor mount must expose its host state folder at that path. Never expose the current loopback listener through a LAN port publish or reverse proxy; LAN administration needs authenticated HTTPS and a separate security review.
+The site can run on the host while each processor runs in a container. Give it the host path to the private AI Key configuration and any existing AI Port configurations you want to manage. It writes new key files into the corresponding host state folder with mode 600 and stores the processor-visible path in the config. AI Key reads its processor state path from `runtime.state_dir`; pass AI Port's processor path with `--aiport-runtime-state-dir`. Each configured processor mount must expose its host state folder at that path. The default listener stays on loopback HTTP. Do not publish or reverse-proxy that plaintext listener onto a LAN. For explicit direct TLS, use the HTTPS mode below; forwarding headers are not trusted.
 
 Initialize the administrator credential in a local terminal. The command prompts without echoing the password and refuses to overwrite an existing administrator:
 
@@ -134,3 +134,46 @@ local-aikey-control run --state-dir /private/admin-state \
 Open `http://127.0.0.1:8765/` on the same host. Each AI Port form appears when that instance's config has a `paired_streams` pool. `--aiport-instance NAME=CONFIG` can be repeated; names use lowercase letters, digits, underscores and hyphens. All instances use the `--aiport-runtime-state-dir` path inside their respective containers. Selecting OpenAI requires a new key or an existing key reference for the same provider and endpoint. A new key never returns to the browser. Saving replaces only the selected instance's provider settings, preserves its identity and paired streams, and displays that the affected service needs a restart. Restart through the deployment's service manager after checking the saved settings. The site does not restart, unpair or re-adopt cameras. A control site running on a different host edits only the config files actually mounted there; a staged Mac copy is not a live NAS config.
 
 API-backed AI Port detection is still experimental. The motion gate, provider-failure backoff, object output validation and the optional durable request cap have synthetic tests, but real-camera object locations, score calibration and saved Protect events are `needs_evidence`. Do not treat a successful settings save as proof that the selected model is suitable or that Protect accepted its events. See [AI Port candidate](aiport-candidate.md) for the backend configuration and current native evidence.
+
+## Explicit direct HTTPS
+
+Mac and Linux can also serve the same authenticated site over direct TLS.
+This is opt-in, not an automatic LAN bind or a reverse-proxy mode. Reuse a
+maintained certificate authority/certificate tool you already operate; no new
+certificate service, DNS entry or trust exception is installed by this command.
+Use a **separate administrator** certificate/key, not the adopted device identity.
+The browser must trust the certificate chain and its SAN must cover the exact
+origin host. Never disable browser/client certificate validation.
+
+```sh
+local-aikey-control run --state-dir /private/admin-state \
+  --aikey-config /private/aikey-state/config.json \
+  --bind 192.168.10.20 --port 8765 \
+  --origin https://processor-admin.example:8765 \
+  --tls-certificate /private/admin-tls/server-chain.pem \
+  --tls-private-key /private/admin-tls/server-key.pem
+```
+
+`--bind` is one literal ordinary private/VPN or loopback address; wildcard,
+public, link-local and mapped addresses are refused. Non-default binding requires
+HTTPS. Origin/listener ports must agree; incomplete TLS flags, credentialed or
+path-bearing origins, missing/mismatched certificates and encrypted keys fail
+closed before listening. There is no plaintext fallback or automatic key
+creation/replacement. Certificate and key must both be owned regular files,
+mode 0600 with no final symlink. OpenSSL loads the checked open descriptors via
+`/dev/fd` on the supported Mac/Linux hosts, without a temporary private-key copy
+or an interactive password prompt. TLS 1.2 is the minimum.
+
+HTTPS uses a distinct `__Host-aikey_admin` cookie: Secure, HttpOnly, SameSite
+Strict, Path `/`, no Domain. The HTTP loopback cookie is not used there. The
+actual transport scheme, exact Host, configured Origin, session and CSRF are
+checked; `Forwarded` and `X-Forwarded-*` do not change that decision or the login
+rate-limit actor. Logout expires the same secure host-only cookie. Configuration
+revisions, role-separated keys and identity-preserving rollback are unchanged.
+
+The default `http://127.0.0.1:8765` flow remains available for local use. No LAN
+port, firewall, DNS, existing certificate, service or deployment is modified by
+adding support in source. Tests use synthetic identities and a trusted loopback
+TLS client; they are not a native LAN/browser, accessibility, penetration-test
+or release-clearance result. Certificate issuance/renewal and the administrator's
+network reachability policy remain deployment responsibilities.

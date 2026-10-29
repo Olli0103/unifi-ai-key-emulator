@@ -1,6 +1,6 @@
 # Security contract
 
-This contract defines the security boundaries for the current processor and the planned administration site. It separates implemented controls from design requirements. A checkbox or configuration field does not prove that a future feature is safe.
+This contract defines the security boundaries for the current processor and administration site. It separates implemented controls from design requirements. A checkbox or configuration field does not prove that a future feature is safe.
 
 ## Trust boundaries
 
@@ -11,7 +11,7 @@ This contract defines the security boundaries for the current processor and the 
 | Worker to vision provider | Selected image frames, fixed prompt and provider key | Separate client, explicit provider and model, explicit remote opt-in, no redirects, bounded response and no controller credentials |
 | Search to embedding provider | Description or query text and optional embedding key | Separate client, explicit remote and insecure-HTTP opt-ins, no redirects, bounded response and no controller credentials |
 | Processor to search database | Embeddings and device-managed database credential | Separate credential file, TLS configuration and restricted PostgreSQL peers |
-| Browser to planned admin service | Configuration changes and secret replacement | `needs_evidence`; issue #13 must implement the requirements below before LAN exposure |
+| Browser to admin service | Configuration changes and secret replacement | Authenticated loopback HTTP or opt-in direct HTTPS, exact transport/Host/Origin, CSRF, revision checks and write-only keys; native LAN deployment/audit remain `needs_evidence` |
 | Release/update source to deployment | Images, packages and migration code | `needs_evidence`; signed artifacts, provenance and rollback belong to issues #4 and #16 |
 
 Camera media, transcripts, face templates, plates, provider keys, controller credentials and private diagnostics are sensitive. Model responses, media files, protocol requests, URLs and headers are untrusted input.
@@ -102,3 +102,14 @@ The opt-in `enhanceImage` route (off unless `face_enhancement.server` is set) wa
 | Originals | Protect stores the upload in its separate `enhancedImages` table; the source crop is never modified. | `test_an_enhanced_face_is_uploaded_as_a_separate_derivative` |
 
 Native enhancement acceptance remains `needs_evidence` (#23): enhancement is not configured and has not been deployed.
+
+## Direct administration TLS — 29 October 2026
+
+The [control site](control-site.md#explicit-direct-https) has an opt-in direct TLS
+listener with one explicit private/VPN address, existing private certificate/key,
+TLS 1.2 minimum and no plaintext fallback. Secure host-only cookies and actual
+transport/Host/Origin checks complement existing session/CSRF and login-rate
+policy. Proxy headers are ignored; the loopback HTTP listener must not be
+published through a reverse proxy. This source/fixture boundary does not claim
+an installed LAN endpoint, certificate-renewal service, completed security audit
+or signed release.

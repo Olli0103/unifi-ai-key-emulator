@@ -1,4 +1,4 @@
-"""Loopback administration site for AI Key and AI Port provider settings."""
+"""Authenticated local/direct-HTTPS administration for AI Key and AI Port."""
 
 from __future__ import annotations
 
@@ -16,13 +16,15 @@ import secrets
 import signal
 import stat
 import time
+from urllib.parse import urlsplit
 
 from aiohttp import web
 
 from .admin_audit import AuditLog
 from .caption_preflight import preflight as caption_preflight
 from .state_backup_preflight import inventory as backup_inventory
-from .admin_security import AdminSecurity
+from .admin_security import AdminSecurity, SESSION_COOKIE_NAME
+from .admin_listener import configure_listener
 from .aiport_config_store import (
     AiPortConfigurationError, AiPortConfigurationStore, AiPortRevisionConflict,
 )
@@ -113,11 +115,15 @@ class ControlSite:
                  search_backups_dir: Path | None = None,
                  search_live_rows: Callable[[], Awaitable[int]] | None = None,
                  aikey_state_dir: Path | None = None,
-                 audit_log: Path | None = None):
+                 audit_log: Path | None = None,
+                 bind: str = "127.0.0.1", origin: str | None = None,
+                 tls_certificate: Path | None = None, tls_private_key: Path | None = None):
         if type(port) is not int or not 1024 <= port <= 65535:
             raise ValueError("Invalid control-site port")
-        self.origin = f"http://127.0.0.1:{port}"
-        self.security = AdminSecurity(signing_key, self.origin, allow_loopback_http=True)
+        proposed = origin if origin is not None else f"http://127.0.0.1:{port}"
+        self.security = AdminSecurity(signing_key, proposed, allow_loopback_http=True)
+        self.origin = self.security.allowed_origin
+        self.listener = configure_listener(port, bind, self.origin, tls_certificate, tls_private_key)
         self.password_record = password_record
         self.aikey = ConfigurationStore(aikey_config)
         self.aiport = (AiPortConfigurationStore(
@@ -541,13 +547,18 @@ class ControlSite:
         return _page("Protect cameras", body)
 
     def _same_host(self, request: web.Request) -> bool:
-        return request.host == self.origin.removeprefix("http://")
+        origin = urlsplit(self.origin)
+        return request.host == origin.netloc and request.scheme == origin.scheme
+
+    @property
+    def cookie_name(self) -> str:
+        return SESSION_COOKIE_NAME if self.origin.startswith("https://") else _COOKIE
 
     def _session(self, request: web.Request, *, mutate: bool = False,
                  csrf: str | None = None) -> str | None:
         if not self._same_host(request):
             return None
-        cookie = request.cookies.get(_COOKIE, "")
+        cookie = request.cookies.get(self.cookie_name, "")
         origin = request.headers.get("Origin", "") if mutate else self.origin
         decision = self.security.authorize(
             "POST" if mutate else "GET", origin, cookie, csrf)
@@ -577,8 +588,8 @@ class ControlSite:
                          "<p><a href='/login'>Back to sign in</a></p>")
         self._audit("login", "signed_in")
         response = web.HTTPSeeOther("/")
-        response.set_cookie(_COOKIE, decision.credentials.cookie, httponly=True,
-                            secure=False, samesite="Strict", path="/",
+        response.set_cookie(self.cookie_name, decision.credentials.cookie, httponly=True,
+                            secure=self.origin.startswith("https://"), samesite="Strict", path="/",
                             max_age=self.security.session_ttl)
         raise response
 
@@ -1160,18 +1171,19 @@ class ControlSite:
             raise web.HTTPForbidden()
         self._audit("logout", "signed_out")
         response = web.HTTPSeeOther("/login")
-        response.del_cookie(_COOKIE, path="/")
+        response.del_cookie(self.cookie_name, path="/", httponly=True,
+                            secure=self.origin.startswith("https://"), samesite="Strict")
         raise response
 
 
 def _cli() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Local-only AI processor control site")
+    parser = argparse.ArgumentParser(description="Authenticated AI processor control site")
     commands = parser.add_subparsers(dest="command", required=True)
     initial = commands.add_parser("init", help="Set an administrator password locally")
     initial.add_argument("--state-dir", required=True, type=Path)
     initial.add_argument("--generate", action="store_true",
                          help="Generate a private one-time bootstrap password file")
-    run = commands.add_parser("run", help="Serve provider settings on loopback")
+    run = commands.add_parser("run", help="Serve settings on loopback or explicit direct HTTPS")
     run.add_argument("--state-dir", required=True, type=Path)
     run.add_argument("--aikey-config", required=True, type=Path)
     run.add_argument("--aiport-config", type=Path,
@@ -1181,6 +1193,11 @@ def _cli() -> argparse.ArgumentParser:
     run.add_argument("--aiport-instance", action="append", default=[], metavar="NAME=CONFIG",
                      help="Add another AI Port instance with a private host config path")
     run.add_argument("--port", type=int, default=8765)
+    run.add_argument("--bind", default="127.0.0.1",
+                     help="One literal private/loopback address; non-default requires HTTPS")
+    run.add_argument("--origin", help="Exact HTTPS browser origin, including the listener port")
+    run.add_argument("--tls-certificate", type=Path, help="Private owned PEM certificate/chain file")
+    run.add_argument("--tls-private-key", type=Path, help="Private owned unencrypted PEM key file")
     run.add_argument("--aiport-rollout", type=Path,
                      help="Private AI Port rollout slot file (needs the inventory settings)")
     run.add_argument("--search-state-dir", type=Path,
@@ -1210,13 +1227,14 @@ def _live_rows(container: str) -> Callable[[], Awaitable[int]]:
 async def _run(site: ControlSite, port: int) -> None:
     runner = web.AppRunner(site.app(), access_log=None)
     await runner.setup()
-    listener = web.TCPSite(runner, "127.0.0.1", port)
-    await listener.start()
-    stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(signum, stop.set)
     try:
+        listener = web.TCPSite(runner, site.listener.host, port,
+                               ssl_context=site.listener.ssl_context)
+        await listener.start()
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(signum, stop.set)
         await stop.wait()
     finally:
         await runner.cleanup()
@@ -1278,13 +1296,17 @@ def main(argv: list[str] | None = None) -> int:
                            search_state_dir=args.search_state_dir,
                            search_backups_dir=args.search_backups,
                            aikey_state_dir=args.aikey_state_dir,
+                           bind=args.bind, origin=args.origin,
+                           tls_certificate=args.tls_certificate, tls_private_key=args.tls_private_key,
                            audit_log=state / "admin-audit.jsonl",
                            search_live_rows=_live_rows(args.search_container)
                            if args.search_container else None)
         site.aikey.snapshot()
         for port_store in site.aiports.values():
             port_store.snapshot()
-        print(json.dumps({"control_site": site.origin, "loopback_only": True}))
+        print(json.dumps({"control_site": site.origin,
+                          "loopback_only": site.listener.loopback_only,
+                          "https": site.listener.ssl_context is not None}))
         asyncio.run(_run(site, args.port))
         return 0
     except (OSError, ValueError, ConfigurationStoreError, AiPortConfigurationError) as exc:
