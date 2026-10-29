@@ -1,0 +1,99 @@
+{
+  "schema": "aikey-multimodal-cases/1",
+  "run": {
+    "model": "synthetic-only",
+    "provider": "fixture",
+    "profile": "ai-port",
+    "code_revision": "fictional-example"
+  },
+  "cases": [
+    {
+      "id": "plate-positive",
+      "kind": "plate",
+      "camera_class": "synthetic-outdoor",
+      "conditions": [
+        "night"
+      ],
+      "input_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "AB12",
+      "predicted": "AB?2"
+    },
+    {
+      "id": "plate-negative",
+      "kind": "plate",
+      "camera_class": "synthetic-outdoor",
+      "conditions": [
+        "night"
+      ],
+      "input_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "",
+      "predicted": ""
+    },
+    {
+      "id": "speech-positive",
+      "kind": "speech",
+      "camera_class": "synthetic-outdoor",
+      "conditions": [
+        "night"
+      ],
+      "input_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "hello small world",
+      "predicted": "hello world"
+    },
+    {
+      "id": "speech-silence",
+      "kind": "speech",
+      "camera_class": "synthetic-outdoor",
+      "conditions": [
+        "night"
+      ],
+      "input_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "",
+      "predicted": "noise"
+    },
+    {
+      "id": "query-positive",
+      "kind": "retrieval",
+      "camera_class": "synthetic-outdoor",
+      "conditions": [
+        "night"
+      ],
+      "input_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "relevant": [
+        "synthetic-hit"
+      ],
+      "ranked": [
+        "synthetic-miss",
+        "synthetic-hit"
+      ],
+      "k": 2
+    },
+    {
+      "id": "query-negative",
+      "kind": "retrieval",
+      "camera_class": "synthetic-outdoor",
+      "conditions": [
+        "night"
+      ],
+      "input_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "relevant": [],
+      "ranked": [],
+      "k": 2
+    },
+    {
+      "id": "exposure",
+      "kind": "operation",
+      "camera_class": "synthetic-outdoor",
+      "conditions": [
+        "night"
+      ],
+      "input_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "camera_days": 1,
+      "false_alarms": 1,
+      "critical_events": 2,
+      "missed_critical": 1,
+      "latency_ms": 100,
+      "provider_charge_usd": null
+    }
+  ]
+}

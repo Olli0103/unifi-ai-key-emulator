@@ -193,12 +193,24 @@ def main(argv: list[str] | None = None) -> int:
     versus = sub.add_parser("compare")
     versus.add_argument("report", type=Path)
     versus.add_argument("reference", type=Path)
+    multi = sub.add_parser("multi-score", help="Score plates, speech, retrieval and operation records")
+    multi.add_argument("cases", type=Path)
+    multi_compare = sub.add_parser("multi-compare")
+    multi_compare.add_argument("report", type=Path)
+    multi_compare.add_argument("reference", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "score":
             output = score(json.loads(args.cases.read_text()))
-        else:
+        elif args.command == "compare":
             output = compare(json.loads(args.report.read_text()), json.loads(args.reference.read_text()))
+        else:
+            from . import benchmark_multi
+            if args.command == "multi-score":
+                output = benchmark_multi.score(json.loads(args.cases.read_text()))
+            else:
+                output = benchmark_multi.compare(json.loads(args.report.read_text()),
+                                                 json.loads(args.reference.read_text()))
     except (BenchmarkError, OSError, ValueError) as exc:
         print(json.dumps({"error": type(exc).__name__, "detail": str(exc)}), file=sys.stderr)
         return 1
