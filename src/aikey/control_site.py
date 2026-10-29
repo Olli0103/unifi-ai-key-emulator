@@ -103,7 +103,7 @@ def _private_directory(path: Path) -> None:
 
 
 class ControlSite:
-    def __init__(self, aikey_config: Path, aiport_config: Path, *,
+    def __init__(self, aikey_config: Path, aiport_config: Path | None = None, *,
                  signing_key: bytes, password_record: str, port: int,
                  aiport_runtime_state_dir: Path | None = None,
                  aiport_instances: dict[str, Path] | None = None,
@@ -120,10 +120,11 @@ class ControlSite:
         self.security = AdminSecurity(signing_key, self.origin, allow_loopback_http=True)
         self.password_record = password_record
         self.aikey = ConfigurationStore(aikey_config)
-        self.aiport = AiPortConfigurationStore(
+        self.aiport = (AiPortConfigurationStore(
             aiport_config, runtime_state_dir=aiport_runtime_state_dir)
-        self.aiports = {"aiport": self.aiport}
-        paths = {self.aiport.path}
+            if aiport_config is not None else None)
+        self.aiports = {"aiport": self.aiport} if self.aiport is not None else {}
+        paths = {store.path for store in self.aiports.values()}
         for name, path in (aiport_instances or {}).items():
             if (not isinstance(name, str) or not _INSTANCE_NAME.fullmatch(name)
                     or name == "default"):
@@ -603,7 +604,7 @@ class ControlSite:
                   if request.query.get("rolledback") == "1" else "")
         undo_form = self._undo_form("aikey", "AI Key", self.aikey.provider_rollback_status(), csrf)
         body = ("<div class='row'><div><h1>Local AI processor</h1>"
-                "<p class='muted'>Provider and model settings for both Protect profiles.</p>"
+                "<p class='muted'>Provider and model settings for configured Protect profiles.</p>"
                 "</div><form method='post' action='/logout'>"
                 f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
                 "<button>Sign out</button></form></div>" + notice +
@@ -644,6 +645,11 @@ class ControlSite:
                 body += (f"<section><h2>{_safe(title)}</h2><p>No camera pool is configured. "
                          "Provider settings become available after configuring at least two streams."
                          "</p></section>")
+        if not ports:
+            body += ("<section><h2>AI Ports</h2><p>No AI Port configuration is attached. "
+                     "AI Key settings are available independently. Add an existing AI Port "
+                     "configuration when starting the site to manage that profile; this page "
+                     "does not create, adopt or pair a device.</p></section>")
         return _page("Local AI processor", body + "</div>")
 
     @staticmethod
@@ -1168,7 +1174,8 @@ def _cli() -> argparse.ArgumentParser:
     run = commands.add_parser("run", help="Serve provider settings on loopback")
     run.add_argument("--state-dir", required=True, type=Path)
     run.add_argument("--aikey-config", required=True, type=Path)
-    run.add_argument("--aiport-config", required=True, type=Path)
+    run.add_argument("--aiport-config", type=Path,
+                     help="Optional existing default AI Port configuration; omit for AI Key only")
     run.add_argument("--aiport-runtime-state-dir", type=Path,
                      help="AI Port state path inside its processor container")
     run.add_argument("--aiport-instance", action="append", default=[], metavar="NAME=CONFIG",

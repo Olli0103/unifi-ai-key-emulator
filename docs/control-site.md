@@ -4,7 +4,7 @@ For a credentials-free, read-only preview with invented data, use the separate
 [synthetic demo](synthetic-demo.md). It is not an administration or device server
 and cannot read deployment state or send a provider request.
 
-The control site is a separate loopback HTTP service for the AI Key and one or more AI Port configuration files. It has administrator sign-in, a signed session, CSRF protection, revision-checked saves and write-only API-key replacement. It manages the vision provider, model and endpoint for AI Key descriptions and AI Port object detections. OpenAI, Claude/Anthropic, Ollama and an OpenAI-compatible endpoint are selectable. Each AI Port form also manages classes, score threshold and an optional API-request cost cap (empty means no cap) for that instance only. Object events have no per-camera cap, and a save keeps the local fallback, plate cameras and held-package mode. A configured AI Key speech role has its own provider form, described below. The site does not manage embeddings, audio camera opt-ins, face/plate models, adoption, camera pairing or service restarts yet. Those controls remain open work under [issue #17](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17).
+The control site is a separate loopback HTTP service for the AI Key and optional AI Port configuration files. It has administrator sign-in, a signed session, CSRF protection, revision-checked saves and write-only API-key replacement. It manages the vision provider, model and endpoint for AI Key descriptions and AI Port object detections. OpenAI, Claude/Anthropic, Ollama and an OpenAI-compatible endpoint are selectable. Each AI Port form also manages classes, score threshold and an optional API-request cost cap (empty means no cap) for that instance only. Object events have no per-camera cap, and a save keeps the local fallback, plate cameras and held-package mode. A configured AI Key speech role has its own provider form, described below. The site does not manage embeddings, audio camera opt-ins, face/plate models, adoption, camera pairing or service restarts yet. Those controls remain open work under [issue #17](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17).
 
 ## Data flow and retention
 
@@ -92,7 +92,7 @@ by adding this rule.
 
 With optional pinned Protect inventory settings, the signed-in site has a read-only Cameras page. Each refresh fetches the current inventory, calculates the number of AI Port instances needed for connected legacy and G3–G5 targets, and shows which configured instance, if any, contains each camera MAC in its validated local stream allowlist. Exact known single-stream model maximums and conservative unknown-model reservations determine the count; an unknown camera source shows `needs_evidence` instead of inventing a slot. The count does not create device identities or pair cameras. An allowlisted camera is not necessarily paired or streaming in Protect. The page never enables processing or sends camera media. If Protect is unavailable or its version changes, it shows an error instead of stale camera data.
 
-The site can run on the host while each processor runs in a container. Give it the host paths to the two private configuration files. It writes new key files into the corresponding host state folder with mode 600 and stores the processor-visible path in the config. AI Key reads its processor state path from `runtime.state_dir`; pass AI Port's processor path with `--aiport-runtime-state-dir`. Both processor mounts must expose the host state folders at those paths. Never expose the current loopback listener through a LAN port publish or reverse proxy; LAN administration needs authenticated HTTPS and a separate security review.
+The site can run on the host while each processor runs in a container. Give it the host path to the private AI Key configuration and any existing AI Port configurations you want to manage. It writes new key files into the corresponding host state folder with mode 600 and stores the processor-visible path in the config. AI Key reads its processor state path from `runtime.state_dir`; pass AI Port's processor path with `--aiport-runtime-state-dir`. Each configured processor mount must expose its host state folder at that path. Never expose the current loopback listener through a LAN port publish or reverse proxy; LAN administration needs authenticated HTTPS and a separate security review.
 
 Initialize the administrator credential in a local terminal. The command prompts without echoing the password and refuses to overwrite an existing administrator:
 
@@ -102,7 +102,21 @@ local-aikey-control init --state-dir /private/admin-state
 
 For unattended installation, add `--generate`. This writes a mode-600 `admin-bootstrap-password` file and prints only its path. Move the password into your password manager and delete the plaintext bootstrap file after signing in; keep the password record and signing key. No API key or administrator password is printed by the site.
 
-Start the site after both profile configs exist:
+For an AI-Key-only installation, no placeholder AI Port config or device is needed:
+
+```sh
+local-aikey-control run --state-dir /private/admin-state \
+  --aikey-config /private/aikey-state/config.json --port 8765
+```
+
+This offers AI Key provider/model settings, rollback and read-only maintenance
+pages. It does not create an AI Port directory, identity, pairing or service.
+The same login, Host/origin, CSRF, private-file and revision checks apply.
+
+To attach existing AI Port profiles, add `--aiport-config` for the default slot
+and/or repeated `--aiport-instance NAME=CONFIG` for named slots. Named slots do
+not require a default slot. A supplied missing/invalid config remains an error;
+it is never silently treated as an absent profile. For example:
 
 ```sh
 local-aikey-control run --state-dir /private/admin-state \
