@@ -24,7 +24,7 @@ from .aiport_deployment import (
 )
 from .aiport_nas_compose import NasComposeError, build_nas_compose
 from .aiport_ingest import IngressError, normalize_mac
-from .camera_inventory import InventoryError, fetch_inventory
+from .camera_inventory import InventoryError, fetch_inventory, is_supported_protect_version
 
 
 class ReconcileError(ValueError):
@@ -171,7 +171,7 @@ def verify_inputs(plan: dict, manifest: dict, report: dict,
     fetched = report.get("fetched_at") if isinstance(report, dict) else None
     if (not isinstance(report, dict) or report.get("schema") != "aikey-camera-preflight/1"
             or report.get("source") != "local_protect_integration_api"
-            or report.get("protect_version") != "7.3.60"
+            or not is_supported_protect_version(report.get("protect_version"))
             or report.get("processing_enabled") is not False
             or type(fetched) is not int or not 0 <= current_time - fetched <= 300):
         raise ReconcileError("A fresh, supported pinned Protect inventory is required")

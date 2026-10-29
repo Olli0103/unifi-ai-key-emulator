@@ -39,6 +39,30 @@ def test_fresh_inventory_and_exact_manifest_are_required(tmp_path):
         verify_inputs(plan, manifest, report, states, options)
 
 
+@pytest.mark.parametrize("version", ["7.3.60", "7.3.68", "7.3.70", "7.3.74"])
+def test_reconciler_accepts_each_validated_inventory_version(tmp_path, version):
+    plan, states, options, manifest, report = inputs(tmp_path)
+    report["protect_version"] = version
+    assert verify_inputs(plan, manifest, report, states, options) == ["aiport_slot_2"]
+    # Supporting a current version must not bypass fresh-inventory/manifest gates.
+    report["fetched_at"] -= 301
+    with pytest.raises(ReconcileError, match="fresh"):
+        verify_inputs(plan, manifest, report, states, options)
+    report["fetched_at"] += 301
+    changed = deepcopy(manifest)
+    changed["services"]["aiport_slot_2"]["image"] = "unexpected:latest"
+    with pytest.raises(ReconcileError, match="manifest"):
+        verify_inputs(plan, changed, report, states, options)
+
+
+@pytest.mark.parametrize("version", ["7.3.61", "7.3.75", "7.4.0", "7.3.74-beta", None, 7, [], {}])
+def test_reconciler_refuses_unknown_or_malformed_inventory_versions(tmp_path, version):
+    plan, states, options, manifest, report = inputs(tmp_path)
+    report["protect_version"] = version
+    with pytest.raises(ReconcileError, match="fresh, supported"):
+        verify_inputs(plan, manifest, report, states, options)
+
+
 def test_paired_camera_class_change_preserves_verified_nas_slot(tmp_path):
     _, states, options, _, report = inputs(tmp_path)
     plan = plan_ai_ports(report, camera_scope="legacy-and-g3-g5",
