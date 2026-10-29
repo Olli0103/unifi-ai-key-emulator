@@ -87,23 +87,19 @@ def test_failed_state_write_keeps_candidate_unadopted(tmp_path, monkeypatch):
     assert store.pending_token is None
 
 
-def test_resume_existing_requires_separate_short_window(tmp_path):
+@pytest.mark.parametrize("until", [0, int(time.time()) + 60, "invalid"])
+def test_tokenless_resume_configuration_is_rejected(tmp_path, until):
     config = fixture_state(tmp_path)
-    config["diagnostic_resume_until"] = int(time.time()) + 60
-    private_file(tmp_path / "config.json", json.dumps(config).encode())
-    assert load_config(tmp_path / "config.json")["diagnostic_resume_until"] == config[
-        "diagnostic_resume_until"]
-    config["diagnostic_adoption_until"] = int(time.time()) + 60
+    config["diagnostic_resume_until"] = until
     private_file(tmp_path / "config.json", json.dumps(config).encode())
     with pytest.raises(CandidateError):
         load_config(tmp_path / "config.json")
 
 
 @pytest.mark.asyncio
-async def test_existing_cert_reconnect_confirms_local_state_without_camera_access(tmp_path):
+async def test_saved_adoption_reconnects_without_token_or_camera_access(tmp_path):
     config = fixture_state(tmp_path)
     config["controller_ip"] = "127.0.0.1"
-    config["diagnostic_resume_until"] = int(time.time()) + 60
     accepted = asyncio.Event()
 
     async def websocket(request):
@@ -120,6 +116,10 @@ async def test_existing_cert_reconnect_confirms_local_state_without_camera_acces
     app.router.add_get("/camera/1.0/ws", websocket)
     controller = TestServer(app)
     await controller.start_server(ssl=CandidateService(config, tmp_path)._server_context())
+    store = AdoptionStore(tmp_path, config["controller_ip"],
+                          config["controller_pin"], controller.port)
+    store.begin("synthetic-token-123456", int(time.time()) + 60)
+    store.confirm()
     service = CandidateService(config, tmp_path, control_port=controller.port)
     task = asyncio.create_task(service._connect_loop())
     try:
@@ -141,15 +141,20 @@ async def test_existing_cert_reconnect_confirms_local_state_without_camera_acces
 
 
 @pytest.mark.asyncio
-async def test_rejected_existing_cert_reconnect_stays_unadopted(tmp_path):
+async def test_successful_tokenless_handshake_cannot_create_adoption(tmp_path):
     config = fixture_state(tmp_path)
     config["controller_ip"] = "127.0.0.1"
-    config["diagnostic_resume_until"] = int(time.time()) + 60
     rejected = asyncio.Event()
 
     async def websocket(request):
+        assert request.headers["Adopted"] == "false"
+        assert "token" not in request.query
+        ws = web.WebSocketResponse(protocols=["secure_transfer"])
+        await ws.prepare(request)
         rejected.set()
-        return web.Response(status=403)
+        async for _ in ws:
+            pass
+        return ws
 
     app = web.Application()
     app.router.add_get("/camera/1.0/ws", websocket)
@@ -160,10 +165,10 @@ async def test_rejected_existing_cert_reconnect_stays_unadopted(tmp_path):
     try:
         await asyncio.wait_for(rejected.wait(), 3)
         for _ in range(100):
-            if service.last_result == "WSServerHandshakeError":
+            if service.connected:
                 break
             await asyncio.sleep(0.01)
-        assert service.last_result == "WSServerHandshakeError"
+        assert service.connected
         assert not service.adoption.adopted
         assert not (tmp_path / "aiport-adoption.json").exists()
     finally:

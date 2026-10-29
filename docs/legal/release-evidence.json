@@ -1,0 +1,66 @@
+{
+  "schema": "community-release-evidence/1",
+  "reviewed_snapshot_sha256": null,
+  "checks": {
+    "code_origin": {
+      "status": "needs_evidence",
+      "reviewer": null,
+      "evidence_ref": null
+    },
+    "firmware_authorization": {
+      "status": "needs_evidence",
+      "reviewer": null,
+      "evidence_ref": null
+    },
+    "interoperability_scope": {
+      "status": "needs_evidence",
+      "reviewer": null,
+      "evidence_ref": null
+    },
+    "contributor_rights": {
+      "status": "needs_evidence",
+      "reviewer": null,
+      "evidence_ref": null
+    },
+    "development_statement": {
+      "status": "verified",
+      "reviewer": "project owner",
+      "evidence_ref": "Owner statement in release-preparation conversation, 2026-09-30; agreement and code-origin review remain separate."
+    },
+    "license_selection": {
+      "status": "verified",
+      "reviewer": "project owner",
+      "evidence_ref": "Owner statement in release-preparation conversation, 2026-09-30; agreement and code-origin review remain separate."
+    },
+    "aiport_fresh_adoption": {
+      "status": "needs_evidence",
+      "reviewer": null,
+      "evidence_ref": null
+    },
+    "dependency_licenses": {
+      "status": "needs_evidence",
+      "reviewer": null,
+      "evidence_ref": null
+    },
+    "image_licenses": {
+      "status": "needs_evidence",
+      "reviewer": null,
+      "evidence_ref": null
+    },
+    "model_licenses": {
+      "status": "needs_evidence",
+      "reviewer": null,
+      "evidence_ref": null
+    },
+    "history_review": {
+      "status": "needs_evidence",
+      "reviewer": null,
+      "evidence_ref": null
+    },
+    "legal_review": {
+      "status": "needs_evidence",
+      "reviewer": null,
+      "evidence_ref": null
+    }
+  }
+}

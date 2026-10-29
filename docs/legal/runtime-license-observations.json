@@ -1,0 +1,186 @@
+{
+  "scope": "14 exact runtime lock distributions from isolated CI runtime-sbom; excludes optional extras, OS/images and model weights",
+  "source_run": "https://github.com/Olli0103/unifi-ai-key-emulator/actions/runs/36674537757",
+  "source_commit": "95876e6f5244466c0166967cdfa266578559a15b",
+  "sbom_sha256": "a00d6c0f0832ca4b54aab5f23dab6b950bae2babd9e85b39c380597bd6d385ca",
+  "clearance": "needs_evidence",
+  "packages": [
+    {
+      "package": "aiohappyeyeballs",
+      "version": "2.7.1",
+      "declared_licenses": [
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "id": "PSF-2.0"
+          }
+        },
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "id": "Python-2.0"
+          }
+        }
+      ],
+      "review_status": "needs_evidence"
+    },
+    {
+      "package": "aiohttp",
+      "version": "3.14.3",
+      "declared_licenses": [
+        {
+          "acknowledgement": "declared",
+          "expression": "Apache-2.0 AND MIT"
+        }
+      ],
+      "review_status": "needs_evidence"
+    },
+    {
+      "package": "aiosignal",
+      "version": "1.4.0",
+      "declared_licenses": [
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "name": "License :: OSI Approved :: Apache Software License"
+          }
+        }
+      ],
+      "review_status": "needs_evidence"
+    },
+    {
+      "package": "attrs",
+      "version": "26.1.0",
+      "declared_licenses": [
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "id": "MIT"
+          }
+        }
+      ],
+      "review_status": "needs_evidence"
+    },
+    {
+      "package": "cffi",
+      "version": "2.1.1",
+      "declared_licenses": [
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "id": "MIT-0"
+          }
+        }
+      ],
+      "review_status": "needs_evidence"
+    },
+    {
+      "package": "cryptography",
+      "version": "50.0.1",
+      "declared_licenses": [
+        {
+          "acknowledgement": "declared",
+          "expression": "Apache-2.0 OR BSD-3-Clause"
+        }
+      ],
+      "review_status": "needs_evidence"
+    },
+    {
+      "package": "frozenlist",
+      "version": "1.8.0",
+      "declared_licenses": [
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "review_status": "needs_evidence"
+    },
+    {
+      "package": "idna",
+      "version": "3.20",
+      "declared_licenses": [
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "review_status": "needs_evidence"
+    },
+    {
+      "package": "multidict",
+      "version": "6.9.1",
+      "declared_licenses": [],
+      "review_status": "needs_evidence"
+    },
+    {
+      "package": "propcache",
+      "version": "0.5.4",
+      "declared_licenses": [
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "review_status": "needs_evidence"
+    },
+    {
+      "package": "psycopg",
+      "version": "3.3.6",
+      "declared_licenses": [
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "id": "LGPL-3.0-only"
+          }
+        }
+      ],
+      "review_status": "needs_evidence"
+    },
+    {
+      "package": "psycopg-binary",
+      "version": "3.3.6",
+      "declared_licenses": [
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "id": "LGPL-3.0-only"
+          }
+        }
+      ],
+      "review_status": "needs_evidence"
+    },
+    {
+      "package": "pycparser",
+      "version": "3.0",
+      "declared_licenses": [
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "review_status": "needs_evidence"
+    },
+    {
+      "package": "yarl",
+      "version": "1.25.1",
+      "declared_licenses": [
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "review_status": "needs_evidence"
+    }
+  ]
+}
