@@ -3192,6 +3192,11 @@ class CandidateService:
             self.smart_events_closed_on_stop += 1
 
     async def stop(self):
+        # Seal frame admission and finish the current threaded model/observer
+        # before final native leaves. An in-flight observer must not reopen an
+        # event after _close_open_events_on_stop has already closed its tracks.
+        if self._inference is not None:
+            await self._inference.close()
         try:
             await asyncio.wait_for(self._close_open_events_on_stop(),
                                    _STOP_CLOSE_SECONDS)
@@ -3219,8 +3224,6 @@ class CandidateService:
                 await ingress_close_task
         if self.ingress is not None:
             await self.ingress.close()
-        if self._inference is not None:
-            await self._inference.close()
         self._detector = None
         if self.runner is not None:
             await self.runner.cleanup()

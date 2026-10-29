@@ -37,6 +37,155 @@ class Detector:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider_fails", [False, True])
+async def test_close_waits_for_running_thread_and_drops_queued_work(provider_fails):
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+    calls, results = [], []
+
+    class Slow:
+        def detect(self, frame):
+            calls.append(frame)
+            started.set()
+            try:
+                assert release.wait(2)
+                if provider_fails:
+                    raise ApiDetectionError("api_detection_http_5xx")
+                return ()
+            finally:
+                finished.set()
+
+    async def on_result(*args):
+        results.append(args)
+
+    scheduler = FairInference([FIRST, SECOND], load_detector=Slow,
+                              on_result=on_result, max_frames_per_camera=None)
+    await scheduler.observe(FIRST, b"active", generation=1)
+    assert await asyncio.to_thread(started.wait, 1)
+    await scheduler.observe(SECOND, b"queued", generation=1)
+    closer = asyncio.create_task(scheduler.close())
+    try:
+        done, _ = await asyncio.wait({closer}, timeout=0.03)
+        assert not done, "close must not finish while the actual thread is active"
+        assert scheduler.snapshot()["closed"] is True
+        assert scheduler.snapshot()["pending_cameras"] == 0
+        await scheduler.observe(SECOND, b"late", generation=1)
+        assert scheduler.snapshot()["pending_cameras"] == 0
+    finally:
+        release.set()
+        await closer
+        assert await asyncio.to_thread(finished.wait, 1)
+    assert calls == [b"active"] and results == []
+    await scheduler.close()  # idempotent after actual completion
+
+
+@pytest.mark.asyncio
+async def test_close_during_model_load_does_not_start_detection():
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+    detector = Detector()
+
+    def load():
+        started.set()
+        try:
+            assert release.wait(2)
+            return detector
+        finally:
+            finished.set()
+
+    async def on_result(*args):
+        pytest.fail("a closing scheduler must not deliver a result")
+
+    scheduler = FairInference([FIRST], load_detector=load, on_result=on_result,
+                              max_frames_per_camera=None)
+    await scheduler.observe(FIRST, b"frame", generation=1)
+    assert await asyncio.to_thread(started.wait, 1)
+    closer = asyncio.create_task(scheduler.close())
+    try:
+        done, _ = await asyncio.wait({closer}, timeout=0.03)
+        assert not done, "model load is still real threaded work"
+    finally:
+        release.set()
+        await closer
+        assert await asyncio.to_thread(finished.wait, 1)
+    assert detector.calls == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_closer_does_not_cancel_running_worker_or_claim_completion():
+    started, release = threading.Event(), threading.Event()
+    detector = Detector(started=started, release=release)
+
+    async def on_result(*args):
+        pytest.fail("a closing scheduler must not deliver a result")
+
+    scheduler = FairInference([FIRST], load_detector=lambda: detector,
+                              on_result=on_result, max_frames_per_camera=None)
+    await scheduler.observe(FIRST, b"frame", generation=1)
+    assert await asyncio.to_thread(started.wait, 1)
+    closer = asyncio.create_task(scheduler.close())
+    try:
+        await asyncio.sleep(0)
+        closer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closer
+        # A later owner can still wait for the very same operation, not retry it.
+        again = asyncio.create_task(scheduler.close())
+        done, _ = await asyncio.wait({again}, timeout=0.03)
+        assert not done
+    finally:
+        release.set()
+        await scheduler.close()
+        if 'again' in locals():
+            await again
+    assert detector.calls == [b"frame"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_join_cannot_hide_a_still_running_thread_from_close():
+    started, release = threading.Event(), threading.Event()
+    detector = Detector(started=started, release=release)
+
+    async def on_result(*args):
+        pytest.fail("cancelled work must not deliver a result")
+
+    scheduler = FairInference([FIRST], load_detector=lambda: detector,
+                              on_result=on_result, max_frames_per_camera=None)
+    await scheduler.observe(FIRST, b"frame", generation=1)
+    assert await asyncio.to_thread(started.wait, 1)
+    waiter = asyncio.create_task(scheduler.join())
+    await asyncio.sleep(0)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    closer = asyncio.create_task(scheduler.close())
+    try:
+        done, _ = await asyncio.wait({closer}, timeout=0.03)
+        assert not done
+    finally:
+        release.set()
+        await closer
+    assert detector.calls == [b"frame"]
+
+
+@pytest.mark.asyncio
+async def test_close_can_cancel_async_delivery_after_the_model_thread_finished():
+    delivering, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def on_result(*args):
+        delivering.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    scheduler = FairInference([FIRST], load_detector=Detector, on_result=on_result,
+                              max_frames_per_camera=None)
+    await scheduler.observe(FIRST, b"frame", generation=1)
+    await asyncio.wait_for(delivering.wait(), 1)
+    await asyncio.wait_for(scheduler.close(), 1)
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
 async def test_camera_aware_api_detector_receives_only_its_camera():
     calls = []
 

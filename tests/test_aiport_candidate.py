@@ -3342,6 +3342,48 @@ async def test_stopping_during_an_active_event_closes_it_with_a_leave(tmp_path, 
 
 
 @pytest.mark.asyncio
+async def test_inflight_observer_cannot_reopen_an_event_during_final_shutdown_leave(tmp_path, monkeypatch):
+    service, sink, frame = await _person_event_service(tmp_path, monkeypatch)
+    camera = service.ingress.list_streams()[0]["deviceID"]
+    original_session = service._pool_sessions[camera]
+    enter = _edges(sink, "enter")[0]
+    delivering, release, reopened = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    cancelled = False
+
+    async def delayed_result(*args):
+        nonlocal cancelled
+        delivering.set()
+        try:
+            await release.wait()
+            service._pool_sessions[camera] = original_session
+            await service._send_control_event(sink, "EventSmartDetect", enter)
+            reopened.set()
+        finally:
+            cancelled = True
+
+    service._inference._on_result = delayed_result
+    await service._observe_pool_frame(camera, frame)
+    await asyncio.wait_for(delivering.wait(), 1)
+    original_send = service._send_control_event
+
+    async def yield_during_leave(ws, name, payload):
+        await original_send(ws, name, payload)
+        if name == "EventSmartDetect" and payload.get("edgeType") == "leave" and not cancelled:
+            release.set()
+            await asyncio.wait_for(reopened.wait(), 1)
+
+    monkeypatch.setattr(service, "_send_control_event", yield_during_leave)
+    try:
+        await service.stop()
+    finally:
+        release.set()
+        await service._inference.close()
+    assert not reopened.is_set()
+    assert len(_edges(sink, "enter")) == 1 and len(_edges(sink, "leave")) == 1
+    assert service._pool_sessions == {}
+
+
+@pytest.mark.asyncio
 async def test_an_ordinarily_closed_event_gets_no_second_leave_on_stop(tmp_path, monkeypatch):
     service, sink, frame = await _person_event_service(tmp_path, monkeypatch)
     later = time.monotonic() + 21
