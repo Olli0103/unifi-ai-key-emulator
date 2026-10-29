@@ -45,7 +45,9 @@ untrusted certificate before an HTTP request.
 This is address-class policy, not DNSSEC, permanent IP pinning, routing/billing
 attestation or proof about every possible network translation. Public DNS
 answers may change between requests if each new answer still satisfies the
-policy. Synchronous AI Port HTTP and face-enrollment helpers are separate,
-not covered by this connector. No DNS/hosts, Gateway, controller, NAS provider
+policy. Synchronous AI Port HTTP and face-enrollment helpers use a separate
+[guarded transport](provider-sync-boundary-20261029.md) sharing this address
+decision; they are not covered by the async connector itself.
+No DNS/hosts, Gateway, controller, NAS provider
 or running-image configuration changed. Existing clients must receive a
 reviewed deployment before this source fix becomes a runtime boundary.

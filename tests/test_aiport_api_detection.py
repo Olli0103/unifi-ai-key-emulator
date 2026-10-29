@@ -379,7 +379,8 @@ def test_dns_outage_preserves_budget_and_recovers_without_restart(tmp_path, monk
 
     clock[0] += 61
     monkeypatch.setattr("aikey.aiport_api_detection.socket.getaddrinfo",
-                        lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM)])
+                        lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM,
+                                                   socket.IPPROTO_TCP, '', ('8.8.8.8', 443))])
     for _ in range(4):
         detector.detect_for_camera(FIRST, STILL)
     assert detector.detect_for_camera(FIRST, FRAME) == ()

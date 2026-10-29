@@ -20,11 +20,16 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .provider_http import provider_opener
+from .provider_network import ProviderAddressError, checked_addresses, validate_provider_host
+from .protocol import _json_object
+
 
 MATCH_THRESHOLD = 0.363          # OpenCV SFace cosine threshold
 _DIMENSION = 128
 _MAX_IDENTITIES = 50
 _MAX_TEMPLATES = 20
+_MAX_EMBED_REPLY_BYTES = 256 * 1024
 _NAME = re.compile(r"[^\x00-\x1f\x7f]{1,64}\Z")
 
 
@@ -33,13 +38,19 @@ class FaceStoreError(ValueError):
 
 
 def _unit(embedding) -> list[float]:
-    if (not isinstance(embedding, list) or len(embedding) != _DIMENSION
-            or any(type(v) not in (int, float) or not math.isfinite(v) for v in embedding)):
+    try:
+        valid = (isinstance(embedding, list) and len(embedding) == _DIMENSION
+                 and all(type(v) in (int, float) and math.isfinite(v) for v in embedding))
+    except OverflowError:
+        valid = False
+    if not valid:
         raise FaceStoreError("invalid_embedding")
-    norm = math.sqrt(sum(v * v for v in embedding))
-    if norm == 0:
+    scale = max(abs(v) for v in embedding)
+    if not scale:
         raise FaceStoreError("invalid_embedding")
-    return [v / norm for v in embedding]
+    scaled = [v / scale for v in embedding]
+    norm = math.hypot(*scaled)
+    return [v / norm for v in scaled]
 
 
 class FaceStore:
@@ -115,13 +126,23 @@ class FaceStore:
 
 def _private_server(url: str) -> str:
     import ipaddress
-    parsed = urlsplit(url)
-    try:
-        address = ipaddress.ip_address(parsed.hostname or "")
-    except ValueError as exc:
-        raise FaceStoreError("face_server_must_be_local") from exc
-    if parsed.scheme != "http" or not (address.is_loopback or address.is_private):
+    if not isinstance(url, str):
         raise FaceStoreError("face_server_must_be_local")
+    try:
+        parsed = urlsplit(url)
+        validate_provider_host(parsed.hostname, authority=parsed.netloc)
+        address = ipaddress.ip_address(parsed.hostname or "")
+        port = parsed.port or 80
+        if (parsed.scheme != 'http' or not (address.is_loopback or address.is_private)
+                or parsed.username is not None or parsed.password is not None
+                or parsed.path not in ('', '/') or parsed.query or parsed.fragment
+                or parsed.port == 0 or not 1 <= port <= 65535
+                or any(c.isspace() or c in '\\%' for c in url)):
+            raise ValueError
+        checked_addresses(parsed.hostname, port,
+                          [{'hostname': parsed.hostname, 'host': parsed.hostname, 'port': port}])
+    except (ProviderAddressError, ValueError, TypeError) as exc:
+        raise FaceStoreError("face_server_must_be_local") from exc
     return url.rstrip("/") + "/v1/faces"
 
 
@@ -129,17 +150,31 @@ def embed_single_face(image: bytes, server: str) -> list[float]:
     """Exactly one face from an owner-supplied enrollment photo."""
     import urllib.request
     import uuid
+    endpoint = _private_server(server)
     boundary = uuid.uuid4().hex
     body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; "
             f"filename=\"enroll.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n").encode()
     body += image + f"\r\n--{boundary}--\r\n".encode()
-    request = urllib.request.Request(_private_server(server), data=body, headers={
-        "Content-Type": f"multipart/form-data; boundary={boundary}"})
-    with urllib.request.urlopen(request, timeout=60) as response:
-        faces = json.load(response)["faces"]
-    if len(faces) != 1:
-        raise FaceStoreError("enrollment_photo_needs_exactly_one_face")
-    return faces[0]["embedding"]
+    request = urllib.request.Request(endpoint, data=body, headers={
+        "Content-Type": f"multipart/form-data; boundary={boundary}", "Accept-Encoding": "identity"})
+    try:
+        with provider_opener().open(request, timeout=60) as response:
+            if response.status != 200 or response.headers.get('Content-Encoding', 'identity') != 'identity':
+                raise FaceStoreError('enrollment_unavailable')
+            raw = response.read(_MAX_EMBED_REPLY_BYTES + 1)
+        if len(raw) > _MAX_EMBED_REPLY_BYTES:
+            raise FaceStoreError('enrollment_unavailable')
+        result = _json_object(raw)
+        found = result.get('faces')
+        if not isinstance(found, list) or len(found) != 1 or not isinstance(found[0], dict):
+            raise FaceStoreError("enrollment_photo_needs_exactly_one_face")
+        return _unit(found[0].get('embedding'))
+    except FaceStoreError:
+        raise
+    except Exception:
+        # HTTP errors, URLs, provider bodies and embeddings must not reach CLI
+        # stderr. No retry, fallback or identity-store write follows failure.
+        raise FaceStoreError('enrollment_unavailable') from None
 
 
 def main(argv: list[str] | None = None) -> int:

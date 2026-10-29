@@ -21,6 +21,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
+from .provider_http import HTTPOnly, ProviderHTTPHandler, ProviderHTTPSHandler, ProviderLookupError
+from .provider_network import ProviderAddressError, checked_addresses
+
 from PIL import Image, UnidentifiedImageError
 
 from .aiport_detection import ObjectObservation
@@ -511,7 +514,8 @@ def _post(url: str, headers: dict, payload: dict, *, timeout: float = 15) -> dic
     body = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode()
     request = Request(url, data=body, headers={**headers, "Content-Type": "application/json"},
                       method="POST")
-    opener = build_opener(ProxyHandler({}), _NoRedirect())
+    opener = build_opener(HTTPOnly(), ProxyHandler({}), _NoRedirect(),
+                          ProviderHTTPHandler(), ProviderHTTPSHandler())
     try:
         with opener.open(request, timeout=timeout) as response:
             if response.status != 200:
@@ -525,6 +529,10 @@ def _post(url: str, headers: dict, payload: dict, *, timeout: float = 15) -> dic
             return result
     except ApiDetectionError:
         raise
+    except ProviderLookupError:
+        raise ApiDetectionError("api_detection_dns_unavailable") from None
+    except ProviderAddressError:
+        raise ApiDetectionError("api_detection_address_refused") from None
     except HTTPError as exc:
         code = ("api_detection_http_429" if exc.code == 429 else
                 "api_detection_http_4xx" if 400 <= exc.code < 500 else
@@ -555,7 +563,8 @@ def _post_jpeg(url: str, jpeg: bytes, *, timeout: float = _SCORE_TIMEOUT_S) -> d
             "Content-Type: image/jpeg\r\n\r\n").encode() + jpeg + f"\r\n--{boundary}--\r\n".encode()
     request = Request(url, data=body, method="POST",
                       headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
-    opener = build_opener(ProxyHandler({}), _NoRedirect())
+    opener = build_opener(HTTPOnly(), ProxyHandler({}), _NoRedirect(),
+                          ProviderHTTPHandler(), ProviderHTTPSHandler())
     try:
         with opener.open(request, timeout=timeout) as response:
             if response.status != 200:
@@ -569,7 +578,7 @@ def _post_jpeg(url: str, jpeg: bytes, *, timeout: float = _SCORE_TIMEOUT_S) -> d
             return result
     except ApiDetectionError:
         raise
-    except (HTTPError, URLError, OSError, ValueError) as exc:
+    except (ProviderAddressError, HTTPError, URLError, OSError, ValueError) as exc:
         raise ApiDetectionError("score_unavailable") from exc
 
 
@@ -737,6 +746,12 @@ class ApiObjectDetector:
         except socket.gaierror as exc:
             self._dns_retry_at = now + _DNS_RETRY_SECONDS
             raise ApiDetectionError("api_detection_dns_unavailable") from exc
+        try:
+            records = [{'hostname': self._remote_host, 'host': item[4][0], 'port': item[4][1]}
+                       for item in addresses]
+            checked_addresses(self._remote_host, 443, records)
+        except (ProviderAddressError, IndexError, TypeError):
+            raise ApiDetectionError("api_detection_address_refused") from None
         self._dns_ok_until = now + _DNS_RETRY_SECONDS
 
     def detect_for_camera(self, camera_mac: str,
@@ -793,7 +808,10 @@ class ApiObjectDetector:
         if fallback_reason is None:
             try:
                 self._check_remote_dns()
-            except ApiDetectionError:
+            except ApiDetectionError as exc:
+                if exc.args != ("api_detection_dns_unavailable",):
+                    self.motion.reset(camera_mac)
+                    raise
                 if self.fallback is None:
                     self.motion.reset(camera_mac)
                     raise

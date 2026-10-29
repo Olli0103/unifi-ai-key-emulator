@@ -43,8 +43,9 @@ Backup, restore and update actions require separate authorization and an explici
 
 An operator must see the destination and data class before enabling a remote provider. Provider selection never falls back silently. The service must fail closed if a required credential file disappears or becomes unreadable.
 
-The asynchronous Key model, embedding, CLIP, rerank and model-catalog clients
-check every DNS answer at the connection boundary. Except for `localhost`
+The asynchronous Key model, embedding, CLIP, rerank and model-catalog clients,
+and the synchronous AI Port model/score transports, check every DNS answer at
+the connection boundary. Except for `localhost`
 (which must resolve only to loopback), a hostname may resolve only to ordinary
 global unicast addresses. Private backends use explicit LAN/VPN/loopback IPs;
 special, link-local, multicast, reserved and supported translation/transition
@@ -55,10 +56,19 @@ resolved again. Verified TLS still uses the original provider hostname.
 Unicode hostnames must be supplied as ASCII IDNA A-labels; compatibility
 Unicode cannot normalize into an approved loopback/private destination.
 
-This source boundary does not yet cover the separate synchronous AI Port
-HTTP/enrollment helpers, prove live DNS behavior, or attest routing/billing
-behind an approved endpoint. Those remain open in #3/#13. See the
-[bounded checks and operational limits](evidence/provider-dns-boundary-20261029.md).
+Face enrollment also uses the guarded, proxy-free, HTTP-only transport with
+redirects disabled; its separately validated endpoint remains an explicit
+private/loopback IP. Enrollment responses are bounded and validated before
+identity storage. Failed requests expose fixed errors rather than provider
+bodies or URLs. This does not encrypt identity storage or change retention.
+
+This source boundary does not prove live DNS behavior or attest routing/billing
+behind an approved endpoint. Blocking libc DNS cannot be forcibly cancelled
+here, and the existing sync HTTP response timeout is not a proven whole-request
+wall-clock deadline. Late DNS/connect completion cannot begin an expired HTTP
+transfer, but sustained/slow-response acceptance remains open in #3/#24. See the
+[async checks](evidence/provider-dns-boundary-20261029.md) and
+[sync/enrollment limits](evidence/provider-sync-boundary-20261029.md).
 
 Model text is data. It never becomes a command, URL, path, query or configuration update. Camera media and model output cannot expand the configured network allowlist. Future OCR, speech and recognition adapters inherit the same rule.
 
