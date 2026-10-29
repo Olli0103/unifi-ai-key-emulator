@@ -45,6 +45,11 @@ class InventoryError(RuntimeError):
     """The inventory cannot be trusted or is unavailable."""
 
 
+def is_supported_protect_version(value: object) -> bool:
+    """Share the exact validated inventory versions with deployment consumers."""
+    return isinstance(value, str) and value in _VALIDATED_VERSIONS
+
+
 @dataclass(frozen=True)
 class Camera:
     id: str
@@ -286,7 +291,7 @@ async def fetch_inventory(host: str, *, api_key_file: Path, trust_file: Path,
                                                               "Accept": "application/json"}) as session:
         meta = await _get_json(session, base + "/meta/info")
         if (not isinstance(meta, dict)
-                or meta.get("applicationVersion") not in _VALIDATED_VERSIONS):
+                or not is_supported_protect_version(meta.get("applicationVersion"))):
             raise InventoryError("Protect version has no validated camera inventory contract")
         rows = await _get_json(session, base + "/cameras")
     cameras = parse_cameras(rows)

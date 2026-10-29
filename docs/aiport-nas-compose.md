@@ -29,6 +29,12 @@ If the NAS already has a suitable macvlan, add `--external-network EXISTING_NETW
 
 On the NAS, first verify the parent interface and each IP reservation. `local-aiport-nas-reconcile` provides a read-only default run and an explicit `--apply` mode. Pass the same plan, Compose file, slot-state assignments and network/identity arguments used to create the manifest, plus `--api-key-file`, `--web-trust-file`, and `--web-cert-file` for the pinned Protect integration API. Keep all these files private. The command fetches a fresh inventory, rejects changed camera assignments, regenerates and compares the complete manifest, validates Docker Compose, and reads the current service states. It also inspects each existing container's image, port-443 command, IP, MAC, non-root user, read-only root filesystem, dropped capabilities, no-new-privileges setting, unprivileged-port sysctl, absence of published host ports, and private state mount against the manifest. Its dry run reports which slots would start and gives each running slot a readiness state: `connected`, `awaiting_adoption`, or `controller_disconnected`. With `--apply`, it starts only absent or stopped selected slots using `--no-recreate --no-build --pull never`; it never replaces a running service. It refuses to start another slot while an existing adopted slot is disconnected. After each start it checks the container's own pinned HTTPS `/healthz` through `docker compose exec`, because the NAS host usually cannot reach a macvlan container directly. A newly started, unadopted slot can report `awaiting_adoption`; an adopted slot must reconnect during 16 bounded checks separated by two seconds. If it cannot, the reconciler stops only slots attempted during that invocation. It does not remove any containers or volumes.
 
+The reconciler and inventory reader share one exact supported-version check
+(currently Protect 7.3.60, 7.3.68, 7.3.70 and 7.3.74). Other versions, including
+unknown patch releases and prerelease suffixes, remain blocked. This is inventory
+schema support, not blanket AI Port feature-parity qualification. Version support
+does not bypass inventory freshness, slot/camera assignment or manifest checks.
+
 Example dry run for slot 2 (add `--apply` only after checking the output and LAN reservations):
 
 ```sh
