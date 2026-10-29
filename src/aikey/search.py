@@ -28,6 +28,7 @@ from .provider_network import ProviderAddressError, ProviderConnector, validate_
 from .protocol import ContractError, decode_message, encode_message
 from .device import VerifiedConnector
 from .embedding_profile import EmbeddingProfileError, ensure_embedding_profile, pinned_value
+from .secret_files import SecretFileError, read_secret
 
 
 LOG = logging.getLogger(__name__)
@@ -152,6 +153,16 @@ class EmbeddingService:
         return endpoint
 
     async def _http_encode(self, texts: list[str]) -> list[list[float]]:
+        headers = {}
+        token_file = self.config.get("bearer_token_file")
+        if token_file:
+            try:
+                token = read_secret(token_file)
+            except SecretFileError:
+                raise EmbeddingError("Embedding token file is empty or invalid") from None
+            if "\n" in token or "\r" in token:
+                raise EmbeddingError("Embedding token file is empty or invalid")
+            headers["Authorization"] = "Bearer " + token
         if self._session is None or self._session.closed:
             timeout = float(self.config.get("timeout_seconds", 8))
             if not math.isfinite(timeout) or timeout <= 0:
@@ -160,13 +171,6 @@ class EmbeddingService:
                 connector=ProviderConnector(), timeout=aiohttp.ClientTimeout(total=timeout),
                 trust_env=False, cookie_jar=aiohttp.DummyCookieJar()
             )
-        headers = {}
-        token_file = self.config.get("bearer_token_file")
-        if token_file:
-            token = Path(token_file).read_text().strip()
-            if not token or "\n" in token or "\r" in token:
-                raise EmbeddingError("Embedding token file is empty or invalid")
-            headers["Authorization"] = "Bearer " + token
         payload = {"model": self.model, "input": texts, "encoding_format": "float"}
         async with self._session.post(self._endpoint(), json=payload, headers=headers, allow_redirects=False) as response:
             if response.status != 200:

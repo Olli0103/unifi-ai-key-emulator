@@ -11,6 +11,7 @@ import time
 from urllib.parse import urlsplit
 
 from .protocol import CONTINUOUS_CAPTION_VERSIONS
+from .secret_files import SecretFileError, read_secret
 
 
 class ConfigError(ValueError):
@@ -371,18 +372,24 @@ def hydrate_secrets(config: dict) -> dict:
     config = copy.deepcopy(config)
     path = Path(config["device"]["management_password_file"])
     try:
-        password = path.read_text().strip()
-    except OSError as exc:
-        raise ConfigError("Management credential file is not readable") from exc
+        password = read_secret(path)
+    except SecretFileError:
+        raise ConfigError("Management credential file is not readable") from None
     if len(password) < 16:
         raise ConfigError("Management credential must contain at least 16 characters")
     config["device"]["management_password"] = password
     key_path = config["inference"].get("api_key_file")
     if key_path:
-        config["inference"]["api_key"] = Path(key_path).read_text().strip()
+        try:
+            config["inference"]["api_key"] = read_secret(key_path)
+        except SecretFileError:
+            raise ConfigError("Vision credential file is not readable") from None
     speech = config.get("speech_to_text")
     if isinstance(speech, dict) and speech.get("api_key_file"):
-        speech["api_key"] = Path(speech["api_key_file"]).read_text().strip()
+        try:
+            speech["api_key"] = read_secret(speech["api_key_file"])
+        except SecretFileError:
+            raise ConfigError("Speech credential file is not readable") from None
     return config
 
 
@@ -418,6 +425,9 @@ def readiness(config: dict) -> dict:
             errors["vision_configuration_valid"] = str(exc)
     else:
         checks["vision_configuration_valid"] = False
+        errors["vision_configuration_valid"] = (
+            "Vision configuration cannot be validated until required credentials are readable"
+        )
     return {"ready_for_device_start": all(checks.values()), "checks": checks, "errors": errors,
             "target": {"console": "UDM Pro Max", "protect": config["controller"].get("protect_version"),
                        "deployment": config["runtime"].get("deployment", "unspecified")},

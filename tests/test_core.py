@@ -24,6 +24,7 @@ def test_readiness_reads_key_without_network_or_secret_output(tmp_path, monkeypa
     config = ready_config(tmp_path)
     key_path = tmp_path / "provider-key"
     key_path.write_text("")
+    key_path.chmod(0o600)
     config["inference"] = {
         "provider": "openai", "model": "fixture-model", "allow_remote": True,
         "base_url": "https://api.openai.com/v1", "api_key_file": str(key_path),
