@@ -109,9 +109,18 @@ async def test_a_controller_reporting_an_evidenced_version_is_admitted(tmp_path,
     assert code == 0 and admitted == ["camera-fixture"]
 
 
-@pytest.mark.parametrize("reported", [None, "7.3.56", "7.4.1", "not-a-version"])
+@pytest.mark.parametrize("reported", [None, "7.3.56", "7.3.74", "7.4.1", "not-a-version"])
 async def test_an_unreported_or_unevidenced_controller_version_blocks_admission(tmp_path, reported):
     code, admitted, device = await _device(tmp_path, reported)
     assert code == 95 and admitted == []                             # no worker, no budget, no media
     phases = device.status["recognize_key_frames"]["phase_counts"]
     assert phases["controller_version_unverified"] == 1
+
+
+async def test_a_partially_observed_controller_keeps_baseline_control_not_caption_admission(tmp_path):
+    code, admitted, device = await _device(tmp_path, "7.3.74")
+    assert code == 95 and admitted == []
+    reply = decode_message(await device.handle_message(wire("getInfo", {}, "baseline")))
+    assert reply.header["errorCode"] == 0
+    assert reply.body["mac"] == device.mac
+    assert device.status["compatibility"]["controller_version_evidence"] == "live_partial"

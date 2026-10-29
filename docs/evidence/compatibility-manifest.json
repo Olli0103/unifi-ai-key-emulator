@@ -1,8 +1,8 @@
 {
  "schema": "aikey-compatibility-manifest/1",
- "manifest_version": "ai-key/2026-10-03.1",
+ "manifest_version": "ai-key/2026-10-29.1",
  "processor_profile": "ai-key",
- "base_commit": "7241dcb",
+ "base_commit": "de1324b",
  "emulated_identity": {
   "type": "UP-AI-KEY",
   "sysid": "0xa5f0",
@@ -129,7 +129,7 @@
    "id": "live-protect-7.3.70",
    "kind": "live",
    "protect_version": "7.3.70",
-   "date": "2026-09-30",
+   "date": "2026-09-30 to 2026-10-07 (dated entries)",
    "console": "UDM Pro Max",
    "camera_family": "AI Port-paired G3/G4/G5 cameras and a G6 Instant",
    "vision_provider": "local Ollama qwen3-vl 8B instruct on the NAS iGPU",
@@ -142,19 +142,46 @@
     "worker journal only: speechToText and recognizeFaces jobs reached completed (callback answered 2xx)",
     "the unhandled connect-time commands are diskInfo and updateLcmSettings (bounded fingerprint window, matched against Protect's AI processor log); updateLcmSettings answered 0 after the Key stored it",
     "search index row counts grew on the Key's PostgreSQL, including 2 rows for the native face camera after the face-task search tags change; counts do not attribute rows to that change",
-    "1 Oct 2026: deep understanding enabled on all cameras; session descriptions, re-ID vectors and descriptions saved natively; hybrid session search (BM25 plus rerank) returns ranked sessions; a manual face enhancement saved natively"
+    "1 Oct 2026: deep understanding enabled on all cameras; session descriptions, re-ID vectors and descriptions saved natively; hybrid session search (BM25 plus rerank) returns ranked sessions; a manual face enhancement saved natively",
+    "30 Sep evening native web readback: 31 audio-image events have ramState done, ramTags and ramDescription; distinct from the earlier video-job callback-only observations"
    ],
    "not_observed": [
-    "a caption read back from the exact-event record (metadata.ramDescription) on 7.3.70",
-    "transcription rows or face thumbnails read back per event on 7.3.70",
-    "an independently read-back player AI summary; the owner reported one rendered in the Büro player (screenshot, 09:09 local), while 4 on-demand jobs timed out earlier and 7 more after a restart with a caption backlog",
+    "an exact-event video-caption readback tied to the initial 30 Sep completed video jobs (audio-image persistence is separately observed)",
+    "per-event transcript/face readback in the initial morning worker-journal trial; later dated native face/enhancement observations are separate",
+    "an independently read-back player AI summary in the initial morning trial; later dated saved-description observations are separate",
     "the body or expected reply of diskInfo",
-    "deep mode, /describe tasks or a reverified event on 7.3.70"
+    "full comparative quality/false-match acceptance for deep descriptions, ReID or reverification"
    ],
-   "limits": "Worker journal states, callback status codes and counters from one controller over about one day. A 2xx callback, a completed job or a growing row count is not a native saved caption, transcript, face or summary.",
+   "limits": "Dated stages differ: the initial 30 Sep section is worker-journal/callback-only, later sections include native web/database readbacks. A 2xx or completed job alone is never persistence; observed audio-image descriptions do not prove the separately owed initial video-caption readback.",
    "records": [
     "docs/evidence/live-protect-7.3.70.md",
     "docs/planning/nas-final-cutover.md"
+   ],
+   "raw_traces_public": false
+  },
+  {
+   "id": "live-protect-7.3.74",
+   "kind": "live",
+   "protect_version": "7.3.74",
+   "date": "2026-10-29",
+   "console": "UDM Pro Max",
+   "deployment": "Linux AMD64 NAS, inventory-only image overlay; existing adopted state retained",
+   "operator": "integration owner",
+   "observed": [
+    "pinned integration API inventory: 11 cameras, 10 connected, eight UniFi families; complete private ID-set digest matches independent native bootstrap",
+    "same adopted Key identity/config/certificate/private key after one-module inventory image replacement; control/search connected, registry fresh; four existing AI Ports untouched and connected",
+    "installed older manifest reports controller evidence unknown while the adopted baseline control remains connected",
+    "native detection-nls request for person in a room returns HTTP 200 and 60 detections under clip-basic-v1; no relevance or negative-query benchmark inferred"
+   ],
+   "not_observed": [
+    "fresh adoption or a new credential rotation on this version",
+    "new persisted video caption/audio/recognition/enhancement acceptance on 7.3.74",
+    "complete image/deep retrieval, restored-device bootstrap, host reboot, soak or ONVIF acceptance"
+   ],
+   "records": [
+    "docs/evidence/live-protect-7.3.74.md",
+    "docs/evidence/camera-inventory-7.3.74.md",
+    "docs/evidence/nas-restore-20261029.md"
    ],
    "raw_traces_public": false
   },
@@ -655,7 +682,8 @@
    "live": {
     "live-protect-7.3.56": "native-verified",
     "live-protect-7.3.60": "native-verified",
-    "live-protect-7.3.68": "native-verified"
+    "live-protect-7.3.68": "native-verified",
+    "live-protect-7.3.74": "native-verified"
    },
    "static": [
     "static-protect-7.2.105",
@@ -730,7 +758,8 @@
    "live": {
     "live-protect-7.3.56": "not_observed",
     "live-protect-7.3.60": "not_observed",
-    "live-protect-7.3.68": "native-verified"
+    "live-protect-7.3.68": "native-verified",
+    "live-protect-7.3.74": "native-verified"
    },
    "static": [],
    "tests": [
@@ -745,7 +774,7 @@
    "missing_evidence": [
     "The exact protectVersion value, if any, sent by 7.3.56 or 7.3.60 in setConsoleInfo was not recorded"
    ],
-   "notes": "Report, not refuse: a supported baseline must keep working on a newer controller. No feature is gated on version yet. On 7.3.68, before it was listed, health reported evidence unknown while the processor stayed adopted, reconnected and persisted a caption. 27 Sep readback: controller_version 7.3.68, evidence live_partial, adopted and connected (1 connection, no close code)."
+   "notes": "Baseline control reports fixed version categories without recreating identity. Continuous caption admission is independently version-gated; live_partial is not permission. The installed older manifest reported unknown for 7.3.74 while the Key remained adopted/connected after inventory-overlay replacement. Older 7.3.68 evidence includes a persisted caption before that version was classified."
   },
   {
    "id": "lifecycle.controller_upgrade",
@@ -772,7 +801,8 @@
    "title": "Adoption and identity survive an emulator version upgrade",
    "status": "native-verified",
    "live": {
-    "live-protect-7.3.70": "native-verified"
+    "live-protect-7.3.70": "native-verified",
+    "live-protect-7.3.74": "native-verified"
    },
    "static": [],
    "tests": [
