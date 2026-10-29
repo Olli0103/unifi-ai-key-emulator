@@ -4,10 +4,12 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import ipaddress
+import os
 from pathlib import Path
 import re
 import socket
 import ssl
+import tempfile
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -74,7 +76,7 @@ def import_controller_trust(host: str, port: int, expected_sha256: str, output: 
     normalized = expected_sha256.replace(":", "").lower()
     if not re.fullmatch(r"[0-9a-f]{64}", normalized):
         raise ConfigError("Supply the independently verified controller SHA-256 fingerprint")
-    if output.exists():
+    if output.exists() or output.is_symlink():
         raise ConfigError("Controller trust file already exists; refusing to overwrite it")
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
@@ -86,5 +88,33 @@ def import_controller_trust(host: str, port: int, expected_sha256: str, output: 
     actual = hashlib.sha256(der).hexdigest()
     if not hmac.compare_digest(actual, normalized):
         raise ConfigError("Controller certificate fingerprint does not match; no trust was saved")
-    atomic_private(output, ssl.DER_cert_to_PEM_cert(der))
+    _save_new_trust(output, ssl.DER_cert_to_PEM_cert(der))
     return actual
+
+
+def _save_new_trust(output: Path, pem: str) -> None:
+    """Publish a complete private file only if the destination is still absent.
+
+    Unlike replacing configuration, importing trust must never overwrite a
+    concurrent import, file or dangling link after the initial network preflight.
+    A same-directory hard-link publication is exclusive and has no partial leaf.
+    """
+    output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor, name = tempfile.mkstemp(prefix=".controller-trust-", dir=output.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(pem.encode("ascii"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, output, follow_symlinks=False)
+        except FileExistsError as exc:
+            raise ConfigError("Controller trust file already exists; refusing to overwrite it") from exc
+        directory = os.open(output.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)

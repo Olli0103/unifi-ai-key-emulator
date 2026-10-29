@@ -69,9 +69,39 @@ trust. Hostname verification stays enabled. If the certificate does not cover
 the chosen controller address, supply both `--controller-fingerprint` and
 `--pin-only-hostname` **during setup**. This selects certificate pinning instead
 of hostname matching, never disables certificate verification. Additional
-controller-channel certificates/trust and deployment-specific policies remain
-separate configuration work; this command does not promise every network layout
-is ready without further configuration.
+deployment-specific policies remain separate work; setup does not promise every
+network layout is ready without further configuration.
+
+Select `--control-profile device-service` when following the separately documented
+device-service protocol recipe; the default is `ucp4`. The device-service choice
+requires `--controller-fingerprint` and is validated before identity creation.
+Selecting a profile does not establish its compatibility with your controller.
+
+Protect's search endpoint may use a different certificate. During setup,
+`--search-fingerprint VERIFIED_SEARCH_SHA256` prepares a **separate** CA path
+and expected pin, without enabling search or the database. Independently verify
+each endpoint's fingerprint; do not assume the control certificate covers search.
+Import each explicitly, without editing JSON:
+
+```sh
+local-aikey trust --config ./new-key/config.json --channel control --fingerprint VERIFIED_SHA256
+local-aikey trust --config ./new-key/config.json --channel search --fingerprint VERIFIED_SEARCH_SHA256
+```
+
+The selected channel defaults to its configured port (control 7442, search 7443);
+`--port` can choose an explicit valid TCP endpoint. The legacy command without
+`--channel` still selects control. Import refuses a missing search configuration
+or a fingerprint differing from the selected channel's saved pin **before any
+network access**. It writes only that channel's trust file, never rewrites the
+configuration or copies a control certificate into the search slot. The verified
+certificate is published as a complete owner-private file with exclusive
+same-directory hard-link creation. A file/link appearing during the handshake
+or a second concurrent importer is refused, not overwritten; a dangling target
+link is refused before contacting the endpoint. Unsupported hard-link/filesystem
+operations fail rather than falling back to replacement. This is not a full
+ancestor-directory or hostile-same-user protection claim. Import is
+certificate retrieval authenticated by the explicit hash, not a login, adoption,
+new model call or a general certificate/hostname-verification bypass.
 
 `check` reads local files only. An operator-reported version is not live version
 verification, model capability, native compatibility, adoption or a result.

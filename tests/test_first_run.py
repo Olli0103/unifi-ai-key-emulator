@@ -91,6 +91,8 @@ def test_explicit_nat_pin_mp4_and_hosted_key_reference_without_read(tmp_path, ca
     ["--controller", "https://example.invalid"], ["--controller", ""],
     ["--device-ip", "not-an-ip"], ["--bind", "no-ip"], ["--https-port", "0"],
     ["--protect-version", "7.x"], ["--pin-only-hostname"],
+    ["--control-profile", "device-service"], ["--search-fingerprint", "xyz"],
+    ["--controller-fingerprint", ""], ["--search-fingerprint", ""],
     ["--controller-fingerprint", "z" * 64], ["--controller-fingerprint", "ab"],
     ["--ffmpeg-path", "relative/ffmpeg"], ["--model", " "],
     ["--provider", "openai"], ["--provider", "openai-compatible"],
@@ -162,3 +164,70 @@ def test_explicit_lan_provider_requires_both_network_opt_ins(tmp_path, capsys):
     assert main(arguments(tmp_path / "fresh", "--base-url", "http://192.168.50.2:11434",
                           "--allow-remote", "--allow-insecure-http")) == 0
     assert json.loads(capsys.readouterr().out)["network_contacted"] is False
+
+
+def test_explicit_profile_and_distinct_search_trust_remain_offline(tmp_path, capsys):
+    root = tmp_path / "fresh"
+    assert main(arguments(root, "--control-profile", "device-service",
+                          "--controller-fingerprint", "ab" * 32,
+                          "--search-fingerprint", "cd" * 32,
+                          "--pin-only-hostname")) == 0
+    config = load_config(root / "config.json")
+    assert config["controller"]["control_profile"] == "device-service"
+    assert config["controller"]["expected_fingerprint"] == "ab" * 32
+    assert config["controller"]["search_expected_fingerprint"] == "cd" * 32
+    assert config["controller"]["ca_file"] != config["controller"]["search_ca_file"]
+    assert not (root / "state" / "controller-ca.pem").exists()
+    assert not (root / "state" / "controller-search-ca.pem").exists()
+    assert config["search"]["enabled"] is False and config["database"]["enabled"] is False
+    assert json.loads(capsys.readouterr().out)["network_contacted"] is False
+
+
+@pytest.mark.parametrize("channel,port,leaf,pin", [
+    ("control", 7442, "controller-ca.pem", "ab" * 32),
+    ("search", 7443, "controller-search-ca.pem", "cd" * 32),
+])
+@pytest.mark.parametrize("override", [False, True])
+def test_trust_routes_one_explicit_channel_without_rewriting_config(tmp_path, monkeypatch, channel, port, leaf, pin, override):
+    from aikey.config import atomic_private
+    root = tmp_path / "fresh"
+    assert main(arguments(root, "--controller-fingerprint", "ab" * 32,
+                          "--search-fingerprint", "cd" * 32)) == 0
+    path = root / "config.json"
+    before = path.read_bytes()
+    seen = []
+    def import_fixture(host, selected_port, fingerprint, output):
+        seen.append((host, selected_port, fingerprint, output))
+        atomic_private(output, "synthetic certificate fixture, not usable TLS")
+        return fingerprint
+    monkeypatch.setattr("aikey.tls.import_controller_trust", import_fixture)
+    extra = ["--port", "9443"] if override else []
+    assert main(["trust", "--config", str(path), "--channel", channel,
+                 "--fingerprint", pin, *extra]) == 0
+    assert seen == [("192.0.2.1", 9443 if override else port, pin, root / "state" / leaf)]
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("extra", [
+    ["--channel", "search"], ["--fingerprint", "cd" * 32],
+    ["--port", "0"], ["--port", "65536"],
+])
+def test_trust_refuses_missing_channel_mismatched_pin_or_invalid_port_before_network(tmp_path, extra):
+    root = tmp_path / "fresh"
+    assert main(arguments(root, "--controller-fingerprint", "ab" * 32)) == 0
+    before = {str(p): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    assert main(["trust", "--config", str(root / "config.json"), "--fingerprint", "ab" * 32, *extra]) == 2
+    assert before == {str(p): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+@pytest.mark.parametrize("invalid", [False, 123, ["ab" * 32]])
+def test_malformed_saved_control_pin_fails_safely_before_network(tmp_path, invalid):
+    root = tmp_path / "fresh"
+    assert main(arguments(root)) == 0
+    path = root / "config.json"
+    value = json.loads(path.read_text())
+    value["controller"]["expected_fingerprint"] = invalid
+    path.write_text(json.dumps(value) + "\n")
+    before = path.read_bytes()
+    assert main(["trust", "--config", str(path), "--fingerprint", "ab" * 32]) == 2
+    assert path.read_bytes() == before
