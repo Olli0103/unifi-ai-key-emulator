@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from .provider_http import HTTPOnly, ProviderHTTPHandler, ProviderHTTPSHandler, ProviderLookupError
+from .provider_dns import ProviderDNSTimeout, ProviderResolverError, resolve_addresses
 from .provider_network import ProviderAddressError, checked_addresses
 
 from PIL import Image, UnidentifiedImageError
@@ -111,7 +112,7 @@ _FALLBACK_SCHEMA = {
                                "items": {"type": "number"}}}}}}}
 # paid_budget: the optional paid-request cost cap is spent; the frame is
 # still detected, locally, so the cap never limits object events.
-FALLBACK_REASONS = ("http_429", "http_5xx", "request_failed", "dns_unavailable", "backoff",
+FALLBACK_REASONS = ("http_429", "http_5xx", "request_failed", "dns_unavailable", "dns_timeout", "backoff",
                     "paid_budget")
 # After a failed local request the fallback pauses, doubling from 30 s to
 # 300 s, so an overloaded NAS model is not queued up against.
@@ -531,6 +532,10 @@ def _post(url: str, headers: dict, payload: dict, *, timeout: float = 15) -> dic
         raise
     except ProviderLookupError:
         raise ApiDetectionError("api_detection_dns_unavailable") from None
+    except ProviderDNSTimeout:
+        raise ApiDetectionError("api_detection_dns_timeout") from None
+    except ProviderResolverError:
+        raise ApiDetectionError("api_detection_resolver_unavailable") from None
     except ProviderAddressError:
         raise ApiDetectionError("api_detection_address_refused") from None
     except HTTPError as exc:
@@ -548,7 +553,9 @@ def _post(url: str, headers: dict, payload: dict, *, timeout: float = 15) -> dic
         # Not chained: the HTTP error carries the provider's message and headers.
         raise error from None
     except URLError as exc:
-        code = ("api_detection_dns_unavailable"
+        code = ("api_detection_resolver_unavailable" if isinstance(exc.reason, ProviderResolverError) else
+                "api_detection_dns_timeout" if isinstance(exc.reason, ProviderDNSTimeout) else
+                "api_detection_dns_unavailable"
                 if isinstance(exc.reason, socket.gaierror)
                 else "api_detection_request_failed")
         raise ApiDetectionError(code) from exc
@@ -691,6 +698,7 @@ class ApiObjectDetector:
                              else None)
         self._dns_ok_until = 0.0
         self._dns_retry_at = 0.0
+        self._dns_failure_code = "api_detection_dns_unavailable"
         # Optional local fallback (Ollama on the LAN), used while the primary
         # provider fails or its optional paid cap is spent. It has no count
         # ceiling: the caller runs one request at a time per AI Port with at
@@ -735,17 +743,22 @@ class ApiObjectDetector:
             return
         now = time.monotonic()
         if now < self._dns_retry_at:
-            raise ApiDetectionError("api_detection_dns_unavailable")
+            raise ApiDetectionError(self._dns_failure_code)
         if now < self._dns_ok_until:
             return
         try:
-            addresses = socket.getaddrinfo(self._remote_host, 443,
-                                           type=socket.SOCK_STREAM)
+            addresses = resolve_addresses(self._remote_host, 443, 5)
             if not addresses:
                 raise socket.gaierror()
-        except socket.gaierror as exc:
+        except (socket.gaierror, ProviderDNSTimeout) as exc:
+            self._dns_failure_code = ("api_detection_dns_timeout" if isinstance(exc, ProviderDNSTimeout)
+                                      else "api_detection_dns_unavailable")
             self._dns_retry_at = now + _DNS_RETRY_SECONDS
-            raise ApiDetectionError("api_detection_dns_unavailable") from exc
+            raise ApiDetectionError(self._dns_failure_code) from None
+        except ProviderAddressError:
+            raise ApiDetectionError("api_detection_address_refused") from None
+        except ProviderResolverError:
+            raise ApiDetectionError("api_detection_resolver_unavailable") from None
         try:
             records = [{'hostname': self._remote_host, 'host': item[4][0], 'port': item[4][1]}
                        for item in addresses]
@@ -934,8 +947,9 @@ class ApiObjectDetector:
             return accepted
         except ApiDetectionError as exc:
             self.motion.sample_result(camera_mac, found_object=False)
-            if exc.args == ("api_detection_dns_unavailable",):
+            if exc.args in (("api_detection_dns_unavailable",), ("api_detection_dns_timeout",)):
                 self._dns_ok_until = 0.0
+                self._dns_failure_code = exc.args[0]
                 self._dns_retry_at = time.monotonic() + _DNS_RETRY_SECONDS
             raise
         except ProviderError as exc:
@@ -979,7 +993,8 @@ class ApiObjectDetector:
         code = exc.args[0] if isinstance(exc, ApiDetectionError) and exc.args else None
         return {"api_detection_http_429": "http_429", "api_detection_http_5xx": "http_5xx",
                 "api_detection_request_failed": "request_failed",
-                "api_detection_dns_unavailable": "dns_unavailable"}.get(code)
+                "api_detection_dns_unavailable": "dns_unavailable",
+                "api_detection_dns_timeout": "dns_timeout"}.get(code)
 
     def _gate(self, camera_mac: str) -> MinuteHistory:
         """Per-minute gate counters for one camera: counts and cell maxima only."""
