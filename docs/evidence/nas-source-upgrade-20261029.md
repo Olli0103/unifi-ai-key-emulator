@@ -112,4 +112,7 @@ context. See [retention boundaries](../data-retention.md).
 Still open: representative pre-tuning numeric quality gates, complete native
 restore/index association and rollback checks, host/controller recovery,
 72-hour soak, seven-day pilot and the other intelligence/legacy requirements.
+The later [isolated cold database restore](nas-cold-restore-20261029.md) verified
+the physical copy, tokenizer registrations, recorded password/TLS and an isolated
+restart; full native device restoration remains open.
 ONVIF remains open by the owner's instruction because no camera is available.
