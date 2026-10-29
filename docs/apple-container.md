@@ -2,7 +2,22 @@
 
 This guide uses Apple container 1.4.1 on an Apple silicon Mac. The Linux ARM64 image has been built and run against Protect 7.3.56 on a UDM Pro Max. Native discovery, adoption, an online control connection, matching time synchronization, management-password rotation and reconnect after a planned restart were observed. Factory authentication was rejected after enrollment.
 
-Later tests on Protect 7.3.60 verified one native on-demand description and automatic event captions on G5 Flex and G4 Instant through OpenAI. The on-demand route returned its caption without persisting it. An exact-event GET verified the G5 Flex caption; the G4 Instant caption matched the worker result in the native event panel. Both remained visible after a full Safari page reload. Each used a separate single-use permit; continuous operation remains unverified. Face/plate recognition, audio and full legacy-camera enhancement are not implemented. Search and PostgreSQL remained disabled. NAS deployment is untested. The static protocol research uses Protect 7.2.105 and AI Key firmware 2.2.8, distinct from these live checks.
+Later tests on Protect 7.3.60 verified one native on-demand description and automatic event captions on G5 Flex and G4 Instant through OpenAI. The on-demand route returned its caption without persisting it. An exact-event GET verified the G5 Flex caption; the G4 Instant caption matched the worker result in the native event panel. Both remained visible after a full Safari page reload. Each used a separate single-use permit. Search and PostgreSQL remained disabled in **those Apple-container trials**. The static protocol research uses Protect 7.2.105 and AI Key firmware 2.2.8, distinct from these live checks.
+
+These opening observations are historical, not a current product-wide statement.
+Later [NAS deployment](evidence/nas-source-upgrade-20261029.md) and
+[Key/four-Port upgrades](evidence/key-port-batch165-20261030.md) have separate
+Linux AMD64 evidence including PostgreSQL. Source face/plate/speech, CLIP/hybrid
+search and enhancement paths also have separate, bounded records; see the
+[current overview](../README.md#capabilities-and-current-limits). They do not
+establish those features on this Apple recipe, cross-platform equivalence,
+quality, a new clean install, continuous endurance or full native recovery.
+
+For a fresh standalone AI Key directory, [offline setup](first-run.md) now
+prepares controller/listener/provider/model settings without editing JSON. Run
+it in the intended filesystem/runtime namespace: generated absolute paths must
+exist **inside** the eventual container. The existing mount layout and historical
+device-service/control-profile steps below are not automatically migrated.
 
 Install the release from [Apple's 1.4.1 release page](https://github.com/apple/container/releases/tag/1.4.1). The commands below use its [command reference](https://github.com/apple/container/blob/1.4.1/docs/command-reference.md). Use a dedicated directory outside the repository for state and replace the uppercase address placeholders. No real LAN addresses or API secrets belong in this guide.
 
@@ -38,6 +53,9 @@ The explicit UID and GID let the process write its host-owned state mount. The i
 Use a DNS server reachable from the guest, such as the LAN router. In the tested installation, the default virtual gateway did not answer DNS queries, while the router did. Set DNS on both the builder and application containers. After building, `container builder stop` releases its resources without stopping application containers.
 
 ## Configure the first connection
+
+This is the lower-level historical configuration recipe, not a completed
+no-JSON first-run wizard. Do not replay it against an adopted installation.
 
 Edit the generated `config.json` in the private state directory. Preserve its generated identity and credential paths. Set these values in their existing sections:
 

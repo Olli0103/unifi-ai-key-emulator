@@ -13,6 +13,11 @@ directory beneath an existing private parent. Example addresses and model names
 below are fictional: supply the actual controller, advertised device address,
 operator-reported Protect version and an installed vision-capable model.
 
+For containers, execute setup in the eventual runtime filesystem namespace and
+keep the same mounts/paths when starting the device. Absolute generated state and
+secret references are not automatically translated from host paths to container
+paths; setup does not rewrite an existing Compose/Apple-container recipe.
+
 ```sh
 local-aikey setup --directory ./new-key --controller 192.0.2.1 --device-ip 192.0.2.110 --protect-version 7.3.74 --provider ollama --model INSTALLED_VISION_MODEL
 local-aikey check --config ./new-key/config.json
