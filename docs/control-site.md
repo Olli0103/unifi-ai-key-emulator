@@ -295,9 +295,13 @@ network reachability policy remain deployment responsibilities.
 The [30 October NAS loopback qualification](evidence/native-admin-loopback-20261030.md)
 records a separate authenticated service reading the actual Key/four-Port
 profiles, five maintenance-page responses, explicit refusal cases, one admin-only
-restart and unchanged native device/pairing baseline. It remains NAS-loopback
-only; there is no LAN TLS, browser/mobile, real apply/rollback, host-reboot or
-sustained-operation acceptance claim. This does not change the default deployment
+restart and unchanged native device/pairing baseline. The later
+[private-VPN HTTPS checkpoint](evidence/native-admin-private-https-20261030.md)
+supersedes that installation's loopback-only transport: default-trusted TLS,
+authenticated readback and private-interface-only binding were verified on the
+NAS. Remote-client/browser/mobile acceptance and automated renewal remain open,
+as do real apply/rollback, host-reboot and sustained-operation qualification.
+This does not change the default deployment
 or enable an administration service merely by upgrading a processor image.
 
 ## Removing saved AI Port recognition permissions
