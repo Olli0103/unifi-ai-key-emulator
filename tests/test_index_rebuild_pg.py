@@ -92,3 +92,30 @@ async def test_the_sql_store_recognizes_a_committed_swap_after_a_crash(store, tm
     Rebuild(store, tmp_path, target_revision=NEW, target_source="x").cutover(backup=BACKUP, key_quiesced=quiet)
     await Rebuild(store, tmp_path, target_revision=NEW, target_source="x").rollback(key_quiesced=quiet)
     assert live("obj-2") == vector(2)
+
+
+async def test_sql_cancellation_keeps_live_vectors_and_partial_stage(store, tmp_path):
+    run = Rebuild(store, tmp_path, target_revision=NEW, target_source="http://127.0.0.1:8181")
+    encoder = Embedder(NEW)
+    await run.stage(encoder, source(), batch=2, max_batches=1)
+    before = [live(object_id) for object_id in OBJECTS]
+    profile, staged = run.live_profile.read_bytes(), store.staged_summary(run.tag)
+    assert run.cancel()["state"] == "cancelled"
+    assert [live(object_id) for object_id in OBJECTS] == before
+    assert run.live_profile.read_bytes() == profile and store.staged_summary(run.tag) == staged
+    with pytest.raises(RebuildError, match="cancelled"):
+        await run.stage(encoder, source())
+    assert len(encoder.calls) == 2
+
+
+async def test_sql_stale_handle_cannot_reapply_after_rollback(store, tmp_path):
+    run = Rebuild(store, tmp_path, target_revision=NEW, target_source="http://127.0.0.1:8181")
+    await run.stage(Embedder(NEW), source())
+    run.verify()
+    stale = Rebuild(store, tmp_path, target_revision=NEW, target_source="http://127.0.0.1:8181")
+    run.cutover(backup=BACKUP, key_quiesced=quiet)
+    await run.rollback(key_quiesced=quiet)
+    before = [live(object_id) for object_id in OBJECTS]
+    with pytest.raises(RebuildError, match="rolled_back"):
+        stale.cutover(backup=BACKUP, key_quiesced=quiet)
+    assert [live(object_id) for object_id in OBJECTS] == before
