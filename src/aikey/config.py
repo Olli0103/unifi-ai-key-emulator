@@ -352,12 +352,20 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
             config["find_anything"] = validate_find_anything_config(config.get("find_anything"))
         except ClipError as exc:
             raise ConfigError(str(exc)) from None
-    if config["embeddings"].get("backend", "http") == "http":
-        from .search import EmbeddingError, EmbeddingService
-        try:
-            EmbeddingService(config["embeddings"]).identity
-        except EmbeddingError as exc:
-            raise ConfigError(str(exc)) from None
+    # Match the runtime's disabled default and supported backends before a
+    # configuration can be persisted. Local/disabled encoders still construct
+    # EmbeddingService at startup and must use its supported model identity.
+    backend = config["embeddings"].get("backend", "disabled")
+    if not isinstance(backend, str) or backend not in {"http", "sentence-transformers", "disabled"}:
+        raise ConfigError("embeddings.backend must be http, sentence-transformers or disabled")
+    from .search import EmbeddingError, EmbeddingService
+    try:
+        EmbeddingService(config["embeddings"]).identity
+    except EmbeddingError as exc:
+        raise ConfigError(str(exc)) from None
+    if (config["search"].get("enabled") is True and profile == "e5-session-v1"
+            and backend == "disabled"):
+        raise ConfigError("Enabled e5-session-v1 search requires a real embedding backend")
     config["controller_origins"] = []
     if host:
         authority = f"[{host}]" if ":" in host else host
