@@ -18,6 +18,8 @@ These records describe the interface observations used by the implementation. Th
 
 ## Compatibility manifest
 
+- [30 October native routing and missed first detection](native-routing-low-first-reply-20261030.md): two exact send-to-player links and a real near-threshold miss; no quality, zone or full Key-processing acceptance.
+
 The manifest records the currently inventoried AI Key profile features as `native-verified`, `fixture-tested`, `implemented`, `unsupported` or `needs_evidence`. Live results are recorded separately for each live trial (Protect 7.3.56 adoption and control, Protect 7.3.60 captions). Static Protect 7.2.105 and AI Key 2.2.8 references never count as native evidence. A feature is `native-verified` only when a named live trial recorded that behavior, and only for that version and condition. A capability flag or a callback HTTP 200 is never sufficient.
 
 `tests/test_compatibility_manifest.py` checks structural consistency: cited tests and records exist, live and static sources stay separate, and the runtime version table in `aikey.protocol` matches the manifest. It cannot prove a claimed live observation. It also scans public fixtures for credentials, real addresses and non-synthetic identifiers. After editing the manifest, regenerate the matrix with `python tests/test_compatibility_manifest.py --write`. Bump `manifest_version` and `aikey.protocol.COMPATIBILITY_MANIFEST_VERSION` together when statuses change.
