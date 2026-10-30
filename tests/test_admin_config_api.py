@@ -30,6 +30,13 @@ async def test_profile_config_and_role_registry_are_authenticated_private_saved_
         result = await response.json()
         assert result["schema"] == "aikey-admin/1"
         assert [r["id"] for r in result["profiles"]] == ["aikey", "aiport"]
+        response = await client.get(ROOT + "/profiles/aikey/runtime")
+        assert response.status == 200
+        runtime = await response.json()
+        assert runtime["observation"] == "not_configured" and runtime["runtime"] is None
+        assert runtime["native_operations"]["recording"] == "controller_owned_not_measured"
+        response = await client.get(ROOT + "/profiles/aikey/runtime?url=https://127.0.0.1/healthz")
+        assert response.status == 400
         for profile in ("aikey", "aiport"):
             response = await client.get(ROOT + f"/profiles/{profile}/configuration")
             assert response.status == 200

@@ -48,6 +48,7 @@ class AdminAPI:
         app.router.add_get(PREFIX + "/session", self.session)
         app.router.add_get(PREFIX + "/profiles", self.profiles)
         app.router.add_get(PREFIX + "/profiles/{profile}/configuration", self.configuration)
+        app.router.add_get(PREFIX + "/profiles/{profile}/runtime", self.runtime)
         for operation in ("preview", "apply", "rollback"):
             app.router.add_post(PREFIX + "/profiles/{profile}/" + operation, self.change)
         app.on_cleanup.append(self.drain)
@@ -116,6 +117,21 @@ class AdminAPI:
         if not self.authenticated(request):
             return error("authentication_required", 401)
         return reply(result)
+
+    async def runtime(self, request):
+        if not self.authenticated(request):
+            return error("authentication_required", 401)
+        if request.query:
+            return error("invalid_request", 400)
+        profile = request.match_info["profile"]
+        if self.store(profile) is None:
+            return error("unknown_profile", 404)
+        result = await self.site.runtime_observer.read(profile)
+        if not self.authenticated(request):
+            return error("authentication_required", 401)
+        return reply({"profile": profile, **result,
+            "native_operations": {"ptz": "not_supported_by_this_api",
+                                  "recording": "controller_owned_not_measured"}})
 
     async def change(self, request):
         profile = request.match_info["profile"]

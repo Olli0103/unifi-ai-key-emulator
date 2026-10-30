@@ -132,6 +132,7 @@ class ControlSite:
                  search_live_rows: Callable[[], Awaitable[int]] | None = None,
                  aikey_state_dir: Path | None = None,
                  audit_log: Path | None = None,
+                 runtime_health_urls: dict[str, str] | None = None,
                  bind: str = "127.0.0.1", origin: str | None = None,
                  tls_certificate: Path | None = None, tls_private_key: Path | None = None):
         if type(port) is not int or not 1024 <= port <= 65535:
@@ -164,6 +165,8 @@ class ControlSite:
         self.search_live_rows = search_live_rows
         # The Key's host state sits next to its config unless given (#12).
         self.aikey_state_dir = aikey_state_dir or self.aikey.path.parent
+        from .admin_runtime import RuntimeObserver
+        self.runtime_observer = RuntimeObserver(self._backup_profiles(), runtime_health_urls or {})
         self.audit = AuditLog(audit_log) if audit_log is not None else None
         self._catalog_lock = asyncio.Lock()
         self._catalog_next_at = 0.0
@@ -1640,6 +1643,8 @@ def _cli() -> argparse.ArgumentParser:
                      help="AI Port state path inside its processor container")
     run.add_argument("--aiport-instance", action="append", default=[], metavar="NAME=CONFIG",
                      help="Add another AI Port instance with a private host config path")
+    run.add_argument("--runtime-health", action="append", default=[], metavar="PROFILE=HTTPS_URL",
+                     help="Explicit own-runtime private HTTPS healthz target; pinned to that profile certificate")
     _listener_arguments(run)
     run.add_argument("--aiport-rollout", type=Path,
                      help="Private AI Port rollout slot file (needs the inventory settings)")
@@ -1787,10 +1792,17 @@ def main(argv: list[str] | None = None) -> int:
             if not separator or not config_path or name in instances:
                 raise ValueError("Invalid AI Port instance assignment")
             instances[name] = Path(config_path)
+        runtime_health = {}
+        for assignment in args.runtime_health:
+            profile, separator, url = assignment.partition("=")
+            if not separator or not profile or not url or profile in runtime_health:
+                raise ValueError("Invalid runtime health target assignment")
+            runtime_health[profile] = url
         site = ControlSite(args.aikey_config, args.aiport_config,
                            signing_key=signing_key, password_record=record, port=args.port,
                            aiport_runtime_state_dir=args.aiport_runtime_state_dir,
                            aiport_instances=instances,
+                           runtime_health_urls=runtime_health,
                            inventory_loader=inventory_loader,
                            rollout_path=args.aiport_rollout,
                            search_state_dir=args.search_state_dir,

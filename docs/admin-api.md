@@ -37,6 +37,7 @@ diagnostic/count-only pages for that purpose.
 | `GET /api/admin/v1/session` | Session-bound CSRF token, shared mutation-boundary notice. No new session/credential is created. |
 | `GET /api/admin/v1/profiles` | Configured Key and Port profile IDs/kinds and supported configuration-edit flag; not evidence those processors are running. |
 | `GET /api/admin/v1/profiles/{profile}/configuration` | Masked configuration plus saved role registry, both from the same captured revision. Explicit `saved_not_active_runtime`. |
+| `GET /api/admin/v1/profiles/{profile}/runtime` | Bounded allowlisted observation from an explicitly configured own-runtime HTTPS peer, or unknown/unavailable. Never inferred from saved settings. |
 | `POST /api/admin/v1/profiles/{profile}/preview` | `{revision, patch}`; pure validated JSON Merge Patch preview with changed fields, resulting revision and restart/current-job boundary. No history/file/model write. |
 | `POST /api/admin/v1/profiles/{profile}/apply` | `{revision, patch, preview_revision}`; check predicted revision then existing locked/OCC/atomic history/write. Concurrent callers cannot overwrite an unseen revision. |
 | `POST /api/admin/v1/profiles/{profile}/rollback` | `{revision, target_revision}`; explicit complete saved-configuration rollback through immutable identity/index/pairing guards, not provider-only Undo or a controller reset. |
@@ -71,6 +72,42 @@ fixed audit outcome settle. Service cleanup drains them. Audit action names are
 `config_preview`, `config_apply`, `config_rollback`, with fixed result/profile
 labels, never settings, paths, names or key values. A store error after write
 admission records `uncertain`; no success/rollback/retry is inferred from it.
+
+## Optional runtime observations
+
+Configure each intended target on the server with repeated
+`--runtime-health PROFILE=HTTPS_URL`. Profiles must already exist; the target
+must be one literal private/loopback/VPN IP, HTTPS and exactly `/healthz`, with
+no credentials/query/fragment. No request parameter can choose a URL, trust
+file, host, command or credential. Ports have no guessed publication port.
+An omitted target means **not configured/unknown**, not offline or disabled.
+
+The observer trusts the configured profile's own public `device.crt`, retains
+normal CA/validity verification and verifies that exact leaf SHA-256 pin before
+HTTP headers. Hostname checking may be replaced only by this explicit identity
+pin, not by `ssl=False`/disabled certificate validation. The client sends no
+controller/provider credential or cookie, uses no environment proxy, follows no
+redirect and refuses compressed replies. One request, three-second transport /
+four-second total admission deadline, 256-KiB strict JSON body. Wrong service,
+duplicate/nonfinite fields, wrong counter types or oversized replies do not
+become runtime facts and are never echoed.
+
+Per-profile coalescing and a two-second result cache limit polling; at most two
+peers are contacted concurrently. Successful reports include observation time,
+allowlisted boolean/count fields and CA+leaf-pin verification. Missing metrics
+remain null, not zero. Raw images, camera identifiers, descriptions, provider
+errors and arbitrary health namespaces are not copied into this response. The
+running process does not report its loaded configuration revision, so that
+field remains null; a live connection is not proof it uses the newest saved
+settings. PTZ is not an implemented action here; recording remains
+controller-owned/unmeasured rather than falsely reported working or disabled.
+
+Runtime observations make only read-only own-runtime requests, not controller
+discovery, camera fetches, model inference, activation or a remote health export.
+Logout/expiry after an awaited read still refuses delivery. The helper's tests
+use owned TLS peers: CA refusal, separately trusted-but-wrong leaf pin, redirect,
+ambiguous/oversized/mistyped JSON, bounded slow response, twelve concurrent
+coalesced reads and explicit unknown/zero distinctions.
 
 ## Remaining #13 work
 
