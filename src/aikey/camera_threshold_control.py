@@ -18,6 +18,7 @@ from .control_site import _page, _safe
 
 _BASE = {"csrf", "profile", "revision"}
 _CONFIRM = {"expires", "signature", "resulting_revision", "confirm"}
+_FRESH = object()
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -36,10 +37,11 @@ class CameraThresholdControl:
         return hmac.new(self.signing_key, json.dumps(value, sort_keys=True,
                         separators=(",", ":")).encode(), hashlib.sha256).hexdigest()
 
-    async def _choices(self, cookie, profile, status):
+    async def _choices(self, cookie, profile, status, report=_FRESH):
         if not status["eligible"] or self.site.inventory_loader is None:
             raise ValueError
-        report = await self.site.inventory_loader()
+        if report is _FRESH:
+            report = await self.site.inventory_loader()
         rows = inventory_view(report, {})["cameras"]
         # Fail closed on ambiguous IDs/MACs/names rather than naming the wrong camera.
         if len({r["mac"] for r in rows}) != len(rows):
@@ -70,11 +72,17 @@ class CameraThresholdControl:
             body += "<p class='notice'>Camera thresholds saved; running service unchanged.</p>"
         if request.query.get("undone") == "1":
             body += "<p class='notice'>Prior camera thresholds restored; running service unchanged.</p>"
+        report = None
+        if self.site.aiports and self.site.inventory_loader is not None:
+            try:
+                report = await self.site.inventory_snapshot()
+            except (ValueError, OSError, InventoryError, TimeoutError):
+                pass
         for profile, store in self.site.aiports.items():
             body += f"<section><h2>{_safe(profile)}</h2>"
             try:
                 status = await asyncio.to_thread(store.camera_threshold_status)
-                choices = await self._choices(cookie, profile, status)
+                choices = await self._choices(cookie, profile, status, report)
             except (ValueError, KeyError, OSError, InventoryError):
                 choices = None
             csrf = self.site.security.csrf_token(cookie)

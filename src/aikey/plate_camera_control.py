@@ -45,11 +45,17 @@ class PlateCameraControl(CameraThresholdControl):
                 "probe and does not restart a processor, change detection classes or revoke keys.</p>")
         if request.query.get("saved") == "1":
             body += "<p class='notice'>Plate permissions saved; running service unchanged.</p>"
+        report = None
+        if self.site.aiports and self.site.inventory_loader is not None:
+            try:
+                report = await self.site.inventory_snapshot()
+            except (ValueError, OSError, InventoryError, TimeoutError):
+                pass
         for profile, store in self.site.aiports.items():
             body += f"<section><h2>{_safe(profile)}</h2>"
             try:
                 status = await asyncio.to_thread(store.plate_camera_status)
-                choices = await self._choices(cookie, profile, status)
+                choices = await self._choices(cookie, profile, status, report)
             except (ValueError, KeyError, OSError, InventoryError):
                 body += ("<p>Editing unavailable: an API detector and fresh validated inventory "
                          "with unambiguous names for every saved camera are required.</p></section>")
