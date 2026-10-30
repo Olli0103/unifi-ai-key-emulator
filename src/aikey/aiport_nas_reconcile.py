@@ -22,7 +22,9 @@ from .aiport_candidate import CandidateError, _private_file, load_config
 from .aiport_deployment import (
     AI_PORT_CONTAINER_PORT, AiPortPlanError, _eligible, _ip, plan_ai_ports,
 )
-from .aiport_nas_compose import NasComposeError, _PROJECT_NAME, build_nas_compose
+from .aiport_nas_compose import (
+    NasComposeError, _PROJECT_NAME, build_nas_compose, read_runtime_layout,
+)
 from .aiport_ingest import IngressError, normalize_mac
 from .camera_inventory import InventoryError, fetch_inventory, is_supported_protect_version
 
@@ -302,8 +304,37 @@ def _verify_external_network(run: Callable[[list[str], int], str],
         raise ReconcileError("Existing AI Port macvlan differs from the verified LAN")
 
 
+def _verify_health_network(run: Callable[[list[str], int], str],
+                            manifest: dict) -> str | None:
+    network = manifest["networks"].get("aiport_health")
+    expected = manifest.get("x-aikey-health-network-check")
+    if network is None and expected is None:
+        return None
+    if (not isinstance(network, dict) or network.get("external") is not True
+            or not isinstance(expected, dict)
+            or set(expected) != {"name", "driver", "internal", "subnet", "gateway"}
+            or network.get("name") != expected.get("name")
+            or expected.get("driver") != "bridge" or expected.get("internal") is not True):
+        raise ReconcileError("Health network lacks its reviewed internal bridge contract")
+    try:
+        actual = json.loads(run(["docker", "network", "inspect", "--format",
+                                 "{{json .}}", expected["name"]], 15))
+        ipam = actual["IPAM"]["Config"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ReconcileError("Existing health network cannot be inspected") from exc
+    if (not isinstance(actual, dict) or actual.get("Name") != expected["name"]
+            or actual.get("Driver") != "bridge" or actual.get("Internal") is not True
+            or actual.get("EnableIPv6") is not False
+            or not isinstance(ipam, list) or len(ipam) != 1
+            or not isinstance(ipam[0], dict)
+            or ipam[0].get("Subnet") != expected["subnet"]
+            or ipam[0].get("Gateway") != expected["gateway"]):
+        raise ReconcileError("Existing health network differs from the reviewed internal bridge")
+    return expected["name"]
+
+
 def _inspect(run: Callable[[list[str], int], str], row: dict, service: dict,
-             network_name: str) -> None:
+             network_name: str, health_network_name: str | None = None) -> None:
     container_id = row.get("ID")
     if not isinstance(container_id, str) or not _CONTAINER_ID.fullmatch(container_id):
         raise ReconcileError("Docker Compose did not identify its container")
@@ -323,10 +354,13 @@ def _inspect(run: Callable[[list[str], int], str], row: dict, service: dict,
         selected = service["networks"]["aiport_lan"]
     except (ValueError, KeyError, TypeError) as exc:
         raise ReconcileError("Docker container identity or network cannot be verified") from exc
+    expected_networks = {network_name}
+    if health_network_name is not None:
+        expected_networks.add(health_network_name)
     if (image != service["image"] or command != service["command"]
-            or not isinstance(networks, dict) or len(networks) != 1):
+            or not isinstance(networks, dict) or set(networks) != expected_networks):
         raise ReconcileError("Docker container image, command or network differs from the manifest")
-    expected_volume = service["volumes"][0]
+    expected_volumes = service["volumes"]
     if (user != service["user"] or not isinstance(host, dict)
             or host.get("ReadonlyRootfs") is not True
             or host.get("Privileged") is not False
@@ -336,19 +370,26 @@ def _inspect(run: Callable[[list[str], int], str], row: dict, service: dict,
             or host.get("Sysctls") != {key: str(value) for key, value in service["sysctls"].items()}
             or host.get("PublishAllPorts") is not False
             or host.get("PortBindings") not in (None, {})
-            or not isinstance(mounts, list) or len(mounts) != 1
-            or not isinstance(mounts[0], dict)
-            or mounts[0].get("Type") != "bind"
-            or mounts[0].get("Source") != expected_volume["source"]
-            or mounts[0].get("Destination") != expected_volume["target"]
-            or mounts[0].get("RW") is not True):
+            or not isinstance(mounts, list) or len(mounts) != len(expected_volumes)
+            or any(not isinstance(m, dict) for m in mounts)):
         raise ReconcileError("Docker container user, isolation or state mount differs from the manifest")
+    for volume in expected_volumes:
+        found = [m for m in mounts if m.get("Destination") == volume["target"]]
+        if (len(found) != 1 or found[0].get("Type") != "bind"
+                or found[0].get("Source") != volume["source"]
+                or found[0].get("RW") is not (not volume.get("read_only", False))):
+            raise ReconcileError("Docker container user, isolation or state mount differs from the manifest")
     actual = networks.get(network_name)
     if (not isinstance(actual, dict)
             or network_name not in networks
             or actual.get("IPAddress") != selected["ipv4_address"]
             or str(actual.get("MacAddress", "")).lower() != selected["mac_address"].lower()):
         raise ReconcileError("Docker container network, IP or MAC differs from the planned identity")
+    if health_network_name is not None:
+        health = networks.get(health_network_name)
+        if (not isinstance(health, dict)
+                or health.get("IPAddress") != service["networks"]["aiport_health"]["ipv4_address"]):
+            raise ReconcileError("Docker container health address differs from the reviewed identity")
 
 
 def _health(run: Callable[[list[str], int], str], manifest_path: Path,
@@ -383,6 +424,7 @@ def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
     run(_compose(manifest_path, project_name, "config", "--quiet"), 15)
     network_name = _network_name(manifest)
     _verify_external_network(run, manifest)
+    health_network_name = _verify_health_network(run, manifest)
     found = _rows(run(_compose(manifest_path, project_name, "ps", "--all", "--format", "json"), 15),
                   services)
     running = [name for name in services if name in found and found[name]["State"] == "running"]
@@ -390,7 +432,7 @@ def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
     health = {}
     readiness = {}
     for name, row in found.items():
-        _inspect(run, row, manifest["services"][name], network_name)
+        _inspect(run, row, manifest["services"][name], network_name, health_network_name)
     for name in running:
         slot = int(name.removeprefix("aiport_slot_"))
         health[name] = _health(run, manifest_path, name, states[slot], project_name)
@@ -410,7 +452,7 @@ def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
                                 15), services)
             if name not in current or current[name]["State"] != "running":
                 raise ReconcileError(f"{name} did not enter running state")
-            _inspect(run, current[name], manifest["services"][name], network_name)
+            _inspect(run, current[name], manifest["services"][name], network_name, health_network_name)
             slot = int(name.removeprefix("aiport_slot_"))
             for attempt in range(_HEALTH_ATTEMPTS):
                 try:
@@ -447,6 +489,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--parent", required=True)
     parser.add_argument("--external-network")
     parser.add_argument("--project-name", default="local-aiport")
+    parser.add_argument("--runtime-layout", type=Path)
     parser.add_argument("--image", required=True)
     parser.add_argument("--uid", required=True, type=int)
     parser.add_argument("--gid", required=True, type=int)
@@ -456,6 +499,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
     try:
+        runtime_layout = read_runtime_layout(args.runtime_layout)
         states = {}
         for assignment in args.slot_state:
             number, path = assignment.split("=", 1)
@@ -471,7 +515,8 @@ def main(argv: list[str] | None = None) -> int:
         options = {"controller_ip": args.controller_ip, "controller_pin": args.controller_pin,
                    "nas_ip": args.nas_ip, "subnet": args.subnet, "gateway": args.gateway,
                    "parent": args.parent, "image": args.image, "uid": args.uid, "gid": args.gid,
-                   "external_network": args.external_network, "project_name": args.project_name}
+                   "external_network": args.external_network, "project_name": args.project_name,
+                   "runtime_layout": runtime_layout}
         verify_inputs(plan, manifest, report, states, options)
         outcome = reconcile(args.compose, manifest, states, apply=args.apply)
     except (InventoryError, ReconcileError, OSError, ValueError) as exc:

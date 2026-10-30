@@ -62,6 +62,54 @@ vendor Compose file, or authorize repacking adopted camera assignments.
 See the [30 October namespace verification](evidence/compose-project-fencing-20261030.md)
 for the native status reproduction and isolated lifecycle check.
 
+### Explicit existing NAS runtime layout
+
+The default remains one state bind, one LAN network and the supplied image for
+every selected slot. For an already reviewed deployment with different image
+revisions, a shared read-only model directory or an internal health bridge, pass
+the **same** private `--runtime-layout FILE` to both commands. This is an input to
+the complete manifest comparison, not an import or an unchecked override.
+
+Example for selected slots 2–4 (addresses and images are fictional):
+
+```json
+{
+  "schema": "aikey-nas-runtime-layout/1",
+  "slot_images": {"2": "local-aiport:reviewed-canary"},
+  "models_dir": "/private/nas/models",
+  "health_network": {
+    "name": "reviewed_internal_health",
+    "subnet": "172.27.1.0/24",
+    "gateway": "172.27.1.1",
+    "addresses": {"2": "172.27.1.22", "3": "172.27.1.23", "4": "172.27.1.24"}
+  }
+}
+```
+
+Only `schema` is mandatory; the three optional sections are independent. Image
+overrides may name only selected slots, using canonical decimal slot strings;
+other selected slots keep `--image`. The model directory must already exist, be
+owned by the selected UID, have no symlink path, and be separate from selected
+state directories. It is bound only at `/models`, read-only, without creating a
+host path or changing permissions. This does not attest model contents,
+licensing or immunity to updates by host writers.
+
+The health network must already exist as an internal IPv4-only bridge, with
+exactly the declared RFC1918 subnet and gateway, disjoint from the LAN. Declare
+one distinct usable non-gateway address per selected slot. No network is created
+or attached during a dry run. Its manifest selects the LAN's gateway priority;
+unsupported Compose versions fail validation before starting a slot. The
+reconciler requires **exactly** the declared network set and IPs, exact image,
+and exact state/model binds with their expected write permissions. Additional,
+missing, duplicate or changed mounts/networks remain errors; the normal
+isolation and unexpected-service guards remain in force.
+
+The layout file must be a private JSON object: explicit `null`, malformed JSON,
+duplicate fields and non-object files are refused before inventory retrieval.
+Layout validation never provisions an identity or creates a model directory.
+Native verification and limits are recorded in the
+[30 October layout checkpoint](evidence/nas-runtime-layout-20261030.md).
+
 Protect's Integration API does not report stream resolution. In the 24 September live read, it also classified the two initially legacy G3 cameras as smart-event candidates after AI Port pairing. If a previously verified, unselected Mac slot relied on a lower resolution than the conservative unknown-camera fallback, reconciliation checks that its camera IDs and source still match but does not let that untouched slot block a separate NAS start. The verifier tolerates only the descriptive legacy/enhancement counts changing after pairing; camera IDs, slot assignments, addresses, listener settings and reserved capacity must still match. Every **selected** NAS slot must still fit the fresh inventory's conservative capacity; a lower-resolution assumption for a selected slot requires fresh evidence before it can start. This exception does not create or modify a Mac container.
 
 The command cannot prove that a router reservation exists, that the NAS kernel accepts the container's networking and port sysctl, or that Protect can reach the service. Check those on the real LAN before `--apply`, then verify each started slot from the controller or another LAN host and in Protect. Do not start an overlapping NAS service at the Mac candidate's existing IP. Retire that Mac service only as a deliberate migration after its replacement state and network are ready. Preserve the adopted state directory; never regenerate its MAC or certificate to troubleshoot reconnects.

@@ -1,0 +1,42 @@
+{
+  "schema": "aikey-nas-runtime-layout-verification/1",
+  "date": "2026-10-30",
+  "new_parent_regressions_failed": 54,
+  "corrected_focused_tests_passed": 188,
+  "same_agent_separate_matrix": {
+    "invalid_cases_rejected_before_identity_or_transport": 72,
+    "valid_normalization_controls": 3,
+    "valid_baseline_reaches_identity_boundary": true,
+    "fixture_tree_collected": true,
+    "socket_dns_or_provision_calls": 0
+  },
+  "native_final": {
+    "candidate_module_hashes": {
+      "aiport_nas_compose.py": "8bcbf9a61da702b67e667b549d8e3dad25b9a746f67d2ae93449746589ff5202",
+      "aiport_nas_reconcile.py": "30afbab16852568075c01508c979620bac51dc803af924680885d4d2ba313ccf"
+    },
+    "qualified_module_count": 111,
+    "fresh_integration_metadata_gets": 2,
+    "running_slots": 4,
+    "would_start": 0,
+    "saved_camera_counts": [3, 2, 2, 2],
+    "image_variants": 2,
+    "binds_per_slot": 2,
+    "models_bind_read_only": true,
+    "networks_per_slot": 2,
+    "internal_bridge_subnet_gateway_verified": true,
+    "pinned_own_health_gets": 4,
+    "all_four_adopted_connected": true,
+    "live_containers_unchanged": 7,
+    "profile_hashes_unchanged": 5,
+    "owned_netless_import_container_collected": true
+  },
+  "native_apply_or_provision": false,
+  "producer_upgrade": false,
+  "model_or_provider_requests_introduced": 0,
+  "models_host_content_integrity_attested": false,
+  "human_review": false,
+  "native_quality_qualified": false,
+  "feature_parity": false,
+  "issue_45_complete": false
+}

@@ -31,6 +31,28 @@ class NasComposeError(ValueError):
     """The plan, state, or NAS network cannot be safely represented."""
 
 
+def read_runtime_layout(path: Path | None) -> dict | None:
+    """Absence means default layout; an explicitly supplied file must be an object."""
+    if path is None:
+        return None
+
+    def unique_fields(pairs: list[tuple[str, object]]) -> dict:
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(_private_file(path, 65536), object_pairs_hook=unique_fields)
+        if not isinstance(value, dict):
+            raise ValueError
+    except (CandidateError, ValueError) as exc:
+        raise NasComposeError("Private runtime layout must be a JSON object without duplicate fields") from exc
+    return value
+
+
 def _lan_ip(value: str, network: ipaddress.IPv4Network) -> str:
     if not isinstance(value, str):
         raise NasComposeError("A concrete IPv4 LAN address is required")
@@ -60,11 +82,71 @@ def _verified_state(state_dir: Path, uid: int) -> None:
             raise NasComposeError("AI Port identity files must be private and owned by the container user")
 
 
+def _runtime_layout(value: dict | None, states: dict[int, Path], uid: int,
+                    lan: ipaddress.IPv4Network, lan_name: str) -> dict:
+    """Validate optional reviewed inputs without discovering or changing a host."""
+    if value is None:
+        return {}
+    if (not isinstance(value, dict)
+            or value.get("schema") != "aikey-nas-runtime-layout/1"
+            or set(value) - {"schema", "slot_images", "models_dir", "health_network"}):
+        raise NasComposeError("Invalid reviewed NAS runtime layout")
+    result = {}
+    images = value.get("slot_images", {})
+    selected = {str(slot) for slot in states}
+    if (not isinstance(images, dict) or not set(images) <= selected
+            or any(not isinstance(image, str) or not _IMAGE.fullmatch(image)
+                   for image in images.values())):
+        raise NasComposeError("Runtime layout images must name selected slots and explicit images")
+    result["slot_images"] = images.copy()
+    if "models_dir" in value:
+        raw = value["models_dir"]
+        if not isinstance(raw, str) or not raw:
+            raise NasComposeError("Runtime layout needs an existing absolute model directory")
+        models = Path(raw)
+        try:
+            if (not models.is_absolute() or models.is_symlink() or not models.is_dir()
+                    or models.resolve() != models or models.stat().st_uid != uid
+                    or any(models == Path(s).resolve() or models in Path(s).resolve().parents
+                           or Path(s).resolve() in models.parents for s in states.values())):
+                raise ValueError
+        except (OSError, ValueError) as exc:
+            raise NasComposeError("Runtime layout model directory must be owned and separate from state") from exc
+        result["models_dir"] = str(models)
+    if "health_network" in value:
+        health = value["health_network"]
+        if (not isinstance(health, dict)
+                or set(health) != {"name", "subnet", "gateway", "addresses"}
+                or not isinstance(health["name"], str)
+                or not _NETWORK_NAME.fullmatch(health["name"])
+                or health["name"] == lan_name):
+            raise NasComposeError("Runtime layout needs an explicit separate health network")
+        try:
+            subnet = ipaddress.IPv4Network(health["subnet"], strict=True)
+            private = any(subnet.subnet_of(ipaddress.IPv4Network(r))
+                          for r in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+            if not private or subnet.overlaps(lan):
+                raise ValueError
+            gateway = _lan_ip(health["gateway"], subnet)
+            addresses = health["addresses"]
+            if not isinstance(addresses, dict) or set(addresses) != selected:
+                raise ValueError
+            checked = {slot: _lan_ip(ip, subnet) for slot, ip in addresses.items()}
+            if len(set(checked.values())) != len(checked) or gateway in checked.values():
+                raise ValueError
+        except (TypeError, ValueError) as exc:
+            raise NasComposeError("Runtime layout health subnet, gateway or slot addresses are invalid") from exc
+        result["health_network"] = {"name": health["name"], "subnet": str(subnet),
+                                    "gateway": gateway, "addresses": checked}
+    return result
+
+
 def build_nas_compose(plan: dict, state_dirs: dict[int, Path], *,
                       controller_ip: str, controller_pin: str, nas_ip: str,
                       subnet: str, gateway: str, parent: str, image: str,
                       uid: int, gid: int, external_network: str | None = None,
-                      project_name: str = "local-aiport") -> dict:
+                      project_name: str = "local-aiport",
+                      runtime_layout: dict | None = None) -> dict:
     """Build a static-IP Compose model after verifying every selected slot."""
     if not isinstance(project_name, str) or not _PROJECT_NAME.fullmatch(project_name):
         raise NasComposeError("A bounded lowercase Compose project name is required")
@@ -88,6 +170,8 @@ def build_nas_compose(plan: dict, state_dirs: dict[int, Path], *,
     except (ipaddress.AddressValueError, ipaddress.NetmaskValueError,
             TypeError, ValueError) as exc:
         raise NasComposeError("A valid IPv4 NAS LAN subnet is required") from exc
+    layout = _runtime_layout(runtime_layout, state_dirs, uid, network,
+                             external_network or f"{project_name}_aiport_lan")
     gateway = _lan_ip(gateway, network)
     nas_ip = _lan_ip(nas_ip, network)
     controller_ip = _lan_ip(controller_ip, network)
@@ -138,7 +222,7 @@ def build_nas_compose(plan: dict, state_dirs: dict[int, Path], *,
         seen_macs.add(mac)
         colon_mac = ":".join(mac[offset:offset + 2] for offset in range(0, 12, 2))
         services[f"aiport_slot_{index}"] = {
-            "image": image,
+            "image": layout.get("slot_images", {}).get(str(index), image),
             "user": f"{uid}:{gid}",
             "read_only": True,
             "cap_drop": ["ALL"],
@@ -153,6 +237,15 @@ def build_nas_compose(plan: dict, state_dirs: dict[int, Path], *,
             "networks": {"aiport_lan": {"ipv4_address": address,
                                         "mac_address": colon_mac}},
         }
+        if "models_dir" in layout:
+            services[f"aiport_slot_{index}"]["volumes"].append({
+                "type": "bind", "source": layout["models_dir"], "target": "/models",
+                "read_only": True, "bind": {"create_host_path": False}})
+        if "health_network" in layout:
+            networks = services[f"aiport_slot_{index}"]["networks"]
+            networks["aiport_lan"]["gw_priority"] = 1
+            networks["aiport_health"] = {
+                "ipv4_address": layout["health_network"]["addresses"][str(index)]}
     result = {
         "name": project_name,
         "services": services,
@@ -167,6 +260,12 @@ def build_nas_compose(plan: dict, state_dirs: dict[int, Path], *,
             "name": external_network, "driver": "macvlan", "parent": parent,
             "subnet": str(network), "gateway": gateway,
         }
+    if "health_network" in layout:
+        health = layout["health_network"]
+        result["networks"]["aiport_health"] = {"external": True, "name": health["name"]}
+        result["x-aikey-health-network-check"] = {
+            "name": health["name"], "driver": "bridge", "internal": True,
+            "subnet": health["subnet"], "gateway": health["gateway"]}
     return result
 
 
@@ -185,12 +284,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="Use an existing macvlan; the reconciler verifies its parent and IPAM")
     parser.add_argument("--project-name", default="local-aiport",
                         help="Freeze the reviewed Compose project name (default: local-aiport)")
+    parser.add_argument("--runtime-layout", type=Path,
+                        help="Private reviewed per-slot images, read-only models and internal health network")
     parser.add_argument("--image", required=True)
     parser.add_argument("--uid", required=True, type=int)
     parser.add_argument("--gid", required=True, type=int)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
+        runtime_layout = read_runtime_layout(args.runtime_layout)
         plan = json.loads(_private_file(args.plan, 2 * 1024 * 1024))
         states = {}
         for assignment in args.slot_state:
@@ -203,7 +305,8 @@ def main(argv: list[str] | None = None) -> int:
             plan, states, controller_ip=args.controller_ip, controller_pin=args.controller_pin,
             nas_ip=args.nas_ip, subnet=args.subnet, gateway=args.gateway,
             parent=args.parent, image=args.image, uid=args.uid, gid=args.gid,
-            external_network=args.external_network, project_name=args.project_name)
+            external_network=args.external_network, project_name=args.project_name,
+            runtime_layout=runtime_layout)
         output = args.output
         if output.is_symlink() or (output.exists() and not stat.S_ISREG(output.stat().st_mode)):
             raise NasComposeError("Output must be a regular private file")
