@@ -3,8 +3,8 @@
 Work in progress for #13. These version-1 endpoints adapt the existing private
 administration listener and configuration stores. They are **not** the device
 service, a new network listener, a public diagnostic export, a generic file
-editor or a command-execution API. Identity/pairing/host edits, live operational/trust
-status and supported backup/restore/update actions are not yet implemented by
+editor or a command-execution API. Identity/pairing/host edits and supported
+backup/restore/update actions are not yet implemented by
 this JSON contract; #13 remains open until its whole scope is reconciled.
 
 ## Authentication and response boundaries
@@ -38,6 +38,7 @@ diagnostic/count-only pages for that purpose.
 | `GET /api/admin/v1/profiles` | Configured Key and Port profile IDs/kinds and supported configuration-edit flag; not evidence those processors are running. |
 | `GET /api/admin/v1/profiles/{profile}/configuration` | Masked configuration plus saved role registry, both from the same captured revision. Explicit `saved_not_active_runtime`. |
 | `GET /api/admin/v1/profiles/{profile}/runtime` | Bounded allowlisted observation from an explicitly configured own-runtime HTTPS peer, or unknown/unavailable. Never inferred from saved settings. |
+| `GET /api/admin/v1/profiles/{profile}/identity` | Private saved MAC/certificate, persisted adoption and configured controller-trust observations, explicitly not a current connection/adoption proof. No initialization or credential hydration. |
 | `POST /api/admin/v1/profiles/{profile}/preview` | `{revision, patch}`; pure validated JSON Merge Patch preview with changed fields, resulting revision and restart/current-job boundary. No history/file/model write. |
 | `POST /api/admin/v1/profiles/{profile}/apply` | `{revision, patch, preview_revision}`; check predicted revision then existing locked/OCC/atomic history/write. Concurrent callers cannot overwrite an unseen revision. |
 | `POST /api/admin/v1/profiles/{profile}/rollback` | `{revision, target_revision}`; explicit complete saved-configuration rollback through immutable identity/index/pairing guards, not provider-only Undo or a controller reset. |
@@ -109,11 +110,31 @@ use owned TLS peers: CA refusal, separately trusted-but-wrong leaf pin, redirect
 ambiguous/oversized/mistyped JSON, bounded slow response, twelve concurrent
 coalesced reads and explicit unknown/zero distinctions.
 
+## Saved identity and controller trust
+
+The separate identity view is private operator data, not public diagnostics.
+It reads only bounded private regular state/public-certificate files, never the
+device private key or a provider/management credential value. No schema migration,
+state initialization, certificate issuance or controller handshake is performed.
+Missing/malformed/future-schema state stays unknown/unavailable; it never creates
+a replacement identity. Key state MAC must match saved configuration before
+its persisted adopted flag is reported. Port adoption records bind to controller
+address/pin and do not contain the Port MAC; that limitation is explicit rather
+than a fabricated identity-binding proof. Saved stream bindings are counted,
+not described as running or currently paired in Protect.
+
+Controller public-certificate validity and, when configured, agreement with the
+saved controller pin are separate observations. A valid file or persisted
+adopted flag is not a verified live connection. Use the runtime observation and
+the independently recorded native controller acceptance for their own scopes.
+No template, token, raw state, private key, credential location or unrelated
+state value is included in the identity response.
+
 ## Remaining #13 work
 
-These local checkpoints do not close #13. Complete saved versus actual
-identity/adoption/trust/job/stream observations, native
-controller-owned unsupported status, authenticated supported maintenance
+These local checkpoints do not close #13. Complete camera inventory and
+runtime camera/policy binding, native controller-owned unsupported status,
+authenticated supported maintenance
 operations, their approval/preflight/recovery boundaries, full original scope
 and rejection/concurrency qualification before the integration PR. No unqualified
 backup/export/restore/update/PTZ/recording operation is advertised as available.

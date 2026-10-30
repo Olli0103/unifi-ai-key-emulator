@@ -48,6 +48,11 @@ async def test_profile_config_and_role_registry_are_authenticated_private_saved_
             assert "management-password" not in json.dumps(data)
             assert "database-password" not in json.dumps(data)
             assert len(data["roles"]["roles"]) == (9 if profile == "aikey" else 4)
+            response = await client.get(ROOT + f"/profiles/{profile}/identity")
+            assert response.status == 200
+            identity = (await response.json())["identity"]
+            assert identity["persisted_adoption"] is None
+            assert identity["live_connection_checked"] is False
         assert path.read_bytes() == original
         response = await client.get(ROOT + "/profiles/unknown/configuration")
         assert response.status == 404 and (await response.json())["error"] == "unknown_profile"

@@ -49,6 +49,7 @@ class AdminAPI:
         app.router.add_get(PREFIX + "/profiles", self.profiles)
         app.router.add_get(PREFIX + "/profiles/{profile}/configuration", self.configuration)
         app.router.add_get(PREFIX + "/profiles/{profile}/runtime", self.runtime)
+        app.router.add_get(PREFIX + "/profiles/{profile}/identity", self.identity)
         for operation in ("preview", "apply", "rollback"):
             app.router.add_post(PREFIX + "/profiles/{profile}/" + operation, self.change)
         app.on_cleanup.append(self.drain)
@@ -132,6 +133,27 @@ class AdminAPI:
         return reply({"profile": profile, **result,
             "native_operations": {"ptz": "not_supported_by_this_api",
                                   "recording": "controller_owned_not_measured"}})
+
+    async def identity(self, request):
+        if not self.authenticated(request):
+            return error("authentication_required", 401)
+        profile = request.match_info["profile"]
+        store = self.store(profile)
+        if store is None:
+            return error("unknown_profile", 404)
+        def read():
+            from .admin_identity import identity_status
+            content, config = store._read(store.path) if profile == "aikey" else store._read()
+            kind, directory = self.site._backup_profiles()[profile]
+            return {"profile": profile, "saved_revision": hashlib.sha256(content).hexdigest(),
+                    "identity": identity_status(kind, directory, config)}
+        try:
+            result = await asyncio.to_thread(read)
+        except (ConfigurationStoreError, AiPortConfigurationError, OSError, ValueError):
+            return error("identity_unavailable", 503)
+        if not self.authenticated(request):
+            return error("authentication_required", 401)
+        return reply(result)
 
     async def change(self, request):
         profile = request.match_info["profile"]
