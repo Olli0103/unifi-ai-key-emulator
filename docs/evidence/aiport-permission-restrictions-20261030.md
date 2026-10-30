@@ -4,7 +4,7 @@ The existing authenticated control site could restrict saved Key speech scope,
 but had no corresponding operation for already configured Port face/sound
 scopes. This adds removal only, reusing existing private-file, configuration
 validation, optimistic-revision, shared-lock, history and atomic-save primitives.
-No new framework, provider, model, network endpoint or permission-grant system
+No new framework, provider, model, external transport destination or permission-grant system
 is introduced.
 
 ## Boundary
