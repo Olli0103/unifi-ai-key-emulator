@@ -210,6 +210,26 @@ def swap(state_dir: Path, planned: Plan, *, idle: Probe, ready: Probe, run: Runn
     if started and _wait(ready, ready_timeout, sleep, clock, 2):
         supervisor.pin(state_dir, planned.service, planned.new, run=run)   # also releases the hold
         return "swapped"
+    if not started:
+        # A failed/lost run acknowledgement is not ownership of this name.
+        # Never stop/delete a target that may have appeared independently,
+        # and never restart the old identity beside an uncertain new owner.
+        code, output = run([CONTAINER, "list", "--all", "--format", "json"])
+        try:
+            listing = json.loads(output) if code == 0 else None
+        except (ValueError, TypeError):
+            listing = None
+        if (not isinstance(listing, list) or any(not isinstance(row, dict)
+                or not isinstance(row.get("id"), str) or not _CONTAINER_ID.fullmatch(row["id"])
+                for row in listing)
+                or len({row["id"] for row in listing}) != len(listing)
+                or not any(row["id"] == planned.old for row in listing)
+                or any(row.get("id") == planned.new for row in listing)):
+            return "run_outcome_uncertain"  # Keep the hold/old recovery; reconcile first.
+        run([CONTAINER, "start", planned.old])
+        back = _wait(ready, ready_timeout, sleep, clock, 2)
+        supervisor.pin(state_dir, planned.service, planned.old, run=run)
+        return "rolled_back:run_failed" if back else "rollback_not_ready"
     run([CONTAINER, "stop", planned.new])
     run([CONTAINER, "delete", planned.new])
     run([CONTAINER, "start", planned.old])

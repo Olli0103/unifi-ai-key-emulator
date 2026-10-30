@@ -43,7 +43,10 @@ async def test_private_camera_mac_is_joined_only_after_runtime_order_agrees(tmp_
         value = {"service": "aiport-candidate", "adopted": True, "control_connected": True,
             "pool_binding_schema": SCHEMA, "pool_binding_revision": binding_revision(config["mac"], declared),
             "pool_cameras": [{"policy_enabled": True, "policy_enabled_types": ["person"],
-                              "policy_smart_zones": n, "policy_exclude_zones": 0}
+                              "policy_smart_zones": n, "policy_exclude_zones": 0,
+                              "stream_active": True, "stream_points": 2,
+                              "stream_geometry": {"width":1920,"height":1080,"fps":30},
+                              "stream_restart_attempts":0,"stream_restart_successes":0}
                              for n in (1, 0)]}
         runtime_server, calls, url = await target(site.aiport.path.parent, value)
         site.runtime_observer = RuntimeObserver(site._backup_profiles(), {"aiport": url})
@@ -54,6 +57,8 @@ async def test_private_camera_mac_is_joined_only_after_runtime_order_agrees(tmp_
         assert len(data["runtime"]["cameras"]) == 2
         for index, item in enumerate(data["runtime"]["cameras"]):
             assert item["policy_smart_zones"] == (1, 0)[index]
+            assert item["stream_active"] is True and item["stream_points"] == 2
+            assert item["stream_geometry"] == {"width":1920,"height":1080,"fps":30}
             if matches:
                 assert item["saved_camera_mac"] == cameras[index]
             else:
@@ -64,3 +69,16 @@ async def test_private_camera_mac_is_joined_only_after_runtime_order_agrees(tmp_
             await runtime_server.close()
         await client.close()
         await server.close()
+
+
+@pytest.mark.parametrize("geometry,points", [
+    ({"width": True,"height":1080,"fps":30},2),
+    ({"width":1920,"height":1080,"fps":float('inf')},2),
+    ({"width":1920,"height":1080,"fps":30,"uri":"fictional-private-alias"},2),
+    ({"width":1920,"height":1080,"fps":30},5),
+])
+def test_invalid_or_contradictory_stream_measurements_are_not_published(geometry, points):
+    from aikey.admin_runtime import _normalize
+    with pytest.raises(ValueError):
+        _normalize("aiport", {"service":"aiport-candidate","adopted":True,
+            "pool_cameras":[{"stream_geometry":geometry,"stream_points":points}]})

@@ -97,7 +97,7 @@ def prepare(host: Path, bridge: Path, *, script: Path, inputs: dict,
             or type(timeout) is not int or not 1 <= timeout <= 1800
             or not isinstance(inputs, dict) or len(_encode(inputs)) > 256 * 1024
             or not isinstance(expected_effect, str)
-            or expected_effect not in {"read_only", "isolated_restore", "offline_replace"}
+            or expected_effect not in {"read_only", "private_backup_export", "isolated_restore", "offline_replace"}
             or not isinstance(guard_files, list) or not 1 <= len(guard_files) <= 64):
         raise MaintenanceError("invalid_maintenance_plan")
     _identifier(revision)
@@ -158,7 +158,7 @@ class Bridge:
                     or not re.fullmatch(r"aikey|aiport(?::[a-z0-9-]{1,32})?", row["profile"])
                     or type(row["timeout"]) is not int or not 1 <= row["timeout"] <= 1800
                     or not isinstance(row["expected_effect"], str)
-                    or row["expected_effect"] not in {"read_only", "isolated_restore", "offline_replace"}
+                    or row["expected_effect"] not in {"read_only", "private_backup_export", "isolated_restore", "offline_replace"}
                     or row["scope"] != "host_approved_frozen_runbook"
                     or row["worker_liveness"] != "not_asserted"):
                 raise MaintenanceError("invalid_maintenance_catalog")
@@ -405,7 +405,7 @@ def work_once(host: Path, bridge: Path):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["prepare", "prepare-search", "prepare-apple-update", "work-once"])
+    parser.add_argument("command", choices=["prepare", "prepare-search", "prepare-state", "prepare-apple-update", "work-once"])
     parser.add_argument("--host", type=Path, required=True)
     parser.add_argument("--bridge", type=Path, required=True)
     parser.add_argument("--plan", type=Path, help="Private host prepare definition JSON; never supplied through HTTP")
@@ -416,7 +416,7 @@ def main(argv=None):
         for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             signal.signal(signum, interrupted)
     try:
-        if args.command in {"prepare", "prepare-search", "prepare-apple-update"}:
+        if args.command in {"prepare", "prepare-search", "prepare-state", "prepare-apple-update"}:
             spec = _json_object(_read(args.plan))
             if args.command == "prepare-search":
                 from .maintenance_runbooks import prepare_search
@@ -424,6 +424,12 @@ def main(argv=None):
                     if spec.get(key) is not None:
                         spec[key] = Path(spec[key])
                 result = {"operation": prepare_search(args.host, args.bridge, **spec)}
+            elif args.command == "prepare-state":
+                from .maintenance_runbooks import prepare_state
+                for key in ("directory", "archive", "engine", "destination"):
+                    if spec.get(key) is not None:
+                        spec[key] = Path(spec[key])
+                result = {"operation": prepare_state(args.host, args.bridge, **spec)}
             elif args.command == "prepare-apple-update":
                 from .maintenance_runbooks import prepare_apple_update
                 for key in ("config", "state_dir", "certificate", "recovery_archive", "engine"):

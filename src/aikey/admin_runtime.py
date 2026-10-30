@@ -11,6 +11,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import ipaddress
+import math
 import re
 from pathlib import Path
 import ssl
@@ -64,6 +65,19 @@ def _count(value, name):
     return result
 
 
+def _geometry(value):
+    geometry = value.get("stream_geometry")
+    if geometry is None:
+        return None
+    if (not isinstance(geometry, dict) or set(geometry) != {"width", "height", "fps"}
+            or type(geometry["width"]) is not int or not 16 <= geometry["width"] <= 8192
+            or type(geometry["height"]) is not int or not 16 <= geometry["height"] <= 4320
+            or type(geometry["fps"]) not in (int, float) or not math.isfinite(geometry["fps"])
+            or not 1 <= geometry["fps"] <= 120):
+        raise ValueError("Invalid requested stream geometry")
+    return dict(geometry)
+
+
 def _object(value, name):
     result = value.get(name, {})
     if not isinstance(result, dict):
@@ -109,10 +123,20 @@ def _normalize(kind, value):
                         or len(set(types)) != len(types)):
                     raise ValueError("Invalid runtime camera types")
                 entry = {"ordinal": index + 1, "policy_received": _flag(camera, "policy_enabled"),
-                         "enabled_types": types, "event_budget_healthy": _flag(camera, "event_budget_healthy")}
+                         "enabled_types": types, "event_budget_healthy": _flag(camera, "event_budget_healthy"),
+                         "stream_active": _flag(camera, "stream_active"), "stream_geometry": _geometry(camera)}
                 entry.update({name: _count(camera, name) for name in (
                     "policy_smart_zones", "policy_exclude_zones", "policy_secondary_lens_zones",
-                    "event_budget_remaining", "active_tracks", "events_entered")})
+                    "event_budget_remaining", "active_tracks", "events_entered", "stream_points",
+                    "stream_restart_attempts", "stream_restart_successes", "stream_deferred_starts", "stream_full_frames")})
+                if entry["stream_points"] is not None:
+                    if entry["stream_points"] > 10:
+                        raise ValueError("Invalid reserved stream capacity")
+                    if entry["stream_geometry"] is not None:
+                        from .aiport_deployment import stream_capacity_points
+                        geometry = entry["stream_geometry"]
+                        if entry["stream_points"] != stream_capacity_points(geometry["width"], geometry["height"]):
+                            raise ValueError("Inconsistent stream geometry/capacity")
                 result["cameras"].append(entry)
     if result["adopted"] is None:
         raise ValueError("Runtime adoption flag is unavailable")

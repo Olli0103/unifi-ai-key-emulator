@@ -3,9 +3,11 @@
 Work in progress for #13. These version-1 endpoints adapt the existing private
 administration listener and configuration stores. They are **not** the device
 service, a new network listener, a public diagnostic export, a generic file
-editor or a command-execution API. Identity/pairing/host edits and supported
-backup/restore/update actions are not yet implemented by
-this JSON contract; #13 remains open until its whole scope is reconciled.
+editor or a command-execution API. Identity/pairing/host edits remain outside
+generic configuration patches. Typed rollout and host-approved maintenance
+have separate guards. #13 remains open until the integration and its remaining
+native controller-status access are qualified; this document is not a native
+parity claim.
 
 ## Authentication and response boundaries
 
@@ -40,6 +42,9 @@ diagnostic/count-only pages for that purpose.
 | `GET /api/admin/v1/profiles/{profile}/configuration` | Masked configuration plus saved role registry, both from the same captured revision. Explicit `saved_not_active_runtime`. |
 | `GET /api/admin/v1/profiles/{profile}/runtime` | Bounded allowlisted observation from an explicitly configured own-runtime HTTPS peer, or unknown/unavailable. Never inferred from saved settings. |
 | `GET /api/admin/v1/profiles/{profile}/identity` | Private saved MAC/certificate, persisted adoption and configured controller-trust observations, explicitly not a current connection/adoption proof. No initialization or credential hydration. |
+| `GET /api/admin/v1/maintenance` | Only host-published one-use plans for known profiles; not execution or worker-liveness proof. |
+| `POST /api/admin/v1/maintenance` | `{operation, revision, request}`; authenticated/audited durable queue admission, no caller command/path/URL. HTTP 202 is not completion. |
+| `GET /api/admin/v1/maintenance/requests/{request}` | Fixed host result for the same retained request ID; an unknown result is not automatically retried. |
 | `POST /api/admin/v1/profiles/{profile}/preview` | `{revision, patch}`; pure validated JSON Merge Patch preview with changed fields, resulting revision and restart/current-job boundary. No history/file/model write. |
 | `POST /api/admin/v1/profiles/{profile}/apply` | `{revision, patch, preview_revision}`; check predicted revision then existing locked/OCC/atomic history/write. Concurrent callers cannot overwrite an unseen revision. |
 | `POST /api/admin/v1/profiles/{profile}/rollback` | `{revision, target_revision}`; explicit complete saved-configuration rollback through immutable identity/index/pairing guards, not provider-only Undo or a controller reset. |
@@ -49,7 +54,7 @@ the listener's 8-KiB request bound applies. Configuration patches cannot replace
 write-only fields. Provider credentials still use the dedicated write-only
 provider operation. The Key store preserves device identity/credential locations
 and refuses incompatible index changes outside migration. No restart, drain,
-past-event reprocessing or model activation is performed by these routes.
+past-event reprocessing or model activation is performed by configuration routes.
 
 A full rollback deliberately selects a prior complete configuration; review its
 policy/permission consequences rather than treating it as a provider-only Undo.
@@ -130,6 +135,15 @@ pairing proof, proof of the latest complete loaded settings, zone-quality
 ground truth or authorization to edit a controller zone. Older running Ports
 cannot be claimed to report these new fields before an explicitly qualified
 runtime upgrade.
+
+Per-camera observations also retain the existing stream-active flag, requested
+width/height/fps, reserved capacity points, restart/deferred-start counters and
+full-frame count when reported. Missing old fields remain unknown, not zero.
+Geometry follows the same numeric limits as maintained stream admission;
+boolean/nonfinite/extra-field geometry and contradictory geometry/capacity are
+refused. The same runtime-order binding gate applies before joining camera MACs.
+Requested geometry is not actual decode fidelity, a controller channel index,
+playback continuity or PTZ/recording control.
 
 ## Saved identity and controller trust
 
@@ -259,6 +273,59 @@ or reset of one-use history.
 
 ### Maintained adapters and actual limits
 
+Host `prepare-state --plan PRIVATE_DEFINITION_JSON` prepares device-file export
+or a **fresh offline restore**. Its definition selects `kind` (`backup` or
+`restore`), `profile_kind` (`aikey` or `aiport`), the existing host `directory`,
+private `archive` path, known Docker `container`/absolute `engine`, optional
+profile label and a new `destination` for restore. Profile kind, saved identity,
+own public certificate, current revision and actual runtime state mount must
+agree. The published API metadata contains none of these private paths.
+
+The backup includes **every regular file and empty directory** in the state
+root: saved configuration, adopted/factory identity, TLS key/certificate,
+controller/search trust, referenced local keys, configuration histories,
+worker/budget/replay journals and local biometric stores when present. Nested
+state-local/container-state key references are supported. External references
+are refused rather than silently omitted or followed outside the profile.
+All containers mounting an overlapping source path must be stopped, including
+other writers; the adapter does not stop them for the caller. The normal
+Key/Port writer lock is held, and complete Docker inventory is checked again
+after the export. A newly running writer makes the outcome uncertain, not a
+completed backup. Matching container identities, images, restart counts and
+start/finish timestamps also detect a start-and-stop between those checks.
+A stopped processor alone is not claimed sufficient when
+another container can write that same state tree.
+
+The private, bounded uncompressed archive has content digests, saved revision,
+identity/certificate binding and a validated certificate/private-key pair.
+Existing identity MACs, supported Key state schema and Port controller-adoption
+bindings are checked using the maintained state validators. Factory certificate
+fingerprints are checked when stored. No missing identity is regenerated or
+state migration performed by an export/restore check. Encrypted device-key
+formats are refused without an interactive password prompt.
+Symlinks, hardlinks, special files, unsafe paths, duplicate members, extension
+headers, hidden trailing payload and mismatched metadata are rejected. Source
+files are copied via anchored descriptors; the bytes actually copied and a
+second same-descriptor read must match, not merely timestamps. The default cap
+is 1 GiB of file data and 20,000 total entries, not a silently truncated backup.
+Model inputs outside the state root and the database are **separate** artifacts;
+this is not a complete installation/host backup. Archive output must be in a
+private host directory. It is **not application-encrypted**: select protected
+backup storage and appropriate volume/backup encryption for the installation.
+
+Restore verifies an immutable anonymous archive copy completely **before**
+creating the destination. Only a new, unmounted offline directory is supported;
+an existing/live directory is never overwritten. Directory descriptors anchor
+all writes and read-back, every restored byte is checked, permissions are kept
+owner-only, and the profile is **not started or activated**. The original source
+may stay running during this isolated restore because it is not modified.
+A partial export/restore created before an IO or postflight failure is retained
+privately for reconciliation, not deleted through a potentially replaced path.
+An archive filename's existence alone is not success: require the terminal
+operation receipt and verified digests. Activation, original-path rebinding,
+database recovery and a full production disaster-restore drill remain separate
+qualified steps, not inferred from this file restore.
+
 Host `prepare-search --plan PRIVATE_DEFINITION_JSON` freezes the existing
 `search_backup` implementation, not a second database backup implementation.
 The definition selects `kind` (`backup` or `restore`), `config`, `container`,
@@ -285,6 +352,12 @@ adapter, not a Docker/NAS image-swap or Key/PG namespace migration. Idle is an
 observation followed by graceful stop, not producer-pause/zero-inflight proof;
 archive hashing is not a full restore drill. Those native/endurance and recovery
 requirements stay in their own acceptance issues.
+If a failed `run` acknowledgement leaves an existing/unknown new target, the
+tool preserves it and does not restart the old identity beside it; it retains
+the hold and reports uncertainty for host reconciliation instead of deleting
+an unowned container name. A conclusive absent-target failure can restore the
+old container normally. The selected config/state mount and own certificate
+are bound to the profile, not just a user-facing label.
 
 No live restore, unsupported update platform, unqualified PTZ/recording action,
 ONVIF ingest, arbitrary export or generic shell endpoint is advertised as

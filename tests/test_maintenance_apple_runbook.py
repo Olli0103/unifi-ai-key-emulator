@@ -22,11 +22,13 @@ IMAGE = "sha256:" + "a" * 64
 def host_fixture(tmp_path, run_rc=0):
     root = tmp_path / "supervisor"
     root.mkdir(mode=0o700)
-    supervisor.pin(root, "aiport-mac", OLD, run=Host([_entry()]))
+    entry = _entry()
+    entry["configuration"]["mounts"][1]["source"] = str(tmp_path)
+    supervisor.pin(root, "aiport-mac", OLD, run=Host([entry]))
     # The source is a synthetic container engine fixture, not a real engine.
     (tmp_path / "engine_fixture.py").write_bytes(Path(__file__).with_name("test_apple_upgrade.py").read_bytes())
     state = tmp_path / "engine-state.json"
-    state.write_text(json.dumps({"entries": [_entry()], "images": {OLD_IMAGE: _image(), IMAGE: _image()}, "run_rc": run_rc}))
+    state.write_text(json.dumps({"entries": [entry], "images": {OLD_IMAGE: _image(), IMAGE: _image()}, "run_rc": run_rc}))
     engine = tmp_path / "engine"
     engine.write_text(f'#!{sys.executable}\n' + '''import json, pathlib, sys
 root=pathlib.Path(__file__).parent
@@ -57,6 +59,7 @@ async def test_owned_apple_swap_or_verified_rollback_preserves_identity_config(t
               "smart_events_entered": 0, "smart_events_left": 0,
               "active_streams": 2, "streams_with_decoded_frames": 2}
     peer, requests, url = await target(tmp_path / "tls", health)
+    (config.parent / "device.crt").write_bytes((tmp_path / "tls" / "device.crt").read_bytes())
     host, bridge = tmp_path / "authority", tmp_path / "bridge"
     before, recovery = config.read_bytes(), archive.read_bytes()
     try:
@@ -85,6 +88,7 @@ async def test_nonidle_runtime_is_refused_before_hold_or_stop(tmp_path):
               "smart_events_entered": 1, "smart_events_left": 0,
               "active_streams": 2, "streams_with_decoded_frames": 2}
     peer, requests, url = await target(tmp_path / "tls", health)
+    (config.parent / "device.crt").write_bytes((tmp_path / "tls" / "device.crt").read_bytes())
     host, bridge = tmp_path / "authority", tmp_path / "bridge"
     try:
         operation = await asyncio.to_thread(prepare_apple_update, host, bridge, config=config,
@@ -121,6 +125,7 @@ async def test_trusted_but_wrong_health_leaf_is_refused_before_http_and_stop(tmp
         "active_streams": 2, "streams_with_decoded_frames": 2})
     certificate = own / "device.crt"
     certificate.write_bytes(certificate.read_bytes() + (tmp_path / "other-tls" / "device.crt").read_bytes())
+    (config.parent / "device.crt").write_bytes(certificate.read_bytes())
     host, bridge = tmp_path / "authority", tmp_path / "bridge"
     try:
         operation = await asyncio.to_thread(prepare_apple_update, host, bridge, config=config,
