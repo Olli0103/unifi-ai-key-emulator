@@ -219,7 +219,9 @@ class AiPortConfigurationStore:
         if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
                 or not hmac.compare_digest(before, expected_revision)):
             raise AiPortRevisionConflict("aiport_config_changed")
-        candidate = self._candidate(current, settings)
+        # Edit the same captured raw bytes, not parser-normalized camera names
+        # or default values. Validation still uses the complete runtime parser.
+        candidate = self._candidate(json.loads(content), settings)
         self._validate(candidate)
         encoded = self._encode(candidate)
         after = self._revision(encoded) if encoded != content else before
@@ -232,7 +234,7 @@ class AiPortConfigurationStore:
             if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
                     or not hmac.compare_digest(before, expected_revision)):
                 raise AiPortRevisionConflict("aiport_config_changed")
-            candidate = self._candidate(current, settings)
+            candidate = self._candidate(json.loads(content), settings)
             self._validate(candidate)
             encoded = self._encode(candidate)
             if encoded == content:
@@ -275,7 +277,7 @@ class AiPortConfigurationStore:
                 raise AiPortConfigurationError("vision_provider_not_configured")
             if detector.get("provider_config", {}).get("model") == model:
                 return self._public(content, current)
-            candidate = deepcopy(current)
+            candidate = json.loads(content)
             candidate["live_pool_detector"]["provider_config"]["model"] = model
             self._validate(candidate)
             encoded = self._encode(candidate)
@@ -421,11 +423,13 @@ class AiPortConfigurationStore:
                 and previous.get("api_key_file")):
             provider["api_key_file"] = previous["api_key_file"]
         candidate = deepcopy(current)
-        # Settings this form does not manage (the local fallback, plate
-        # cameras, the held-package mode) are kept. A legacy object-event cap
+        # Settings this form does not manage (local fallback, plate cameras,
+        # held-package mode, per-camera gates and score server) are kept.
+        # A legacy object-event cap
         # is dropped: object events have no per-camera ceiling.
         kept = {key: value for key, value in current.get("live_pool_detector", {}).items()
-                if key in {"fallback", "plate_cameras", "held_package_followup"}}
+                if key in {"fallback", "plate_cameras", "held_package_followup",
+                           "camera_thresholds", "score_server"}}
         candidate["live_pool_detector"] = {
             "inference_backend": "vision_api", "provider_config": provider,
             "threshold": settings["threshold"],

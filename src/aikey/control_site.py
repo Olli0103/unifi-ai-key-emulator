@@ -704,6 +704,9 @@ class ControlSite:
             detail += ("<p class='muted'>Saving provider settings switches AI Port "
                        "to API detection after its next restart. The current local "
                        "detector keeps running until then.</p>")
+        if profile.startswith("aiport"):
+            detail += ("<p class='muted'>Any saved per-camera score gates and local "
+                       "score-server routing are kept; this form does not edit them.</p>")
         output_limit = 32768 if profile == "aikey" else 512
         form = (f"<section><h2>{_safe(title)}</h2>{detail}<p class='muted'>"
                 f"Key reference configured: {'yes' if key_configured else 'no'}. "
