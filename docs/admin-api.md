@@ -443,3 +443,39 @@ source-digest result contain only fictional fixtures. Inspect the screenshots
 before claiming visual acceptance; the script reports that review as pending.
 This is not an iPhone, Tailscale-client, native Protect or production-browser
 acceptance test. No browser is installed into the runtime images.
+
+## Native Port event correlation (wire observation only)
+
+A reviewed Port can expose `native_event_correlation` through its own health
+and the authenticated runtime view. It retains at most 64 SHA-256 correlation
+fingerprints in process memory, expiring 900 seconds after the first completed
+smart-event wire send. Repeats do not extend retention. Restart loses these
+records. No new controller/media/model request, persistent journal, worker,
+configuration switch or camera enrollment is introduced.
+
+The digest input is UTF-8 `local-aiport-native-snapshot/1`, one NUL byte, then
+compact JSON `[CAMERA_MAC,kind,trackerId,clockBestWall]`. MAC is uppercase with
+no separators; kind is person/vehicle/animal/package; both numbers must be
+positive JavaScript-safe integers. Native read-back derives the same tuple
+from the event's **original camera** mapped through current bootstrap and each
+`metadata.detectedThumbnails` entry's `type`, `attributes.trackerId` and
+`clockBestWall`. Do not round clocks, substitute event timestamps or guess
+camera order. Current native records expose those field types; exact emitted
+tuple preservation still requires a fresh matched read-back after deployment.
+
+Only `leave` snapshot metadata for configured paired cameras is recorded, and
+only after the real `send_bytes` completes. Failed/cancelled sends create no
+record. Face/plate/identity templates, filenames, coordinates, raw identifiers,
+labels, text and images are not copied into the per-event diagnostic records.
+These deterministic digests are **linkable private diagnostic metadata**, not
+anonymization, a signature or authentication.
+
+The fixed scope is `wire_sent_only_native_readback_required`. Neither a
+completed send nor a hash alone asserts native acceptance, persistence, no
+false positives or quality. Compare to independently fetched native records
+and read the exact event again before claiming observed persistence. An empty
+or overwritten set is incomplete evidence, not zero activity. Confirming
+positive tuples does not establish outside-zone behavior, alarm delivery,
+recording playback, ONVIF support or an entire parity contract. The API refuses
+oversized, duplicate or malformed correlation replies rather than laundering
+an arbitrary runtime field into private output.

@@ -110,6 +110,22 @@ def _normalize(kind, value):
                 or value.get("pool_binding_schema") != BINDING_SCHEMA):
             raise ValueError("Invalid runtime camera binding")
         result["pool_binding_revision"] = binding
+        if "native_event_correlation" in value:
+            from .native_event_correlation import SCHEMA, SCOPE, CAPACITY, RETENTION_SECONDS
+            correlation = value["native_event_correlation"]
+            if (not isinstance(correlation, dict)
+                    or set(correlation) != {"schema", "scope", "capacity", "retention_seconds", "fingerprints"}
+                    or correlation["schema"] != SCHEMA or correlation["scope"] != SCOPE
+                    or type(correlation["capacity"]) is not int or correlation["capacity"] != CAPACITY
+                    or type(correlation["retention_seconds"]) is not int
+                    or correlation["retention_seconds"] != RETENTION_SECONDS
+                    or not isinstance(correlation["fingerprints"], list)
+                    or len(correlation["fingerprints"]) > CAPACITY
+                    or any(not isinstance(h, str) or not re.fullmatch(r"[0-9a-f]{64}", h)
+                           for h in correlation["fingerprints"])
+                    or len(set(correlation["fingerprints"])) != len(correlation["fingerprints"])):
+                raise ValueError("Invalid native event correlation")
+            result["native_event_correlation"] = deepcopy(correlation)
         cameras = value.get("pool_cameras")
         result["cameras"] = None
         if cameras is not None:

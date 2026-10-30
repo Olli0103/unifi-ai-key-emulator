@@ -70,6 +70,7 @@ from .aiport_virtual_hardware import (
 )
 from .device import VerifiedConnector
 from .providers import ProviderError, validate_inference_config
+from .native_event_correlation import SentSnapshots
 
 
 _MAC = re.compile(r"[0-9A-Fa-f]{12}\Z")
@@ -848,6 +849,9 @@ class CandidateService:
         self._live_event_times: deque[float] = deque()
         self.snapshot_requests = 0
         self.snapshot_uploads = 0
+        self._sent_snapshots = SentSnapshots(
+            [s["camera_mac"] for s in config.get("paired_streams", [])]
+            + ([config["paired_stream"]["camera_mac"]] if "paired_stream" in config else []))
         self.live_snapshot_uploads = 0
         self.live_snapshot_rejection_reasons: dict[str, int] = {}
         self._live_snapshot_slots = asyncio.Semaphore(_LIVE_SNAPSHOT_CONCURRENCY)
@@ -2290,6 +2294,7 @@ class CandidateService:
             "smart_events_closed_on_stop": self.smart_events_closed_on_stop,
             "snapshot_requests": self.snapshot_requests,
             "snapshot_uploads": self.snapshot_uploads,
+            "native_event_correlation": self._sent_snapshots.view(),
             "live_snapshot_uploads": self.live_snapshot_uploads,
             "live_snapshot_rejection_reasons": dict(self.live_snapshot_rejection_reasons),
             "snapshot_rejections": self.snapshot_rejections,
@@ -2548,6 +2553,8 @@ class CandidateService:
                     payload["clockWall"] / 1000, timezone.utc
                 ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
             await ws.send_bytes(json.dumps(event, separators=(",", ":")).encode())
+            if function == "EventSmartDetect":
+                self._sent_snapshots.record(payload)
             self._next_message_id += 1
 
     async def _send_stream_status(self, ws: aiohttp.ClientWebSocketResponse,
