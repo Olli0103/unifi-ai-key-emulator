@@ -54,3 +54,18 @@ native cutover approval, retrieval quality, controller/host crash recovery,
 power-loss durability, full database restore or independent human review.
 Real-CLIP weight-dependent acceptance is separate. The broad migration and
 deployment issues remain open.
+
+## Final exact-fixture and CI result
+
+The updated dedicated-name/UTF8/pre-existing-state guard was exercised on exact
+head `16cd48d98c01b72a185fae8e844a91bcc4bbb61c` in a fresh isolated NAS fixture:
+**two passed, zero skips**, with both owned containers collected and unchanged
+seven production containers/five profile bytes. A separate same-agent gate
+passed 15 assertions, including four wrong-database/encoding/existing-state
+refusals using no-DDL connection stubs, no external transport and no fixture/tracked-byte/mode
+residue. Production module bytes are unchanged from the full-tested runtime.
+
+All four required exact-head CI jobs passed. The normal Linux suite reported
+**3,070 passed, one skipped**, 22 existing warnings and 56 passing subtests.
+The remaining skip requires real CLIP weights; the PostgreSQL cases now run.
+This does not turn synthetic approval fixtures into a native migration approval.

@@ -301,6 +301,10 @@ supersedes that installation's loopback-only transport: default-trusted TLS,
 authenticated readback and private-interface-only binding were verified on the
 NAS. Remote-client/browser/mobile acceptance and automated renewal remain open,
 as do real apply/rollback, host-reboot and sustained-operation qualification.
+The subsequent [captured-byte reader rollout](evidence/port-config-snapshot-20261030.md#integrated-checks-and-native-administrator-rollout)
+updates only that separate administrator image, retaining HTTPS and processor
+state; it preserves the failed first attempt and recovery as well as the final
+readback. No live permission or model apply is implied.
 This does not change the default deployment
 or enable an administration service merely by upgrading a processor image.
 
