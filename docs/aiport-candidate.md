@@ -360,3 +360,7 @@ The owner rejected per-camera caps on object events (30 Sep 2026). Each remainin
 | Local captions (AI Key) | No hourly budget with a local Ollama model (`worker.continuous.unmetered`); bounded by `max_concurrency`, `max_queue` and `caption_timeout_s`. Optional `inference_concurrency` caps requests in flight to the model, with player summaries served first; with it, at most `inference_concurrency` + 1 caption jobs hold workers (never all of them), and the rest wait oldest first and count against `max_queue` | NAS load, summary latency | owner (unset live) |
 
 A `max_events_per_hour` left in `live_pool_detector`, or `max_per_hour` in its `fallback`, is accepted but not applied, and health lists it under `legacy_limits_ignored`. Removing those keys from the live slot configs is the owner's deployment step, not part of this change. The legacy single-stream `live_detector` mode, which is not deployed, keeps its own event limit.
+
+The [30 October four-Port activation](evidence/port-transport-activation-20261030.md)
+records the installed strict outer transport, cold backups and native continuity;
+quality, sustained operation and full recovery remain separate requirements.
