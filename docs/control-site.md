@@ -305,6 +305,9 @@ The subsequent [captured-byte reader rollout](evidence/port-config-snapshot-2026
 updates only that separate administrator image, retaining HTTPS and processor
 state; it preserves the failed first attempt and recovery as well as the final
 readback. No live permission or model apply is implied.
+The [native Kuma checkpoint](evidence/native-admin-monitoring-20261030.md) adds
+direct strict-TLS/JSON-identity and existing expiry-warning observation, without
+a new host polling timer. Browser, renewal and shared-host recovery limits remain.
 This does not change the default deployment
 or enable an administration service merely by upgrading a processor image.
 
