@@ -2495,10 +2495,9 @@ class JobProcessor:
                 timeout=aiohttp.ClientTimeout(total=_TAG_TIMEOUT_S)) as response:
             if response.status != 200:
                 raise WorkerError(f"Re-ID server returned HTTP {response.status}")
-            body = json.loads(await self._read_response(response, 131072))
-        vector = body.get("embedding") if isinstance(body, dict) else None
+            raw = await self._read_response(response, 131072)
         try:
-            return deep_mode.padded_reid(vector)
+            return deep_mode.reid_response(raw)
         except deep_mode.DeepModeError as exc:
             raise WorkerError("Re-ID server returned an invalid vector") from exc
 
