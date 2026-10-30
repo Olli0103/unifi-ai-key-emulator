@@ -2,14 +2,71 @@
 
 import json
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from aikey.worker import JobProcessor, WorkerError
 from test_basic_descriptions import PNG, command
 from test_continuous_admission import MutableRegistry, continuous_options
+from test_two_camera_scope import second_camera
 
 pytest_plugins = ["test_worker"]
+
+
+async def test_four_virtual_days_of_real_callbacks_roll_over_without_manual_reset(
+    services, tmp_path, monkeypatch
+):
+    """Virtual wall time; real worker/durable files/owned HTTP, not a four-day soak."""
+    now = [time.time()]
+    monkeypatch.setattr("aikey.worker.time", SimpleNamespace(
+        time=lambda: now[0], monotonic=time.monotonic))
+    config = continuous_options(services, tmp_path)
+    # Force rollover on every hour rather than hiding it below a large ledger.
+    # One spare ledger entry lets the thirteenth request reach the budget gate.
+    config["worker"]["max_ledger_entries"] = 13
+    registry = MutableRegistry("camera-fixture", "camera-fixture-two")
+
+    async def decode(*args, **kwargs):
+        return PNG
+
+    first = command("four-days-0-0")
+    for hour in range(96):
+        worker = JobProcessor(config, tmp_path, camera_registry=registry)
+        worker.caption_budget.clock_ns = lambda: int(now[0] * 1_000_000_000)
+        monkeypatch.setattr(worker, "_video_frame", decode)
+        try:
+            for index in range(12):
+                item = command(f"four-days-{hour}-{index}")
+                if index % 2:
+                    item = second_camera(item, "camera-fixture-two")
+                result = await worker.handle(item)
+                assert result["status"] == "processed" and result["callback"] == "http_accepted"
+                assert services.callbacks[-1]["payload"]["payload"] == result["result"]
+            with pytest.raises(WorkerError, match="budget is exhausted"):
+                await worker.submit(command(f"four-days-{hour}-overflow"))
+            assert worker.status()["ledger"] == 12
+            assert len(list(worker.archive_dir.rglob("*.json"))) == hour * 12
+            # Budget replay records retain 24 hours; the active limit is one hour.
+            assert len(json.loads((tmp_path / "caption-budget.json").read_text())["reservations"]) == min(hour + 1, 24) * 12
+            if hour:
+                assert (await worker.handle(first)) == {
+                    "status": "archived", "callback": "already_completed"}
+            assert len(services.media_requests) == len(services.requests) == len(services.callbacks) == (hour + 1) * 12
+            assert not list((tmp_path / "worker-test-scopes").glob("*.json"))
+        finally:
+            await worker.stop()
+        now[0] += 3601
+
+    restarted = JobProcessor(config, tmp_path, camera_registry=registry)
+    restarted.caption_budget.clock_ns = lambda: int(now[0] * 1_000_000_000)
+    try:
+        assert (await restarted.handle(first))["status"] == "archived"
+        assert len(services.requests) == len(services.callbacks) == 1152
+        assert restarted.status()["ledger"] == 0
+        assert len(list(restarted.archive_dir.rglob("*.json"))) == 1152
+    finally:
+        await restarted.stop()
 
 
 def age_record(worker, job_id):
