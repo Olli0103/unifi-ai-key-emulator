@@ -74,10 +74,12 @@ specific tree; it cannot prove the truth or legal sufficiency of attestations.
 
 This repository has no publishing workflow. Any future package, image or release
 publisher must require the final check and a maintainer approval before upload.
-The full-history secret scan has three exact-fingerprint exceptions in
+The full-history secret scan has four distinct exact-fingerprint exceptions in
 `.gitleaksignore`: one synthetic loopback credential sentinel from historical
 commit `0f519e4`, and normalization-format whitelist constants plus their
-parametrized test in `67aa5e8`. The source/test shapes were reviewed and
+parametrized test in `67aa5e8`, and an English documentation enumeration in
+`841408e` (plate camera evidence line 32). These exact source/test/prose shapes
+were reviewed and
 Gitleaks 8.30.1 reports no remaining HEAD-history findings. These exceptions
 do not exclude whole files, disable rules or permit current/future credentials.
 

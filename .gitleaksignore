@@ -9,3 +9,6 @@
 # False positive: a synthetic, never-issued test credential in the #8 isolation
 # doubles (commit 0f519e4); later commits build it without a key literal.
 0f519e43dec3d0cc2534f6c4f250b279b19b7304:tests/test_credential_isolation.py:generic-api-key:22
+# English documentation enumeration in #218, not a credential value.
+# Exact historical prose fingerprint only; current/future documents stay scanned.
+841408e53e93073ded55297ffc486e7a1884e5c7:docs/evidence/plate-camera-control-20261030.md:generic-api-key:32

@@ -29,8 +29,9 @@ there is no automatic retry, restart, rollback or privacy regrant.
 ## Focused and browser observation
 
 48 focused cases passed: initial explicit grant, scope restriction, last-camera
-removal with/without separate OCR, key retention, unknown/unpaired/duplicate
-refusal, no-op/raw formatting/sibling preservation, stale revisions, route/CSRF/
+removal with/without separate OCR, retention of private credential files,
+refusal of unknown or duplicate cameras, no-op/raw formatting/sibling preservation,
+stale revisions, route/CSRF/
 session/signature/camera-selection constraints, consumed/superseded drafts,
 exact-byte revocation, lost acknowledgement and disconnected-waiter drain.
 The initial shared test helper wrongly assumed vehicle classes were disabled;
@@ -55,3 +56,16 @@ production permission change, model call, real camera grant or binary release is
 implied. Production remains on Admin #217 until separately qualified activation.
 Independent human review, native accuracy and real-client acceptance remain
 separate evidence requirements.
+
+
+## Full-history documentation false positive
+
+The first CI secret scan reported the natural-language test enumeration at
+line 32 of commit `841408e53e93073ded55297ffc486e7a1884e5c7` as a generic
+credential. The pinned local Gitleaks 8.30.1 reproduces the exact single finding;
+that source line is English prose, not a credential. The current sentence is
+rephrased. One exact historical commit/path/rule/line fingerprint is documented
+in `.gitleaksignore`, following the existing scoped exception contract. No
+whole-file exclusion, rule change or current/future credential allowance is
+introduced; history is retained, not rewritten. The original failed CI receipt
+and redacted local report are preserved.
