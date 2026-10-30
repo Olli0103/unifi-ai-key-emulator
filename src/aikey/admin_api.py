@@ -10,14 +10,16 @@ import asyncio
 import hashlib
 import hmac
 import re
+import time
 
-from aiohttp import web
+from aiohttp import ClientError, web
 
 from .aiport_config_store import (AiPortConfigurationError, AiPortRevisionConflict,
                                   AiPortUnsafePolicyChange)
 from .config_store import (ConfigurationStoreError, RevisionConflict,
                            UnsafeConfigurationChange, _public)
 from .model_roles import key_roles, port_roles
+from .camera_inventory import InventoryError
 from .protocol import ContractError, _json_object
 
 
@@ -43,10 +45,13 @@ class AdminAPI:
     def __init__(self, site):
         self.site = site
         self.operations = set()
+        self.inventory_lock = asyncio.Lock()
+        self.inventory_cache = None
 
     def register(self, app):
         app.router.add_get(PREFIX + "/session", self.session)
         app.router.add_get(PREFIX + "/profiles", self.profiles)
+        app.router.add_get(PREFIX + "/cameras", self.cameras)
         app.router.add_get(PREFIX + "/profiles/{profile}/configuration", self.configuration)
         app.router.add_get(PREFIX + "/profiles/{profile}/runtime", self.runtime)
         app.router.add_get(PREFIX + "/profiles/{profile}/identity", self.identity)
@@ -94,6 +99,36 @@ class AdminAPI:
             return error("authentication_required", 401)
         return reply({"csrf_token": token, "mutation_limit": "shared_with_browser_forms",
                       "authorization": "current_runtime_session"})
+
+    async def cameras(self, request):
+        if not self.authenticated(request):
+            return error("authentication_required", 401)
+        if request.query:
+            return error("invalid_request", 400)
+        if self.site.inventory_loader is None:
+            return error("inventory_unavailable", 503)
+        try:
+            async with asyncio.timeout(12):
+                async with self.inventory_lock:
+                    if self.inventory_cache is not None and self.inventory_cache[0] > time.monotonic():
+                        result = self.inventory_cache[1]
+                    else:
+                        report = await self.site.inventory_loader()
+                        def read():
+                            from .admin_inventory import inventory_view
+                            bindings = {}
+                            for profile, store in self.site.aiports.items():
+                                for mac in store.configured_camera_macs():
+                                    bindings.setdefault(mac, []).append(profile)
+                            return inventory_view(report, bindings)
+                        result = await asyncio.to_thread(read)
+                        self.inventory_cache = (time.monotonic() + 2, result)
+        except (OSError, ValueError, ClientError, InventoryError,
+                AiPortConfigurationError, asyncio.TimeoutError):
+            return error("inventory_unavailable", 503)
+        if not self.authenticated(request):
+            return error("authentication_required", 401)
+        return reply(result)
 
     def view(self, profile, store):
         # Bind configuration and registry to one captured validated revision.

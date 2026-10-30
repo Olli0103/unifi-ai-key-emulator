@@ -36,6 +36,7 @@ diagnostic/count-only pages for that purpose.
 | --- | --- |
 | `GET /api/admin/v1/session` | Session-bound CSRF token, shared mutation-boundary notice. No new session/credential is created. |
 | `GET /api/admin/v1/profiles` | Configured Key and Port profile IDs/kinds and supported configuration-edit flag; not evidence those processors are running. |
+| `GET /api/admin/v1/cameras` | Complete validated current Protect camera inventory and separately labeled saved Port bindings, not native pairing proof or a new scope grant. |
 | `GET /api/admin/v1/profiles/{profile}/configuration` | Masked configuration plus saved role registry, both from the same captured revision. Explicit `saved_not_active_runtime`. |
 | `GET /api/admin/v1/profiles/{profile}/runtime` | Bounded allowlisted observation from an explicitly configured own-runtime HTTPS peer, or unknown/unavailable. Never inferred from saved settings. |
 | `GET /api/admin/v1/profiles/{profile}/identity` | Private saved MAC/certificate, persisted adoption and configured controller-trust observations, explicitly not a current connection/adoption proof. No initialization or credential hydration. |
@@ -130,10 +131,29 @@ the independently recorded native controller acceptance for their own scopes.
 No template, token, raw state, private key, credential location or unrelated
 state value is included in the identity response.
 
+## Private camera inventory
+
+The camera endpoint uses only the server's existing pinned inventory loader,
+never a caller URL/key. It reuses the validated camera schema, bounded counts,
+supported Protect version and fresh observation time; stale/partial/malformed
+or unavailable inventory returns a fixed 503, not an empty success. Only known
+fields are returned and classifications are recomputed from validated camera
+fields. Arbitrary loader metadata is discarded. Two-second coalesced caching
+bounds API polling; this does not cache the rollout operation's required fresh
+planning read.
+
+Configured camera MAC bindings are joined to named Port profiles as **saved
+configuration only**, not proof of current native pairings or successful
+processing. Names/IDs/MACs here are private operator data, not a public export.
+The observed inventory does not identify every source's Protect-vs-ONVIF kind;
+that remains unknown, not invented from a model name. ONVIF ingest remains
+unimplemented and its native acceptance issue stays open. Reading this endpoint
+does not change pairing, permissions, configuration or processing activation.
+
 ## Remaining #13 work
 
-These local checkpoints do not close #13. Complete camera inventory and
-runtime camera/policy binding, native controller-owned unsupported status,
+These local checkpoints do not close #13. Complete runtime camera/policy
+binding, native controller-owned unsupported status,
 authenticated supported maintenance
 operations, their approval/preflight/recovery boundaries, full original scope
 and rejection/concurrency qualification before the integration PR. No unqualified
