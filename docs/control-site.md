@@ -47,7 +47,8 @@ The private, versioned [administration JSON adapter](admin-api.md) reuses this
 listener's current session, Host/Origin/CSRF checks and shared mutation window.
 Its configuration responses are private operator data, not a public diagnostic
 export. It currently provides saved profile/configuration/role views and Key
-preview/apply/rollback; Port full edits and maintenance actions remain unavailable.
+preview/apply/rollback for Key settings and bounded Port feature policy. Native
+identity/pairing/host edits and maintenance actions remain unavailable there.
 
 The signed-in [data-flow and retention page](data-retention.md) separately shows
 all output/state categories, other destinations, product defaults and current

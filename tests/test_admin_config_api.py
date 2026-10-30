@@ -157,6 +157,35 @@ async def test_preview_apply_and_exact_rollback_preserve_other_profile_and_ident
         await server.close()
 
 
+async def test_port_policy_api_preserves_pairings_and_key_and_rolls_back_exactly(tmp_path):
+    site, server, client, cookie, path = await signed_in(tmp_path)
+    try:
+        key_before, port_before = path.read_bytes(), site.aiport.path.read_bytes()
+        revision = site.aiport.snapshot().revision
+        patch = {"live_pool_detector": {"threshold": .76}}
+        payload = {"revision": revision, "patch": patch}
+        response = await client.post(ROOT + "/profiles/aiport/preview", json=payload,
+                                     headers=headers(site, cookie))
+        assert response.status == 200
+        preview = await response.json()
+        assert preview["changed_fields"] == ["live_pool_detector.threshold"]
+        assert site.aiport.path.read_bytes() == port_before
+        response = await client.post(ROOT + "/profiles/aiport/apply", json={**payload,
+            "preview_revision": preview["resulting_revision"]}, headers=headers(site, cookie))
+        assert response.status == 200
+        applied = await response.json()
+        assert applied["revision"] == site.aiport.snapshot().revision
+        assert path.read_bytes() == key_before
+        assert json.loads(site.aiport.path.read_text())["paired_streams"] == json.loads(port_before)["paired_streams"]
+        response = await client.post(ROOT + "/profiles/aiport/rollback", json={
+            "revision": applied["revision"], "target_revision": revision}, headers=headers(site, cookie))
+        assert response.status == 200
+        assert site.aiport.path.read_bytes() == port_before and path.read_bytes() == key_before
+    finally:
+        await client.close()
+        await server.close()
+
+
 @pytest.mark.parametrize("bad", ["csrf", "origin", "revision", "preview_revision", "non_ascii_preview", "secret", "identity", "unknown_field", "duplicate_json"])
 async def test_invalid_apply_is_refused_without_changes_or_echo(tmp_path, bad):
     site, server, client, cookie, path = await signed_in(tmp_path)

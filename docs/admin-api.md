@@ -3,7 +3,7 @@
 Work in progress for #13. These version-1 endpoints adapt the existing private
 administration listener and configuration stores. They are **not** the device
 service, a new network listener, a public diagnostic export, a generic file
-editor or a command-execution API. Full Port edits, live operational/trust
+editor or a command-execution API. Identity/pairing/host edits, live operational/trust
 status and supported backup/restore/update actions are not yet implemented by
 this JSON contract; #13 remains open until its whole scope is reconciled.
 
@@ -37,9 +37,9 @@ diagnostic/count-only pages for that purpose.
 | `GET /api/admin/v1/session` | Session-bound CSRF token, shared mutation-boundary notice. No new session/credential is created. |
 | `GET /api/admin/v1/profiles` | Configured Key and Port profile IDs/kinds and supported configuration-edit flag; not evidence those processors are running. |
 | `GET /api/admin/v1/profiles/{profile}/configuration` | Masked configuration plus saved role registry, both from the same captured revision. Explicit `saved_not_active_runtime`. |
-| `POST /api/admin/v1/profiles/aikey/preview` | `{revision, patch}`; pure validated JSON Merge Patch preview with changed fields, resulting revision and restart/current-job boundary. No history/file/model write. |
-| `POST /api/admin/v1/profiles/aikey/apply` | `{revision, patch, preview_revision}`; check predicted revision then existing locked/OCC/atomic history/write. Concurrent callers cannot overwrite an unseen revision. |
-| `POST /api/admin/v1/profiles/aikey/rollback` | `{revision, target_revision}`; explicit full-configuration rollback through the existing immutable identity/index guards, not provider-only Undo or a controller reset. |
+| `POST /api/admin/v1/profiles/{profile}/preview` | `{revision, patch}`; pure validated JSON Merge Patch preview with changed fields, resulting revision and restart/current-job boundary. No history/file/model write. |
+| `POST /api/admin/v1/profiles/{profile}/apply` | `{revision, patch, preview_revision}`; check predicted revision then existing locked/OCC/atomic history/write. Concurrent callers cannot overwrite an unseen revision. |
+| `POST /api/admin/v1/profiles/{profile}/rollback` | `{revision, target_revision}`; explicit complete saved-configuration rollback through immutable identity/index/pairing guards, not provider-only Undo or a controller reset. |
 
 Bodies must be exact finite UTF-8 JSON objects, without duplicate/unknown fields;
 the listener's 8-KiB request bound applies. Configuration patches cannot replace
@@ -53,8 +53,18 @@ policy/permission consequences rather than treating it as a provider-only Undo.
 The existing remove-only provider Undo boundary remains separate. Restore of
 backups, search indexes or adopted device identities is not a configuration
 rollback. Reconcile retained secret references and actual runtime state before
-activation. Invalid/unknown profile returns 404; unsupported full Port mutation
-returns fixed 409 rather than pretending the action exists.
+activation. Invalid/unknown profile returns 404.
+
+Port patches may change only live detection policy, face/sound policy, audio
+camera scope and its event limit. Native identity, controller trust/address,
+host/decoder/firmware and paired stream bindings are immutable here; new slots
+and pairings use the separate rollout operation. Full runtime validation checks
+model references, camera membership, feature dependencies, sizes and supported
+arguments before save, without model loads or provider contact. Raw unrelated
+saved omissions/spelling are retained. A retained detection/OCR/fallback key
+cannot be retargeted by a generic patch; use the role-specific write-only flow.
+Rollback verifies the exact archived digest and required retained key references,
+and cannot import another identity/slot's streams.
 
 Writes admitted by the API remain owned until their store operation and final
 fixed audit outcome settle. Service cleanup drains them. Audit action names are
@@ -64,8 +74,8 @@ admission records `uncertain`; no success/rollback/retry is inferred from it.
 
 ## Remaining #13 work
 
-This first local checkpoint does not close #13. Complete typed Port policy edits,
-saved versus actual identity/adoption/trust/job/stream observations, native
+These local checkpoints do not close #13. Complete saved versus actual
+identity/adoption/trust/job/stream observations, native
 controller-owned unsupported status, authenticated supported maintenance
 operations, their approval/preflight/recovery boundaries, full original scope
 and rejection/concurrency qualification before the integration PR. No unqualified

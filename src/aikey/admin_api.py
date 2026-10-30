@@ -13,7 +13,8 @@ import re
 
 from aiohttp import web
 
-from .aiport_config_store import AiPortConfigurationError
+from .aiport_config_store import (AiPortConfigurationError, AiPortRevisionConflict,
+                                  AiPortUnsafePolicyChange)
 from .config_store import (ConfigurationStoreError, RevisionConflict,
                            UnsafeConfigurationChange, _public)
 from .model_roles import key_roles, port_roles
@@ -78,7 +79,7 @@ class AdminAPI:
         if not self.authenticated(request):
             return error("authentication_required", 401)
         rows = [{"id": "aikey", "kind": "aikey", "configuration_edit": True}]
-        rows.extend({"id": name, "kind": "aiport", "configuration_edit": False}
+        rows.extend({"id": name, "kind": "aiport", "configuration_edit": True}
                     for name in self.site.aiports)
         return reply({"profiles": rows, "activation": "saved_not_active_runtime"})
 
@@ -99,7 +100,7 @@ class AdminAPI:
         registry = key_roles(config, revision) if profile == "aikey" else port_roles(config, revision)
         return {"profile": profile, "revision": revision, "configuration": _public(config),
                 "roles": registry, "activation": "saved_not_active_runtime",
-                "configuration_edit": profile == "aikey"}
+                "configuration_edit": True}
 
     async def configuration(self, request):
         if not self.authenticated(request):
@@ -127,11 +128,6 @@ class AdminAPI:
         if store is None:
             self.site._audit(action, "unknown_profile", profile=profile)
             return error("unknown_profile", 404)
-        # Port-specific provider/scope actions remain on their existing typed
-        # handlers until the Port full-patch contract is implemented.
-        if profile != "aikey":
-            self.site._audit(action, "unsupported", profile=profile)
-            return error("operation_not_supported", 409)
         expected = {"revision", "target_revision"} if operation == "rollback" else {"revision", "patch"}
         if operation == "apply":
             expected.add("preview_revision")
@@ -140,6 +136,9 @@ class AdminAPI:
                 raise ValueError
             payload = _json_object(await request.read())
             if set(payload) != expected or (operation != "rollback" and not isinstance(payload["patch"], dict)):
+                raise ValueError
+            if operation == "rollback" and (not isinstance(payload["target_revision"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", payload["target_revision"])):
                 raise ValueError
         except web.HTTPRequestEntityTooLarge:
             self.site._audit(action, "rejected", profile=profile)
@@ -152,14 +151,15 @@ class AdminAPI:
             return error("forbidden", 403)
         if operation != "rollback":
             try:
-                preview = await asyncio.to_thread(store.preview, payload["revision"], payload["patch"])
-            except RevisionConflict:
+                prepare = store.preview if profile == "aikey" else store.preview_patch
+                preview = await asyncio.to_thread(prepare, payload["revision"], payload["patch"])
+            except (RevisionConflict, AiPortRevisionConflict):
                 self.site._audit(action, "conflict", profile=profile)
                 return error("revision_conflict", 409)
-            except UnsafeConfigurationChange:
+            except (UnsafeConfigurationChange, AiPortUnsafePolicyChange):
                 self.site._audit(action, "rejected", profile=profile)
                 return error("unsafe_change", 400)
-            except (ConfigurationStoreError, OSError, ValueError):
+            except (ConfigurationStoreError, AiPortConfigurationError, OSError, ValueError):
                 self.site._audit(action, "unavailable", profile=profile)
                 return error("configuration_unavailable", 503)
             if not self.authenticated(request):
@@ -178,21 +178,22 @@ class AdminAPI:
                     or not hmac.compare_digest(proposed, preview.resulting_revision)):
                 self.site._audit(action, "conflict", profile=profile)
                 return error("preview_conflict", 409)
+        apply = store.apply if profile == "aikey" else store.apply_patch
         method, args = ((store.rollback, (payload["revision"], payload["target_revision"]))
-                        if operation == "rollback" else (store.apply, (payload["revision"], payload["patch"])))
+                        if operation == "rollback" else (apply, (payload["revision"], payload["patch"])))
         return await self.file_operation(self.commit, profile, action, method, args)
 
     async def commit(self, profile, action, method, args):
         # Both the commit result and final audit outlive an HTTP disconnect.
         try:
             result = await asyncio.to_thread(method, *args)
-        except RevisionConflict:
+        except (RevisionConflict, AiPortRevisionConflict):
             self.site._audit(action, "conflict", profile=profile)
             return error("revision_conflict", 409)
-        except UnsafeConfigurationChange:
+        except (UnsafeConfigurationChange, AiPortUnsafePolicyChange):
             self.site._audit(action, "rejected", profile=profile)
             return error("unsafe_change", 400)
-        except (ConfigurationStoreError, OSError, ValueError):
+        except (ConfigurationStoreError, AiPortConfigurationError, OSError, ValueError):
             # An IO/store failure after admission is not proof that it rolled back.
             self.site._audit(action, "uncertain", profile=profile)
             return error("outcome_uncertain", 503)
