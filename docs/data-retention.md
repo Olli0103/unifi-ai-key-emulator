@@ -24,6 +24,13 @@ controls remain limited as documented in [the control site](control-site.md).
   otherwise completed records after one day and failed records after seven.
   The archive omits caption/event details but preserves hashed replay markers
   indefinitely. `callback_uncertain` is not automatically archived or retried.
+- Separate private `worker-failure-notes/` records retain a first observed
+  exception category per opaque job/input hash, not an exception message or
+  current job outcome. They are best-effort, capped at 1,024 records, and are
+  not automatically removed. They survive journal rollover but do not replace
+  replay markers. Active-journal counts on the retention page exclude them.
+  See [the diagnostic boundary](worker-failure-notes.md) before interpreting a
+  missing note, publication counter or historical category.
 - Protect events, transcripts, names/face groups, plates, enhanced images and
   uploaded crops/query images have their own lifetime. Native search-by-image
   creates a controller-side temporary upload even if the input was already a

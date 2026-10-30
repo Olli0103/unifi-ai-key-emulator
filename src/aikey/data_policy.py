@@ -50,7 +50,8 @@ ROWS = (
      "evidence": ("aikey.aiport_inference:FairInference", "aikey.aiport_candidate:CandidateService._prune_snapshots")},
     {"key": "captions", "category": "Captions and active worker result journals",
      "local": "Basic captions/event identifiers may remain in private active job records; "
-              "Deep descriptions use count-only journal summaries",
+              "Deep descriptions use count-only journal summaries. Private failure notes keep "
+              "opaque job/input hashes, fixed exception categories and optional controller HTTP status",
      "protect": "Protect saves descriptions on events/sessions; search copies can also persist",
      "destination": "Selected vision service receives images/prompts; configured embedding "
                     "service may receive description text; Protect receives descriptions",
@@ -59,12 +60,14 @@ ROWS = (
      "detail": "On startup/new admission, completed/failed continuous records roll over after "
                "one hour; non-continuous completed records after one day, failures after seven. "
                "Completed local-index records roll over after one minute. Archive markers omit "
-               "text. Callback-uncertain records remain active for review; no timer guarantees deletion.",
+               "text. Callback-uncertain records remain active for review; no timer guarantees deletion. "
+               "Separate best-effort failure notes retain the first observed exception per job/input "
+               "up to 1024 notes, without automatic deletion. Active journal counts exclude those notes.",
      "controller_decides": True,
      "owner_decision": "Caption/search/controller/backup lifetime and review of uncertain outcomes; "
                        "do not delete deduplication records to retry a possibly charged job",
      "evidence": ("aikey.worker:rollover_due", "aikey.worker:JobProcessor._archive_terminal",
-                  "aikey.worker:JobProcessor._execute")},
+                  "aikey.worker:JobProcessor._execute", "aikey.worker_failure_notes:FailureNotes")},
     {"key": "plates", "category": "License-plate readings and vehicle metadata",
      "local": "Optional plate strings in volatile AI Port vehicle tracks",
      "protect": "Protect may retain plate text with the native vehicle event and search metadata",
