@@ -145,8 +145,10 @@ def test_response_counts_distinguish_empty_from_score_rejection(tmp_path):
         _ollama_config(), tmp_path, threshold=0.8, max_requests_per_hour=3,
         transport=lambda *_args: _response(next(replies)))
     assert detector.detect_for_camera(FIRST, STILL) == ()
-    assert detector.detect_for_camera(FIRST, STILL) == ()
-    assert len(detector.detect_for_camera(FIRST, FRAME)) == 1
+    # The doubtful first reply now reserves a bounded resample; only the
+    # independently above-threshold reply is returned to the tracker.
+    assert len(detector.detect_for_camera(FIRST, STILL)) == 1
+    assert detector.detect_for_camera(FIRST, FRAME) == ()
     assert detector.detect_for_camera(FIRST, FRAME) == ()
     first = detector.diagnostic_counts(FIRST)
     assert {k: first[k] for k in ("responses", "empty_responses",

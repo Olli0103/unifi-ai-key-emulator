@@ -176,7 +176,7 @@ class ApiDetectionError(ValueError):
 
 
 class _MotionGate:
-    """Probe once at startup and confirm positives; sample motion in pairs."""
+    """Sample in pairs; one doubtful first reply may use one extra sample."""
 
     def __init__(self):
         self._previous: dict[str, bytes] = {}
@@ -186,6 +186,7 @@ class _MotionGate:
         self._startup_probe: set[str] = set()
         self._last_change: dict[str, float] = {}
         self._fresh: dict[str, bool] = {}
+        self._near_retry_used: set[str] = set()
         # The last frame's changed-cell count (None for a baseline frame), for
         # the per-minute gate history (#6). Never pixel data.
         self.last_changed: dict[str, int | None] = {}
@@ -199,6 +200,7 @@ class _MotionGate:
         self._startup_probe.discard(camera)
         self._last_change.pop(camera, None)
         self._fresh.pop(camera, None)
+        self._near_retry_used.discard(camera)
 
     def wait_for_motion(self, camera: str) -> None:
         """After a full budget, preserve the scene but cancel automatic probes.
@@ -228,21 +230,30 @@ class _MotionGate:
         """Skip a refresh pair; motion rearms after the scene quiets."""
         self._pending.pop(camera, None)
 
-    def sample_result(self, camera: str, *, found_object: bool) -> None:
-        """Only spend a confirming request if the first one found an object.
+    def sample_result(self, camera: str, *, found_object: bool,
+                      near_threshold: bool = False) -> bool:
+        """Keep confirmation only for a positive or one doubtful first reply.
 
-        One positive sample cannot confirm a track, and the next unsampled
-        frame drops it. A second request after an empty or failed first one
-        can never produce an event, so it would only spend the budget. Motion
-        stays disarmed until the scene quiets; an idle startup probe rearms.
+        The doubtful reply itself never reaches tracking. Reserve at most two
+        more samples, both of which must pass the unchanged detector gate to
+        confirm a track. A second doubtful, empty or failed reply ends the
+        episode; a doubtful confirmation cannot extend an ordinary pair.
+        Every request still passes the normal budget/backoff checks.
         """
-        if not found_object:
+        retry = (not found_object and near_threshold
+                 and self._pending.get(camera, 0) == 1
+                 and camera not in self._near_retry_used)
+        if retry:
+            self._near_retry_used.add(camera)
+            self._pending[camera] = 2
+        elif not found_object:
             self._pending.pop(camera, None)
         if camera not in self._startup_probe:
-            return
+            return retry
         self._startup_probe.remove(camera)
-        if not found_object:
+        if not found_object and not retry:
             self._armed[camera] = True
+        return retry
 
     def has_baseline(self, camera: str) -> bool:
         return camera in self._previous
@@ -269,6 +280,7 @@ class _MotionGate:
             # second observation for tracker confirmation. A restart with a
             # partly used durable budget waits for fresh motion instead.
             if allow_startup_probe:
+                self._near_retry_used.discard(camera)
                 self._pending[camera] = 2
                 self._armed[camera] = False
                 self._fresh[camera] = True
@@ -288,6 +300,7 @@ class _MotionGate:
                     and self._armed.get(camera, True)
                     and self._pending.get(camera, 0) == 0):
                 self._pending[camera] = 2
+                self._near_retry_used.discard(camera)
                 self._armed[camera] = False
                 last = self._last_change.get(camera)
                 self._fresh[camera] = (last is None
@@ -981,7 +994,12 @@ class ApiObjectDetector:
                         read["vehicles"] += 1
                         read["plates_read"] += item.plate is not None
                         read["plates_partial"] += item.plate is not None and "?" in item.plate
-            self.motion.sample_result(camera_mac, found_object=bool(accepted))
+            retry = self.motion.sample_result(
+                camera_mac, found_object=bool(accepted),
+                near_threshold=any(item.kind in SCORE_KINDS
+                                   and .5 <= item.score < threshold for item in reported))
+            if retry:
+                counts['near_threshold_retries'] = counts.get('near_threshold_retries', 0) + 1
             return accepted
         except ApiDetectionError as exc:
             self.motion.sample_result(camera_mac, found_object=False)
