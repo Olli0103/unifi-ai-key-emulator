@@ -646,3 +646,18 @@ explicit grant. It checks full semantic config equality and then the fixture
 restores its own original formatting; that is **not a product permission Undo**
 or proof of live-camera revocation/recognition. Real-client/native #19 acceptance
 and the broader #17 workflow remain outstanding.
+
+## Bounded camera inventory observations
+
+Score-gate and plate-camera GET pages share a validated server-side inventory
+observation with the private camera API for at most two seconds. Each complete
+page uses a single observation for all its profiles. Parallel readers coalesce;
+source failure briefly suppresses repeated reads, never substitutes expired
+data, and leaves the saved configuration untouched. An unavailable inventory
+can hide named editing without disabling any running permission. Reload shortly;
+do not interpret a missing form as a changed processing policy.
+
+POST preview/apply remains fresh: camera identity and current configuration are
+re-observed before consent can be admitted. Rollout authority remains separate.
+The legacy remove-only permission view keeps its existing source contract. See
+[the reproduced Protect quota refusal and correction](evidence/shared-camera-inventory-20261030.md).

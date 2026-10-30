@@ -219,7 +219,7 @@ class AdminAPI:
                     if self.inventory_cache is not None and self.inventory_cache[0] > time.monotonic():
                         result = self.inventory_cache[1]
                     else:
-                        report = await self.site.inventory_loader()
+                        report = await self.site.inventory_snapshot()
                         def read():
                             from .admin_inventory import inventory_view
                             bindings = {}

@@ -6,6 +6,7 @@ import argparse
 import asyncio
 from collections import deque
 from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from datetime import datetime, timezone
 import getpass
 import hashlib
@@ -22,7 +23,7 @@ import stat
 import time
 from urllib.parse import urlsplit
 
-from aiohttp import web
+from aiohttp import ClientError, web
 
 from .admin_audit import AuditLog
 from .caption_preflight import preflight as caption_preflight
@@ -164,6 +165,11 @@ class ControlSite:
             paths.add(store.path)
             self.aiports[f"aiport:{name}"] = store
         self.inventory_loader = inventory_loader
+        self._inventory_clock = time.monotonic
+        self._inventory_source = inventory_loader
+        self._inventory_snapshot = None
+        self._inventory_failure_until = 0.0
+        self._inventory_snapshot_lock = asyncio.Lock()
         self.rollout_path = rollout_path
         self.search_state_dir = search_state_dir
         self.search_backups_dir = search_backups_dir
@@ -1170,6 +1176,38 @@ class ControlSite:
                          "<p><a href='/speech-permissions'>Saved audio permissions</a></p>")
         self._audit("speech_permissions", "saved", "aikey")
         raise web.HTTPSeeOther("/speech-permissions?saved=1")
+
+    async def inventory_snapshot(self):
+        """One validated two-second GET observation; never used for write admission."""
+        from .admin_inventory import inventory_view
+        async with self._inventory_snapshot_lock:
+            loader = self.inventory_loader
+            if loader is not self._inventory_source:
+                self._inventory_source = loader
+                self._inventory_snapshot = None
+                self._inventory_failure_until = 0.0
+            if loader is None:
+                raise InventoryError("Inventory is not configured")
+            now = self._inventory_clock()
+            if now < self._inventory_failure_until:
+                raise InventoryError("Inventory observation is unavailable")
+            try:
+                if self._inventory_snapshot is not None and self._inventory_snapshot[0] > now:
+                    report = deepcopy(self._inventory_snapshot[1])
+                    inventory_view(report, {})  # Recheck version/completeness/age, even on a cache hit.
+                    return report
+                self._inventory_snapshot = None  # Never fall back to expired good data.
+                async with asyncio.timeout(12):
+                    report = deepcopy(await loader())
+                if loader is not self.inventory_loader:
+                    raise InventoryError("Inventory source changed")
+                inventory_view(report, {})
+            except (InventoryError, OSError, ValueError, ClientError, TimeoutError):
+                self._inventory_snapshot = None
+                self._inventory_failure_until = self._inventory_clock() + 2
+                raise  # Cancellation is not a cached failure and always releases the lock.
+            self._inventory_snapshot = (self._inventory_clock() + 2, report)
+            return deepcopy(report)
 
     def _port_permission_tokens(self, cookie: str, profile: str, feature: str,
                                 revision: str, cameras: tuple[str, ...]) -> dict[str, str] | None:
