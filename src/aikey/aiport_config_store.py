@@ -5,7 +5,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
-import fcntl
 import hashlib
 import hmac
 import json
@@ -16,7 +15,10 @@ import stat
 from typing import Any, Iterator
 
 from .aiport_candidate import CandidateError, parse_config
+from .file_lock import acquire as acquire_file_lock
 from .config import atomic_private
+from .config_store import (ConfigurationPreview, ConfigurationSnapshot, ConfigurationStore,
+                           ConfigurationStoreError, _changed, _merge_patch, _public)
 from .role_changes import RoleModelPreview
 
 
@@ -29,6 +31,8 @@ _PROVIDER_FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
                               "allow_insecure_http", "max_output_tokens", "api_key_file"})
 _RECOGNITION_SCOPES = {"face": "live_face", "sound": "live_sound", "speech": "live_speech_cameras"}
 _ROLE_PROVIDER_FIELDS = {"detection": "provider_config", "ocr": "ocr_provider_config"}
+_POLICY_ROOTS = frozenset({"live_pool_detector", "live_face", "live_sound",
+                          "live_speech_cameras", "live_speech_max_events_per_hour"})
 
 
 class AiPortConfigurationError(ValueError):
@@ -37,6 +41,10 @@ class AiPortConfigurationError(ValueError):
 
 class AiPortRevisionConflict(AiPortConfigurationError):
     pass
+
+
+class AiPortUnsafePolicyChange(AiPortConfigurationError):
+    """Pure policy admission refused before any configuration write."""
 
 
 @dataclass(frozen=True)
@@ -117,6 +125,102 @@ class AiPortConfigurationStore:
     def snapshot(self) -> AiPortSettings:
         content, value = self._read()
         return self._public(content, value)
+
+    @staticmethod
+    def _assert_policy_only(before: dict, after: dict) -> None:
+        if any(before.get(name) != after.get(name) for name in set(before) | set(after)
+               if name not in _POLICY_ROOTS):
+            raise AiPortUnsafePolicyChange("aiport_identity_pairing_or_runtime_change")
+
+    @staticmethod
+    def _assert_role_routes(before: dict, after: dict) -> None:
+        old = before.get("live_pool_detector") or {}
+        new = after.get("live_pool_detector") or {}
+        for path in (("provider_config",), ("ocr_provider_config",), ("fallback", "provider_config")):
+            a, b = old, new
+            for name in path:
+                a = a.get(name, {}) if isinstance(a, dict) else {}
+                b = b.get(name, {}) if isinstance(b, dict) else {}
+            key = a.get("api_key_file") if isinstance(a, dict) else None
+            if (key and isinstance(b, dict) and key == b.get("api_key_file")
+                    and any(a.get(n) != b.get(n) for n in ("provider", "base_url"))):
+                raise AiPortUnsafePolicyChange("aiport_credential_route_requires_typed_operation")
+
+    def _prepare_patch(self, content: bytes, expected_revision: str, patch: dict):
+        revision = self._revision(content)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(revision, expected_revision)):
+            raise AiPortRevisionConflict("aiport_config_changed")
+        try:
+            if not isinstance(patch, dict) or len(json.dumps(patch, allow_nan=False).encode()) > 4096:
+                raise ValueError
+            current = json.loads(content)
+            candidate = _merge_patch(current, patch)
+            self._assert_policy_only(current, candidate)
+            self._assert_role_routes(current, candidate)
+            self._validate(candidate)
+        except (ConfigurationStoreError, TypeError, ValueError) as exc:
+            if isinstance(exc, AiPortUnsafePolicyChange):
+                raise
+            raise AiPortUnsafePolicyChange("aiport_policy_change_invalid") from exc
+        changes = tuple(_changed(current, candidate))
+        encoded = self._encode(candidate) if changes else content
+        preview = ConfigurationPreview(revision, self._revision(encoded), _public(candidate),
+                                       changes, bool(changes))
+        return encoded, preview
+
+    def preview_patch(self, expected_revision: str, patch: dict) -> ConfigurationPreview:
+        content, _ = self._read()
+        return self._prepare_patch(content, expected_revision, patch)[1]
+
+    def apply_patch(self, expected_revision: str, patch: dict) -> ConfigurationSnapshot:
+        with self._locked():
+            content, _ = self._read()
+            encoded, preview = self._prepare_patch(content, expected_revision, patch)
+            if encoded != content:
+                self._archive(content)
+                atomic_private(self.path, encoded)
+            persisted, checked = self._read()
+            if persisted != encoded:
+                raise AiPortConfigurationError("aiport_policy_write_uncertain")
+            return ConfigurationSnapshot(preview.resulting_revision, _public(checked))
+
+    def rollback(self, expected_revision: str, target_revision: str) -> ConfigurationSnapshot:
+        if not isinstance(target_revision, str) or not _REVISION.fullmatch(target_revision):
+            raise AiPortConfigurationError("aiport_history_revision_invalid")
+        with self._locked():
+            content, _ = self._read()
+            if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                    or not hmac.compare_digest(self._revision(content), expected_revision)):
+                raise AiPortRevisionConflict("aiport_config_changed")
+            try:
+                target = ConfigurationStore._read_regular_bytes(
+                    self.history_dir / (target_revision + ".json"), 4096)
+                if self._revision(target) != target_revision:
+                    raise ValueError
+                candidate = json.loads(target)
+                self._assert_policy_only(json.loads(content), candidate)
+                self._validate(candidate)
+                def refs_present(value):
+                    if isinstance(value, dict):
+                        return all(self._key_reference_present(v) if k == "api_key_file"
+                                   else refs_present(v) for k, v in value.items())
+                    if isinstance(value, list):
+                        return all(refs_present(v) for v in value)
+                    return True
+                if not refs_present(candidate):
+                    raise AiPortConfigurationError("aiport_prior_key_missing")
+            except (OSError, ConfigurationStoreError, ValueError, TypeError) as exc:
+                if isinstance(exc, AiPortConfigurationError):
+                    raise
+                raise AiPortConfigurationError("aiport_history_unavailable") from exc
+            if target != content:
+                self._archive(content)
+                atomic_private(self.path, target)
+            persisted, checked = self._read()
+            if persisted != target:
+                raise AiPortConfigurationError("aiport_policy_write_uncertain")
+            return ConfigurationSnapshot(target_revision, _public(checked))
 
     def catalog_configuration(self, expected_revision: str, role: str) -> tuple[dict, Path, bool]:
         """Internal-only selected-role references, never an HTTP response."""
@@ -530,7 +634,7 @@ class AiPortConfigurationStore:
             os.fchmod(descriptor, 0o600)
             with os.fdopen(descriptor, "rb") as lock:
                 descriptor = -1
-                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                acquire_file_lock(lock.fileno())
                 yield
         except OSError as exc:
             raise AiPortConfigurationError("aiport_config_lock_unavailable") from exc

@@ -25,9 +25,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from contextlib import contextmanager
+import base64
+from contextlib import contextmanager, ExitStack
 from copy import deepcopy
-import fcntl
 from fractions import Fraction
 import hashlib
 import ipaddress
@@ -37,6 +37,7 @@ from pathlib import Path
 import re
 import socket
 import ssl
+import stat
 import time
 
 from .aiport_deployment import (
@@ -48,7 +49,9 @@ from .aiport_compose_slots import (
 )
 from .aiport_ingest import IngressError, normalize_mac
 from .aiport_instance_state import InstanceStateError, provision_slot
+from .file_lock import acquire as acquire_file_lock
 from .config import atomic_private
+from .protocol import _json_object
 
 
 SCHEMA = "aikey-aiport-rollout/1"
@@ -66,6 +69,10 @@ class RolloutError(ValueError):
 
 class PlanChanged(RolloutError):
     """The reviewed revision is no longer the current plan; nothing was applied."""
+
+
+class RolloutOutcomeUncertain(RolloutError):
+    """Do not overwrite an intervening writer or claim a failed rollback succeeded."""
 
 
 def _mac(value: object) -> str:
@@ -462,9 +469,10 @@ def _automated(plan: dict, kind: str, label: str) -> bool:
 
 
 def apply_rollout(plan: dict, slot_dirs: dict[str, Path], *, new_slot_parent: Path,
-                  template_label: str, compose_path: Path | None = None) -> list[str]:
+                  template_label: str, compose_path: Path | None = None, writer=None) -> list[str]:
     """Apply only the automated, local actions of a freshly computed plan."""
     changed = []
+    write = atomic_private if writer is None else writer
     template = json.loads((slot_dirs[template_label] / "config.json").read_text())
     for label, slot in sorted(plan["slots"].items()):
         removes = {a["_mac"] for a in plan["actions"]
@@ -483,9 +491,9 @@ def apply_rollout(plan: dict, slot_dirs: dict[str, Path], *, new_slot_parent: Pa
             raise RolloutError("A slot must keep one to five allowlisted cameras")
         backup = path.with_name("config.json.before-rollout")
         if not backup.exists():
-            atomic_private(backup, path.read_bytes())
+            write(backup, path.read_bytes())
         config["paired_streams"] = streams
-        atomic_private(path, json.dumps(config, separators=(",", ":")).encode())
+        write(path, json.dumps(config, separators=(",", ":")).encode())
         changed.append(label)
     for slot in plan["new_slots"]:
         if not _automated(plan, "create_slot", slot["label"]):
@@ -514,7 +522,7 @@ def apply_rollout(plan: dict, slot_dirs: dict[str, Path], *, new_slot_parent: Pa
                  "ffmpeg_path": "/usr/bin/ffmpeg"} for mac in slot["add"]]
             config["live_pool_detector"] = _cloned_detector(template["live_pool_detector"],
                                                             slot["add"])
-            atomic_private(path, json.dumps(config, separators=(",", ":")).encode())
+            write(path, json.dumps(config, separators=(",", ":")).encode())
             changed.append(slot["label"])
         if slot.get("compose") and _automated(plan, "compose_add_service", slot["label"]):
             if compose_path is None:
@@ -535,8 +543,8 @@ def apply_rollout(plan: dict, slot_dirs: dict[str, Path], *, new_slot_parent: Pa
                 backup = Path(compose_path).with_name(
                     Path(compose_path).name + f".before-{slot['label']}")
                 if not backup.exists():
-                    atomic_private(backup, text.encode())
-                atomic_private(Path(compose_path), updated.encode())
+                    write(backup, text.encode())
+                write(Path(compose_path), updated.encode())
                 plan["compose_sha256"] = hashlib.sha256(updated.encode()).hexdigest()
                 changed.append(slot["compose"]["service"])
     return changed
@@ -584,8 +592,74 @@ def _cloned_detector(detector: dict, cameras: list[str]) -> dict:
     return clone
 
 
+def _existing_rollout_bytes(path: Path, limit: int = 1024 * 1024, *, private: bool = False) -> bytes | None:
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise RolloutError("Rollout file cannot be read safely") from None
+    with os.fdopen(fd, "rb") as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_size > limit
+                or private and (info.st_uid != os.geteuid() or info.st_mode & 0o077)):
+            raise RolloutError("Rollout file cannot be read safely")
+        value = source.read(limit + 1)
+        if len(value) > limit:
+            raise RolloutError("Rollout file cannot be read safely")
+        return value
+
+
+def _transaction_path(path: Path) -> Path:
+    return Path(path).with_name("." + Path(path).name + ".transaction.json")
+
+
+def _transaction_ready(path: Path) -> None:
+    try:
+        raw = _existing_rollout_bytes(_transaction_path(path), 16 * 1024 * 1024, private=True)
+    except (OSError, RolloutError):
+        raise RolloutOutcomeUncertain("Rollout recovery record is unavailable; reconcile before applying") from None
+    if raw is None:
+        return
+    try:
+        data = _json_object(raw)
+        if (set(data) != {"schema", "state", "plan_revision", "before", "created_at"}
+                or data["schema"] != "aikey-rollout-transaction/1"
+                or data["state"] not in {"prepared", "committed", "rolled_back", "uncertain"}
+                or not isinstance(data["plan_revision"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", data["plan_revision"])
+                or type(data["created_at"]) is not int
+                or not isinstance(data["before"], list) or not 1 <= len(data["before"]) <= 256):
+            raise ValueError
+        names, total = set(), 0
+        for item in data["before"]:
+            if (not isinstance(item, dict) or set(item) != {"path", "sha256", "data"}
+                    or not isinstance(item["path"], str) or not Path(item["path"]).is_absolute()
+                    or len(item["path"]) > 4096 or item["path"] in names):
+                raise ValueError
+            names.add(item["path"])
+            if item["data"] is None:
+                if item["sha256"] is not None:
+                    raise ValueError
+            else:
+                value = base64.b64decode(item["data"], validate=True)
+                total += len(value)
+                if (len(value) > 1024 * 1024 or total > 8 * 1024 * 1024
+                        or hashlib.sha256(value).hexdigest() != item["sha256"]):
+                    raise ValueError
+        if data["state"] not in {"committed", "rolled_back"}:
+            raise RolloutOutcomeUncertain("Prior rollout requires reconciliation before another apply")
+    except RolloutOutcomeUncertain:
+        raise
+    except (ValueError, TypeError, KeyError):
+        raise RolloutOutcomeUncertain("Rollout recovery record is unavailable; reconcile before applying") from None
+
+
 def apply_and_register(rollout_path: Path, rollout: dict, plan: dict) -> list[str]:
     """Apply a plan's local actions and record new slots for the next run."""
+    _transaction_ready(rollout_path)
+    if not local_changes(plan):
+        return []
     new = rollout["new_slots"]
     dirs = {slot["label"]: Path(slot["state_dir"]) for slot in rollout["slots"]}
     compose = rollout.get("compose")
@@ -594,40 +668,102 @@ def apply_and_register(rollout_path: Path, rollout: dict, plan: dict) -> list[st
     # identity directories stay: they are unregistered and verified on retry.
     touched = [dirs[label] / name for label in dirs
                for name in ("config.json", "config.json.before-rollout")]
+    touched.append(Path(rollout_path))
     if compose:
         touched.append(Path(compose["path"]))
-    before = {path: (path.read_bytes() if path.exists() else None) for path in touched}
+        touched.extend(Path(compose["path"]).with_name(
+            Path(compose["path"]).name + f".before-{slot['label']}")
+            for slot in plan["new_slots"] if slot.get("compose"))
+    before = {path.absolute(): _existing_rollout_bytes(path) for path in touched}
+    if len(before) > 256 or sum(len(v) for v in before.values() if v is not None) > 8 * 1024 * 1024:
+        raise RolloutError("Rollout recovery exceeds its supported size")
+    recovery = {"schema": "aikey-rollout-transaction/1", "state": "prepared",
+        "plan_revision": plan["revision"], "created_at": int(time.time()),
+        "before": [{"path": str(path), "sha256": hashlib.sha256(value).hexdigest() if value is not None else None,
+                    "data": base64.b64encode(value).decode() if value is not None else None}
+                   for path, value in before.items()]}
+
+    def record(state):
+        recovery["state"] = state
+        atomic_private(_transaction_path(rollout_path), (json.dumps(recovery, separators=(",", ":")) + "\n").encode())
+
+    record("prepared")  # Durable last-known-good bytes precede every target write.
+    original_rollout, original_plan = deepcopy(rollout), deepcopy(plan)
+    owned = {path: set() for path in before}
+    new_configs = {(Path(new["state_parent"]) / slot["label"] / "config.json").absolute()
+                   for slot in plan["new_slots"]}
+
+    def write(path, value):
+        path = Path(path).absolute()
+        raw = value.encode() if isinstance(value, str) else value
+        if path in owned:
+            # Record intent first: even a lost acknowledgement after rename
+            # can be reconciled without overwriting an intervening writer.
+            owned[path].add(hashlib.sha256(raw).digest())
+        elif path not in new_configs:
+            raise RolloutError("Unexpected rollout write target")
+        atomic_private(path, raw)
+        if _existing_rollout_bytes(path) != raw:
+            raise RolloutOutcomeUncertain("Rollout write outcome is uncertain")
+
     try:
         changed = apply_rollout(plan, dirs, new_slot_parent=Path(new["state_parent"]),
                                 template_label=new.get("template", rollout["slots"][0]["label"]),
-                                compose_path=Path(compose["path"]) if compose else None)
+                                compose_path=Path(compose["path"]) if compose else None,
+                                writer=write)
+        applied = [slot for slot in plan["new_slots"]
+                   if _automated(plan, "create_slot", slot["label"])]
+        if applied:
+            updated = deepcopy(rollout)
+            now = time.time()
+            for slot in applied:
+                entry = {"label": slot["label"], "target": slot["target"],
+                         "state_dir": str(Path(new["state_parent"]) / slot["label"]),
+                         "health_port": int(new.get("health_port", 443))}
+                if slot.get("compose"):
+                    entry["pending"] = {
+                        "since": now,
+                        "deadline": now + int(compose.get("health_timeout_seconds", 1800)),
+                        "service": slot["compose"]["service"],
+                        "block": slot["compose"]["block"]}
+                updated["slots"].append(entry)
+            encoded = (json.dumps(updated, indent=2) + "\n").encode()
+            write(Path(rollout_path), encoded)
+            if _existing_rollout_bytes(Path(rollout_path)) != encoded:
+                raise RolloutOutcomeUncertain("Rollout registration outcome is uncertain")
+            rollout.clear()
+            rollout.update(updated)
+        record("committed")
     except BaseException:
+        uncertain = False
         for path, content in before.items():
-            if content is None:
-                if path.exists():
+            try:
+                current = _existing_rollout_bytes(path)
+                if current == content:
+                    continue
+                if current is None or hashlib.sha256(current).digest() not in owned[path]:
+                    uncertain = True
+                    continue  # Never restore old data over an unowned later edit.
+                if content is None:
                     path.unlink()
-            elif not path.exists() or path.read_bytes() != content:
-                atomic_private(path, content)
-        raise
-    applied = [slot for slot in plan["new_slots"]
-               if _automated(plan, "create_slot", slot["label"])]
-    if applied:
-        updated = deepcopy(rollout)
-        now = time.time()
-        for slot in applied:
-            entry = {"label": slot["label"], "target": slot["target"],
-                     "state_dir": str(Path(new["state_parent"]) / slot["label"]),
-                     "health_port": int(new.get("health_port", 443))}
-            if slot.get("compose"):
-                entry["pending"] = {
-                    "since": now,
-                    "deadline": now + int(compose.get("health_timeout_seconds", 1800)),
-                    "service": slot["compose"]["service"],
-                    "block": slot["compose"]["block"]}
-            updated["slots"].append(entry)
-        atomic_private(Path(rollout_path), (json.dumps(updated, indent=2) + "\n").encode())
+                else:
+                    atomic_private(path, content)
+                if _existing_rollout_bytes(path) != content:
+                    uncertain = True
+            except (OSError, RolloutError):
+                uncertain = True
         rollout.clear()
-        rollout.update(updated)
+        rollout.update(original_rollout)
+        plan.clear()
+        plan.update(original_plan)
+        try:
+            record("uncertain" if uncertain else "rolled_back")
+        except OSError:
+            uncertain = True
+        if uncertain:
+            raise RolloutOutcomeUncertain(
+                "Rollout outcome is uncertain; reload and reconcile before retrying") from None
+        raise
     return changed
 
 
@@ -635,12 +771,22 @@ def apply_and_register(rollout_path: Path, rollout: dict, plan: dict) -> list[st
 def _rollout_lock(rollout_path: Path):
     """Serialize applies across requests and processes (#13)."""
     lock = Path(rollout_path).with_name("." + Path(rollout_path).name + ".lock")
+    fd = -1
     try:
-        fd = os.open(lock, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW, 0o600)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError
+        os.fchmod(fd, 0o600)
     except OSError as exc:
+        if fd >= 0:
+            os.close(fd)
         raise RolloutError("Cannot open the rollout lock") from exc
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            acquire_file_lock(fd)
+        except OSError as exc:
+            raise RolloutError("Cannot acquire the rollout lock") from exc
         yield
     finally:
         os.close(fd)
@@ -656,10 +802,15 @@ def apply_if_current(rollout_path: Path, report: dict, expected_revision: object
     """
     with _rollout_lock(rollout_path):
         rollout = load_rollout_config(rollout_path)
-        plan, _ = compute(rollout, report, allow_estimated_capacity=allow_estimated_capacity)
-        if not isinstance(expected_revision, str) or expected_revision != plan["revision"]:
-            raise PlanChanged("The plan changed; review the refreshed plan before applying")
-        return apply_and_register(rollout_path, rollout, plan), rollout
+        from .aiport_config_store import AiPortConfigurationStore
+        with ExitStack() as locks:
+            paths = sorted({Path(slot["state_dir"]) / "config.json" for slot in rollout["slots"]})
+            for path in paths:
+                locks.enter_context(AiPortConfigurationStore(path)._locked())
+            plan, _ = compute(rollout, report, allow_estimated_capacity=allow_estimated_capacity)
+            if not isinstance(expected_revision, str) or expected_revision != plan["revision"]:
+                raise PlanChanged("The plan changed; review the refreshed plan before applying")
+            return apply_and_register(rollout_path, rollout, plan), rollout
 
 
 def verify_new_slots(rollout_path: Path, rollout: dict, *,
@@ -748,7 +899,11 @@ def check_inventory_fresh(report: dict, *, now: float | None = None) -> None:
 
 
 def load_rollout_config(path: Path) -> dict:
-    value = json.loads(Path(path).read_text())
+    _transaction_ready(path)
+    raw = _existing_rollout_bytes(Path(path))
+    if raw is None:
+        raise RolloutError("Rollout configuration is unavailable")
+    value = _json_object(raw)
     if (not isinstance(value, dict) or value.get("schema") != SCHEMA
             or not isinstance(value.get("slots"), list) or not value["slots"]
             or not isinstance(value.get("new_slots"), dict)):

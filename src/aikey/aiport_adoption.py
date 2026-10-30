@@ -66,6 +66,27 @@ def validate_management(value: object, controller_ip: str, control_port: int,
     return token
 
 
+def validate_adoption_state(value: object, binding: dict, *, now: float | None = None) -> dict | None:
+    """Pure admission shared by the runtime and cold-state recovery checks."""
+    if not isinstance(value, dict) or value.get("phase") not in ("pending", "adopted"):
+        raise AdoptionError("Unsafe adoption file")
+    if any(value.get(key) != expected for key, expected in binding.items()):
+        raise AdoptionError("Adoption state belongs to a different controller")
+    if value["phase"] == "pending":
+        if (set(value) != set(binding) | {"phase", "token", "expires_at"}
+                or not isinstance(value["token"], str)
+                or not 16 <= len(value["token"]) <= 512
+                or any(ord(character) < 33 or ord(character) > 126
+                       for character in value["token"])
+                or type(value["expires_at"]) is not int):
+            raise AdoptionError("Unsafe adoption file")
+        return value if value["expires_at"] > int(time.time() if now is None else now) else None
+    elif set(value) == set(binding) | {"phase"}:
+        return value
+    else:
+        raise AdoptionError("Unsafe adoption file")
+
+
 class AdoptionStore:
     """A pending token becomes an adopted record only after a verified WebSocket 101."""
 
@@ -84,23 +105,7 @@ class AdoptionStore:
                 if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_size > 1024:
                     raise AdoptionError("Unsafe adoption file")
                 value = json.loads(source.read(1025))
-            if not isinstance(value, dict) or value.get("phase") not in ("pending", "adopted"):
-                raise AdoptionError("Unsafe adoption file")
-            if any(value.get(key) != expected for key, expected in self.binding.items()):
-                raise AdoptionError("Adoption state belongs to a different controller")
-            if value["phase"] == "pending":
-                if (set(value) != set(self.binding) | {"phase", "token", "expires_at"}
-                        or not isinstance(value["token"], str)
-                        or not 16 <= len(value["token"]) <= 512
-                        or any(ord(character) < 33 or ord(character) > 126
-                               for character in value["token"])
-                        or type(value["expires_at"]) is not int):
-                    raise AdoptionError("Unsafe adoption file")
-                self.state = value if value["expires_at"] > int(time.time()) else None
-            elif set(value) == set(self.binding) | {"phase"}:
-                self.state = value
-            else:
-                raise AdoptionError("Unsafe adoption file")
+            self.state = validate_adoption_state(value, self.binding)
         except (OSError, ValueError, UnicodeError) as exc:
             raise AdoptionError("Unsafe adoption file") from exc
 

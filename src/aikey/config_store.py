@@ -5,7 +5,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
-import fcntl
 import hashlib
 import hmac
 import json
@@ -15,6 +14,7 @@ import re
 import stat
 from typing import Any, Iterator
 
+from .file_lock import acquire as acquire_file_lock
 from .config import ConfigError, atomic_private, validate_config
 from .role_changes import RoleModelPreview
 
@@ -712,7 +712,7 @@ class ConfigurationStore:
             raise ConfigurationStoreError("Cannot open the configuration update lock") from exc
         with os.fdopen(descriptor, "rb") as lock:
             try:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                acquire_file_lock(lock.fileno())
             except OSError as exc:
                 raise ConfigurationStoreError("Cannot acquire the configuration update lock") from exc
             yield
@@ -735,7 +735,7 @@ class ConfigurationStore:
 
     @staticmethod
     def _read_regular_bytes(path: Path, limit: int) -> bytes:
-        flags = os.O_RDONLY
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         descriptor = os.open(path, flags)

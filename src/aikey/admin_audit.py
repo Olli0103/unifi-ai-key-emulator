@@ -18,7 +18,8 @@ import time
 
 ACTIONS = frozenset({"login", "logout", "provider_save", "provider_rollback", "rollout_apply",
                      "role_model", "speech_provider", "speech_permissions", "model_catalog", "provider_probe",
-                     "first_run_create", "first_run_trust", "aiport_permissions", "tls_reload", "mutation"})
+                     "first_run_create", "first_run_trust", "aiport_permissions", "tls_reload", "mutation",
+                     "config_preview", "config_apply", "config_rollback", "maintenance_submit"})
 _RESULT = re.compile(r"[a-z][a-z0-9_]{0,39}\Z")
 _PROFILE = re.compile(r"(aikey|aiport|aiport:[a-z0-9-]{1,32})\Z")
 _MAX_BYTES = 256 * 1024
@@ -32,13 +33,20 @@ class AuditLog:
         self.max_bytes = max_bytes
         self.failures = 0
 
-    def record(self, action: str, result: str, *, profile: str | None = None) -> bool:
+    def record(self, action: str, result: str, *, profile: str | None = None,
+               operation_id: str | None = None, request_id: str | None = None) -> bool:
         """Append one entry; returns False (and counts it) if it could not be written."""
         if action not in ACTIONS or not isinstance(result, str) or not _RESULT.fullmatch(result):
             raise ValueError("Audit entries use a fixed action and a short result code")
         if profile is not None and (not isinstance(profile, str) or not _PROFILE.fullmatch(profile)):
             profile = "unknown"
         entry = {"at": int(self.clock()), "action": action, "result": result}
+        if operation_id is not None or request_id is not None:
+            if (action != "maintenance_submit" or not isinstance(operation_id, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", operation_id)
+                    or not isinstance(request_id, str) or not re.fullmatch(r"[0-9a-f]{32}", request_id)):
+                raise ValueError("Maintenance audit identifiers must be fixed digests")
+            entry.update(operation_id=operation_id, request_id=request_id)
         if profile is not None:
             entry["profile"] = profile
         line = (json.dumps(entry, separators=(",", ":"), sort_keys=True) + "\n").encode()
@@ -90,8 +98,14 @@ class AuditLog:
                 if (isinstance(value, dict) and value.get("action") in ACTIONS
                         and isinstance(value.get("result"), str) and _RESULT.fullmatch(value["result"])
                         and type(value.get("at")) is int):
-                    entries.append({key: value[key] for key in ("at", "action", "result", "profile")
-                                    if key in value})
+                    row = {key: value[key] for key in ("at", "action", "result", "profile") if key in value}
+                    if (value["action"] == "maintenance_submit"
+                            and isinstance(value.get("operation_id"), str)
+                            and re.fullmatch(r"[0-9a-f]{64}", value["operation_id"])
+                            and isinstance(value.get("request_id"), str)
+                            and re.fullmatch(r"[0-9a-f]{32}", value["request_id"])):
+                        row.update(operation_id=value["operation_id"], request_id=value["request_id"])
+                    entries.append(row)
                 if len(entries) >= limit:
                     return entries
         return entries

@@ -273,6 +273,23 @@ def test_a_failed_stop_changes_nothing_and_releases_the_hold(state_dir):
     assert "aiport-mac" not in runtime.get("holds", {})
 
 
+def test_failed_run_ack_never_deletes_an_unowned_name_or_restarts_beside_it(state_dir):
+    class InterveningHost(Host):
+        def __call__(self, argv):
+            if argv[1] == "run":
+                self.entries[NEW] = _entry(NEW, "unowned-fixture:image", "running")
+                self.calls.append(argv[1:])
+                return 1, "fictional lost acknowledgement or name collision"
+            return super().__call__(argv)
+    host = InterveningHost([_entry()])
+    assert _swap(state_dir, host) == "run_outcome_uncertain"
+    assert host.entries[NEW]["configuration"]["image"]["reference"] == "unowned-fixture:image"
+    assert host.entries[OLD]["status"]["state"] == "stopped"
+    assert not any(call[0] in {"delete", "start"} or call[:2] == ["stop", NEW] for call in host.calls)
+    runtime = json.loads((state_dir / sup.RUNTIME_FILE).read_text())
+    assert runtime["holds"]["aiport-mac"] > 0
+
+
 def test_a_probe_error_counts_as_not_ready(state_dir):
     host = Host([_entry()])
 
