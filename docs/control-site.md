@@ -310,9 +310,9 @@ or enable an administration service merely by upgrading a processor image.
 
 ## Removing saved AI Port recognition permissions
 
-For attached Port profiles, **Remove saved AI Port face or sound permissions**
-opens a remove-only page. It can shrink an already configured face-recognition
-or sound-classification camera list, or disable that saved role. It cannot enroll
+For attached Port profiles, **Remove saved AI Port face, sound or speech permissions**
+opens a remove-only page. It can shrink an already configured face-recognition,
+sound-classification or audio/speech-presence camera list, or disable that saved role. It cannot enroll
 a camera, enable an absent role, change its model or provider, delete evidence or
 revoke a key. Individual selection requires unambiguous camera names from the
 configured pinned inventory; during an inventory outage, disabling the whole
@@ -327,6 +327,15 @@ remain; no recording, template, provider or backup copy is deleted. A preceding
 provider Undo cannot regrant the removed scope; a later provider-only Undo keeps
 the reduced scope. After an uncertain save, reload the current saved settings
 before retrying; do not assume no effect or automatically repeat the operation.
+
+**Audio capture / Speech presence** manages the existing Port audio allowlist,
+not the AI Key speech-to-text provider. The Sound role depends on the same
+camera's audio permission: remove its saved Sound permission first. A conflicting
+audio removal is refused before lock/history/save with a fixed explanation;
+it never silently disables Sound or changes another role. Whole audio removal
+also removes its now-orphaned speech event limit; a partial restriction retains
+that limit. No new camera, recording, key, model or privacy scope is introduced.
+See the [audio-scope boundary](evidence/aiport-audio-permissions-20261030.md).
 
 Source/fixture verification does not mean that a deployed admin/Port image has
 been updated or that real camera permissions were changed. See the

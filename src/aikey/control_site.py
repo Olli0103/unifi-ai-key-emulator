@@ -651,7 +651,7 @@ class ControlSite:
                   "<a href='/audit'>Audit log</a> · "
                   "<a href='/caption-preflight'>Caption preflight</a> · "
                   "<a href='/state-backup-preflight'>Backup preflight</a></p>"
-                + ("<p><a href='/aiport-permissions'>Remove saved AI Port face or sound permissions</a></p>"
+                + ("<p><a href='/aiport-permissions'>Remove saved AI Port face, sound or speech permissions</a></p>"
                    if ports else "")
                 + undo_form + self._role_models_section(csrf) + self._speech_form(key, csrf)
                 + "<div class='grid'>")
@@ -1037,14 +1037,18 @@ class ControlSite:
                             labels[mac] = name
             except Exception:
                 pass  # Missing names must not prevent disabling a saved role.
-        body = ("<h1>Remove saved AI Port recognition permissions</h1><p><a href='/'>Settings</a></p>"
-                "<p><strong>Saved settings only.</strong> Face or sound processing may continue "
+        body = ("<h1>Remove saved AI Port recognition and audio permissions</h1><p><a href='/'>Settings</a></p>"
+                "<p><strong>Saved settings only.</strong> Face, sound or speech-presence processing may continue "
                 "until you restart the selected AI Port. No processor is stopped here. "
                 "This page cannot add cameras, change models, delete recordings/templates or "
-                "revoke keys. Other detection and audio permissions are unchanged.</p>")
+                "revoke keys. Other detection and audio permissions are unchanged. "
+                "Sound classification requires the same camera's audio permission: remove "
+                "its saved sound permission first. No other role is changed automatically, "
+                "including AI Key speech-to-text.</p>")
         for profile, store in self.aiports.items():
             instance_title = "AI Port" if profile == "aiport" else "AI Port " + profile.partition(":")[2]
-            for feature, title in (("face", "Face recognition"), ("sound", "Sound classification")):
+            for feature, title in (("face", "Face recognition"), ("sound", "Sound classification"),
+                                   ("speech", "Audio capture / Speech presence")):
                 body += f"<section><h2>{_safe(instance_title)} — {title}</h2>"
                 try:
                     revision, cameras = await asyncio.to_thread(store.recognition_permissions, feature)
@@ -1104,7 +1108,7 @@ class ControlSite:
                 raise ValueError
             selected_profile, feature = fields["profile"], fields["feature"]
             if (not isinstance(selected_profile, str) or selected_profile not in self.aiports
-                    or not isinstance(feature, str) or feature not in {"face", "sound"}):
+                    or not isinstance(feature, str) or feature not in {"face", "sound", "speech"}):
                 raise ValueError
             profile = selected_profile
             store = self.aiports[profile]
@@ -1133,9 +1137,13 @@ class ControlSite:
             certain = not apply_started or isinstance(exc, AiPortRevisionConflict)
             self._audit("aiport_permissions", "rejected" if certain else "uncertain", profile)
             title = "AI Port permissions not saved" if certain else "AI Port permission save outcome uncertain"
+            hint = ("<p>Remove saved sound permissions for the affected cameras before removing "
+                    "their audio permission. No other role was changed automatically.</p>"
+                    if not apply_started and str(exc) == "aiport_audio_required_by_sound" else "")
             return _page(title, f"<h1>{title}</h1><p>Reload current settings before retrying. "
                          "Check the selection, confirmation and revision. The running processor "
-                         "has not been stopped.</p><p><a href='/aiport-permissions'>Saved permissions</a></p>")
+                         "has not been stopped.</p>" + hint +
+                         "<p><a href='/aiport-permissions'>Saved permissions</a></p>")
         self._audit("aiport_permissions", "saved_" + feature, profile)
         raise web.HTTPSeeOther("/aiport-permissions?saved=1")
 
