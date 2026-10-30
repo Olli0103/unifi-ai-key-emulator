@@ -122,6 +122,45 @@ scope. An uncertain save is reported as uncertain: reload before retrying.
 These are source/HTTP integration results, not native live revocation, browser
 visual/mobile acceptance or a deployed permission change. See [checks and limits](evidence/speech-permission-restrictions-20261029.md).
 
+## Separate AI Port plate OCR provider
+
+`/ocr-provider` configures a separate OCR provider, model, destination and
+write-only credential without editing JSON. It is offered only for a saved
+API-based Port detector with an existing nonempty `plate_cameras` permission;
+this page cannot enroll cameras or change plate scope, detector/fallback,
+thresholds, request allowance, identity or pairing. A Port without that scope
+gets an explicit unavailable explanation, not an activation button.
+
+The first POST validates a preview but creates no credential/configuration file
+and makes no network or model call. The confirmation shows the OCR destination
+and model; a new credential is entered only there, never echoed or put in hidden
+fields. The confirmation is bound to the current login, profile, exact current
+and proposed revisions, complete selection and a ten-minute server-private
+signature. A service restart invalidates outstanding confirmations. It needs
+the normal same-origin/CSRF checks, shared mutation limit and an explicit
+acknowledgement before the saved change.
+
+A first separate assignment never inherits the detector's credential. An
+existing explicit OCR credential is retained only for the exact same provider
+and configured base URL. A changed destination drops it; OpenAI/Anthropic need
+a separate supplied OCR credential. New private files are created exclusively
+and synced before configuration apply, so a repeated concurrent confirmation
+cannot overwrite the first writer's credential. Stale requests fail before key
+creation. A possible committed write is reported uncertain; its credential is
+retained for active/history references, not automatically deleted or retried.
+
+The existing one-step per-Port provider Undo restores the exact prior config
+when its revision and required previous credentials still match. It cannot
+discard a later scope/settings revision, and it does not prune new keys. A
+no-op retains the original bytes.
+
+This updates saved configuration only. The selected Port needs a separate
+controlled restart for runtime activation. OCR uses the detector's existing
+per-camera request allowance; no configured cap means no cap. Capability,
+native plate persistence and recognition accuracy are not proved by a save.
+The maintained isolated browser check covers preview, stale refusal, explicit
+keyboard confirmation, separate-key save and exact Undo on desktop/mobile.
+
 ## Model catalogs
 
 The authenticated [saved model-role registry](model-roles.md) at

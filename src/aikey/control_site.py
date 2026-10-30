@@ -805,6 +805,7 @@ class ControlSite:
                   "<a href='/model-registry'>Saved model role registry</a></p>"
                 + ("<p><a href='/aiport-permissions'>Remove saved AI Port face, sound or speech permissions</a></p>"
                    if ports else "")
+                + ("<p><a href='/ocr-provider'>Configure separate plate OCR provider</a></p>" if ports else "")
                 + undo_form + self._role_models_section(csrf) + self._speech_form(key, csrf)
                 + "<div class='grid'>")
         body += self._provider_form("AI Key", "aikey", key.revision, inference,

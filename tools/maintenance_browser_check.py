@@ -28,6 +28,7 @@ from aikey.tls import ensure_identity_certificate  # noqa: E402
 
 PASSWORD = " ".join(("fictional", "browser", "only", "passphrase"))
 CANARY = "fictional-host-input-not-in-browser"
+OCR_KEY = "fictional-independent-ocr-credential"
 CODE = '''import json,pathlib,sys
 v=json.load(sys.stdin)
 with pathlib.Path(v["effect"]).open("a") as f:f.write("one-effect\\n")
@@ -70,6 +71,7 @@ async def scenario(output, name, viewport, executable):
         "paired_streams": [{"camera_mac": "02000000F0C3", "source_ip": "192.168.10.1",
                             "ffmpeg_path": sys.executable}],
         "live_pool_detector": {"inference_backend": "vision_api", "threshold": .8,
+            "plate_cameras": ["02000000F0C3"],
             "smart_types": ["person"], "provider_config": {"provider": "openai-compatible",
                 "model": "fictional-detector", "base_url": origin + "/fixture-provider/v1",
                 "api_key_file": str(port_state / "provider-key")}}}) + "\n")
@@ -109,6 +111,7 @@ async def scenario(output, name, viewport, executable):
     unowned, console, page_errors = [], [], []
     posts = []
     provider_posts = []
+    ocr_posts = []
     outside_referrer = []
     outside_seen = asyncio.Event()
     context = None
@@ -142,6 +145,8 @@ async def scenario(output, name, viewport, executable):
                     if request.method == "POST" and request.url == origin + "/maintenance" else None)
             page.on("request", lambda request: provider_posts.append(request.url)
                     if request.method == "POST" and request.url == origin + "/provider" else None)
+            page.on("request", lambda request: ocr_posts.append(request.url)
+                    if request.method == "POST" and request.url == origin + "/ocr-provider/apply" else None)
             await page.goto(origin + "/maintenance")
             await expect(page.get_by_role("heading", name="Administrator sign in", exact=True)).to_be_visible()
             await page.get_by_label("Password", exact=True).fill(PASSWORD)
@@ -204,6 +209,48 @@ async def scenario(output, name, viewport, executable):
             await undo.get_by_role("button").click()
             await expect(page).to_have_url(origin + "/?rolledback=1")
             assert port_config.read_bytes() == port_bytes and not fixture_requests
+            await page.goto(origin + "/ocr-provider")
+            ocr = page.locator("form[action='/ocr-provider/preview']")
+            await ocr.locator("input[name='revision']").evaluate("element => element.value = '0'.repeat(64)")
+            await ocr.get_by_role("button", name="Preview OCR provider", exact=True).click()
+            await expect(page.get_by_role("heading", name="OCR settings not saved", exact=True)).to_be_visible()
+            assert port_config.read_bytes() == port_bytes and not list(port_state.glob("ocr-key-*"))
+            await page.goto(origin + "/ocr-provider")
+            ocr = page.locator("form[action='/ocr-provider/preview']")
+            await ocr.get_by_label("OCR model ID", exact=True).fill("fictional-independent-ocr")
+            await ocr.get_by_label("OCR API base URL", exact=True).fill(origin + "/fixture-ocr/v1")
+            await ocr.get_by_role("checkbox", name="Supply a new separate OCR key", exact=False).check()
+            await ocr.get_by_role("button", name="Preview OCR provider", exact=True).click()
+            await expect(page.get_by_role("heading", name="Confirm OCR provider", exact=True)).to_be_visible()
+            assert port_config.read_bytes() == port_bytes and not list(port_state.glob("ocr-key-*"))
+            await page.get_by_label("New separate OCR API key", exact=True).fill(OCR_KEY)
+            button = page.get_by_role("button", name="Save separate OCR provider", exact=True)
+            await button.click()
+            assert not ocr_posts  # unchecked acknowledgement blocks even with a key entered
+            checkbox = page.get_by_role("checkbox", name="I approve this OCR destination", exact=False)
+            await checkbox.focus()
+            await page.keyboard.press("Space")
+            await expect(checkbox).to_be_checked()
+            await page.keyboard.press("Tab")
+            await expect(button).to_be_focused()
+            assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+            await page.screenshot(path=str(output / (name + "-ocr-confirm.png")), full_page=True)
+            async with page.expect_response(lambda r: r.url == origin + "/ocr-provider/apply") as saved_ocr:
+                await page.keyboard.press("Enter")
+            assert (await saved_ocr.value).status == 303
+            await expect(page.get_by_text("OCR provider saved; running service unchanged.", exact=True)).to_be_visible()
+            changed = json.loads(port_config.read_text())
+            selected = changed["live_pool_detector"].pop("ocr_provider_config")
+            assert changed == json.loads(port_bytes) and config.read_bytes() == config_bytes
+            assert selected["model"] == "fictional-independent-ocr"
+            ocr_key = port_state / Path(selected["api_key_file"]).name
+            assert ocr_key.read_text() == OCR_KEY + "\n" and not fixture_requests
+            markup = await page.content()
+            assert all(value not in markup for value in (OCR_KEY, provider_key, str(root)))
+            await page.screenshot(path=str(output / (name + "-ocr-saved.png")), full_page=True)
+            await page.locator("form[action='/provider/rollback']").get_by_role("button").click()
+            await expect(page).to_have_url(origin + "/?rolledback=1")
+            assert port_config.read_bytes() == port_bytes and len(ocr_posts) == 1
             probe = page.locator("form[action='/provider-probe']").filter(
                 has=page.locator("input[name='profile'][value='aiport']")).filter(
                 has=page.locator("input[name='role'][value='detection']"))
@@ -267,6 +314,7 @@ async def scenario(output, name, viewport, executable):
             assert source_digests() == before
             assert all(provider_key not in message and "fictional-private-provider-body" not in message
                        for message in console)
+            assert all(OCR_KEY not in message for message in console)
             report = {"viewport": viewport, "browser_version": browser.version,
                 "login_and_expiry_in_browser": True, "required_confirmation_prevented_post": True,
                 "keyboard_confirmation_and_submit": True, "admitted_requests": len(posts),
@@ -279,6 +327,8 @@ async def scenario(output, name, viewport, executable):
                 "provider_save_and_exact_rollback": True,
                 "invalid_model_preview_refused_without_save_or_provider_call": True,
                 "role_preview_confirm_and_exact_rollback": True,
+                "separate_ocr_preview_key_confirmation_and_exact_rollback": True,
+                "ocr_administration_provider_calls": 0,
                 "synthetic_fixture_provider_calls": len(fixture_requests),
                 "provider_result": "http_503_no_retry" if name == "desktop" else "synthetic_answer_mismatch",
                 "synthetic_cost_acknowledgement_required": True}

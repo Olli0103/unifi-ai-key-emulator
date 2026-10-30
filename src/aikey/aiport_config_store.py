@@ -357,6 +357,82 @@ class AiPortConfigurationStore:
             self._write_provider_journal(before, self._revision(persisted))
             return self._public(persisted, checked)
 
+    def ocr_provider_status(self) -> dict:
+        """Private operator selection fields, never a credential or key path."""
+        content, _ = self._read()
+        raw = json.loads(content)
+        detector = raw.get("live_pool_detector") or {}
+        explicit = detector.get("ocr_provider_config")
+        selected = explicit if explicit is not None else detector.get("provider_config", {})
+        return {"revision": self._revision(content),
+                "eligible": detector.get("inference_backend") == "vision_api"
+                            and bool(detector.get("plate_cameras")),
+                "plate_camera_count": len(detector.get("plate_cameras", [])),
+                "assignment": "explicit" if explicit is not None else "legacy_shared_detection",
+                "key_configured": bool(explicit and explicit.get("api_key_file")),
+                "selection": {k: selected[k] for k in _PROVIDER_FIELDS - {"api_key_file"}
+                              if k in selected}}
+
+    def _ocr_candidate(self, expected_revision: str, settings: dict):
+        content, _ = self._read()
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(self._revision(content), expected_revision)):
+            raise AiPortRevisionConflict("aiport_config_changed")
+        required = _PROVIDER_FIELDS - {"api_key_file"}
+        if (not isinstance(settings, dict) or not required <= set(settings) <= _PROVIDER_FIELDS
+                or any(type(settings[k]) is not bool for k in ("allow_remote", "allow_insecure_http"))
+                or not isinstance(settings["model"], str) or not _MODEL_ID.fullmatch(settings["model"])
+                or ".." in settings["model"]):
+            raise AiPortConfigurationError("aiport_ocr_settings_invalid")
+        candidate = json.loads(content)
+        detector = candidate.get("live_pool_detector") or {}
+        if detector.get("inference_backend") != "vision_api" or not detector.get("plate_cameras"):
+            raise AiPortConfigurationError("aiport_ocr_existing_permission_required")
+        selected = deepcopy(settings)
+        if "api_key_file" in selected:
+            path = selected["api_key_file"]
+            if (not isinstance(path, str) or not Path(path).is_absolute()
+                    or Path(path).parent != self.runtime_state_dir):
+                raise AiPortConfigurationError("aiport_key_must_be_in_state_directory")
+        previous = detector.get("ocr_provider_config") or {}
+        if ("api_key_file" not in selected and previous.get("api_key_file")
+                and all(previous.get(k) == selected.get(k) for k in ("provider", "base_url"))):
+            selected["api_key_file"] = previous["api_key_file"]
+        if selected["provider"] in {"openai", "anthropic"} and not selected.get("api_key_file"):
+            raise AiPortConfigurationError("aiport_ocr_separate_key_required")
+        detector["ocr_provider_config"] = selected
+        self._validate(candidate)
+        # A repeated semantic no-op must not re-encode old raw defaults/spellings.
+        encoded = content if candidate == json.loads(content) else self._encode(candidate)
+        if len(encoded) > 4096:
+            raise AiPortConfigurationError("aiport_ocr_configuration_too_large")
+        return content, candidate, encoded
+
+    def preview_ocr_provider(self, expected_revision: str, settings: dict) -> ConfigurationPreview:
+        content, candidate, encoded = self._ocr_candidate(expected_revision, settings)
+        return ConfigurationPreview(self._revision(content), self._revision(encoded),
+                                    {"ocr_provider": _public(candidate["live_pool_detector"]["ocr_provider_config"])},
+                                    ("live_pool_detector.ocr_provider_config",) if encoded != content else (),
+                                    encoded != content)
+
+    def apply_ocr_provider(self, expected_revision: str, settings: dict) -> AiPortSettings:
+        """Independent OCR only; retain identity, streams, plate scope and caps."""
+        self._ocr_candidate(expected_revision, settings)  # refuse before lock creation
+        with self._locked():
+            content, candidate, encoded = self._ocr_candidate(expected_revision, settings)
+            if encoded == content:
+                return self._public(content, candidate)
+            self._archive(content)
+            try:
+                atomic_private(self.path, encoded)
+            except OSError as exc:
+                raise AiPortConfigurationError("aiport_config_write_uncertain") from exc
+            persisted, checked = self._read()
+            if persisted != encoded:
+                raise AiPortConfigurationError("aiport_config_write_uncertain")
+            self._write_provider_journal(self._revision(content), self._revision(persisted))
+            return self._public(persisted, checked)
+
     # --- detection role model (#17) ------------------------------------------
 
     def role_models(self) -> dict[str, dict[str, Any]]:

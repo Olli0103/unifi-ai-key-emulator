@@ -66,6 +66,9 @@ class AdminAPI:
         from .maintenance_console import MaintenanceConsole
         self.maintenance_console = MaintenanceConsole(self)
         self.maintenance_console.register(app)
+        from .ocr_provider_control import OcrProviderControl
+        self.ocr_provider_control = OcrProviderControl(self.site)
+        self.ocr_provider_control.register(app)
 
     async def maintenance_history(self, request):
         if not self.authenticated(request):
