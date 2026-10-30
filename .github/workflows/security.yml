@@ -17,6 +17,19 @@ jobs:
   test-and-build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg14-bookworm@sha256:fb27b00a92028f4749bf18f3d31b18fc62510258326486fb8900653ab2701252
+        env:
+          # Empty disposable CI database only; never use this auth policy in production.
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: aikey_rebuild_test
+          POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres -d aikey_rebuild_test"
+          --health-interval 5s --health-timeout 3s --health-retries 12
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -45,6 +58,8 @@ jobs:
               path_file.write(str(tools) + "\n")
           PY
       - name: Run tests
+        env:
+          AIKEY_TEST_PG_DSN: postgresql://postgres@127.0.0.1:${{ job.services.postgres.ports[5432] }}/aikey_rebuild_test
         run: python -m pytest -q
       - name: Run static checks
         run: python -m ruff check .

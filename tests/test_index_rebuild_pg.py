@@ -1,5 +1,9 @@
-"""PgStore against a real pgvector database (#18). Opt-in: set AIKEY_TEST_PG_DSN to a
-scratch database; the test creates and drops its own tables. Never point it at a live index."""
+"""PgStore against real pgvector (#18). CI runs this in its disposable service.
+
+Local opt-in requires AIKEY_TEST_PG_DSN for an empty UTF8 database named exactly
+aikey_rebuild_test. Never point it at a live index; only fixture-owned tables
+are created/dropped. Existing rebuild tables/schema are refused, not erased.
+"""
 
 import json
 import os
@@ -23,9 +27,14 @@ def connect():
 @pytest.fixture
 def store(tmp_path):
     with connect() as conn:
+        if conn.info.dbname != "aikey_rebuild_test" or conn.info.encoding != "utf-8":
+            pytest.fail("requires dedicated aikey_rebuild_test UTF8 scratch database")
+        existing = conn.execute(
+            "SELECT to_regnamespace('aikey_rebuild'), "
+            "to_regclass('public.\"ramDetections\"')").fetchone()
+        if existing != (None, None):
+            pytest.fail("scratch fixture refuses pre-existing rebuild state")
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        conn.execute("DROP SCHEMA IF EXISTS aikey_rebuild CASCADE")
-        conn.execute('DROP TABLE IF EXISTS public."ramDetections"')
         conn.execute('CREATE TABLE public."ramDetections" (id varchar PRIMARY KEY, '
                      '"smartDetectObjectId" varchar NOT NULL UNIQUE, embedding vector NOT NULL)')
         for i, object_id in enumerate(OBJECTS):
