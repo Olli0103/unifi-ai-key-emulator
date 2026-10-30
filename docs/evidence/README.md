@@ -14,6 +14,7 @@ These records describe the interface observations used by the implementation. Th
 
 - [29–30 October reviewed-source follow-up through #165](key-port-batch165-20261030.md): 90 runtime modules per processor, preserved native identities, explicit controller-managed credential limits and retained first-attempt recovery.
 - [30 October bounded native basic-search/filter readback](native-search-filters-20261030.md): one local-day window and explicit mixed-type limits, not relevance quality or a detector-pilot rerun.
+- [30 October separate NAS loopback administration](native-admin-loopback-20261030.md): five actual profiles, bounded maintenance reads, one admin-only restart and retained native baseline; no LAN/browser or full restore acceptance.
 
 ## Compatibility manifest
 

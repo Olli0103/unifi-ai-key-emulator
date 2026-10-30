@@ -1,0 +1,73 @@
+{
+  "schema": "aikey-native-admin-loopback/1",
+  "observed_date": "2026-10-30",
+  "admin_source": "8bb64ef0a4f1a6b8f0ffd213c46f01f183058f72",
+  "processor_runtime_source": "5a459230c68809835f1781d006b62030d9694059",
+  "installed_admin_modules_matched": 92,
+  "required_main_ci_jobs_passed": 4,
+  "main_ci_tests_passed": 3013,
+  "main_ci_tests_skipped": 3,
+  "listener": "NAS host IPv4 loopback HTTP only",
+  "port": 8765,
+  "credential_free_lan_connection_accepted": false,
+  "authenticated_profiles": 5,
+  "provider_forms": 5,
+  "speech_forms": 1,
+  "empty_write_only_key_inputs": 6,
+  "maintenance_pages": {
+    "data-retention": {
+      "status": 200,
+      "elapsed_ms": 139
+    },
+    "audit": {
+      "status": 200,
+      "elapsed_ms": 1
+    },
+    "caption-preflight": {
+      "status": 200,
+      "elapsed_ms": 10
+    },
+    "state-backup-preflight": {
+      "status": 200,
+      "elapsed_ms": 2
+    },
+    "index-migration": {
+      "status": 200,
+      "elapsed_ms": 1
+    }
+  },
+  "admitted_admin_provider_or_config_applies": 0,
+  "temporary_http_candidates": {
+    "failed": 2,
+    "passed": 1
+  },
+  "original_timeout_page_known": false,
+  "original_timeout_sole_cause_proven": false,
+  "new_admin_initializations": 1,
+  "new_admin_manual_restarts": 1,
+  "processor_restarts": 0,
+  "old_cookie_refused_after_admin_restart": true,
+  "persistent_credential_signin_after_restart": true,
+  "proof_session_logged_out": true,
+  "later_admin_health": "healthy",
+  "admin_automatic_restarts": 0,
+  "admin_oom": false,
+  "five_profile_bytes_unchanged": true,
+  "six_existing_processor_database_containers_unchanged": true,
+  "new_admin_authority_bytes_unchanged": true,
+  "new_admin_authority_private_recovery_locations_verified": 2,
+  "native_original_baseline_before_and_after": {
+    "key_identity_unchanged": true,
+    "port_identities_pairings_unchanged": true,
+    "key_count": 1,
+    "port_count": 4,
+    "pair_count": 9,
+    "adopted_connected": 5
+  },
+  "new_admin_camera_scope_or_model_activation": false,
+  "caddy_gateway_scheduler_firewall_dns_changes": false,
+  "separate_monitor_installed": false,
+  "browser_mobile_or_lan_tls_acceptance": false,
+  "full_restore_host_reboot_or_sustained_operation_acceptance": false,
+  "independent_human_security_review": false
+}
