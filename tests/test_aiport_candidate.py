@@ -499,6 +499,20 @@ def test_live_pool_requires_unique_allowlisted_cameras_and_local_detector(tmp_pa
         load_config(tmp_path / "config.json")
 
 
+@pytest.mark.parametrize("size", [0, 6])
+def test_live_pool_still_refuses_empty_or_over_capacity_allowlist(tmp_path, size):
+    config = fixture_state(tmp_path)
+    config["paired_streams"] = [
+        {"camera_mac": f"2A11223344{i:02X}", "source_ip": "192.168.10.1",
+         "ffmpeg_path": sys.executable} for i in range(size)]
+    config["live_pool_detector"] = {
+        "checkpoint_path": str(tmp_path / "not-loaded.pth"),
+        "checkpoint_sha256": "a" * 64, "threshold": 0.3, "smart_types": ["person"]}
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError, match="Invalid live camera pool"):
+        load_config(tmp_path / "config.json")
+
+
 def test_live_pool_accepts_explicit_pinned_onnx_provider(tmp_path):
     config = fixture_state(tmp_path)
     config["paired_streams"] = [

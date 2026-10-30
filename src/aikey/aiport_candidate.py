@@ -247,7 +247,9 @@ def parse_config(raw: bytes, *, state_dir: Path, check_decoder_executable: bool 
         if ("paired_stream" in value or "live_pool_detector" not in value
                 or any(key.startswith("diagnostic_") for key in value)
                 or "live_detector" in value or not isinstance(streams, list)
-                or not 2 <= len(streams) <= 5):
+                # A new addressed slot can contain just one eligible camera;
+                # ingress, policy and fair inference already support 1..5.
+                or not 1 <= len(streams) <= 5):
             raise CandidateError("Invalid live camera pool")
         seen = set()
         for stream in streams:
