@@ -7,7 +7,7 @@ Controller HTTP acceptance is recorded separately from semantic indexing.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import heapq
 from io import BytesIO
@@ -380,6 +380,9 @@ _DESCRIBE_EXPORT_SPAN_MS = 30_000
 _DESCRIBE_WINDOW_MS = 1000           # before the first and after the last time of a window
 _DESCRIBE_GAP_MS = 5000              # object times closer than this share a window
 _DESCRIBE_MAX_WINDOWS = 16
+# Continuous basic captions may refer to a long event, but still fetch only
+# one clip inside the existing configured video byte/duration/time budgets.
+_BASIC_CAPTION_SOURCE_SPAN_MS = 3_600_000
 # Protect re-sends a failed deep task under the same task ID. These run on local
 # models and a failed one sent no callback, so the retry is admitted; uncertain
 # callbacks still are not.
@@ -1093,9 +1096,11 @@ class JobProcessor:
                 or body["type"] != "rotating" or body["mute"] is not True
                 or body["format"] not in {"ubv", "mp4"} or body["createEvent"] is not False):
             raise WorkerError("recognizeKeyFrames is limited to captioned, muted target-camera video")
+        source_span = (max(self.max_video_duration_ms, _BASIC_CAPTION_SOURCE_SPAN_MS)
+                       if self.continuous else self.max_video_duration_ms)
         if (any(type(body[key]) is not int for key in ("start", "end"))
                 or not 0 <= body["start"] < body["end"] <= 2 ** 53 - 1
-                or body["end"] - body["start"] > self.max_video_duration_ms):
+                or body["end"] - body["start"] > source_span):
             raise WorkerError("recognizeKeyFrames video exceeds configured duration bound")
         moments = body["keyMoments"]
         # Protect places a key moment exactly at the export's endTime (26 Sep,
@@ -1108,6 +1113,20 @@ class JobProcessor:
         callback_kind = "legacy_tagging"
         if body["camera"] in self.index_cameras:
             body["_index"] = self._index_targets(body)
+        if body['end'] - body['start'] > self.max_video_duration_ms:
+            # Validate the complete original export and every timestamp before
+            # deriving a window. Retain that original input in the fingerprint:
+            # changing a discarded key moment must not hide an identity conflict.
+            anchor = min(moments)
+            window_ms = min(self.max_video_duration_ms, _DESCRIBE_EXPORT_SPAN_MS)
+            window_end = min(body['end'], anchor + max(1, window_ms // 2))
+            window_start = max(body['start'], window_end - window_ms)
+            body['_caption_window'] = [window_start, window_end]
+            if '_index' in body:
+                body['_index'] = [target for target in body['_index']
+                                  if window_start <= target[1] <= window_end]
+            media = [(kind, _with_interval(url, window_start, window_end))
+                     for kind, url in media]
         normalized = {"operation": "recognizeKeyFrames", "payload": body,
                       "callback": callback, "callbackKind": callback_kind, "media": media}
         fingerprint = hashlib.sha256(_json(normalized)).hexdigest()
@@ -2712,12 +2731,18 @@ class JobProcessor:
             return await self._execute_faces(job)
         started = time.monotonic()
         images, thumbnail_tags, key_moment_tags, snapshot_images = [], [], [], []
+        decode_job = job
+        window = job.payload.get('_caption_window') if job.operation == 'recognizeKeyFrames' else None
+        if window is not None:
+            decode_job = replace(job, payload={**job.payload, 'start': window[0], 'end': window[1]})
         for kind, url in job.media:
             data, headers = await self._fetch(url, kind)
             if job.operation == "recognizeKeyFrames":
                 thumbnail_tags, key_moment_tags, snapshot_images = await self._index_objects(
-                    job, data, headers, url)
+                    decode_job, data, headers, url)
                 moments = sorted(set(job.payload["keyMoments"]))
+                if window is not None:
+                    moments = [ts for ts in moments if window[0] <= ts <= window[1]]
                 if len(moments) > self.max_images:
                     if self.max_images == 1:
                         moments = [moments[len(moments) // 2]]
@@ -2725,7 +2750,7 @@ class JobProcessor:
                         moments = [moments[index * (len(moments) - 1) // (self.max_images - 1)]
                                    for index in range(self.max_images)]
                 for timestamp in moments:
-                    frame = await self._video_frame(data, headers, url, job, timestamp=timestamp)
+                    frame = await self._video_frame(data, headers, url, decode_job, timestamp=timestamp)
                     self._image_type(frame)
                     images.append(frame)
                 if (self._tag_server() and images
