@@ -47,7 +47,7 @@ async def test_burst_refuses_before_provider_key_creation_or_config_apply(tmp_pa
         assert SECRET not in body and not calls
         for route in ("/provider", "/provider/rollback", "/role-model", "/role-model-preview", "/speech-provider",
                       "/speech-permissions", "/aiport-permissions", "/model-catalog",
-                      "/provider-probe", "/aiport-rollout"):
+                      "/provider-probe", "/aiport-rollout", "/ocr-provider/preview", "/ocr-provider/apply"):
             blocked = await client.post(route, data={"csrf": site.security.csrf_token(cookie)},
                                         headers={"Origin": site.origin}, allow_redirects=False)
             assert blocked.status == 429, route
