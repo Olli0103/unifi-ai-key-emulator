@@ -59,7 +59,7 @@ h1 { margin-bottom: .25rem; } p { line-height: 1.45; }
 section { background: white; border: 1px solid #d9e2eb; border-radius: 12px;
           padding: 1.3rem; box-shadow: 0 2px 8px #1a35450a; }
 label { display: block; font-weight: 600; margin-top: 1rem; }
-input, select { box-sizing: border-box; width: 100%; margin-top: .35rem; padding: .6rem;
+input, select, textarea { box-sizing: border-box; width: 100%; margin-top: .35rem; padding: .6rem;
                 font: inherit; border: 1px solid #65788b; border-radius: 6px; }
 input[type=checkbox] { width: auto; margin-right: .4rem; }
 .checks label { display: inline-block; margin-right: .9rem; font-weight: 400; }
@@ -1348,6 +1348,10 @@ def _cli() -> argparse.ArgumentParser:
     initial.add_argument("--state-dir", required=True, type=Path)
     initial.add_argument("--generate", action="store_true",
                          help="Generate a private one-time bootstrap password file")
+    setup = commands.add_parser("setup", help="Authenticated fresh-directory AI Key preparation; never start/adopt")
+    setup.add_argument("--state-dir", required=True, type=Path, help="Existing private administrator state")
+    setup.add_argument("--directory", required=True, type=Path, help="New AI Key directory; existing paths refused")
+    _listener_arguments(setup)
     run = commands.add_parser("run", help="Serve settings on loopback or explicit direct HTTPS")
     run.add_argument("--state-dir", required=True, type=Path)
     run.add_argument("--aikey-config", required=True, type=Path)
@@ -1357,12 +1361,7 @@ def _cli() -> argparse.ArgumentParser:
                      help="AI Port state path inside its processor container")
     run.add_argument("--aiport-instance", action="append", default=[], metavar="NAME=CONFIG",
                      help="Add another AI Port instance with a private host config path")
-    run.add_argument("--port", type=int, default=8765)
-    run.add_argument("--bind", default="127.0.0.1",
-                     help="One literal private/loopback address; non-default requires HTTPS")
-    run.add_argument("--origin", help="Exact HTTPS browser origin, including the listener port")
-    run.add_argument("--tls-certificate", type=Path, help="Private owned PEM certificate/chain file")
-    run.add_argument("--tls-private-key", type=Path, help="Private owned unencrypted PEM key file")
+    _listener_arguments(run)
     run.add_argument("--aiport-rollout", type=Path,
                      help="Private AI Port rollout slot file (needs the inventory settings)")
     run.add_argument("--search-state-dir", type=Path,
@@ -1377,6 +1376,15 @@ def _cli() -> argparse.ArgumentParser:
     run.add_argument("--inventory-web-trust-file", type=Path)
     run.add_argument("--inventory-web-cert-file", type=Path)
     return parser
+
+
+def _listener_arguments(command):
+    command.add_argument("--port", type=int, default=8765)
+    command.add_argument("--bind", default="127.0.0.1",
+                         help="One literal private/loopback address; non-default requires HTTPS")
+    command.add_argument("--origin", help="Exact HTTPS browser origin, including the listener port")
+    command.add_argument("--tls-certificate", type=Path, help="Private owned PEM certificate/chain file")
+    command.add_argument("--tls-private-key", type=Path, help="Private owned unencrypted PEM key file")
 
 
 def _live_rows(container: str) -> Callable[[], Awaitable[int]]:
@@ -1436,6 +1444,16 @@ def main(argv: list[str] | None = None) -> int:
         _private_directory(state)
         signing_key = _private_bytes(state / "admin-signing-key", 64)
         record = _private_bytes(state / "admin-password-record", 4096).decode().strip()
+        if args.command == "setup":
+            from .first_run_site import FirstRunSite
+            site = FirstRunSite(args.directory,
+                signing_key=signing_key, password_record=record, port=args.port,
+                bind=args.bind, origin=args.origin, tls_certificate=args.tls_certificate,
+                tls_private_key=args.tls_private_key, audit_log=state / "admin-audit.jsonl")
+            print(json.dumps({"first_run_site": site.origin, "loopback_only": site.listener.loopback_only,
+                              "https": site.listener.ssl_context is not None, "device_started": False}))
+            asyncio.run(_run(site, args.port))
+            return 0
         inventory_fields = (args.inventory_controller, args.inventory_api_key_file,
                             args.inventory_web_trust_file, args.inventory_web_cert_file)
         if any(value is not None for value in inventory_fields) and not all(

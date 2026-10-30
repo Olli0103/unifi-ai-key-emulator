@@ -200,7 +200,8 @@ class AdminSecurity:
         actor = "session:" + session_id[:16]
         if action == "mutate":
             expected = _b64encode(hmac.digest(self._key, b"csrf\0" + cookie.encode(), "sha256"))
-            if not isinstance(csrf_token, str) or not hmac.compare_digest(csrf_token, expected):
+            if (not isinstance(csrf_token, str) or not csrf_token.isascii()
+                    or not hmac.compare_digest(csrf_token, expected)):
                 return self._decision(False, "csrf_rejected", action, actor, now)
         return self._decision(True, "authorized", action, actor, now, subject=subject)
 

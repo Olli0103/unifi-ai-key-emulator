@@ -8,6 +8,9 @@ must use their existing configuration/control site, not this command.
 
 ## Prepare without editing JSON
 
+For the authenticated browser form, see [browser preparation](#authenticated-browser-preparation)
+below. The CLI remains available and uses the same configuration/identity validators.
+
 Install the package as described in the [README](../README.md). Choose a new
 directory beneath an existing private parent. Example addresses and model names
 below are fictional: supply the actual controller, advertised device address,
@@ -142,3 +145,77 @@ and exercise invalid endpoint/pin/address settings, unchanged existing paths,
 concurrent writers and retained certificate-failure state. They perform no
 controller/provider call, new adoption or native test. Model availability and
 runtime executable paths remain unverified by design.
+
+## Authenticated browser preparation
+
+The existing control-site executable has a separate, one-shot preparation mode:
+
+```sh
+local-aikey-control init --state-dir ./new-admin
+local-aikey-control setup --state-dir ./new-admin --directory ./new-key
+```
+
+Use an already initialized private administrator state instead when available;
+do not reinitialize it. The first command prompts for the password locally with
+masked input. No default password is supplied. The setup server uses the same
+authentication, session expiry/revocation, Host/Origin/CSRF controls, audit log,
+no-script/no-store headers and listener rules as the normal site. Default is
+loopback HTTP on port 8765; LAN use requires explicit direct HTTPS, never a
+forwarded-header shortcut. See [listener setup](control-site.md#explicit-direct-https).
+
+The directory is fixed by the server operator, not by an HTTP field, and must
+not exist. Sign in and enter controller/listener addresses, reported version,
+protocol/pins, vision provider/model/endpoint and optional MP4 runtime settings.
+The required, initially unchecked acknowledgement describes future media
+sharing/retention/cost. Preparation itself does not contact a controller,
+provider, model catalog or camera, download weights, enable optional roles,
+start a device or adopt anything. AI Port provisioning is separate.
+
+An optional **new** vision key is write-only and belongs to that chosen
+provider/destination in the new profile. Hosted providers require it. It is
+stored as a private file referenced from the configuration, never returned in
+a form, URL or audit record. No existing secret is copied, retargeted or rotated.
+Secrets must not be pasted into command arguments, screenshots, public reports
+or model prompts. File permissions are the declared platform boundary, not
+encryption or provider-retention attestation.
+
+After creation the page shows local file checks and the saved model/destination,
+not a model-availability or native compatibility result. To import trust within
+this netless wizard, paste **one public PEM certificate** obtained separately,
+plus its independently verified SHA-256 fingerprint. Private keys, chains,
+extra content, wrong pins and stale/cross-channel forms are refused. The existing
+exclusive writer installs only the declared control/search trust slot and never
+replaces existing trust. Grants are session/channel/revision-bound, expire in
+120 seconds and share a 30-second cooldown. This verifies the certificate bytes
+against the supplied pin, not native connectivity, hostname coverage or future
+certificate renewal. The alternative `local-aikey trust` command above performs
+the separately explicit TLS retrieval; the browser wizard does not.
+
+Creation is one-directory-only; concurrent/replayed forms cannot generate a
+second identity or change saved settings. An interrupted or uncertain write
+retains private files and refuses reinitialization. File work already admitted
+to a thread can finish after an HTTP waiter is cancelled: the server retains
+those operations, blocks replacement attempts and waits for them during normal
+shutdown. It does not report them as a zero-effect abort or auto-delete their
+possible credentials. Filesystem I/O has no universal hard deadline, and this
+is not host-power-loss, hostile-same-user/all-ancestor or distributed recovery
+qualification. Inspect retained partial state explicitly.
+
+Stop the preparation server before using the normal site with that configuration:
+
+```sh
+local-aikey-control run --state-dir ./new-admin --aikey-config ./new-key/config.json
+local-aikey check --config ./new-key/config.json
+```
+
+Existing directories are refused on a new preparation-server start as well,
+including empty, partial and adopted state. There is no HTTP start/adopt/reset,
+inference/catalog, arbitrary-path or existing-profile mutation route. An
+operator still checks deployment paths/ports, camera permissions and costs,
+then starts/adopts the new device explicitly through the documented workflow.
+Additional role/camera/budget wizard controls and independent fresh-tester native
+results remain open.
+
+Verification uses real loopback HTTP with fictional files/secrets/certificates,
+not a claimed visual browser/mobile/keyboard/screen-reader result. No actual
+private profile, controller, camera, hosted model or production service is used.

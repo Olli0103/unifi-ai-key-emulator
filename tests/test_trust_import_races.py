@@ -74,7 +74,7 @@ def test_two_verified_handshakes_admit_one_new_trust_file(tmp_path, monkeypatch)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["controller-ca.pem"]
 
 
-async def test_real_loopback_tls_pin_and_exclusive_persistence(tmp_path):
+async def test_real_loopback_tls_pin_and_exclusive_persistence(tmp_path, monkeypatch):
     state = tmp_path / "synthetic-device"
     state.mkdir()
     cert, _ = tls.ensure_identity_certificate(state, "02000000ABCD")
@@ -89,6 +89,24 @@ async def test_real_loopback_tls_pin_and_exclusive_persistence(tmp_path):
             await writer.wait_closed()
     server = await asyncio.start_server(connected, "127.0.0.1", 0,
                                         ssl=tls.server_context(state))
+    # Finish TLS shutdown explicitly in this observation harness. An immediate
+    # pin refusal can otherwise reset the peer before asyncio schedules its
+    # application callback, so a second queue item is not guaranteed. Keep the
+    # zero-application-byte assertions; do not reinterpret a reset as empty data.
+    real_wrap = ssl.SSLContext.wrap_socket
+    class OrderlyClose:
+        def __init__(self, connection):
+            self.connection = connection
+        def __enter__(self):
+            return self.connection
+        def __exit__(self, *args):
+            try:
+                self.connection.unwrap().close()
+            except OSError:
+                self.connection.close()
+    def orderly_wrap(context, *args, **kwargs):
+        return OrderlyClose(real_wrap(context, *args, **kwargs))
+    monkeypatch.setattr(ssl.SSLContext, "wrap_socket", orderly_wrap)
     output = tmp_path / "new-controller-ca.pem"
     try:
         port = server.sockets[0].getsockname()[1]

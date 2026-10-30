@@ -123,7 +123,7 @@ def test_declared_normal_text_palette_meets_aa_contrast(selector, background):
 
 def test_declared_button_text_and_input_boundary_contrast():
     assert contrast(color("button", "color"), color("button", "background")) >= 4.5
-    assert contrast(color("input, select", "border"), "#ffffff") >= 3
+    assert contrast(color("input, select, textarea", "border"), "#ffffff") >= 3
 
 
 def test_keyboard_focus_palette_is_distinguishable_from_both_surfaces():
