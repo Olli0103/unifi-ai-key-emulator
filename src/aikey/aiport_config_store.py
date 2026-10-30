@@ -12,11 +12,10 @@ import json
 import os
 from pathlib import Path
 import re
-import secrets
 import stat
 from typing import Any, Iterator
 
-from .aiport_candidate import CandidateError, load_config
+from .aiport_candidate import CandidateError, parse_config
 from .config import atomic_private
 
 
@@ -93,8 +92,9 @@ class AiPortConfigurationStore:
                 content = source.read(4097)
                 if len(content) > 4096:
                     raise ValueError
-            return content, load_config(
-                self.path, check_decoder_executable=(self.runtime_state_dir == self.path.parent))
+            return content, parse_config(
+                content, state_dir=self.path.parent,
+                check_decoder_executable=(self.runtime_state_dir == self.path.parent))
         except (OSError, ValueError, CandidateError) as exc:
             raise AiPortConfigurationError("aiport_config_unavailable") from exc
 
@@ -424,17 +424,11 @@ class AiPortConfigurationStore:
         return candidate
 
     def _validate(self, candidate: dict) -> None:
-        temporary = self.path.with_name(f".{self.path.name}.{secrets.token_hex(8)}.check")
         try:
-            descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            with os.fdopen(descriptor, "wb") as output:
-                output.write(self._encode(candidate))
-            load_config(temporary,
-                        check_decoder_executable=(self.runtime_state_dir == self.path.parent))
+            parse_config(self._encode(candidate), state_dir=self.path.parent,
+                         check_decoder_executable=(self.runtime_state_dir == self.path.parent))
         except (OSError, CandidateError, TypeError, ValueError) as exc:
             raise AiPortConfigurationError("aiport_provider_settings_invalid") from exc
-        finally:
-            temporary.unlink(missing_ok=True)
 
     @staticmethod
     def _encode(value: dict) -> bytes:

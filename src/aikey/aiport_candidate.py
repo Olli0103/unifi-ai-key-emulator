@@ -162,7 +162,18 @@ def _offline_decoder_path(value: object) -> str:
 
 
 def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
-    raw = _private_file(path, 4096)
+    return parse_config(_private_file(path, 4096), state_dir=path.parent,
+                        check_decoder_executable=check_decoder_executable)
+
+
+def parse_config(raw: bytes, *, state_dir: Path, check_decoder_executable: bool = True) -> dict:
+    """Validate one bounded snapshot without reopening its configuration path.
+
+    Callers retain responsibility for private, descriptor-bound acquisition.
+    Referenced identity/trust files are still checked in the supplied state dir.
+    """
+    if not isinstance(raw, bytes) or len(raw) > 4096:
+        raise CandidateError("Invalid candidate configuration size")
     try:
         value = json.loads(raw)
     except (ValueError, UnicodeError) as exc:
@@ -572,7 +583,7 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
         try:
             parse_recorded_probe(
                 value["diagnostic_recorded_event_probe"],
-                state_dir=path.parent,
+                state_dir=state_dir,
                 camera_mac=value.get("paired_stream", value.get("diagnostic_stream"))["camera_mac"])
         except RecordedProbeError as exc:
             raise CandidateError(str(exc)) from exc
@@ -625,7 +636,7 @@ def load_config(path: Path, *, check_decoder_executable: bool = True) -> dict:
     if not isinstance(version, str) or not _VERSION.fullmatch(version):
         raise CandidateError("Invalid candidate firmware version")
     for name in ("device.crt", "device.key", "controller-ca.pem"):
-        _private_file(path.parent / name, 16384)
+        _private_file(state_dir / name, 16384)
     return value
 
 
