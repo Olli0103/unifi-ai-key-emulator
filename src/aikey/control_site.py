@@ -222,6 +222,8 @@ class ControlSite:
         from .admin_api import AdminAPI
         self.admin_api = AdminAPI(self)
         self.admin_api.register(app)
+        from .runtime_status import RuntimeStatus
+        RuntimeStatus(self.admin_api).register(app)
         return app
 
     async def health(self, _: web.Request) -> web.Response:
@@ -808,6 +810,7 @@ class ControlSite:
                   "<a href='/caption-preflight'>Caption preflight</a> · "
                   "<a href='/state-backup-preflight'>Backup preflight</a> · "
                   "<a href='/maintenance'>Maintenance operations</a> · "
+                  "<a href='/runtime-status'>Runtime configuration</a> · "
                   "<a href='/model-registry'>Saved model role registry</a></p>"
                 + ("<p><a href='/aiport-permissions'>Remove saved AI Port face, sound or speech permissions</a></p>"
                    if ports else "")

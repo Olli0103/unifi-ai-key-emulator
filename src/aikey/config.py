@@ -134,6 +134,17 @@ def load_config(path: Path) -> dict:
     return validate_config(config, base=path.resolve().parent)
 
 
+def load_startup_config(path: Path) -> tuple[dict, str]:
+    """Validate and fingerprint the very same bounded startup file snapshot."""
+    from .startup_configuration import read_snapshot
+    try:
+        raw, revision = read_snapshot(path, limit=1024 * 1024)
+        config = json.loads(raw)
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise ConfigError("Cannot read valid startup configuration") from exc
+    return validate_config(config, base=path.resolve().parent), revision
+
+
 def validate_factory_enrollment_deadline(value: int) -> int:
     """Accept an explicit bounded deadline; expired deadlines stay inactive."""
     if type(value) is not int or value < 0 or value > time.time() + 600:

@@ -204,10 +204,14 @@ class RuntimeObserver:
                     raw.extend(chunk)
                     if len(raw) > _MAX_BYTES:
                         raise ValueError("Runtime reply exceeds byte limit")
-        runtime = _normalize(kind, _json_object(bytes(raw)))
+        value = _json_object(bytes(raw))
+        runtime = _normalize(kind, value)
+        from .startup_configuration import revision, SCOPE
+        loaded = revision(value.get("startup_configuration"))
         return {"observation": "runtime_health", "runtime": runtime,
                 "observed_at": datetime.now(timezone.utc).isoformat(),
-                "tls_ca_and_leaf_pin_verified": True, "runtime_configuration_revision": None}
+                "tls_ca_and_leaf_pin_verified": True, "runtime_configuration_revision": loaded,
+                "runtime_configuration_revision_scope": SCOPE if loaded is not None else None}
 
     async def read(self, profile):
         if profile not in self.profiles:

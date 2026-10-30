@@ -685,8 +685,17 @@ def _strict_json_object(raw: bytes) -> dict:
 
 
 class CandidateService:
+    @classmethod
+    def from_configuration_file(cls, path: Path):
+        raw = _private_file(path, 4096)
+        config = parse_config(raw, state_dir=path.parent)
+        return cls(config, path.parent, startup_revision=hashlib.sha256(raw).hexdigest())
+
     def __init__(self, config: dict, state_dir: Path, *, control_port: int = 7442,
-                 disconnect_grace_seconds: float = _DISCONNECT_GRACE_SECONDS):
+                 disconnect_grace_seconds: float = _DISCONNECT_GRACE_SECONDS,
+                 startup_revision: str | None = None):
+        from .startup_configuration import observation
+        self._startup_configuration = observation(startup_revision)
         if not 0 < disconnect_grace_seconds <= _DISCONNECT_GRACE_SECONDS:
             raise CandidateError("Invalid diagnostic disconnect grace")
         self.config = config
@@ -2184,6 +2193,7 @@ class CandidateService:
                 live_budget_remaining = 0
                 live_budget_healthy = False
         return web.json_response({"service": "aiport-candidate", "adopted": self.adoption.adopted,
+            "startup_configuration": self._startup_configuration,
             "pool_binding_schema": binding_schema if self._pool_camera_order else None,
             "pool_binding_revision": (binding_revision(self.config["mac"], self._pool_camera_order)
                                       if self._pool_camera_order else None),
@@ -3363,8 +3373,8 @@ class CandidateService:
 
 
 async def _serve(path: Path, bind: str, port: int):
-    config = load_config(path)
-    service = CandidateService(config, path.parent)
+    # Do not reopen the path to compute the digest: a save may replace it.
+    service = CandidateService.from_configuration_file(path)
     await service.start(bind=bind, port=port)
     done = asyncio.Event()
     loop = asyncio.get_running_loop()

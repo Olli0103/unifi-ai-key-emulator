@@ -268,11 +268,28 @@ class AdminAPI:
         profile = request.match_info["profile"]
         if self.store(profile) is None:
             return error("unknown_profile", 404)
+        result = await self.runtime_view(profile)
+        if not self.authenticated(request):
+            return error("authentication_required", 401)
+        return reply({"profile": profile, **result,
+            "native_operations": {"ptz": "not_supported_by_this_api",
+                                  "recording": "controller_owned_not_measured"}})
+
+    async def runtime_view(self, profile):
+        """Compare a fresh saved read with a bounded, pinned startup observation."""
         result = await self.site.runtime_observer.read(profile)
-        if profile != "aikey" and result.get("runtime") is not None:
-            from .camera_bindings import binding_revision
-            try:
-                content, config = await asyncio.to_thread(self.store(profile)._read)
+        result.update(saved_revision=None, saved_revision_matches_runtime_startup=None)
+        try:
+            store = self.store(profile)
+            content, config = await asyncio.to_thread(
+                store._read, *([store.path] if profile == "aikey" else []))
+            saved = hashlib.sha256(content).hexdigest()
+            loaded = result.get("runtime_configuration_revision")
+            result.update(saved_revision=saved,
+                          saved_revision_matches_runtime_startup=(
+                              hmac.compare_digest(saved, loaded) if loaded is not None else None))
+            if profile != "aikey" and result.get("runtime") is not None:
+                from .camera_bindings import binding_revision
                 cameras = [entry["camera_mac"] for entry in config.get("paired_streams", [])]
                 reported = result["runtime"].get("pool_binding_revision")
                 matches = (hmac.compare_digest(reported, binding_revision(config["mac"], cameras))
@@ -285,14 +302,12 @@ class AdminAPI:
                         raise ValueError
                     for camera, mac in zip(observed, cameras, strict=True):
                         camera["saved_camera_mac"] = mac
-            except (ConfigurationStoreError, AiPortConfigurationError, OSError, ValueError):
+        except (ConfigurationStoreError, AiPortConfigurationError, OSError, ValueError):
+            result.update(saved_revision=None, saved_revision_matches_runtime_startup=None)
+            if profile != "aikey":
                 result["saved_order_matches_reported_runtime_order"] = None
                 result["saved_binding_observation"] = "unavailable"
-        if not self.authenticated(request):
-            return error("authentication_required", 401)
-        return reply({"profile": profile, **result,
-            "native_operations": {"ptz": "not_supported_by_this_api",
-                                  "recording": "controller_owned_not_measured"}})
+        return result
 
     async def identity(self, request):
         if not self.authenticated(request):

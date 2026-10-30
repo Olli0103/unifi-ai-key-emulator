@@ -8,7 +8,7 @@ from pathlib import Path
 import signal
 
 from .config import (ConfigError, atomic_private, hydrate_secrets, initialize, load_config,
-                     readiness, validate_config)
+                     load_startup_config, readiness, validate_config)
 
 
 def _parser():
@@ -83,9 +83,9 @@ def _inference_options(args):
     return inference
 
 
-async def _run(config):
+async def _run(config, *, startup_revision=None):
     from .runtime import Application
-    service = Application(hydrate_secrets(config))
+    service = Application(hydrate_secrets(config), startup_revision=startup_revision)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -119,7 +119,10 @@ def main(argv=None):
             args.output.write_text(json.dumps(report, indent=2) + "\n")
             print(json.dumps(report, indent=2))
             return 0 if report["passed"] else 1
-        config = load_config(args.config)
+        if args.command == "run":
+            config, startup_revision = load_startup_config(args.config)
+        else:
+            config, startup_revision = load_config(args.config), None
         if args.command == "inventory":
             from .camera_inventory import fetch_inventory, render_html
             output = args.output or args.api_key_file.with_name("camera-inventory-preflight.json")
@@ -165,7 +168,7 @@ def main(argv=None):
             return 0
         if not report["ready_for_device_start"]:
             raise ConfigError("Configuration is incomplete. Run 'local-aikey check' for missing items")
-        asyncio.run(_run(config))
+        asyncio.run(_run(config, startup_revision=startup_revision))
         return 0
     except (ConfigError, OSError, ValueError, RuntimeError) as exc:
         logging.getLogger("aikey").error("%s", exc)
