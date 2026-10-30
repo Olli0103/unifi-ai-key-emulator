@@ -269,7 +269,9 @@ async def test_the_control_site_page_is_read_only(tmp_path):
         page = await (await client.get("/index-migration")).text()
         assert OLD[:12] in page and NEW[:12] in page and "40.0% of 5" in page
         assert "Apply is unavailable" in page and "No approved stored-object image source" in page
-        assert "<form" not in page.split("Search index migration</h1>")[1] and "<button" not in page
+        assert "action='/index-migration/cancel'" in page
+        assert "Cancel staged migration" in page and "keep the active index and staged data" in page
+        assert "action='/index-migration'" not in page
         assert (await client.post("/index-migration", headers={"Origin": site.origin})).status == 405
         assert _digest(search) + _digest(tmp_path / "backups") == before
         # A damaged local manifest is an unavailable status, not a server error.

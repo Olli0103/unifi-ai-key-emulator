@@ -35,21 +35,24 @@ writing anything. ``rollback`` stays available so a restore is never blocked.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
 import tempfile
 import time
+from contextlib import contextmanager
 from typing import Any, Awaitable, Callable, Protocol
 
 from .embedding_profile import _with_fingerprint
 
 DIMENSIONS = 768
 _REVISION = re.compile(r"[0-9a-f]{64}\Z")
-STATES = ("staging", "staged", "verified", "cut_over", "rolled_back")
+STATES = ("staging", "staged", "verified", "cut_over", "rolled_back", "cancelled")
 
 
 class RebuildError(RuntimeError):
@@ -58,6 +61,10 @@ class RebuildError(RuntimeError):
 
 class MixedRevisionError(RebuildError):
     """Vectors from another encoder revision would enter the index."""
+
+
+class RebuildOutcomeUncertain(RebuildError):
+    """A journal write may have committed; read it back before another request."""
 
 
 class Embedder(Protocol):
@@ -100,10 +107,53 @@ def _atomic_json(path: Path, value: dict) -> None:
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     except BaseException:
         if os.path.exists(temporary):
             os.unlink(temporary)
         raise
+
+
+@contextmanager
+def _generation_lock(state_dir: Path, generation: str):
+    """One immediate-refusal writer authority shared by every generation."""
+    from .file_lock import acquire
+
+    directory = descriptor = None
+    try:
+        try:
+            directory = os.open(state_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            parent = os.fstat(directory)
+            if parent.st_uid != os.geteuid() or parent.st_mode & 0o022:
+                raise RebuildError("The index state directory is not owner-controlled")
+            for path in (state_dir / "index-rebuild", state_dir / "index-rebuild" / generation):
+                if path.exists() or path.is_symlink():
+                    meta = path.lstat()
+                    if (not stat.S_ISDIR(meta.st_mode) or meta.st_uid != os.geteuid()
+                            or meta.st_mode & 0o022):
+                        raise RebuildError("The index generation directory is not owner-controlled")
+            descriptor = os.open(".index-rebuild.lock", os.O_RDWR | os.O_CREAT
+                                 | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory)
+            meta = os.fstat(descriptor)
+            if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != os.geteuid()
+                    or meta.st_mode & 0o077 or meta.st_nlink != 1):
+                raise RebuildError("The index writer lock is not a private regular file")
+            try:
+                acquire(descriptor, timeout=0)
+            except TimeoutError:
+                raise RebuildError("The index generation writer is busy; no change was made") from None
+        except OSError as exc:
+            raise RebuildError("The index generation authority is unavailable") from exc
+        yield directory
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if directory is not None:
+            os.close(directory)
 
 
 class Rebuild:
@@ -114,6 +164,7 @@ class Rebuild:
         if not isinstance(target_revision, str) or not _REVISION.fullmatch(target_revision):
             raise RebuildError("The target revision must be a 64-digit hex digest")
         self.store, self.now = store, now
+        self.target_revision, self.target_source = target_revision, target_source
         self.state_dir = Path(state_dir)
         self.live_profile = self.state_dir / "search-profile.json"
         current = self._read(self.live_profile)
@@ -150,16 +201,70 @@ class Rebuild:
             raise RebuildError("The live revision changed since this generation started; start a new one")
 
     @staticmethod
-    def _read(path: Path) -> dict | None:
+    def _record(path: Path | str, *, dir_fd: int | None = None) -> tuple[dict | None, str | None]:
         try:
-            if path.stat().st_size > 65536:
-                raise RebuildError(f"{path.name} exceeds its size limit")
-            value = json.loads(path.read_text())
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
         except FileNotFoundError:
-            return None
+            return None, None
+        except OSError as exc:
+            raise RebuildError("The index record is unavailable") from exc
+        try:
+            meta = os.fstat(descriptor)
+            if not stat.S_ISREG(meta.st_mode) or meta.st_size > 65536:
+                raise RebuildError("The index record is not a bounded regular file")
+            stream = os.fdopen(descriptor, "rb")
+            descriptor = None
+            with stream:
+                raw = stream.read(65537)
+            if len(raw) > 65536:
+                raise RebuildError("The index record exceeds its size limit")
+        except OSError as exc:
+            raise RebuildError("The index record could not be read") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
+        def unique(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError
+                value[key] = item
+            return value
+
+        def finite(text):
+            value = float(text)
+            if not math.isfinite(value):
+                raise ValueError
+            return value
+
+        def invalid(_):
+            raise ValueError
+
+        try:
+            value = json.loads(raw, object_pairs_hook=unique, parse_float=finite,
+                               parse_constant=invalid)
+        except (ValueError, UnicodeError, RecursionError) as exc:
+            raise RebuildError("The index record is not valid JSON") from exc
         if not isinstance(value, dict):
-            raise RebuildError(f"{path.name} is not a JSON object")
-        return value
+            raise RebuildError("The index record is not a JSON object")
+        return value, hashlib.sha256(raw).hexdigest()
+
+    @staticmethod
+    def _read(path: Path) -> dict | None:
+        return Rebuild._record(path)[0]
+
+    @contextmanager
+    def _mutation(self):
+        with _generation_lock(self.state_dir, self.tag) as state_fd:
+            fresh = Rebuild(self.store, self.state_dir, target_revision=self.target_revision,
+                            target_source=self.target_source, now=self.now)
+            self.journal, self.target_profile = fresh.journal, fresh.target_profile
+            self._state_fd = state_fd
+            try:
+                yield
+            finally:
+                del self._state_fd
 
     def _save(self, **changes) -> None:
         self.journal.update(changes, updated_at=self.now())
@@ -176,6 +281,16 @@ class Rebuild:
 
     async def stage(self, embedder: Embedder, source: Source, *, batch: int = 32,
                     max_batches: int | None = None) -> dict:
+        _require_approval(readback=False)
+        if type(batch) is not int or not 1 <= batch <= 256:
+            raise RebuildError("batch must be 1..256")
+        if max_batches is not None and (type(max_batches) is not int or max_batches < 1):
+            raise RebuildError("max_batches must be a positive integer")
+        with self._mutation():
+            return await self._stage(embedder, source, batch=batch, max_batches=max_batches)
+
+    async def _stage(self, embedder: Embedder, source: Source, *, batch: int,
+                     max_batches: int | None) -> dict:
         """Embed uncovered live objects; resumable and idempotent. Returns counts."""
         _require_approval(readback=False)
         if self.state != "staging":
@@ -209,6 +324,10 @@ class Rebuild:
         return dict(self.journal["counts"], state=self.state)
 
     def verify(self) -> dict:
+        with self._mutation():
+            return self._verify()
+
+    def _verify(self) -> dict:
         """Refuse mixed revisions, bad vectors and incomplete coverage."""
         if self.state not in ("staged", "verified"):
             raise RebuildError(f"Cannot verify a generation in state {self.state}")
@@ -229,6 +348,13 @@ class Rebuild:
 
     def cutover(self, *, backup: dict, key_quiesced: Callable[[], bool],
                 write_profile: Callable[[Path, dict], None] = _atomic_json) -> dict:
+        _require_approval(readback=True)
+        with self._mutation():
+            return self._cutover(backup=backup, key_quiesced=key_quiesced,
+                                 write_profile=write_profile)
+
+    def _cutover(self, *, backup: dict, key_quiesced: Callable[[], bool],
+                 write_profile: Callable[[Path, dict], None]) -> dict:
         """Swap vectors and profile atomically enough to roll back; idempotent."""
         _require_approval(readback=True)
         if self.state == "cut_over":
@@ -274,6 +400,12 @@ class Rebuild:
 
     async def rollback(self, *, key_quiesced: Callable[[], bool],
                        previous_embedder: Embedder | None = None, source: Source | None = None) -> dict:
+        with self._mutation():
+            return await self._rollback(key_quiesced=key_quiesced,
+                                        previous_embedder=previous_embedder, source=source)
+
+    async def _rollback(self, *, key_quiesced: Callable[[], bool],
+                        previous_embedder: Embedder | None, source: Source | None) -> dict:
         """Restore the snapshot and the previous profile; idempotent."""
         if self.state == "rolled_back":
             return {"state": "rolled_back", "already": True}
@@ -301,6 +433,134 @@ class Rebuild:
         self._save(state="rolled_back", rolled_back={"rows": restored, "reembedded": len(replacements),
                                                      "at": self.now()})
         return {"state": "rolled_back", "rows": restored, "reembedded": len(replacements)}
+
+    def cancel(self, *, expected_journal: str | None = None,
+               expected_profile: str | None = None) -> dict:
+        """Cancel only an idle, existing, not-yet-live generation; retain its data."""
+        _check_cancel_revisions(expected_journal, expected_profile)
+        with self._mutation():
+            return self._cancel(expected_journal=expected_journal, expected_profile=expected_profile)
+
+    def _cancel(self, *, expected_journal: str | None, expected_profile: str | None) -> dict:
+        self.journal, result = _cancel_record(self.state_dir, self.tag,
+            expected_journal=expected_journal, expected_profile=expected_profile, now=self.now,
+            state_fd=self._state_fd)
+        return result
+
+
+def _check_cancel_revisions(journal, profile):
+    if journal is None and profile is None:
+        return
+    if any(not isinstance(v, str) or not _REVISION.fullmatch(v) for v in (journal, profile)):
+        raise RebuildError("Two valid index migration revisions are required")
+
+
+def _atomic_cancel_json(directory_fd, value):
+    temporary = ".cancel-" + secrets.token_hex(12)
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=directory_fd)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write((json.dumps(value, indent=2, sort_keys=True) + "\n").encode())
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, "journal.json", src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+        os.fsync(directory_fd)
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+
+
+@contextmanager
+def _cancel_directories(state_dir, generation, state_fd):
+    root_fd = generation_fd = None
+    try:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        root_fd = os.open("index-rebuild", flags, dir_fd=state_fd)
+        generation_fd = os.open(generation, flags, dir_fd=root_fd)
+        for fd in (root_fd, generation_fd):
+            meta = os.fstat(fd)
+            if meta.st_uid != os.geteuid() or meta.st_mode & 0o022:
+                raise RebuildError("The index generation directory is not owner-controlled")
+        _check_cancel_aliases(state_dir, generation, state_fd, root_fd, generation_fd)
+        yield root_fd, generation_fd
+    finally:
+        if generation_fd is not None:
+            os.close(generation_fd)
+        if root_fd is not None:
+            os.close(root_fd)
+
+
+def _check_cancel_aliases(state_dir, generation, state_fd, root_fd, generation_fd):
+    for path, parent_fd, expected_fd in ((state_dir, None, state_fd),
+            ("index-rebuild", state_fd, root_fd), (generation, root_fd, generation_fd)):
+        try:
+            actual = os.stat(path, dir_fd=parent_fd, follow_symlinks=False)
+            expected = os.fstat(expected_fd)
+        except OSError as exc:
+            raise RebuildError("The index generation directory changed; refresh") from exc
+        if not stat.S_ISDIR(actual.st_mode) or (actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino):
+            raise RebuildError("The index generation directory changed; refresh")
+
+
+def _cancel_record(state_dir, generation, *, expected_journal, expected_profile, state_fd,
+                   now=time.time):
+    """Called only under the shared writer lock; needs no database capability."""
+    with _cancel_directories(state_dir, generation, state_fd) as (root_fd, generation_fd):
+        return _cancel_open_record(state_dir, generation, state_fd, root_fd, generation_fd,
+                                   expected_journal, expected_profile, now)
+
+
+def _cancel_open_record(state_dir, generation, state_fd, root_fd, generation_fd,
+                        expected_journal, expected_profile, now):
+    journal, journal_revision = Rebuild._record("journal.json", dir_fd=generation_fd)
+    profile, profile_revision = Rebuild._record("search-profile.json", dir_fd=state_fd)
+    if journal is None:
+        raise RebuildError("No staged generation exists to cancel")
+    if expected_journal is not None and (journal_revision != expected_journal
+                                         or profile_revision != expected_profile):
+        raise RebuildError("The index migration changed; refresh before cancelling")
+    counts = journal.get("counts")
+    if (type(journal.get("schema")) is not int or journal["schema"] != 1
+            or journal.get("state") not in STATES
+            or any(not isinstance(journal.get(k), str) or not _REVISION.fullmatch(journal[k])
+                   for k in ("revision", "from_revision"))
+            or journal["revision"][:12] != generation
+            or journal["revision"] == journal["from_revision"]
+            or not isinstance(counts, dict) or set(counts) != {"embedded", "no_source"}
+            or any(type(v) is not int or v < 0 for v in counts.values())):
+        raise RebuildError("The index generation identity is invalid")
+    if journal["state"] not in ("staging", "staged", "verified", "cancelled"):
+        raise RebuildError(f"Cannot cancel a generation in state {journal['state']}; use rollback")
+    if profile is None or profile.get("revision") != journal["from_revision"]:
+        raise RebuildError("The live index changed; cancellation cannot replace rollback")
+    if journal["state"] == "cancelled":
+        return journal, {"state": "cancelled", "already": True}
+    updated = dict(journal, state="cancelled", updated_at=now(),
+                   cancelled={"at": now(), "staged_data_retained": True})
+    _check_cancel_aliases(state_dir, generation, state_fd, root_fd, generation_fd)
+    try:
+        _atomic_cancel_json(generation_fd, updated)
+        _check_cancel_aliases(state_dir, generation, state_fd, root_fd, generation_fd)
+    except (OSError, RebuildError) as exc:
+        raise RebuildOutcomeUncertain("Cancellation outcome is uncertain; refresh before retrying") from exc
+    return updated, {"state": "cancelled", "staged_data_retained": True}
+
+
+def cancel_generation(state_dir: Path, generation: str, *, expected_journal: str,
+                      expected_profile: str) -> dict:
+    """Revision-bound administration; no database, image source or model authority."""
+    if not isinstance(generation, str) or not re.fullmatch(r"[0-9a-f]{12}", generation):
+        raise RebuildError("Invalid index generation")
+    if expected_journal is None or expected_profile is None:
+        raise RebuildError("Two valid index migration revisions are required")
+    _check_cancel_revisions(expected_journal, expected_profile)
+    state_dir = Path(state_dir)
+    with _generation_lock(state_dir, generation) as state_fd:
+        return _cancel_record(state_dir, generation, expected_journal=expected_journal,
+                              expected_profile=expected_profile, state_fd=state_fd)[1]
 
 
 class MemoryStore:
@@ -517,7 +777,9 @@ def status(state_dir: Path) -> list[dict]:
     root = Path(state_dir) / "index-rebuild"
     out = []
     for journal in sorted(root.glob("*/journal.json")) if root.exists() else []:
-        value = json.loads(journal.read_text())
+        value = Rebuild._read(journal)
+        if value is None:
+            raise RebuildError("The index record disappeared")
         out.append({"generation": journal.parent.name, "state": value.get("state"),
                     "from": str(value.get("from_revision", ""))[:12], "to": str(value.get("revision", ""))[:12],
                     "counts": value.get("counts"), "last_error": value.get("last_error")})
@@ -635,9 +897,9 @@ def migration_plan(state_dir: Path, *, backups_dir: Path | None = None, live_row
     """
     state_dir = Path(state_dir)
     try:
-        live = json.loads((state_dir / "search-profile.json").read_text())
-    except (OSError, ValueError):
-        live = None
+        live, profile_revision = Rebuild._record(state_dir / "search-profile.json")
+    except (OSError, ValueError, RebuildError):
+        live = profile_revision = None
     live_revision = live.get("revision") if isinstance(live, dict) else None
     pinned = isinstance(live_revision, str) and bool(_REVISION.fullmatch(live_revision))
     generations = []
@@ -645,22 +907,27 @@ def migration_plan(state_dir: Path, *, backups_dir: Path | None = None, live_row
     for journal_path in sorted(root.glob("*/journal.json")) if root.is_dir() else []:
         entry = {"generation": journal_path.parent.name, "problems": []}
         try:
-            journal = json.loads(journal_path.read_text())
+            journal, journal_revision = Rebuild._record(journal_path)
             if not isinstance(journal, dict) or journal.get("state") not in STATES:
                 raise ValueError
-        except (OSError, ValueError):
+        except (OSError, ValueError, RebuildError):
             entry.update(state="unreadable", problems=["The journal is unreadable; inspect it"])
             generations.append(entry)
             continue
         target, source_rev = str(journal.get("revision", "")), str(journal.get("from_revision", ""))
-        counts = journal.get("counts") or {}
+        counts = journal.get("counts")
+        if (not isinstance(counts, dict) or any(type(counts.get(k, 0)) is not int
+                or counts.get(k, 0) < 0 for k in ("embedded", "no_source"))):
+            entry.update(state="unreadable", problems=["The journal counts are invalid; inspect it"])
+            generations.append(entry)
+            continue
         entry.update(state=journal["state"], to=target[:12], **{"from": source_rev[:12]})
         if not _REVISION.fullmatch(target) or target[:12] != entry["generation"]:
             entry["problems"].append("The journal's target revision does not match its generation")
         if journal["state"] == "cut_over":
             if target != live_revision:
                 entry["problems"].append("Recorded as cut over, but the live profile has another revision")
-        elif journal["state"] != "rolled_back":
+        elif journal["state"] not in ("rolled_back", "cancelled"):
             if target == live_revision:
                 entry["problems"].append("The target revision is already the live revision")
             elif source_rev != live_revision:
@@ -674,6 +941,12 @@ def migration_plan(state_dir: Path, *, backups_dir: Path | None = None, live_row
         entry["coverage"] = coverage
         entry["previous_profile"] = (journal_path.parent / "previous-profile.json").is_file()
         entry["last_error"] = journal.get("last_error")
+        entry["cancel"] = {"available": journal["state"] in ("staging", "staged", "verified")
+                           and type(journal.get("schema")) is int and journal["schema"] == 1
+                           and bool(_REVISION.fullmatch(source_rev))
+                           and set(counts) == {"embedded", "no_source"}
+                           and not entry["problems"] and pinned,
+                           "journal_revision": journal_revision, "profile_revision": profile_revision}
         generations.append(entry)
     backup = _latest_backup(backups_dir, live_rows, now())
     active = [g for g in generations if g.get("state") in ("staging", "staged", "verified") and not g["problems"]]

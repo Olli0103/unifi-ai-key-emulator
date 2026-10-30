@@ -43,7 +43,7 @@ from .data_policy import ROWS, live_status
 from .config_store import (
     ConfigurationStore, ConfigurationStoreError, RevisionConflict, UnsafeConfigurationChange,
 )
-from .index_rebuild import migration_plan
+from .index_rebuild import RebuildError, RebuildOutcomeUncertain, cancel_generation, migration_plan
 from .model_catalog import CatalogError, catalog_provider, fetch_catalog
 from .providers import DEFAULT_BASE_URLS
 from .provider_probe import ProbeError, ProbeGrants, probe_speech, probe_vision
@@ -87,7 +87,7 @@ def _safe(value: object) -> str:
     return html.escape(str(value if value is not None else ""), quote=True)
 
 
-def _page(title: str, body: str, *, landmark: bool = True) -> web.Response:
+def _page(title: str, body: str, *, landmark: bool = True, status: int = 200) -> web.Response:
     if landmark:
         body = ("<a class='skip-link' href='#main'>Skip to main content</a>"
                 f"<main id='main' tabindex='-1'>{body}</main>")
@@ -95,7 +95,7 @@ def _page(title: str, body: str, *, landmark: bool = True) -> web.Response:
               "<meta name='viewport' content='width=device-width,initial-scale=1'>"
               f"<title>{_safe(title)}</title><style>{_STYLE}</style></head>"
               f"<body>{body}</body></html>")
-    return web.Response(text=markup, content_type="text/html", headers={
+    return web.Response(text=markup, status=status, content_type="text/html", headers={
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
                                    "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
         # Chrome otherwise sends Origin: null for native form POSTs.
@@ -190,8 +190,9 @@ class ControlSite:
         app.router.add_get("/cameras", self.cameras)
         app.router.add_get("/aiport-rollout", self.rollout_page)
         app.router.add_post("/aiport-rollout", self.rollout_apply)
-        # Read-only: no POST route exists, so nothing can be applied from here (#18).
+        # Apply remains unavailable. Cancellation only retires an idle staged generation.
         app.router.add_get("/index-migration", self.index_migration)
+        app.router.add_post("/index-migration/cancel", self.cancel_index_migration)
         app.router.add_get("/data-retention", self.data_retention)
         app.router.add_get("/audit", self.audit_page)
         app.router.add_get("/caption-preflight", self.caption_preflight_page)
@@ -436,31 +437,50 @@ class ControlSite:
                 live_rows = await self.search_live_rows()
             except Exception:            # counts are optional; the plan says so
                 live_rows = None
-        plan = migration_plan(self.search_state_dir, backups_dir=self.search_backups_dir,
-                              live_rows=live_rows)
+        plan = await asyncio.to_thread(migration_plan, self.search_state_dir,
+                                       backups_dir=self.search_backups_dir, live_rows=live_rows)
+        if self._session(request) is None:
+            raise web.HTTPSeeOther("/login")
+        csrf = self.security.csrf_token(cookie)
         live, backup, rollback = plan["live"], plan["backup"], plan["rollback"]
-        rows = "".join(
-            "<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in (
+        rows = []
+        for g in plan["generations"]:
+            choice = g.get("cancel", {})
+            form = "—"
+            if choice.get("available") and csrf is not None:
+                form = ("<form method='post' action='/index-migration/cancel'>"
+                        f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
+                        f"<input type='hidden' name='generation' value='{_safe(g['generation'])}'>"
+                        f"<input type='hidden' name='journal_revision' value='{_safe(choice['journal_revision'])}'>"
+                        f"<input type='hidden' name='profile_revision' value='{_safe(choice['profile_revision'])}'>"
+                        "<label><input type='checkbox' name='confirm' value='cancel' required>"
+                        f"Cancel staged migration {_safe(g['generation'])}; keep the active index and staged data</label>"
+                        "<button type='submit'>Cancel staged migration</button></form>")
+            rows.append("<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in (
                 g["generation"], g.get("state"), g.get("from", "—"), g.get("to", "—"),
                 "—" if "coverage" not in g else
                 f"{g['coverage']['embedded']} embedded, {g['coverage']['no_source']} without source"
                 + (f", {g['coverage']['percent']}% of {g['coverage']['live_rows']}"
                    if g["coverage"].get("percent") is not None else ""),
-                "; ".join(g["problems"]) or "—")) + "</tr>"
-            for g in plan["generations"]) or "<tr><td colspan='6'>No staged generation</td></tr>"
+                "; ".join(g["problems"]) or "—")) + "<td>" + form + "</td></tr>")
+        rows = "".join(rows) or "<tr><td colspan='7'>No staged generation</td></tr>"
         steps = "".join(f"<li><strong>{_safe(s['status'])}</strong> · {_safe(s['step'])}"
                         + (f"<br><span class='muted'>{_safe(s['detail'])}</span>" if s["detail"] else "")
                         + "</li>" for s in plan["steps"])
         reasons = "".join(f"<li>{_safe(reason)}</li>" for reason in plan["apply"]["reasons"])
         body = ("<h1>Search index migration</h1><p><a href='/'>Settings</a> · "
                 "<a href='/index-migration'>Refresh</a></p>"
-                "<p class='muted'>Read-only status and dry-run plan. Nothing is staged, cut over, "
-                "rolled back or restarted from this page.</p>"
+                "<p class='muted'>Viewing this plan changes nothing. No index is staged, cut over, "
+                "rolled back or restarted here. The separate cancellation form only retires an "
+                "idle staged migration. A running writer must finish or be stopped separately.</p>"
                 "<section><h2>Live index</h2><p>Encoder revision "
                 f"<strong>{_safe(live['revision'] or 'not pinned')}</strong> · rows "
                 f"{_safe(live['rows'] if live['rows'] is not None else 'unavailable')}</p></section>"
-                "<h2>Generations</h2><table><tr><th>Generation</th><th>State</th><th>From</th>"
-                "<th>To</th><th>Coverage</th><th>Problems</th></tr>" + rows + "</table>"
+                "<h2>Generations</h2><div class='table-scroll' role='region' "
+                "aria-label='Index migration generations' tabindex='0'><table><tr>"
+                "<th scope='col'>Generation</th><th scope='col'>State</th><th scope='col'>From</th>"
+                "<th scope='col'>To</th><th scope='col'>Coverage</th><th scope='col'>Problems</th>"
+                "<th scope='col'>Cancel staging</th></tr>" + rows + "</table></div>"
                 "<h2>Backup and rollback</h2><ul>"
                 f"<li>Latest backup: {_safe(backup['latest'] or 'none')}"
                 + (f" · {_safe(backup.get('rows'))} rows · scratch restore recorded {'yes' if backup['verified'] else 'no'}"
@@ -474,6 +494,35 @@ class ControlSite:
                 "<h2>Apply is unavailable</h2><ul>" + reasons + "</ul>"
                 + ("<p>No migration exists: this plan is a no-op.</p>" if plan["no_op"] else ""))
         return _page("Search index migration", body)
+
+    async def cancel_index_migration(self, request: web.Request) -> web.Response:
+        fields = await request.post()
+        if self._session(request, mutate=True, csrf=fields.get("csrf")) is None:
+            self._audit("index_cancel", "forbidden")
+            raise web.HTTPForbidden()
+        if self.search_state_dir is None:
+            raise web.HTTPNotFound()
+        expected = {"csrf", "generation", "journal_revision", "profile_revision", "confirm"}
+        if (set(fields) != expected or any(len(fields.getall(k)) != 1 for k in expected)
+                or fields["confirm"] != "cancel"):
+            self._audit("index_cancel", "invalid")
+            raise web.HTTPBadRequest(text="Invalid migration cancellation")
+        try:
+            await asyncio.to_thread(cancel_generation, self.search_state_dir, fields["generation"],
+                                    expected_journal=fields["journal_revision"],
+                                    expected_profile=fields["profile_revision"])
+        except RebuildOutcomeUncertain:
+            self._audit("index_cancel", "uncertain")
+            return _page("Cancellation outcome uncertain", "<h1>Cancellation outcome uncertain</h1>"
+                         "<p>Reload and reconcile the saved generation before retrying. "
+                         "No automatic retry, index rollback or data deletion was started.</p>", status=409)
+        except (RebuildError, OSError, ValueError):
+            self._audit("index_cancel", "refused")
+            return _page("Migration changed or busy", "<h1>Migration changed or busy</h1>"
+                         "<p>Refresh the plan. Active, changed or completed migrations cannot be "
+                         "cancelled from this view.</p>", status=409)
+        self._audit("index_cancel", "cancelled")
+        raise web.HTTPSeeOther("/index-migration")
 
     async def rollout_page(self, request: web.Request) -> web.Response:
         cookie = self._session(request)

@@ -35,11 +35,35 @@ complete first-run/feature-control workflow remain open.
 
 ## Search index and backup status
 
-The read-only Search index migration page reports historical scratch-restore
+The Search index migration page reports historical scratch-restore
 records and live-row comparisons. Damaged/unsafe newest metadata blocks backup
 readiness instead of silently falling back to an older record. It neither
 rehashes nor restores a dump during page loads; re-verify before recovery.
 See the [backup-status boundary and limits](evidence/index-backup-status-20261029.md).
+
+### Cancel an idle staged migration
+
+Viewing `/index-migration` remains read-only. A separate confirmation form can
+retire an existing `staging`, `staged` or `verified` generation while its original
+encoder is still live. The form binds the exact journal and live-profile bytes;
+changed progress, a changed profile or an active writer refuses the request.
+It requires the normal login, same-origin/CSRF checks and shared mutation limit.
+
+Cancellation changes only that generation's journal to `cancelled`. It does not
+contact a model/database, change live vectors or the encoder profile, delete
+staging data, stop a running writer, cut over or roll back an index. A running
+stage must finish or be stopped separately before cancellation. A generation
+already made live needs the explicit rollback workflow, not this form. A
+post-commit filesystem failure is an uncertain outcome: reload and reconcile;
+the site never retries or restores automatically.
+
+All library stage/verify/cancel/cutover/rollback calls share one private writer
+lock per configured state directory and refresh durable state after acquiring
+it. Do not delete/replace that lock file or manually edit migration state while
+a writer is active. Cancelled generations cannot resume, verify or cut over;
+their retained data is not reported as an active migration. Real stored-object
+source approval, native cutover/readback and retrieval quality remain separate
+gates. See [generation authority and cancellation](evidence/index-generation-cancellation-20261030.md).
 
 ## Data flow and retention
 
