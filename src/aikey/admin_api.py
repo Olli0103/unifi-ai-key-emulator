@@ -54,6 +54,7 @@ class AdminAPI:
         app.router.add_get(PREFIX + "/profiles", self.profiles)
         app.router.add_get(PREFIX + "/cameras", self.cameras)
         app.router.add_get(PREFIX + "/maintenance", self.maintenance)
+        app.router.add_get(PREFIX + "/maintenance/requests", self.maintenance_history)
         app.router.add_post(PREFIX + "/maintenance", self.maintenance_submit)
         app.router.add_get(PREFIX + "/maintenance/requests/{request_id}", self.maintenance_receipt)
         app.router.add_get(PREFIX + "/profiles/{profile}/configuration", self.configuration)
@@ -62,6 +63,24 @@ class AdminAPI:
         for operation in ("preview", "apply", "rollback"):
             app.router.add_post(PREFIX + "/profiles/{profile}/" + operation, self.change)
         app.on_cleanup.append(self.drain)
+        from .maintenance_console import MaintenanceConsole
+        self.maintenance_console = MaintenanceConsole(self)
+        self.maintenance_console.register(app)
+
+    async def maintenance_history(self, request):
+        if not self.authenticated(request):
+            return error("authentication_required", 401)
+        if request.query:
+            return error("invalid_request", 400)
+        if self.site.maintenance is None:
+            return reply({"configured": False, "requests": [], "worker_liveness": "not_asserted"})
+        try:
+            rows = await asyncio.to_thread(self.site.maintenance.history)
+        except (MaintenanceError, OSError, ValueError):
+            return error("maintenance_unavailable", 503)
+        if not self.authenticated(request):
+            return error("authentication_required", 401)
+        return reply({"configured": True, "requests": rows, "worker_liveness": "not_asserted"})
 
     async def maintenance(self, request):
         if not self.authenticated(request):

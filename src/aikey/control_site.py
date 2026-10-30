@@ -78,6 +78,8 @@ th, td { padding: .65rem; text-align: left; border-bottom: 1px solid #d9e2eb; }
 .skip-link { position: absolute; top: .5rem; left: .5rem; transform: translateY(-200%);
              background: white; color: #075bd8; padding: .6rem; z-index: 1; }
 .skip-link:focus { transform: none; }
+.maintenance fieldset { min-width: 0; margin: 1rem 0; border: 1px solid #65788b; }
+.maintenance code { overflow-wrap: anywhere; }
 """
 
 
@@ -96,7 +98,9 @@ def _page(title: str, body: str, *, landmark: bool = True) -> web.Response:
     return web.Response(text=markup, content_type="text/html", headers={
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
                                    "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-        "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+        # Chrome otherwise sends Origin: null for native form POSTs.
+        # Keep same-origin form authentication while sending no referrer cross-origin.
+        "X-Content-Type-Options": "nosniff", "Referrer-Policy": "same-origin",
         "Cache-Control": "no-store",
     })
 
@@ -748,6 +752,7 @@ class ControlSite:
                   "<a href='/audit'>Audit log</a> · "
                   "<a href='/caption-preflight'>Caption preflight</a> · "
                   "<a href='/state-backup-preflight'>Backup preflight</a> · "
+                  "<a href='/maintenance'>Maintenance operations</a> · "
                   "<a href='/model-registry'>Saved model role registry</a></p>"
                 + ("<p><a href='/aiport-permissions'>Remove saved AI Port face, sound or speech permissions</a></p>"
                    if ports else "")

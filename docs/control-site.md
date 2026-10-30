@@ -48,7 +48,9 @@ listener's current session, Host/Origin/CSRF checks and shared mutation window.
 Its configuration responses are private operator data, not a public diagnostic
 export. It currently provides saved profile/configuration/role views and Key
 preview/apply/rollback for Key settings and bounded Port feature policy. Native
-identity/pairing/host edits and maintenance actions remain unavailable there.
+identity/pairing/host edits remain unavailable. Host-published one-use maintenance
+plans can be submitted through the constrained bridge; see the maintenance console
+below. This is not arbitrary host execution or automatic worker startup.
 
 The signed-in [data-flow and retention page](data-retention.md) separately shows
 all output/state categories, other destinations, product defaults and current
@@ -465,3 +467,20 @@ See the [audio-scope boundary](evidence/aiport-audio-permissions-20261030.md).
 Source/fixture verification does not mean that a deployed admin/Port image has
 been updated or that real camera permissions were changed. See the
 [permission boundary and limits](evidence/aiport-permission-restrictions-20261030.md).
+
+
+## Host-approved maintenance console
+
+The **Maintenance operations** link opens authenticated `/maintenance` forms
+for explicitly typed host-published backup, inactive restore, search scratch-
+restore verification and Apple image-update plans. Each form names the device,
+fixed scope, saved configuration revision and immutable image digest where
+applicable. Legacy or custom plans without that reviewable scope cannot be
+submitted from the page. Review and confirmation are required.
+
+The page lists retained requests and reported outcomes, blocks another operation
+when an outcome is unsettled and never re-offers a used one-use plan. It does
+not start a host worker, infer its liveness, retry a lost acknowledgement,
+activate a restored directory or provide a NAS update adapter. Existing host
+plans/ledgers and operator-qualified cold windows remain authoritative.
+See the [API boundary and isolated browser check](admin-api.md#browser-maintenance-console).

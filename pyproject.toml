@@ -19,6 +19,7 @@ Issues = "https://github.com/Olli0103/unifi-ai-key-emulator/issues"
 dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "ruff==0.16.8", "build==1.6.1",
        "numpy>=2,<3", "pillow>=13,<14", "pyyaml==6.0.3", "jiwer==4.0.0"]
 benchmark = ["jiwer==4.0.0"]
+browser = ["playwright==1.64.1"]
 rollout = ["pyyaml==6.0.3"]
 models = ["sentence-transformers>=5,<6"]
 detector = ["rfdetr==1.9.1"]
