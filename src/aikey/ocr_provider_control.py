@@ -154,7 +154,7 @@ class OcrProviderControl:
                      "Current processing continues until a separate restart.</p>"
                      "<form method='post' action='/ocr-provider/apply'>" + inputs
                      + ("<label>New separate OCR API key<input name='api_key' type='password' "
-                        "required autocomplete='new-password' maxlength='4096'></label>"
+                        "required autocomplete='new-password' maxlength='4095'></label>"
                         if "replace_key" in fields else "")
                      + "<label><input type='checkbox' name='confirm' value='yes' required>"
                      "I approve this OCR destination for the already permitted plate crops; "
@@ -178,7 +178,9 @@ class OcrProviderControl:
             if not _HEX64.fullmatch(fields["signature"]) or not hmac.compare_digest(expected, fields["signature"]):
                 raise ValueError
             key = fields.get("api_key", "")
-            if ("replace_key" in fields and (not 8 <= len(key) <= 4096 or any(c.isspace() for c in key))
+            if ("replace_key" in fields and (not 8 <= len(key) <= 4095
+                    or len((key + "\n").encode("utf-8")) > 4096
+                    or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in key))
                     or "replace_key" not in fields and key):
                 raise ValueError
             preview = await asyncio.to_thread(store.preview_ocr_provider, fields["revision"], selection)
@@ -203,6 +205,7 @@ class OcrProviderControl:
                     path = store.path.parent / ("ocr-key-" + draft)
                     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                     created = path
+                    os.fchmod(descriptor, 0o600)
                     with os.fdopen(descriptor, "wb") as stream:
                         stream.write((key + "\n").encode())
                         stream.flush()

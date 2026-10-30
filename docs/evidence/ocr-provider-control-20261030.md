@@ -39,6 +39,15 @@ isolation and unchanged plate/detector settings.
 Failure cases cover stale/scope/secret boundaries, confirmation tampering,
 parallel credential creation and uncertain post-commit acknowledgement.
 
+An additional new-flow boundary check found that character counts alone could
+save a credential beyond the runtime reader's 4-KiB byte bound, or admit a NUL.
+Three actual multipart requests reproduce the refusals missing in the first
+candidate. UTF-8 bytes including the saved newline and control characters are
+now checked before any file creation. A 4,095-byte ASCII key plus newline is
+read back through the actual bounded secret reader as the positive boundary.
+The first candidate's partial full-suite run was deliberately interrupted for
+this correction, not reported as a full pass.
+
 The maintained real Chrome scenario covers desktop/mobile preview, stale-form
 refusal, required acknowledgement, Space/Tab/Enter submission, separate key,
 unchanged detector and exact Undo. Decoder-inspected screenshots and exact-head

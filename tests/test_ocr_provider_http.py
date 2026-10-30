@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 import json
 import threading
 
+import aiohttp
 import pytest
 
 from test_control_site_secrets import PASSWORD, SECRET, signed_in, assert_private_page
@@ -265,6 +266,44 @@ async def test_cloud_ocr_requires_its_own_key_not_the_detector_reference(tmp_pat
         response = await client.post("/ocr-provider/apply", data=confirm, headers={"Origin": site.origin})
         assert response.status == 409 and store.path.read_bytes() == before
         assert not list(store.path.parent.glob("ocr-key-*"))
+    finally:
+        await client.close()
+        await server.close()
+
+
+@pytest.mark.parametrize("key_value", ["a" * 4096, "é" * 2048, "fictional\0credential"],
+                         ids=["ascii_file_overflow", "utf8_file_overflow", "nul_control"])
+async def test_unreadable_or_control_character_key_refuses_before_file_creation(tmp_path, key_value):
+    site, server, client, _, _ = await configured(tmp_path)
+    try:
+        store = site.aiports["aiport"]
+        fields = await preview(client, site, replace=True)
+        fields["api_key"] = key_value
+        before = store.path.read_bytes()
+        multipart = aiohttp.FormData()
+        for name, value in fields.items():
+            multipart.add_field(name, value, content_type="text/plain; charset=utf-8")
+        response = await client.post("/ocr-provider/apply", data=multipart,
+                                     headers={"Origin": site.origin}, allow_redirects=False)
+        assert response.status == 409 and store.path.read_bytes() == before
+        assert not list(store.path.parent.glob("ocr-key-*"))
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_maximum_readable_credential_file_succeeds(tmp_path):
+    site, server, client, _, _ = await configured(tmp_path)
+    try:
+        store = site.aiports["aiport"]
+        fields = await preview(client, site, replace=True)
+        fields["api_key"] = "a" * 4095
+        response = await client.post("/ocr-provider/apply", data=fields,
+                                     headers={"Origin": site.origin}, allow_redirects=False)
+        assert response.status == 303
+        [key] = list(store.path.parent.glob("ocr-key-*"))
+        from aikey.secret_files import read_secret
+        assert key.stat().st_size == 4096 and read_secret(key) == fields["api_key"]
     finally:
         await client.close()
         await server.close()
