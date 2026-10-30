@@ -329,6 +329,11 @@ renewal or authorize adopted-device identity/key replacement.
 
 ## Dated native administration evidence
 
+The [policy-preservation checkpoint](evidence/provider-policy-preservation-20261030.md)
+records the provider/model save regression fix, real-profile read-only previews,
+admin-only installation and coordinated certificate-timer pin update. No native
+provider/policy save or model call was made to qualify it.
+
 The [native TLS-context reload checkpoint](evidence/native-admin-tls-reload-20261030.md)
 records an admin-only update followed by same-certificate HUP with unchanged
 process/session/core containers. It is not an issuer-renewal or automatic
