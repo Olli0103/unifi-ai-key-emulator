@@ -176,16 +176,36 @@ async def test_continuous_real_loopback_callback_and_duplicate_no_extra_charge(
         return PNG
 
     monkeypatch.setattr(worker, "_video_frame", decode)
-    first = command("continuous-first")
-    second = second_camera(command("continuous-second"), "camera-fixture-two")
+    items = [command(f"continuous-{index}") if index % 2 == 0 else
+             second_camera(command(f"continuous-{index}"), "camera-fixture-two")
+             for index in range(12)]
     try:
-        assert (await worker.handle(first))["status"] == "processed"
-        assert (await worker.handle(second))["status"] == "processed"
-        assert (await worker.submit(first))["duplicate"] is True
-        assert len(services.media_requests) == len(services.requests) == len(services.callbacks) == 2
-        assert len(json.loads((tmp_path / "caption-budget.json").read_text())["reservations"]) == 2
+        for item in items:
+            result = await worker.handle(item)
+            assert result["status"] == "processed" and result["callback"] == "http_accepted"
+            ram = services.callbacks[-1]["payload"]["payload"]
+            assert ram == result["result"]
+            assert ram["cameraId"] == item["payload"]["camera"]
+            assert ram["eventId"] == item["payload"]["event"]
+            assert ram["status"] == "success" and ram["description"]
+        assert (await worker.submit(items[0]))["duplicate"] is True
+        with pytest.raises(WorkerError, match="budget is exhausted"):
+            await worker.submit(command("continuous-thirteenth"))
+        assert len(services.media_requests) == len(services.requests) == len(services.callbacks) == 12
+        assert len(json.loads((tmp_path / "caption-budget.json").read_text())["reservations"]) == 12
     finally:
         await worker.stop()
+
+    restarted = JobProcessor(config, tmp_path, camera_registry=registry)
+    try:
+        with pytest.raises(WorkerError, match="budget is exhausted"):
+            await restarted.submit(command("continuous-thirteenth-after-restart"))
+        for item in items:
+            assert (await restarted.handle(item))["status"] == "processed"
+        assert len(services.media_requests) == len(services.requests) == len(services.callbacks) == 12
+        assert len(json.loads((tmp_path / "caption-budget.json").read_text())["reservations"]) == 12
+    finally:
+        await restarted.stop()
 
 
 async def test_orphaned_reservation_cannot_repeat_a_paid_call(services, tmp_path):
