@@ -290,6 +290,43 @@ TLS client; they are not a native LAN/browser, accessibility, penetration-test
 or release-clearance result. Certificate issuance/renewal and the administrator's
 network reachability policy remain deployment responsibilities.
 
+### Locally reloading an administrator certificate
+
+The Unix CLI (`run` and `setup`) installs a local `SIGHUP` handler **only in
+explicit HTTPS mode**. Wait for the startup JSON marker
+`{"admin_tls_reload_protocol": 1}` before using that operation. Older versions
+without this marker do not support it: sending them HUP can stop the service.
+Embedded applications do not install process signal handlers. There is no
+HTTP certificate-control endpoint, watcher, issuance command or renewal timer.
+
+After your existing certificate tool has staged and checked a new certificate
+and matching key, replace the **same configured private files** and signal only
+the confirmed CLI process. Coordinate file replacement and local signals with
+other maintenance; the server does not make two separate file replacements
+transactional. It loads the complete candidate pair under the same ownership,
+regular-file, permissions, size, no-final-symlink and descriptor checks as
+startup, then publishes one context for future TLS handshakes. No file read is
+triggered by a client handshake or its SNI hostname. Concurrent local reloads
+are serialized. The configured origin, listener, administrator authority,
+active connections and session cookies do not change.
+
+Success emits fixed JSON fields `admin_tls_reload: "ready"`, the new process-local
+`generation` and `audit_recorded`; a refused file/key load emits `"refused"`
+without advancing the generation. The `tls_reload` audit action records the
+same fixed result without certificate contents or input paths. Audit failure
+is reported separately and does not undo an already loaded TLS context.
+A missing, public, symlinked, special, oversized, encrypted or mismatched input
+leaves the previous context serving new connections too. Retain the prior pair
+for file rollback: a failed reload does not repair the files on disk and a
+later restart will validate them again. Stop requests suppress subsequent HUP
+callbacks; the CLI removes its own HUP handler during cleanup.
+
+Loading a pair is not certificate-authority, hostname, validity-period or
+renewal qualification. Clients must still verify the chain and exact hostname;
+the operator's certificate tool must check those properties before publication.
+This mechanism does not change trust stores, issue a certificate, prove a future
+renewal or authorize adopted-device identity/key replacement.
+
 ## Dated native administration evidence
 
 The [30 October NAS loopback qualification](evidence/native-admin-loopback-20261030.md)
