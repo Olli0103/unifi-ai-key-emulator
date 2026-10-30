@@ -21,6 +21,7 @@ from .config_store import (ConfigurationStoreError, RevisionConflict,
 from .model_roles import key_roles, port_roles
 from .camera_inventory import InventoryError
 from .protocol import ContractError, _json_object
+from .admin_maintenance import MaintenanceError
 
 
 SCHEMA = "aikey-admin/1"
@@ -52,12 +53,89 @@ class AdminAPI:
         app.router.add_get(PREFIX + "/session", self.session)
         app.router.add_get(PREFIX + "/profiles", self.profiles)
         app.router.add_get(PREFIX + "/cameras", self.cameras)
+        app.router.add_get(PREFIX + "/maintenance", self.maintenance)
+        app.router.add_post(PREFIX + "/maintenance", self.maintenance_submit)
+        app.router.add_get(PREFIX + "/maintenance/requests/{request_id}", self.maintenance_receipt)
         app.router.add_get(PREFIX + "/profiles/{profile}/configuration", self.configuration)
         app.router.add_get(PREFIX + "/profiles/{profile}/runtime", self.runtime)
         app.router.add_get(PREFIX + "/profiles/{profile}/identity", self.identity)
         for operation in ("preview", "apply", "rollback"):
             app.router.add_post(PREFIX + "/profiles/{profile}/" + operation, self.change)
         app.on_cleanup.append(self.drain)
+
+    async def maintenance(self, request):
+        if not self.authenticated(request):
+            return error("authentication_required", 401)
+        if request.query:
+            return error("invalid_request", 400)
+        if self.site.maintenance is None:
+            return reply({"configured": False, "operations": [], "worker_liveness": "not_asserted"})
+        try:
+            rows = await asyncio.to_thread(self.site.maintenance.catalog)
+            rows = [row for row in rows if self.store(row["profile"]) is not None]
+        except (MaintenanceError, OSError, ValueError):
+            return error("maintenance_unavailable", 503)
+        if not self.authenticated(request):
+            return error("authentication_required", 401)
+        return reply({"configured": True, "operations": rows, "worker_liveness": "not_asserted"})
+
+    async def maintenance_receipt(self, request):
+        if not self.authenticated(request):
+            return error("authentication_required", 401)
+        if self.site.maintenance is None:
+            return error("maintenance_unavailable", 503)
+        try:
+            result = await asyncio.to_thread(self.site.maintenance.receipt, request.match_info["request_id"])
+        except (MaintenanceError, OSError, ValueError):
+            return error("maintenance_unavailable", 503)
+        if not self.authenticated(request):
+            return error("authentication_required", 401)
+        return reply(result)
+
+    async def maintenance_submit(self, request):
+        if not self.authenticated(request, mutate=True):
+            return error("forbidden", 403)
+        if self.site.maintenance is None or self.site.audit is None:
+            return error("maintenance_unavailable", 503)
+        try:
+            if request.query or request.content_type != "application/json":
+                raise ValueError
+            payload = _json_object(await request.read())
+            if set(payload) != {"operation", "revision", "request"}:
+                raise ValueError
+            from .admin_maintenance import _identifier, _REQUEST
+            _identifier(payload["operation"])
+            _identifier(payload["revision"])
+            _identifier(payload["request"], _REQUEST)
+            rows = await asyncio.to_thread(self.site.maintenance.catalog)
+            matching = next((row for row in rows if row["operation"] == payload["operation"]), None)
+            if matching is None or self.store(matching["profile"]) is None:
+                return error("maintenance_plan_conflict", 409)
+        except web.HTTPRequestEntityTooLarge:
+            return error("request_too_large", 413)
+        except (OSError, ValueError, TypeError):
+            return error("invalid_request", 400)
+        if not self.authenticated(request):
+            return error("forbidden", 403)
+        return await self.file_operation(self.queue_maintenance, payload, matching["profile"])
+
+    async def queue_maintenance(self, payload, profile):
+        # Admission must have durable audit authority before any queue write.
+        if not self.site.audit.record("maintenance_submit", "admitted", profile=profile,
+                operation_id=payload["operation"], request_id=payload["request"]):
+            return error("audit_unavailable", 503)
+        try:
+            result = await asyncio.to_thread(self.site.maintenance.submit,
+                payload["operation"], payload["revision"], payload["request"])
+        except MaintenanceError:
+            self.site._audit("maintenance_submit", "refused", profile=profile)
+            return error("maintenance_plan_conflict", 409)
+        except (OSError, ValueError):
+            self.site._audit("maintenance_submit", "uncertain", profile=profile)
+            return reply({"error": "outcome_uncertain", "automatic_retry": False,
+                          "next_action": "read_same_maintenance_request_receipt"}, status=503)
+        self.site._audit("maintenance_submit", "queued", profile=profile)
+        return reply(result, status=202)
 
     def store(self, profile):
         return self.site.aikey if profile == "aikey" else self.site.aiports.get(profile)

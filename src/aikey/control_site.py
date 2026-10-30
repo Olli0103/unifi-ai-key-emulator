@@ -133,6 +133,7 @@ class ControlSite:
                  aikey_state_dir: Path | None = None,
                  audit_log: Path | None = None,
                  runtime_health_urls: dict[str, str] | None = None,
+                 maintenance_bridge: Path | None = None,
                  bind: str = "127.0.0.1", origin: str | None = None,
                  tls_certificate: Path | None = None, tls_private_key: Path | None = None):
         if type(port) is not int or not 1024 <= port <= 65535:
@@ -168,6 +169,8 @@ class ControlSite:
         from .admin_runtime import RuntimeObserver
         self.runtime_observer = RuntimeObserver(self._backup_profiles(), runtime_health_urls or {})
         self.audit = AuditLog(audit_log) if audit_log is not None else None
+        from .admin_maintenance import Bridge
+        self.maintenance = Bridge(maintenance_bridge) if maintenance_bridge is not None else None
         self._catalog_lock = asyncio.Lock()
         self._catalog_next_at = 0.0
         self._probe_grants = ProbeGrants()
@@ -1656,6 +1659,8 @@ def _cli() -> argparse.ArgumentParser:
                      help="Add another AI Port instance with a private host config path")
     run.add_argument("--runtime-health", action="append", default=[], metavar="PROFILE=HTTPS_URL",
                      help="Explicit own-runtime private HTTPS healthz target; pinned to that profile certificate")
+    run.add_argument("--maintenance-bridge", type=Path,
+                     help="Host-maintained IPC root: catalog/receipts read-only, requests writable; no host plans")
     _listener_arguments(run)
     run.add_argument("--aiport-rollout", type=Path,
                      help="Private AI Port rollout slot file (needs the inventory settings)")
@@ -1814,6 +1819,7 @@ def main(argv: list[str] | None = None) -> int:
                            aiport_runtime_state_dir=args.aiport_runtime_state_dir,
                            aiport_instances=instances,
                            runtime_health_urls=runtime_health,
+                           maintenance_bridge=args.maintenance_bridge,
                            inventory_loader=inventory_loader,
                            rollout_path=args.aiport_rollout,
                            search_state_dir=args.search_state_dir,

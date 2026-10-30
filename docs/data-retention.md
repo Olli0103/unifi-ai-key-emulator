@@ -39,6 +39,16 @@ controls remain limited as documented in [the control site](control-site.md).
   Host snapshots, backup versions, replicas and system/container logs are outside
   this page's enumeration/deletion authority. Backup preflight checks integrity,
   identity and references, not encryption or remote expiry.
+- The rollout transaction journal retains private last-known-good configuration
+  bytes beside the rollout registry. A new completed transaction supersedes its
+  prior terminal snapshot; an unresolved one blocks apply and is not pruned.
+- Optional host-maintenance authority holds frozen runbooks/inputs, guard
+  digests and one-use history outside the admin container. Bridge files contain
+  only plan metadata, requests and fixed receipts. Normal runbook staging is
+  removed; hard-owner-crash staging remains private for reconciliation. There
+  is no time-based expiry, auto-replay or automatic deletion of one-use history.
+  Preserve/reconcile that history before retirement; archiving a backup does
+  not erase its contents or revoke a published plan automatically.
 
 ## Protection and recovery boundary
 

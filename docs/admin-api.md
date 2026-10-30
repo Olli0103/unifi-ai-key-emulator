@@ -189,9 +189,111 @@ local recovery journal contains private configuration; include it in private
 backup/retention policy, not public diagnostics. It is not a complete database
 or processor-state backup and is not evidence of a live restore drill.
 
-## Remaining #13 work
+## Host-owned maintenance
 
-These local checkpoints do not close #13. Complete authenticated supported maintenance
-operations, their approval/preflight/recovery boundaries, full original scope
-and rejection/concurrency qualification before the integration PR. No unqualified
-backup/export/restore/update/PTZ/recording operation is advertised as available.
+`GET /api/admin/v1/maintenance` lists only host-published, frozen, **one-use**
+plans for configured profiles. Without a configured bridge it returns
+`configured: false` and no operations. This is not a worker-liveness claim.
+`POST` to the same endpoint takes exactly `operation` (published digest),
+`revision` (reviewed saved configuration digest), and `request` (32 lower-case
+hex digits chosen once by the caller). It requires the existing session,
+Origin/CSRF/shared mutation limit and a durable audit admission. HTTP 202 means
+**queued, not executed**. The client must retain the same request ID and read
+`GET /api/admin/v1/maintenance/requests/{request}`. It must not retry an unknown
+write with a fresh identifier. An exact resubmission is idempotent; one plan
+cannot execute twice even under distinct request IDs. Terminal state describes
+that one operation's result, not a fresh execution for each receipt.
+
+The separate host owner runs `python -m aikey.admin_maintenance work-once` with
+explicit `--host` and `--bridge` roots. Each invocation admits at most one
+runbook and uses an exclusive kernel lock. Runbooks inherit that lease; the
+maintained adapters pass it to their engine clients as well. A killed owner
+therefore cannot be replaced while its surviving runbook still owns the lease.
+A recorded `started` or `uncertain` outcome prevents **all new plans** from
+executing until host-side effect/recovery reconciliation. Never clear it merely
+because a PID disappeared, a request timed out, or a later health check is green.
+There is no automatic replay, rollback of an unknown host effect, or live
+database overwrite.
+
+### Deployment authority
+
+The host root contains plans, the one-use ledger and private staging. **Never
+mount it in the admin container.** Mount bridge `catalog` and `receipts`
+read-only and only `requests` writable, then set `--maintenance-bridge` to
+their common container parent. Do not mount the Docker socket, engine binary,
+host root, or private runbook inputs in the admin container. The processor
+credentials do not grant maintenance authority. Do not publish host plans,
+archive contents, stdin, stdout, stderr or private filesystem paths as API
+diagnostics. Only allowlisted plan metadata and fixed receipts cross back.
+
+Host `prepare` freezes a reviewed Python runbook, its host inputs/resources,
+interpreter digest, guarded file digests, current saved revision and timeout
+into its content-addressed operation ID. It is a **host-only** operation, not
+an API for uploading code. The runbook is trusted operator code, not sandboxed
+untrusted code: qualify its own locked preflight, backup, effect and downstream
+read-back before publishing it. Guard hashes are an admission observation, not
+a replacement for the runbook's own transaction locks. No caller-selected
+command, argument, URL, image, manifest path or script is accepted over HTTP.
+Removing a published plan before host admission revokes a queued execution.
+
+Requests are atomically published without replacing a prior ID. Files, JSON,
+queue/catalog/ledger sizes, output and execution time are bounded. Raw output
+is discarded; a runbook must return exactly the fixed
+`aikey-maintenance-result/1` schema with an outcome of `succeeded`, `rejected`,
+`rolled_back` or `uncertain`. The owner terminates its own process group on
+timeout/output overflow and collects its direct child. An interrupted owner's
+private staging is deliberately retained under its host root for reconciliation;
+normal completion removes it. No scheduler/daemon or privileged service is
+installed automatically. The host operator must arrange the owner invocation.
+The exit watcher is non-reaping (`waitid(WNOWAIT)` on Linux, native `kqueue`
+on macOS), retaining the process-group anchor until the final group signal.
+This is not an untrusted-process sandbox or a Linux subreaper. A runbook that
+creates an escaping session is not claimed contained/killed. Missing output
+EOF after direct-child exit is bounded and forces `uncertain`, not success;
+its inherited lease and the unresolved ledger retain the admission barrier.
+At the 128-record capacity, stop admission, drain/reconcile and withdraw the
+old catalog. Retain the old host authority and its one-use history privately;
+if new authority is needed, prepare a distinct host root deliberately rather
+than deleting ledger entries in place. There is no automatic retention pruning
+or reset of one-use history.
+
+### Maintained adapters and actual limits
+
+Host `prepare-search --plan PRIVATE_DEFINITION_JSON` freezes the existing
+`search_backup` implementation, not a second database backup implementation.
+The definition selects `kind` (`backup` or `restore`), `config`, `container`,
+an absolute `engine` binary, `output`, and optional `profile`/`manifest` paths.
+The backup action writes a private logical dump and performs the maintained
+scratch restore/count/dimension verification before success. The restore
+action **only** verifies a host-selected existing dump in an isolated scratch
+database and drops that scratch DB; it never overwrites the live index. This
+is not a complete adopted-device/credential/filesystem backup or a disaster
+restore drill. Use the existing separate state-backup preflight for that scope.
+
+Host `prepare-apple-update` freezes the existing `apple_upgrade` and
+`apple_supervisor` implementation. Its definition selects host `config`,
+`state_dir`, `service`, `new_name`, immutable digest-addressed `image`, processor
+`kind`, private literal `health_url`, own `certificate`, retained
+`recovery_archive`, expected Port `streams`, optional profile label and engine.
+It makes a read-only exact plan, binds the engine/archive digests, re-plans
+before execution, requires CA validation plus the exact leaf pin before health
+headers, and refuses unavailable/malformed/nonidle health before hold/stop.
+The existing tool preserves the live runtime layout, pins only after readiness,
+and attempts the existing old-container rollback on failed replacement. The
+old container/image and recovery archive remain. This is an **Apple same-host**
+adapter, not a Docker/NAS image-swap or Key/PG namespace migration. Idle is an
+observation followed by graceful stop, not producer-pause/zero-inflight proof;
+archive hashing is not a full restore drill. Those native/endurance and recovery
+requirements stay in their own acceptance issues.
+
+No live restore, unsupported update platform, unqualified PTZ/recording action,
+ONVIF ingest, arbitrary export or generic shell endpoint is advertised as
+implemented. Supported plans exist only after host preparation/qualification.
+Local tests use fictional state, engine processes and owned HTTPS peers; they
+do not establish an actual native update, database recovery or hardware parity.
+
+## Integration acceptance
+
+These checkpoints alone do not close #13. The exact frozen integration still
+requires full applicable suites, a separate source-derived gate, qualified
+private/native read-back and original rejection/concurrency/identity criteria.
