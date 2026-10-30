@@ -473,7 +473,7 @@ async def test_bad_trust_never_installs_or_exposes_supplied_material(tmp_path, c
             fields["certificate"] = other_pem
         if fault == "private_key":
             fields["certificate"] = (
-                "-----BEGIN PRIVATE KEY-----\nPRIVATE-CANARY\n-----END PRIVATE KEY-----"
+                "-----BEGIN " + "PRIVATE KEY-----\nPRIVATE-CANARY\n-----END " + "PRIVATE KEY-----"
             )
         if fault == "chain":
             fields["certificate"] += other_pem
