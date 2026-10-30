@@ -122,3 +122,117 @@ scope, standalone inference or public release was activated. Native playback,
 quality, in-flight recovery, visual/mobile UX and the independent installations
 remain separate gates. ONVIF remains deliberately open without a test camera.
 Tests and this admin-only deployment do not complete all of #13.
+
+## Subsequent existing-reader activation
+
+After the image-only stage above, the existing readers were qualified separately
+and connected to the Admin. The initial direct-target probe returned unavailable
+for all five runtimes; its Key URL also selected the HTTP rather than HTTPS port.
+Those original results are retained. A second probe used the processors' existing
+internal Docker bridge addresses and correct HTTPS ports: all five returned
+CA-plus-exact-leaf-pin-verified adopted/connected runtime observations, with
+three/two/two/two active Port streams. The existing integration credential read
+eleven validated cameras. No new bridge, route, firewall rule or account was
+created; the later success does not establish the exact cause of every earlier
+unavailable result.
+
+Only the Admin command arguments then changed: four existing pinned-inventory
+assignments and five own-runtime targets. The same image/source, complete mounts,
+hardening, authority, TLS and all five device configs were retained. A fresh
+six-member recovery archive and the exact old/proposed Compose specs were
+privately byte/hash-verified on NAS and the external SSD before replacement.
+Only the Admin was recreated again; the six core containers were unchanged.
+The certificate timer was fenced and restored again, its pin bytes unchanged;
+its check was `not_due` with zero issuer calls/reloads.
+
+Actual authenticated HTTPS reads now returned eleven cameras, nine saved profile
+bindings, five verified runtime observations and nine active stream/camera rows.
+The permission page gained 27 named camera-selection controls without changing
+any of the twelve saved permission areas. No config/provider/permission apply or
+standalone inference was admitted. The old Port runtimes still lack the new
+binding digest, so camera-wise runtime-to-saved-MAC joins correctly remain unknown;
+recording/PTZ/channel status is still not measured. Missing information is not a
+zero, disabled feature or native quality result.
+
+The configured argument list, healthy Admin and unchanged certificate pin were
+read back after the timer resumed. Both monitors were UP (heartbeat ages 33/19
+seconds). A fresh Protect read retained all five adopted/connected processors and
+nine pairings against the same fresh pre-201 identity/pair-set baseline. No real
+device identity, credential value, origin or camera name is included here. The
+maintenance bridge remains unconfigured at this reader-activation checkpoint.
+
+## Native maintenance admission, cold export and inactive restore
+
+The next checkpoint activated the existing IPC bridge. Only its validated
+catalog/receipts were mounted read-only and its request directory writable;
+the host plans, execution ledger, frozen worker source and Docker socket were
+**not** mounted in the Admin. Existing mounts and hardening were retained. No
+worker daemon, recurring schedule, account, network or model was installed.
+The same 109-module source/image was used. Recovery archive/spec read-back and
+certificate-timer fencing/requalification preceded this Admin-only change too.
+
+The host froze a plan for the actual first Port's device-file directory using
+the maintained snapshot runbook, existing engine/interpreter digests, identity,
+config revision and resources. The selected small-profile deadline was narrowed
+to 90 seconds. The convenience preparer's original plan remained **unpublished**;
+only the narrowed one-use plan was exposed to the Admin. The web client supplied
+its published digest/revision and one request ID, never a command or path.
+
+Actual default-CA/SNI-verified HTTPS exercised bad-CSRF refusal, then returned
+202/`queued`/`executed: false` for that request. The keyed durable admission audit,
+profile-level queued audit and exact queue payload were read back. A host-owned
+manual worker, not an automatically installed service, executed the queue.
+
+Before export, the existing producer-control helper identified the selected
+Port's own FFmpeg processes by PID/start identity, recorded resume intent before
+each pause, drained stdout queues and observed stable frames with no pending or
+in-flight model work. Only that Port and the Admin were gracefully stopped.
+The five other core containers continued running. The cold runbook then exported
+and revalidated **34 complete files in a 61,440-byte archive**. The full private
+archive and every member digest were verified again from the external SSD copy.
+This is a real device-file backup, not merely preflight or synthetic data.
+
+The same Port/Admin container IDs, images, command arguments and current state
+were resumed—no old state or image was restored. Three selected-Port streams
+returned; all five other core container identities/images/start/restart states
+were unchanged. Provider files were byte-identical; effective management-password
+equality remains unproved. The existing certificate timer returned to its prior
+active/enabled state with unchanged pins. Its schedule was not changed.
+
+The private availability guard passed ten native-Linux synthetic checks,
+including real owner-process exit, PID-start mismatch, unowned image/config
+refusal, producer resume and refusing an uncertain Docker-stop acknowledgement.
+An initial fixture had conflated zombie liveness with a deadline trigger; the
+corrected check excludes exited/zombie owners and explicitly requires the
+owner-loss trigger before the deadline. The actual cold job ended normally and
+its guard recorded settled state. This is not a real power-loss/kill experiment
+or a claim of universal process containment/application health from a watchdog.
+
+After availability returned, a second separately frozen, one-use restore plan
+was admitted through the same authenticated/audited HTTPS boundary. Its worker
+restored into a **new private inactive directory** with production running.
+Every one of the 34 archived files was byte-compared to the restored result;
+backend identity/key/certificate/schema checks passed, runbook staging was
+collected, all seven container states were unchanged during restore and the live
+identity/trust/config bytes were untouched. Neither the restored identity nor
+its directory was activated or mounted into a processor. The sensitive archive
+and verification copy remain private, not public release artifacts.
+
+Both exact request/operation terminal receipts were subsequently read over
+authenticated HTTPS as `succeeded`, with automatic retry false and no new
+execution. Fresh Protect read-back retained one Key/four Ports, nine pairings and
+five adopted/connected processors against the pre-201 baseline. Admin was healthy,
+the certificate timer active/enabled and both monitors UP (heartbeat ages 43/24
+seconds). The first final-metadata helper wrongly expected JSON from the host's
+`systemctl show`; only that read failed. Text-property read-back corrected it
+without repeating any backup, restore or service change.
+
+The bridge is now configured, with these retained one-use plan/result records;
+future worker liveness is still **not asserted** and no automatic worker has
+been installed. These are supported file-maintenance flows, not live database
+replacement, complete models/host recovery, Apple update acceptance, recording
+playback, visual/mobile UI or a disaster-recovery/soak result. No standalone
+inference, operator credential replacement or new camera permission was used;
+normal already-authorized processing on the other devices continued. Native
+recording/PTZ/channel access and the old-runtime mapping boundary above remain
+open; ONVIF stays deliberately open without a test camera.
