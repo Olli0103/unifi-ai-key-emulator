@@ -70,6 +70,12 @@ malformed outputs fail at configuration/role or typed result boundaries before
 they can replace usable settings or enter the corresponding result/index flow.
 This does not infer an opaque API model's capabilities from its name.
 
+Recognition/enhancement use shared pure policy checks during configuration
+admission and worker construction. Deep/Re-ID/rerank configuration uses the
+existing pure Deep contract at admission too. Invalid role keys, scope or local
+URI parameters are refused before saving; validation does not construct a face
+store, read templates, contact a server or rewrite optional saved policy defaults.
+
 The model-only UI previews the affected role and saved old/new model, unchanged
 provider/key/permissions and index, current-job behavior and any new restart
 requirement. No model call or file save occurs during preview. Confirmation
@@ -88,6 +94,7 @@ keys. Existing native identities/pairings are not model settings.
   decisions, strict output, existing budget denial, raw policy preservation,
   undo-key refusal and owned HTTP catalog/one-use probe.
 - [Unsupported role parameters](../tests/test_role_parameter_admission.py),
+  [pure local-role admission](../tests/test_local_role_admission.py),
   [embedding config admission](../tests/test_embedding_config_admission.py),
   [vision adapters](../tests/test_providers.py), [speech](../tests/test_speech_to_text.py),
   [E5](../tests/test_search.py) and [CLIP](../tests/test_clip_client.py).
