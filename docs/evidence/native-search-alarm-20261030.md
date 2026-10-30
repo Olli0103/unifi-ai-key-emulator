@@ -36,8 +36,10 @@ After the update and again after the search observation, the original one-Key,
 four-Port identities and nine pairings matched; all five processors were adopted
 and connected. No public image release, new camera scope, provider change,
 standalone model probe, old-job replay or complete-long-event quality claim.
-The separate live Admin remains source #201: merging #205/#206 did not activate
-their new maintenance/browser interface there.
+During this search/alarm checkpoint the separate Admin still ran source #201:
+merging #205/#206 had not activated their new interface there. A later,
+separately qualified [Admin-only activation](nas-health-and-admin-ui-20261030.md)
+installed that interface while preserving the six core processes.
 
 ## New basic-search observation after restart
 
