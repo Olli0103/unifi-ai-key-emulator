@@ -205,6 +205,29 @@ or processor-state backup and is not evidence of a live restore drill.
 
 ## Host-owned maintenance
 
+### Startup configuration observation
+
+The authenticated per-profile runtime endpoint also returns
+`runtime_configuration_revision` and
+`saved_revision_matches_runtime_startup` (boolean or `null`). A new runtime's
+versioned `startup_configuration` health observation records SHA-256 of the
+**same file bytes** used for startup validation, before secret hydration or
+normalization. It never rereads the file to manufacture a matching observation.
+The admin observer retains its existing pinned TLS, response bounds and
+two-second health cache; it reads saved configuration freshly for each comparison.
+
+This is file provenance, not current effective-policy attestation. A matching
+digest does not verify referenced key/trust/model files, loaded weights, live
+controller-managed state, success of inference or feature quality. Formatting
+and controller-managed saves can also change file bytes. Old runtimes,
+programmatic construction without startup provenance, unavailable peers and
+failed saved reads remain `null`, never a claimed match. Malformed, extra-field
+or unknown-version observations are refused. No restart/apply is admitted here.
+
+The read-only `/runtime-status` page exposes the same comparison to signed-in
+operators, with separate match/different/unknown states. It does not load native
+recording/PTZ state or expand the supported controller credentials.
+
 `GET /api/admin/v1/maintenance` lists only host-published, frozen, **one-use**
 plans for configured profiles. Without a configured bridge it returns
 `configured: false` and no operations. This is not a worker-liveness claim.

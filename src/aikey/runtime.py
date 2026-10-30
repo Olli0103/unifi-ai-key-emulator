@@ -16,7 +16,9 @@ from .worker import JobProcessor
 
 
 class Application:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, *, startup_revision: str | None = None):
+        from .startup_configuration import observation
+        self._startup_configuration = observation(startup_revision)
         self.config = config
         self.state_dir = Path(config["runtime"]["state_dir"])
         outbound = client_context(config)
@@ -80,6 +82,7 @@ class Application:
 
     async def _health(self, request):
         return web.json_response({"service": "local-aikey", "version": "0.1.0",
+            "startup_configuration": self._startup_configuration,
             "device": self.device.status, "worker": self.worker.status(),
             "camera_registry": (self.camera_registry.status() if self.camera_registry is not None
                                 else {"enabled": False}),

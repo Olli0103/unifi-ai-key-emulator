@@ -534,6 +534,14 @@ been updated or that real camera permissions were changed. See the
 
 ## Host-approved maintenance console
 
+The **Runtime configuration** link opens a separate read-only comparison of
+saved file bytes against each process's reported startup snapshot. It distinguishes
+matches, differences and unknown results. Referenced key/model/trust files and
+current controller settings are not covered by that digest. Legacy processors
+may report healthy connections but unknown startup provenance. This page neither
+restarts them nor claims that a saved setting is active. See the
+[versioned API contract](admin-api.md#startup-configuration-observation).
+
 The **Maintenance operations** link opens authenticated `/maintenance` forms
 for explicitly typed host-published backup, inactive restore, search scratch-
 restore verification and Apple image-update plans. Each form names the device,

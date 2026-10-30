@@ -89,6 +89,7 @@ jobs:
           browser="$(command -v google-chrome)"
           "${browser}" --version
           python tools/maintenance_browser_check.py --browser-executable "${browser}" --output browser-results
+          python tools/runtime_status_browser_check.py --browser-executable "${browser}" --output runtime-browser-results
       - name: Retain only fictional screenshots and source-bound results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -96,6 +97,8 @@ jobs:
           path: |
             browser-results/*.png
             browser-results/result.json
+            runtime-browser-results/*.png
+            runtime-browser-results/result.json
           if-no-files-found: error
           retention-days: 14
 
