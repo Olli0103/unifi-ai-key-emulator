@@ -11,7 +11,7 @@ This contract defines the security boundaries for the current processor and admi
 | Worker to vision provider | Selected image frames, fixed prompt and provider key | Separate client, explicit provider and model, explicit remote opt-in, no redirects, bounded response and no controller credentials |
 | Search to embedding provider | Description or query text and optional embedding key | Separate client, explicit remote and insecure-HTTP opt-ins, no redirects, bounded response and no controller credentials |
 | Processor to search database | Embeddings and device-managed database credential | Separate credential file, TLS configuration and restricted PostgreSQL peers |
-| Browser to admin service | Configuration changes and secret replacement | Authenticated loopback HTTP or opt-in direct HTTPS, exact transport/Host/Origin, CSRF, revision checks and write-only keys; native LAN deployment/audit remain `needs_evidence` |
+| Browser to admin service | Configuration changes and secret replacement | Separate authenticated loopback HTTP or direct private/VPN HTTPS, exact transport/Host/Origin, CSRF, revision checks, bounded mutation admission and write-only keys; native HTTPS observations are linked below, browser E2E remains #17 |
 | Release/update source to deployment | Images, packages and migration code | `needs_evidence`; signed artifacts, provenance and rollback belong to issues #4 and #16 |
 
 Camera media, transcripts, face templates, plates, provider keys, controller credentials and private diagnostics are sensitive. Model responses, media files, protocol requests, URLs and headers are untrusted input.
@@ -27,15 +27,19 @@ Camera media, transcripts, face templates, plates, provider keys, controller cre
 - HTTP bodies, protocol messages, image counts, video duration, decoded output and queues have fixed limits.
 - `ffmpeg` receives fixed arguments, no standard input and a `file,pipe` protocol allowlist. The service never constructs a shell command from media input.
 - Health and diagnostics return fixed counters and categories. They do not serialize configuration, request bodies or exceptions.
-- The production container runs as UID/GID 10001, uses a read-only root filesystem, drops all capabilities and sets `no-new-privileges`.
+- Repository device images declare non-root UID/GID 10001. The separately qualified NAS deployment uses existing non-root UID/GID 1000:10, a read-only root filesystem, dropped capabilities and `no-new-privileges`; deployment ownership is not inferred from the Dockerfile default.
 
 ## Administration requirements
 
 Issue #13 must keep the administration listener separate from both emulated device profiles. LAN administration requires HTTPS, an administrator created during first-run setup and no default password. State-changing requests require an authenticated session, a same-origin check and a CSRF token. Login and mutation endpoints need bounded request bodies and rate limits.
 
-The framework-independent `AdminSecurity` module implements password hashing, signed expiring sessions, exact-origin enforcement, CSRF checks, bounded login-rate state and allowlisted audit decisions. The future HTTP adapter must create and persist its random signing key, store the password record, and set the `__Host-aikey_admin` cookie with `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/` and no `Domain`. HTTP routing and first-run enrollment remain `needs_evidence` until issue #13 integrates and tests them.
+`AdminSecurity` implements password hashing, signed expiring sessions, exact-origin enforcement, CSRF checks, bounded login-rate state and allowlisted decisions. The implemented [control site](control-site.md) persists a random signing key and password record. Direct HTTPS uses `__Host-aikey_admin` with `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/` and no `Domain`; local HTTP has a distinct cookie and must not be reverse-proxy-published. Sessions require the current runtime registry, so restart does not revive logged-out cookies. The authenticated [first-run wizard](first-run.md#authenticated-browser-preparation) inherits the same authorization gate and creates local files without starting processors or contacting a controller/model. Broader identity/maintenance UI and real browser/mobile acceptance remain #13/#17/#25, not unimplemented authentication adapters.
 
-The framework-independent `ConfigurationStore` exposes redacted snapshots and previews, uses content revisions for optimistic concurrency, validates before writing, archives immutable versions, replaces files atomically and supports rollback to an archived revision. It refuses identity and credential-location changes, direct secret replacement and changes to an active embedding profile. The future HTTP adapter still needs separate write-only secret operations and must never put secrets in local storage, history or diagnostic state. Audit events record the actor, action, result and configuration revision without request bodies, secret values or camera identifiers.
+After successful Host/origin/session/CSRF checks, the shared control-site gate admits at most **60 mutating requests in a rolling 60 monotonic seconds per runtime**, across all sessions. Re-login or forged forwarding headers cannot reset it. Invalid authorization does not consume an authenticated quota. Rejected forms count once admitted; their file/key/provider work is still behind the gate. The first-run wizard inherits it. State is one bounded deque, not an unbounded per-address map. HTTP 429 includes `Retry-After`, no-store and the normal page security headers, with no request/secret echo or automatic retry. Reads and a fully authorized sign-out remain available. Denial audit entries are coalesced during a rejected burst and contain only a fixed action/result/time. This in-process operation throttle resets with a new runtime; it is **not** the durable caption budget, a paid-call reservation, provider-billing protection or an Internet-scale denial-of-service guarantee.
+
+`ConfigurationStore` exposes redacted snapshots and previews, uses content revisions for optimistic concurrency, validates before writing, archives immutable versions, replaces files atomically and supports rollback to an archived revision. It refuses identity and credential-location changes, direct generic secret replacement and changes to a pinned embedding/index identity. The HTTP provider forms implement separate write-only replacement: a destination change cannot inherit its old role key, and an uncertain save retains any key potentially referenced by live/history state rather than deleting it or retrying. Pinned CLIP and E5 identities are compared correctly for ordinary settings/undo without encoder contact or a profile rewrite.
+
+HTML pages return no saved secret values or script, use a script-blocking CSP and no-store, and do not write localStorage or console state. Synthetic HTTP canaries check responses, redirect locations, saved forms and audit output on success/refusal/uncertain outcomes. Audit files record fixed time/action/result and optional profile labels, **not** request bodies, configuration values, addresses, tokens or camera identifiers. Configuration revisions live in the versioned configuration history/journals, not a claimed extra audit field.
 
 Backup, restore and update actions require separate authorization and an explicit preview. Restores must validate identity, schema and integrity before changing active state. An update must retain the last working artifact and configuration until the new version passes its startup checks.
 
@@ -70,13 +74,13 @@ connection/TLS, sends, header parsing and body reads, including slow individual
 bytes and already buffered late results. A late DNS/connect completion cannot
 begin an expired HTTP transfer. The separate AI Port DNS admission probe is also
 bounded; asynchronous resolution, arbitrary CPU work and universal kernel
-preemption are not claimed. Sustained/live-provider acceptance remains open in #3/#24. See the
+preemption are not claimed. Sustained/live-provider qualification remains in #24 and the applicable feature acceptance; these bounded controls are not that qualification. See the
 [async checks](evidence/provider-dns-boundary-20261029.md) and
 [sync/enrollment limits](evidence/provider-sync-boundary-20261029.md) and the
 [subsequent transfer-deadline checks](evidence/provider-response-deadline-20261029.md)
 and [DNS-child deadline checks](evidence/provider-dns-deadline-20261029.md).
 
-Model text is data. It never becomes a command, URL, path, query or configuration update. Camera media and model output cannot expand the configured network allowlist. Future OCR, speech and recognition adapters inherit the same rule.
+Model text is data. It never becomes a command, URL, path, query or configuration update. Camera media and model output cannot expand the configured network allowlist. Current speech/recognition/optional enhancement adapters and any future adapter inherit the same rule.
 
 ## Secrets and recovery
 
@@ -95,7 +99,7 @@ Diagnostic bundles use a field allowlist. Do not export raw configuration, envir
 
 The security workflow runs the full test suite, static checks, a package build, a locked-runtime dependency audit, a validated CycloneDX SBOM and a full-history secret scan. Third-party actions use immutable commit SHAs with read-only repository permissions. Malformed media, oversized responses, redirect attempts, credentialed URLs and cross-client credential leakage require negative tests.
 
-Private security reporting, signed update verification, model file hashing and restore testing remain `needs_evidence`. Track them in issues #11, #16, #24 and the relevant provider/model work rather than treating this document as completion evidence.
+Private security reporting is defined in SECURITY.md (#11). Model-file hashes and bounded loaders have source/fixture checks; they do not clear distribution rights or quality. Signed public update/release verification remains #16, redistribution/origin clearance #4, and complete platform/restore/endurance qualification #24. None is claimed complete by this security foundation.
 
 ## Face-enhancement route boundaries (#3 review of #23, 27 Sep 2026)
 
@@ -123,3 +127,32 @@ policy. Proxy headers are ignored; the loopback HTTP listener must not be
 published through a reverse proxy. This source/fixture boundary does not claim
 an installed LAN endpoint, certificate-renewal service, completed security audit
 or signed release.
+
+
+## Issue #3 acceptance evidence map — 30 October 2026
+
+This maps the original foundation criteria, not a universal security audit or
+approval of every future feature. The complete exact-head CI suite contains the
+linked checks; missing model weights remain an explicit skip rather than a pass.
+
+| Original criterion | Reviewable controls and evidence |
+| --- | --- |
+| Authentication/origin failures and no returned/stored secret values | [Authorization](../tests/test_admin_security.py), [HTTP/TLS](../tests/test_control_site_https.py), [session revocation](../tests/test_admin_session_lifecycle.py), [secret canaries](../tests/test_control_site_secrets.py), [write uncertainty](../tests/test_provider_key_save_recovery.py), [first-run](../tests/test_first_run_site.py), [shared operation admission](../tests/test_admin_mutation_limit.py), and [bounded audit fields/files](../tests/test_admin_audit.py) |
+| Controller and provider credentials never cross their clients/routes | [Exact provider/client separation](../tests/test_providers.py), [controller/media boundaries](../tests/test_security.py), [guarded network/TLS peers](../tests/test_provider_network_tls.py), [speech role separation](../tests/test_speech_provider_control.py), [enhancement's separate model session](../tests/test_face_enhancement.py), and role-specific saved-key destination/undo tests |
+| Hostile media/URL/path input and dependency/secret checks are release/CI gates | [Media/protocol refusal](../tests/test_security.py), [strict protocol](../tests/test_protocol.py), [private-file boundaries](../tests/test_secret_loading_boundaries.py), [DNS/HTTP deadlines](../tests/test_provider_response_deadline.py), [outer reply refusal](../tests/test_detector_transport_json.py), [workflow checks](../tests/test_security_workflow.py), and the [four-job pinned security workflow](../.github/workflows/security.yml) |
+
+The authenticated private HTTPS admin is actually deployed, with strict
+CA/hostname verification, separate persistent admin authority, secure cookies,
+logout, retained processor identities and an image-bound certificate-maintenance
+timer. [The CLIP guard qualification](https://github.com/Olli0103/unifi-ai-key-emulator/pull/196)
+records the subsequent admin-only update, read-only real-profile checks and
+limits. The mutation throttle has source/HTTP checks in the current change;
+its production activation must be recorded separately before claiming it is
+installed. The timer's first not-due check is not a new certificate issuance or
+future unattended renewal proof.
+
+Browser/mobile E2E (#17), independent installers (#25/#27), signed public
+releases and rights (#4/#16), detection/retrieval quality (#7) and full
+restore/endurance (#24) stay open on their own requirements. They must not be
+silently declared complete, nor silently added as new prerequisites to this
+foundation's original three criteria.

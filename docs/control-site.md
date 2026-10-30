@@ -247,6 +247,16 @@ Reconcile any in-flight operation's result separately. These source/HTTP tests
 are not a deployed service change or full security-audit approval. See the
 [session-lifecycle checks](evidence/admin-session-lifecycle-20261029.md).
 
+## Administrative request admission
+
+After authentication/origin/CSRF checks, at most 60 mutating requests are admitted
+per rolling minute across all signed-in sessions. Rejected forms count too;
+logging in again does not bypass the limit. HTTP 429 tells you when to retry;
+that refused request has not changed configuration, written a replacement key or
+contacted a provider. Views and valid sign-out remain available. The first-run
+wizard shares this rule. It is an in-process control-site limit, not the durable
+caption/cost budget or a change to running camera processing.
+
 ## Embedding configuration admission
 
 Configuration preview/apply validates supported embedding backends and the E5
