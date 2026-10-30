@@ -27,6 +27,8 @@ from urllib.parse import parse_qs, parse_qsl, urljoin, urlsplit, urlunsplit
 import aiohttp
 
 from .worker_archive import valid_tombstone
+from .worker_failure_notes import (FailureNotes, OUTCOMES as FAILURE_NOTE_OUTCOMES,
+                                   CAPACITY as FAILURE_NOTE_CAPACITY)
 from .caption_budget import (CaptionBudget, CaptionBudgetDeferred, CaptionBudgetError,
                              CaptionBudgetExhausted)
 from .providers import ProviderError, validate_inference_config
@@ -72,6 +74,48 @@ def _native_face_cameras(state_root) -> frozenset:
 
 class WorkerError(RuntimeError):
     """A job was rejected or could not be completed safely."""
+
+
+class _VisionHTTPError(WorkerError):
+    """Typed local observation; the original WorkerError message is preserved."""
+
+
+class _ControllerHTTPError(WorkerError):
+    """Retain a locally observed HTTP boundary, never a provider error body."""
+    def __init__(self, boundary, status):
+        message = (f"Controller media request returned HTTP {status}" if boundary == "media"
+                   else f"Controller callback returned HTTP {status}")
+        super().__init__(message)
+        self.boundary = boundary
+        self.http_status = status if type(status) is int and 100 <= status <= 599 else None
+
+
+def _failure_category(error):
+    """Finite exception categories, not a guess at the original root cause."""
+    current, seen = error, set()
+    for _ in range(4):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        if isinstance(current, _ControllerHTTPError):
+            if current.boundary in {"media", "callback"} and current.http_status is not None:
+                return "controller_" + current.boundary + "_http", current.http_status
+        if isinstance(current, (ProviderError, _VisionHTTPError)):
+            return "vision_provider_error", None
+        if isinstance(current, SpeechError):
+            return "speech_provider_error", None
+        if isinstance(current, FaceStoreError):
+            return "face_store_error", None
+        if isinstance(current, clip.ClipError):
+            return "local_clip_error", None
+        if isinstance(current, aiohttp.ClientError):
+            return "http_transport_error", None
+        if isinstance(current, TimeoutError):
+            return "timeout", None
+        if isinstance(current, OSError):
+            return "os_error", None
+        current = current.__cause__
+    return ("worker_error" if isinstance(error, WorkerError) else "unclassified_exception"), None
 
 
 def validate_test_scope_config(value):
@@ -507,6 +551,8 @@ class JobProcessor:
             raise WorkerError("Controller media origin must be one of controller_origins")
         self.state_dir = Path(state_dir) / "worker-jobs"
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._failure_notes = FailureNotes(Path(state_dir))
+        self._failure_note_counts = dict.fromkeys(sorted(FAILURE_NOTE_OUTCOMES), 0)
         self.test_scopes = configured_test_scopes(self.options)
         self.continuous = "continuous" in self.options
         if self.continuous and self.test_scopes:
@@ -1874,6 +1920,9 @@ class JobProcessor:
         return {"queued": queued, "active": max(0, len(self._pending) - queued),
                 "pending": len(self._pending), "capacity": self._queue.maxsize,
                 "ledger": len(self._history), "retroactive": dict(self.retroactive),
+                "failure_notes": {"scope": "current_process_publication_counts_not_current_job_outcomes",
+                                  "capacity": FAILURE_NOTE_CAPACITY,
+                                  "current_process": dict(self._failure_note_counts)},
                 "speech": dict(self.speech_counts),
                 **({"ram_tagging": dict(self.ram_tagging)} if self._tag_server() else {}),
                 **({"reverification": dict(self.reverify_counts)}
@@ -1955,12 +2004,30 @@ class JobProcessor:
                             self._record(job, "failed", error=message)
                 else:
                     self._record(job, "failed", error=message)
+            # The replay guard is already durable. Best-effort diagnostic notes
+            # must not replace this error, change callbacks or authorize a retry.
+            self._note_worker_exception(job, exc)
             if not job.future.done():
                 job.future.set_exception(WorkerError(message))
         finally:
             if not job.future.done():
                 job.future.set_exception(WorkerError("Job interrupted before durable completion"))
             self._pending.pop(job.job_id, None)
+
+    def _note_worker_exception(self, job, error):
+        outcome = "unavailable"
+        try:
+            record = self._history.get(job.job_id)
+            if record is not None and record.get("fingerprint") == job.fingerprint:
+                category, status = _failure_category(error)
+                reported = self._failure_notes.record(job.job_id, job.fingerprint,
+                    observed_at=record["updatedAt"], journal_state=record["state"],
+                    category=category, http_status=status)
+                outcome = (reported if type(reported) is str and reported in FAILURE_NOTE_OUTCOMES
+                           else "unavailable")
+        except Exception:
+            pass  # No raw exception text in notes/health; preserve the original job failure.
+        self._failure_note_counts[outcome] += 1
 
     async def _read_response(self, response, limit):
         if response.content_length is not None and response.content_length > limit:
@@ -1984,7 +2051,7 @@ class JobProcessor:
                     self.media_retries = getattr(self, "media_retries", 0) + 1
                 else:
                     if response.status != 200:
-                        raise WorkerError(f"Controller media request returned HTTP {response.status}")
+                        raise _ControllerHTTPError("media", response.status)
                     data = await self._read_response(
                         response, self.max_video_bytes if kind == "video" else self.max_bytes)
                     return data, dict(response.headers)
@@ -2067,7 +2134,7 @@ class JobProcessor:
             async with self._inference_session.post(url, json=request,
                         headers=headers, allow_redirects=False) as response:
                 if response.status != 200:
-                    raise WorkerError(f"Inference returned HTTP {response.status}")
+                    raise _VisionHTTPError(f"Inference returned HTTP {response.status}")
                 raw = await self._read_response(response, 1024 * 1024)
         finally:
             if gate is not None:
@@ -2602,7 +2669,7 @@ class JobProcessor:
                     url, json=request, headers=headers, allow_redirects=False,
                     timeout=aiohttp.ClientTimeout(total=_DESCRIBE_INFER_TIMEOUT_S)) as response:
                 if response.status != 200:
-                    raise WorkerError(f"Inference returned HTTP {response.status}")
+                    raise _VisionHTTPError(f"Inference returned HTTP {response.status}")
                 raw = await self._read_response(response, 1024 * 1024)
         except TimeoutError as exc:
             raise WorkerError("The describer did not answer in time") from exc
@@ -2848,7 +2915,7 @@ class JobProcessor:
             async with self._session.post(job.callback, headers=self._headers,
                        allow_redirects=False, **kwargs) as response:
                 if not 200 <= response.status < 300:
-                    raise WorkerError(f"Controller callback returned HTTP {response.status}")
+                    raise _ControllerHTTPError("callback", response.status)
                 await self._read_response(response, 65536)
                 callback_status = response.status
         except BaseException:
