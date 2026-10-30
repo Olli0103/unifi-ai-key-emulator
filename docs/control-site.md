@@ -329,6 +329,11 @@ renewal or authorize adopted-device identity/key replacement.
 
 ## Dated native administration evidence
 
+The [native TLS-context reload checkpoint](evidence/native-admin-tls-reload-20261030.md)
+records an admin-only update followed by same-certificate HUP with unchanged
+process/session/core containers. It is not an issuer-renewal or automatic
+certificate-maintenance result.
+
 The [30 October NAS loopback qualification](evidence/native-admin-loopback-20261030.md)
 records a separate authenticated service reading the actual Key/four-Port
 profiles, five maintenance-page responses, explicit refusal cases, one admin-only
