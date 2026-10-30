@@ -49,3 +49,50 @@ fixture without dropping it. The corrected group passed 52 checks before the
 expanded concurrency/session/expiry cases. Full-suite and separate exact-commit
 gate results are reported at integration; these fixture counts alone do not
 claim deployment or broad native/security acceptance.
+
+## Native read-only qualification and admin-only rollout
+
+The final source `da2b27515122ae395afa2f3e517bf788532f4594` and its merged main
+passed all four required CI jobs: **3,051 tests passed, three skipped**. The
+native Mac full run passed the same number on the preceding functional head;
+the final one-line documentation clarification leaves all 92 production-module
+bytes identical. A separate same-agent, source-derived external fixture gate
+passed 74 assertions on the exact final head, with no unowned transport/DNS
+attempts or fixture/task/thread residue. This is not independent human review.
+
+A new private candidate image was built and its complete 92-module file set and
+license checked without a network. A uniquely owned temporary container then
+read the four **actual** Port profiles with read-only mounts and no network.
+It displayed eight configured feature panels, with saved camera counts:
+
+| Port slot | Face processing | Sound classification |
+| --- | ---: | ---: |
+| 1 | 3 | 3 |
+| 2 | 2 | 2 |
+| 3 | 2 | 2 |
+| 4 | 2 | 2 |
+
+These are permitted-camera counts, **not** recognized people, templates or
+quality results. Anonymous access, bad CSRF and an unknown-profile POST were
+refused. No valid permission operation or model request was admitted. The proof
+signed out and collected the owned server/container. Five config bytes, three
+administrator authority files and all seven existing containers were unchanged.
+Inventory names were not configured, so individual camera checkboxes were absent;
+the whole-role controls remained available without exposing camera MACs.
+
+After merged-main CI and byte-identity checks, only the separate administration
+image was replaced. Its existing compose configuration changed solely in the
+image field; hardening, mounts, command, resource limits and administrator
+authority remained. The new service became healthy, refused the old session,
+accepted the unchanged persistent credential, displayed all eight feature panels
+and signed out. No permission/provider apply was admitted. Five profile bytes,
+the six processor/database containers and the current authority's verified
+recovery archive stayed unchanged. The older admin image was retained.
+
+Fresh Protect reads before/after retained the original one-Key/four-Port
+identities, nine pairings and five adopted/connected processors. No processor
+restart, credential replacement, model activation, new camera scope or archive
+deletion was used. This checkpoint still used NAS-loopback-only administration;
+private HTTPS accessibility is a separate follow-up. Native browser/mobile,
+actual saved-policy change plus Port restart/live enforcement, enrollment,
+deletion, retention and sustained-operation acceptance remain open.
