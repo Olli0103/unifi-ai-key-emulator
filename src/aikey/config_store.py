@@ -193,7 +193,7 @@ class ConfigurationStore:
             if _revision(target_content) != target_revision:
                 raise ConfigurationStoreError("Stored configuration revision does not match its identifier")
             self._assert_immutable(current, target)
-            self._assert_search_profile(target)
+            self._assert_search_profile(target, current)
             self._archive(current_content)
             self._replace(target_content)
             persisted, persisted_checked = self._read(self.path)
@@ -457,7 +457,7 @@ class ConfigurationStore:
             if not self._prior_key_present(json.loads(target_content)):
                 raise ConfigurationStoreError("The prior provider key is no longer stored")
             self._assert_immutable(current, target)
-            self._assert_search_profile(target)
+            self._assert_search_profile(target, current)
             self._archive(content)
             self._replace(target_content)
             persisted, checked = self._read(self.path)
@@ -499,7 +499,7 @@ class ConfigurationStore:
             raise RevisionConflict("Configuration changed since it was read")
         checked = self._validate(candidate)
         self._assert_immutable(current, checked)
-        self._assert_search_profile(checked)
+        self._assert_search_profile(checked, current)
         changes = tuple(_changed(current, checked))
         result_revision = revision if not changes else _revision(self._encode(checked))
         return ConfigurationPreview(revision, result_revision, _public(checked),
@@ -520,7 +520,7 @@ class ConfigurationStore:
         candidate = _merge_patch(current, patch)
         checked = self._validate(candidate)
         self._assert_immutable(current, checked)
-        self._assert_search_profile(checked)
+        self._assert_search_profile(checked, current)
         self._assert_credential_routes(current, checked)
         changes = tuple(_changed(current, checked))
         resulting = current_revision if not changes else _revision(self._encode(checked))
@@ -570,7 +570,7 @@ class ConfigurationStore:
                 "Identity and credential locations require a separate migration: " + ", ".join(changed)
             )
 
-    def _assert_search_profile(self, candidate: dict[str, Any]) -> None:
+    def _assert_search_profile(self, candidate: dict[str, Any], current: dict[str, Any]) -> None:
         profile = Path(candidate["runtime"]["state_dir"]) / "search-profile.json"
         if not profile.exists():
             return
@@ -584,8 +584,29 @@ class ConfigurationStore:
             if not isinstance(fingerprint, str) or not hmac.compare_digest(
                     fingerprint, hashlib.sha256(encoded.encode()).hexdigest()):
                 raise ValueError
+            from . import clip
             from .search import EmbeddingService
-            expected = EmbeddingService(candidate["embeddings"]).identity
+            embedding_identity = EmbeddingService(candidate["embeddings"]).identity
+            if (stored.get("profile") == clip.PROFILE
+                    and embedding_identity != EmbeddingService(current["embeddings"]).identity):
+                # CLIP can also answer E5 session queries. Do not let choosing
+                # the correct primary profile newly permit an E5 retarget.
+                raise UnsafeConfigurationChange(
+                    "Embedding profile changes require an explicit search-index migration")
+            if candidate["search"].get("profile", "e5-session-v1") == clip.PROFILE:
+                expected = {"profile": clip.PROFILE, "model": clip.MODEL,
+                            "dimensions": clip.DIMENSIONS, "backend": "local-clip-onnx",
+                            "source": candidate["find_anything"]["clip_server"]}
+                # Compare the already pinned revision without a server call,
+                # profile rewrite or implicit pin/upgrade. Legacy unpinned
+                # profiles remain unpinned; malformed pins stay refused.
+                if "revision" in stored:
+                    revision = stored["revision"]
+                    if not isinstance(revision, str) or not _REVISION.fullmatch(revision):
+                        raise ValueError
+                    expected["revision"] = revision
+            else:
+                expected = embedding_identity
         except (OSError, ValueError, TypeError) as exc:
             raise UnsafeConfigurationChange(
                 "Existing search profile is invalid; inspect it before changing configuration"
