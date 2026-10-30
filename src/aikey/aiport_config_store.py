@@ -5,7 +5,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
-import fcntl
 import hashlib
 import hmac
 import json
@@ -16,6 +15,7 @@ import stat
 from typing import Any, Iterator
 
 from .aiport_candidate import CandidateError, parse_config
+from .file_lock import acquire as acquire_file_lock
 from .config import atomic_private
 from .config_store import (ConfigurationPreview, ConfigurationSnapshot, ConfigurationStore,
                            ConfigurationStoreError, _changed, _merge_patch, _public)
@@ -634,7 +634,7 @@ class AiPortConfigurationStore:
             os.fchmod(descriptor, 0o600)
             with os.fdopen(descriptor, "rb") as lock:
                 descriptor = -1
-                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                acquire_file_lock(lock.fileno())
                 yield
         except OSError as exc:
             raise AiPortConfigurationError("aiport_config_lock_unavailable") from exc

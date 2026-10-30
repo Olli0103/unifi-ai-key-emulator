@@ -170,6 +170,25 @@ that remains unknown, not invented from a model name. ONVIF ingest remains
 unimplemented and its native acceptance issue stays open. Reading this endpoint
 does not change pairing, permissions, configuration or processing activation.
 
+## Local rollout transaction recovery
+
+Rollout applies share the existing Port configuration locks with the JSON and
+browser writers. Configuration/rollout lock contention is bounded to five
+seconds per acquired lock rather than retaining an executor indefinitely.
+Registration is part of the same rollback boundary as Compose and allowlist
+writes, including a lost acknowledgement after replacement.
+
+Before any target write, one private, bounded transaction journal beside the
+rollout registry retains the last-known-good bytes and digests. Successful apply
+or verified rollback marks it terminal. An interrupted or uncertain transaction
+blocks further planning/apply until host-side reconciliation; it is never
+automatically replayed. A rollback will not overwrite bytes from a later writer
+that are not one of this transaction's own outputs. Generated, unregistered
+device identities remain for reconciliation rather than being deleted. This
+local recovery journal contains private configuration; include it in private
+backup/retention policy, not public diagnostics. It is not a complete database
+or processor-state backup and is not evidence of a live restore drill.
+
 ## Remaining #13 work
 
 These local checkpoints do not close #13. Complete authenticated supported maintenance

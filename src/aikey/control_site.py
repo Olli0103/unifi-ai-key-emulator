@@ -34,7 +34,7 @@ from .aiport_config_store import (
 )
 from .aiport_deployment import AiPortPlanError, plan_ai_ports
 from .aiport_rollout import (
-    PlanChanged, RolloutError, apply_if_current, load_rollout_config,
+    PlanChanged, RolloutError, RolloutOutcomeUncertain, apply_if_current, load_rollout_config,
     compute as compute_rollout, public as public_rollout,
 )
 from .camera_inventory import InventoryError, fetch_inventory
@@ -264,7 +264,7 @@ class ControlSite:
 
     async def _rollout_plan(self) -> tuple[dict, dict]:
         report = await self.inventory_loader()
-        rollout = load_rollout_config(self.rollout_path)
+        rollout = await asyncio.to_thread(load_rollout_config, self.rollout_path)
         plan, _ = await asyncio.to_thread(compute_rollout, rollout, report)
         return rollout, plan
 
@@ -477,6 +477,11 @@ class ControlSite:
         csrf = self.security.csrf_token(cookie)
         try:
             _, plan = await self._rollout_plan()
+        except RolloutOutcomeUncertain:
+            return _page("Rollout outcome uncertain", "<h1>Rollout outcome uncertain</h1>"
+                         "<p class='error'>Some local files may have changed. Reload and reconcile "
+                         "the saved files and private recovery record before retrying. "
+                         "No automatic retry was started.</p>")
         except (InventoryError, RolloutError, OSError, ValueError):
             return _page("AI Port rollout unavailable", "<h1>AI Port rollout unavailable</h1>"
                          "<p class='error'>Check Protect connectivity, the rollout file and "
@@ -549,6 +554,12 @@ class ControlSite:
             return _page("Plan changed", "<h1>The plan changed</h1><p>Review the "
                          "refreshed plan before applying.</p>"
                          "<p><a href='/aiport-rollout'>Review</a></p>")
+        except RolloutOutcomeUncertain:
+            self._audit("rollout_apply", "uncertain")
+            return _page("Rollout outcome uncertain", "<h1>Rollout outcome uncertain</h1>"
+                         "<p class='error'>Some local files may have changed. Reload and reconcile "
+                         "the saved files and private recovery record before retrying. "
+                         "No automatic retry was started.</p>")
         except (InventoryError, RolloutError, OSError, ValueError):
             self._audit("rollout_apply", "refused")
             return _page("Rollout not applied", "<h1>Rollout not applied</h1>"
