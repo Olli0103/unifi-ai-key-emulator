@@ -289,3 +289,13 @@ adding support in source. Tests use synthetic identities and a trusted loopback
 TLS client; they are not a native LAN/browser, accessibility, penetration-test
 or release-clearance result. Certificate issuance/renewal and the administrator's
 network reachability policy remain deployment responsibilities.
+
+## Dated native administration evidence
+
+The [30 October NAS loopback qualification](evidence/native-admin-loopback-20261030.md)
+records a separate authenticated service reading the actual Key/four-Port
+profiles, five maintenance-page responses, explicit refusal cases, one admin-only
+restart and unchanged native device/pairing baseline. It remains NAS-loopback
+only; there is no LAN TLS, browser/mobile, real apply/rollback, host-reboot or
+sustained-operation acceptance claim. This does not change the default deployment
+or enable an administration service merely by upgrading a processor image.
