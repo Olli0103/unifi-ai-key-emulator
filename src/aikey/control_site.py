@@ -1540,9 +1540,32 @@ def _live_rows(container: str) -> Callable[[], Awaitable[int]]:
     return read
 
 
+TLS_RELOAD_PROTOCOL = 1
+
+
+def _reload_admin_tls(site) -> bool:
+    """CLI-owned local operation; no HTTP route and no caller-selected paths."""
+    try:
+        loaded = site.listener.reload_tls()
+    except (OSError, ValueError):
+        loaded = False
+    result = "ready" if loaded else "refused"
+    audit = getattr(site, "audit", None)
+    try:
+        recorded = audit.record("tls_reload", result) if audit is not None else False
+    except Exception:
+        recorded = False
+    print(json.dumps({"admin_tls_reload": result, "generation": site.listener.tls_generation,
+                      "audit_recorded": recorded}), flush=True)
+    return loaded
+
+
 async def _run(site: ControlSite, port: int) -> None:
     runner = web.AppRunner(site.app(), access_log=None)
     await runner.setup()
+    hup_installed = False
+    previous_hup = None
+    loop = None
     try:
         listener = web.TCPSite(runner, site.listener.host, port,
                                ssl_context=site.listener.ssl_context)
@@ -1551,9 +1574,24 @@ async def _run(site: ControlSite, port: int) -> None:
         loop = asyncio.get_running_loop()
         for signum in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(signum, stop.set)
+        if site.listener.ssl_context is not None and hasattr(signal, "SIGHUP"):
+            previous_hup = signal.getsignal(signal.SIGHUP)
+
+            def reload_if_running():
+                if not stop.is_set():
+                    _reload_admin_tls(site)
+
+            loop.add_signal_handler(signal.SIGHUP, reload_if_running)
+            hup_installed = True
+            print(json.dumps({"admin_tls_reload_protocol": TLS_RELOAD_PROTOCOL}), flush=True)
         await stop.wait()
     finally:
-        await runner.cleanup()
+        try:
+            await runner.cleanup()
+        finally:
+            if hup_installed:
+                loop.remove_signal_handler(signal.SIGHUP)
+                signal.signal(signal.SIGHUP, previous_hup)
 
 
 def main(argv: list[str] | None = None) -> int:
