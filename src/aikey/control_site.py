@@ -880,6 +880,7 @@ class ControlSite:
                 f"<button>Roll back the last {_safe(title)} provider change</button></form>")
 
     _ROLE_LABELS = {"caption": "Captions (vision)", "speech": "Speech to text",
+                    "ocr": "AI Port plate text (OCR)",
                     "detection": "AI Port detection", "search_image_text": "Search image/text encoder",
                     "text_embedding": "Text embeddings"}
     _ROLE_REASONS = {"index_migration_required": "Pinned by the search index; change it through the "
@@ -1272,7 +1273,7 @@ class ControlSite:
                 + "".join(rows) + "</table></div></section>")
 
     def _probe_form(self, csrf, profile, role, revision, destination, model) -> str:
-        if role not in {"caption", "detection", "speech"}:
+        if role not in {"caption", "detection", "speech", "ocr"}:
             return "<p>A synthetic test for this role is not available.</p>"
         if not isinstance(model, str) or not model.strip():
             return "<p>Save a model before running a synthetic test.</p>"
@@ -1302,7 +1303,7 @@ class ControlSite:
         expected = {"csrf", "profile", "role", "revision", "grant", "acknowledge_cost"}
         if (set(fields) != expected or any(len(fields.getall(k)) != 1 for k in expected)
                 or not all(isinstance(fields[k], str) for k in expected)
-                or fields["acknowledge_cost"] != "yes" or fields["role"] not in {"caption", "detection", "speech"}):
+                or fields["acknowledge_cost"] != "yes" or fields["role"] not in {"caption", "detection", "speech", "ocr"}):
             self._audit("provider_probe", "invalid_request")
             raise web.HTTPBadRequest(text="A fresh synthetic-test form and cost acknowledgement are required")
         profile, role, revision = fields["profile"], fields["role"], fields["revision"]

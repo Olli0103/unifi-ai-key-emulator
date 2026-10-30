@@ -79,3 +79,32 @@ Use this adapter for servers implementing vision Chat Completions, including com
 The worker's queue, deadline, image count, response size, and description length limits apply to all providers. HTTP errors and redirects fail the job without retry or fallback. Provider sessions never receive the Protect client certificate or device headers. Protect media and callback requests never receive the provider API key.
 
 Changing the vision provider does not change the E5 embedding backend. Description and query embeddings retain their separate shared profile check. None of these adapters establishes native Protect adoption, callback persistence, or search acceptance.
+
+## Independent AI Port plate-text role
+
+For an API detector with an already explicit `plate_cameras` allowlist,
+`live_pool_detector.ocr_provider_config` may select a separate vision adapter,
+model, endpoint and server-side `api_key_file` for plate-only crops. It uses the
+same supported vision adapter fields and existing approved-endpoint policy,
+not a transcription or embedding API. No role key is inherited when an explicit
+OCR selection omits its key. Inline keys and unscoped OCR configurations are
+refused. The normal object prompt then does not ask the detection model for
+plate text; only the separate OCR reply may supply it.
+
+The crop still requires the selected camera, vehicle/crop/interval checks and
+the detector's existing optional request budget. Selecting another role is not
+a budget waiver. It may add a separate paid crop request instead of the old
+combined object/plate reply; no automatic fallback to the detection model occurs
+on OCR failure. Replies require one unambiguous `plate` string or null; invalid
+or uncertain text never becomes an invented plate. The guarded transport,
+redirect/TLS/DNS/reply/deadline rules are shared, but credentials are not.
+
+Without this optional field, the existing combined detection/plate configuration
+and request policy are retained. There is no automatic migration or new camera
+permission. Existing provider forms preserve the separate OCR assignment. Its
+configured model appears as its own role with revision-checked preview/save,
+catalog and explicitly acknowledged one-use synthetic image test. These controls
+do not create the initial OCR assignment or add plate cameras; broader setup UI
+remains #17. Role undo requires both retained role keys and never changes native
+identity/pairings. Saving a configuration does not activate it or prove plate
+quality; native/night/glare/blur acceptance remains #19.
