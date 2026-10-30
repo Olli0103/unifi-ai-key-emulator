@@ -180,7 +180,8 @@ async def test_the_control_site_rolls_back_only_the_chosen_ai_port(tmp_path):
         assert done.status == 303 and done.headers["Location"] == "/?rolledback=1"
         assert nas_port.read_bytes() == nas_before and mac_port.read_bytes() == mac_before
         notice = await (await client.get("/?rolledback=1")).text()
-        assert "deployed NAS copies are not changed" in notice
+        assert "previous provider settings were restored in the selected profile" in notice
+        assert "configuration files mounted or supplied to it" in notice
     finally:
         await client.close()
         await server.close()
