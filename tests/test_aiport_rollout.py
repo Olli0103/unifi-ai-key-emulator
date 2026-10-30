@@ -144,6 +144,56 @@ def _provisioned(tmp_path):
     return root, template
 
 
+async def test_generated_single_camera_slot_loads_constructs_and_reopens_without_inference(
+        tmp_path, monkeypatch):
+    import sys
+    from aikey import aiport_candidate as candidate
+
+    root, template = _provisioned(tmp_path)
+    config = json.loads((template / "config.json").read_text())
+    ensure_identity_certificate(template, config["mac"])
+    for stream in config["paired_streams"]:
+        stream["ffmpeg_path"] = sys.executable  # Valid executable, never launched by this check.
+    config["live_pool_detector"].update(smart_types=["person"], provider_config={
+        "provider": "openai", "model": "synthetic-model", "allow_remote": True,
+        "base_url": "https://api.openai.com/v1", "max_output_tokens": 256,
+        "api_key_file": str(template / "unused-fixture-key")})
+    (template / "config.json").write_text(json.dumps(config))
+    assert len(candidate.load_config(template / "config.json",
+                                    check_decoder_executable=False)["paired_streams"]) == 2
+    slots = {"mac": slot("mac", "192.168.10.20", ["Flur", "Schlafzimmer"],
+                         {"Flur", "Schlafzimmer"})}
+    plan = plan_rollout(report(extra=("Keller",), models={name: "UVC G4 Pro" for name in CAM},
+                               drop=("Esszimmer", "Haustuer")), slots,
+                        new_slot_addresses=["192.168.10.30"])
+    registry = {"schema": "aikey-aiport-rollout/1", "slots": [{"label": "mac", "target": "mac",
+        "state_dir": str(template), "health_port": 8443}], "new_slots": {"target": "nas",
+        "state_parent": str(root), "addresses": ["192.168.10.30"], "health_port": 443}}
+    assert apply_and_register(tmp_path / "rollout.json", registry, plan) == ["nas-slot-1"]
+    state = root / "nas-slot-1"
+    identity = {name: (state / name).read_bytes()
+                for name in ("config.json", "identity.json", "device.crt", "device.key")}
+    def forbidden(*args, **kwargs):
+        pytest.fail("Construction/reopen must not perform inference or connect")
+    monkeypatch.setattr(candidate, "ApiObjectDetector", forbidden)
+    monkeypatch.setattr("socket.socket.connect", forbidden)
+    for _ in range(2):
+        loaded = candidate.load_config(state / "config.json", check_decoder_executable=False)
+        assert [stream["camera_mac"] for stream in loaded["paired_streams"]] == [CAM["Keller"]]
+        assert loaded["paired_streams"][0]["ffmpeg_path"] == "/usr/bin/ffmpeg"
+        # The generated path belongs to the Linux container. Construct offline
+        # on this host with a real local executable, without launching it.
+        loaded["paired_streams"][0]["ffmpeg_path"] = sys.executable
+        service = candidate.CandidateService(loaded, state)
+        try:
+            assert service._pool_camera_order == (CAM["Keller"],)
+            assert service.ingress is not None and service.ingress.list_streams() == []
+            assert len(service._inference.camera_snapshot()) == 1
+        finally:
+            await service.stop()
+        assert all((state / name).read_bytes() == value for name, value in identity.items())
+
+
 def test_apply_edits_allowlists_and_provisions_a_registered_new_slot(tmp_path):
     root, template = _provisioned(tmp_path)
     heavy = {name: "UVC G4 Pro" for name in CAM}
