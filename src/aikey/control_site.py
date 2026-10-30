@@ -185,6 +185,8 @@ class ControlSite:
         app.router.add_post("/speech-provider", self.save_speech_provider)
         app.router.add_get("/speech-permissions", self.speech_permissions)
         app.router.add_post("/speech-permissions", self.restrict_speech_permissions)
+        app.router.add_get("/aiport-permissions", self.aiport_permissions)
+        app.router.add_post("/aiport-permissions", self.restrict_aiport_permissions)
         app.router.add_post("/model-catalog", self.model_catalog)
         app.router.add_post("/provider-probe", self.provider_probe)
         app.router.add_post("/logout", self.logout)
@@ -649,6 +651,8 @@ class ControlSite:
                   "<a href='/audit'>Audit log</a> · "
                   "<a href='/caption-preflight'>Caption preflight</a> · "
                   "<a href='/state-backup-preflight'>Backup preflight</a></p>"
+                + ("<p><a href='/aiport-permissions'>Remove saved AI Port face or sound permissions</a></p>"
+                   if ports else "")
                 + undo_form + self._role_models_section(csrf) + self._speech_form(key, csrf)
                 + "<div class='grid'>")
         body += self._provider_form("AI Key", "aikey", key.revision, inference,
@@ -1004,6 +1008,136 @@ class ControlSite:
                          "<p><a href='/speech-permissions'>Saved audio permissions</a></p>")
         self._audit("speech_permissions", "saved", "aikey")
         raise web.HTTPSeeOther("/speech-permissions?saved=1")
+
+    def _port_permission_tokens(self, cookie: str, profile: str, feature: str,
+                                revision: str, cameras: tuple[str, ...]) -> dict[str, str] | None:
+        csrf = self.security.csrf_token(cookie)
+        if csrf is None:
+            return None
+        return {hmac.new(csrf.encode(),
+                         f"port-permission:{profile}:{feature}:{revision}:{camera}".encode(),
+                         hashlib.sha256).hexdigest(): camera for camera in cameras}
+
+    async def aiport_permissions(self, request: web.Request) -> web.Response:
+        cookie = self._session(request)
+        if cookie is None:
+            raise web.HTTPSeeOther("/login")
+        labels = {}
+        if self.aiports and self.inventory_loader is not None:
+            try:
+                report = await self.inventory_loader()
+                if (isinstance(report, dict) and report.get("schema") == "aikey-camera-preflight/1"
+                        and isinstance(report.get("cameras"), list) and len(report["cameras"]) <= 256):
+                    for camera in report["cameras"]:
+                        if not isinstance(camera, dict):
+                            continue
+                        mac, name = camera.get("mac"), camera.get("name")
+                        if (isinstance(mac, str) and isinstance(name, str) and 0 < len(name) <= 128
+                                and mac.casefold() not in re.sub(r"[:.\-]", "", name).casefold()):
+                            labels[mac] = name
+            except Exception:
+                pass  # Missing names must not prevent disabling a saved role.
+        body = ("<h1>Remove saved AI Port recognition permissions</h1><p><a href='/'>Settings</a></p>"
+                "<p><strong>Saved settings only.</strong> Face or sound processing may continue "
+                "until you restart the selected AI Port. No processor is stopped here. "
+                "This page cannot add cameras, change models, delete recordings/templates or "
+                "revoke keys. Other detection and audio permissions are unchanged.</p>")
+        for profile, store in self.aiports.items():
+            instance_title = "AI Port" if profile == "aiport" else "AI Port " + profile.partition(":")[2]
+            for feature, title in (("face", "Face recognition"), ("sound", "Sound classification")):
+                body += f"<section><h2>{_safe(instance_title)} — {title}</h2>"
+                try:
+                    revision, cameras = await asyncio.to_thread(store.recognition_permissions, feature)
+                except (AiPortConfigurationError, OSError):
+                    body += "<p>Saved permissions are unavailable. Reload after checking this profile.</p></section>"
+                    continue
+                if cameras is None:
+                    body += "<p>Not configured in saved settings. Running status is not checked.</p></section>"
+                    continue
+                tokens = self._port_permission_tokens(cookie, profile, feature, revision, cameras)
+                csrf = self.security.csrf_token(cookie)
+                if tokens is None or csrf is None:
+                    raise web.HTTPSeeOther("/login")
+                hidden = (f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
+                          f"<input type='hidden' name='profile' value='{_safe(profile)}'>"
+                          f"<input type='hidden' name='feature' value='{feature}'>"
+                          f"<input type='hidden' name='revision' value='{revision}'>")
+                confirm = ("<label><input type='checkbox' name='confirm' required>"
+                           "I understand that these are saved permissions only; I must restart "
+                           "this AI Port to change its running processing.</label>")
+                body += f"<p>{len(cameras)} permitted cameras in saved settings.</p>"
+                names = [labels.get(camera) for camera in cameras]
+                if all(names) and len(set(names)) == len(names):
+                    checks = "".join(
+                        f"<label><input type='checkbox' name='keep_camera' value='{token}' checked>"
+                        f"Keep permission: {_safe(labels[camera])}</label>" for token, camera in tokens.items())
+                    body += ("<form method='post' action='/aiport-permissions'>" + hidden +
+                             "<input type='hidden' name='mode' value='restrict'>"
+                             "<p>Uncheck cameras to remove permission. Unchecking every camera "
+                             "disables this saved role only.</p>" + checks + confirm +
+                             "<button>Save reduced permissions</button></form>")
+                else:
+                    body += ("<p>Unambiguous camera names are unavailable. The whole saved role "
+                             "can still be disabled below.</p>")
+                body += ("<form method='post' action='/aiport-permissions'>" + hidden +
+                         "<input type='hidden' name='mode' value='disable_all'>" + confirm +
+                         f"<button>Disable all saved {feature} permissions</button></form></section>")
+        if not self.aiports:
+            body += "<p>No AI Port profiles are attached.</p>"
+        if self._session(request) is None:
+            raise web.HTTPSeeOther("/login")
+        return _page("Saved AI Port permissions", body)
+
+    async def restrict_aiport_permissions(self, request: web.Request) -> web.Response:
+        fields = await request.post()
+        cookie = self._session(request, mutate=True, csrf=fields.get("csrf"))
+        if cookie is None:
+            self._audit("aiport_permissions", "forbidden")
+            raise web.HTTPForbidden()
+        apply_started = False
+        profile = None
+        try:
+            scalar = {"csrf", "profile", "feature", "revision", "mode", "confirm"}
+            if (set(fields) - scalar - {"keep_camera"}
+                    or any(len(fields.getall(key)) != 1 for key in scalar)
+                    or fields["confirm"] != "on" or fields["mode"] not in {"restrict", "disable_all"}):
+                raise ValueError
+            selected_profile, feature = fields["profile"], fields["feature"]
+            if (not isinstance(selected_profile, str) or selected_profile not in self.aiports
+                    or not isinstance(feature, str) or feature not in {"face", "sound"}):
+                raise ValueError
+            profile = selected_profile
+            store = self.aiports[profile]
+            revision, cameras = await asyncio.to_thread(store.recognition_permissions, feature)
+            if (not isinstance(fields["revision"], str) or revision != fields["revision"]
+                    or cameras is None):
+                raise AiPortRevisionConflict("aiport_config_changed")
+            tokens = self._port_permission_tokens(cookie, profile, feature, revision, cameras)
+            if tokens is None:
+                self._audit("aiport_permissions", "forbidden", profile)
+                raise web.HTTPForbidden()
+            selected = fields.getall("keep_camera", [])
+            if (len(selected) > len(cameras) or any(not isinstance(t, str) or t not in tokens for t in selected)
+                    or len(set(selected)) != len(selected) or fields["mode"] == "disable_all" and selected):
+                raise ValueError
+            retained = [tokens[token] for token in selected]
+            preview = await asyncio.to_thread(store.preview_recognition_restriction, revision, feature, retained)
+            if self._session(request, mutate=True, csrf=fields["csrf"]) is None:
+                self._audit("aiport_permissions", "forbidden", profile)
+                raise web.HTTPForbidden()
+            apply_started = True
+            result = await asyncio.to_thread(store.restrict_recognition, revision, feature, retained)
+            if result.revision != preview.resulting_revision:
+                raise AiPortConfigurationError("aiport_config_write_uncertain")
+        except (KeyError, ValueError, TypeError, OSError, AiPortConfigurationError) as exc:
+            certain = not apply_started or isinstance(exc, AiPortRevisionConflict)
+            self._audit("aiport_permissions", "rejected" if certain else "uncertain", profile)
+            title = "AI Port permissions not saved" if certain else "AI Port permission save outcome uncertain"
+            return _page(title, f"<h1>{title}</h1><p>Reload current settings before retrying. "
+                         "Check the selection, confirmation and revision. The running processor "
+                         "has not been stopped.</p><p><a href='/aiport-permissions'>Saved permissions</a></p>")
+        self._audit("aiport_permissions", "saved_" + feature, profile)
+        raise web.HTTPSeeOther("/aiport-permissions?saved=1")
 
     async def save_speech_provider(self, request: web.Request) -> web.Response:
         fields = await request.post()

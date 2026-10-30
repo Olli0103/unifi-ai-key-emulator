@@ -27,6 +27,7 @@ _FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
 _OPTIONAL_FIELDS = frozenset({"api_key_file", "max_requests_per_hour"})
 _PROVIDER_FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
                               "allow_insecure_http", "max_output_tokens", "api_key_file"})
+_RECOGNITION_SCOPES = {"face": "live_face", "sound": "live_sound"}
 
 
 class AiPortConfigurationError(ValueError):
@@ -130,6 +131,74 @@ class AiPortConfigurationStore:
         """Return the validated local allowlist, not Protect pairing state."""
         _, value = self._read()
         return frozenset(stream["camera_mac"] for stream in value.get("paired_streams", ()))
+
+    def recognition_permissions(self, feature: str) -> tuple[str, tuple[str, ...] | None]:
+        """Internal saved scope; the HTTP adapter must use opaque selection labels."""
+        if not isinstance(feature, str) or feature not in _RECOGNITION_SCOPES:
+            raise AiPortConfigurationError("aiport_unknown_recognition_feature")
+        content, current = self._read()
+        role = current.get(_RECOGNITION_SCOPES[feature])
+        return self._revision(content), tuple(role["cameras"]) if role is not None else None
+
+    def _recognition_restriction(self, expected_revision: str, feature: str,
+                                retained: list[str]) -> tuple[bytes, dict, bytes]:
+        if not isinstance(feature, str) or feature not in _RECOGNITION_SCOPES:
+            raise AiPortConfigurationError("aiport_unknown_recognition_feature")
+        content, current = self._read()
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(self._revision(content), expected_revision)):
+            raise AiPortRevisionConflict("aiport_config_changed")
+        field = _RECOGNITION_SCOPES[feature]
+        role = current.get(field)
+        if role is None:
+            raise AiPortConfigurationError("aiport_recognition_not_configured")
+        if (not isinstance(retained, list) or len(retained) > len(role["cameras"])
+                or any(not isinstance(camera, str) for camera in retained)
+                or len(set(retained)) != len(retained)
+                or not set(retained) <= set(role["cameras"])):
+            raise AiPortConfigurationError("aiport_recognition_remove_only")
+        # Validate against canonical camera IDs, but preserve every unrelated
+        # saved value/default omission instead of writing loader normalization.
+        original = json.loads(content)
+        candidate = deepcopy(original)
+        if retained:
+            candidate[field]["cameras"] = [raw for raw, camera in zip(
+                original[field]["cameras"], role["cameras"], strict=True) if camera in retained]
+        else:
+            del candidate[field]
+        if candidate == original:
+            return content, current, content
+        self._validate(candidate)
+        return content, candidate, self._encode(candidate)
+
+    def preview_recognition_restriction(self, expected_revision: str, feature: str,
+                                       retained: list[str]) -> AiPortPreview:
+        content, candidate, encoded = self._recognition_restriction(expected_revision, feature, retained)
+        return AiPortPreview(self._revision(content), self._revision(encoded),
+                             self._public(encoded, candidate), encoded != content)
+
+    def restrict_recognition(self, expected_revision: str, feature: str,
+                             retained: list[str]) -> AiPortSettings:
+        """Remove only saved scope. Runtime needs restart; history/models/keys stay.
+
+        A previous provider Undo becomes stale and cannot restore removed scope.
+        This operation never writes a new provider-undo record.
+        """
+        # Reject invalid requests before creating the shared apply lock/history.
+        self._recognition_restriction(expected_revision, feature, retained)
+        with self._locked():
+            content, candidate, encoded = self._recognition_restriction(expected_revision, feature, retained)
+            if encoded == content:
+                return self._public(content, candidate)
+            self._archive(content)
+            try:
+                atomic_private(self.path, encoded)
+            except OSError as exc:
+                raise AiPortConfigurationError("aiport_config_write_uncertain") from exc
+            persisted, checked = self._read()
+            if persisted != encoded:
+                raise AiPortConfigurationError("aiport_config_write_uncertain")
+            return self._public(persisted, checked)
 
     def preview(self, expected_revision: str, settings: dict[str, Any]) -> AiPortPreview:
         content, current = self._read()

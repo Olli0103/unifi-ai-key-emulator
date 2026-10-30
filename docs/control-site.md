@@ -299,3 +299,27 @@ restart and unchanged native device/pairing baseline. It remains NAS-loopback
 only; there is no LAN TLS, browser/mobile, real apply/rollback, host-reboot or
 sustained-operation acceptance claim. This does not change the default deployment
 or enable an administration service merely by upgrading a processor image.
+
+## Removing saved AI Port recognition permissions
+
+For attached Port profiles, **Remove saved AI Port face or sound permissions**
+opens a remove-only page. It can shrink an already configured face-recognition
+or sound-classification camera list, or disable that saved role. It cannot enroll
+a camera, enable an absent role, change its model or provider, delete evidence or
+revoke a key. Individual selection requires unambiguous camera names from the
+configured pinned inventory; during an inventory outage, disabling the whole
+saved role still works. Opaque selection labels are bound to the current session,
+profile, feature and saved revision; they are not standalone authorization.
+
+**These are saved settings, not live revocation.** Restart the selected Port
+through its deployment manager to apply them. The page does not stop a processor
+or its existing audio/detection work. Disabling sound classification does not
+disable a separately saved speech/audio policy. Models, keys and private history
+remain; no recording, template, provider or backup copy is deleted. A preceding
+provider Undo cannot regrant the removed scope; a later provider-only Undo keeps
+the reduced scope. After an uncertain save, reload the current saved settings
+before retrying; do not assume no effect or automatically repeat the operation.
+
+Source/fixture verification does not mean that a deployed admin/Port image has
+been updated or that real camera permissions were changed. See the
+[permission boundary and limits](evidence/aiport-permission-restrictions-20261030.md).
