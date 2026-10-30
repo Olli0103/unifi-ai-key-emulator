@@ -177,6 +177,15 @@ With optional pinned Protect inventory settings, the signed-in site has a read-o
 
 The site can run on the host while each processor runs in a container. Give it the host path to the private AI Key configuration and any existing AI Port configurations you want to manage. It writes new key files into the corresponding host state folder with mode 600 and stores the processor-visible path in the config. AI Key reads its processor state path from `runtime.state_dir`; pass AI Port's processor path with `--aiport-runtime-state-dir`. Each configured processor mount must expose its host state folder at that path. The default listener stays on loopback HTTP. Do not publish or reverse-proxy that plaintext listener onto a LAN. For explicit direct TLS, use the HTTPS mode below; forwarding headers are not trusted.
 
+The read-only data-retention page checks at most 2,048 archive/reference entries
+and a 250-ms monotonic budget between local file operations. A large archive is
+shown as **incomplete**, with marker/problem totals unknown; a partial count is
+not a total or an expiry/deletion authorization. This is a cooperative scan bound,
+not a hard deadline for a stalled filesystem syscall. The separate archive CLI
+still performs a full inventory by default, and the expiry planner refuses an
+explicitly incomplete inventory. No replay marker is deleted by either status
+read. See the [scan boundary](evidence/retention-scan-budget-20261030.md).
+
 Initialize the administrator credential in a local terminal. The command prompts without echoing the password and refuses to overwrite an existing administrator:
 
 ```sh
