@@ -114,7 +114,7 @@ def test_stale_revision_and_unknown_feature_leave_all_files_unchanged(tmp_path):
     for revision in ("0" * 64, "é" * 64, None, 1):
         with pytest.raises(AiPortRevisionConflict):
             store.restrict_recognition(revision, "face", [])
-    for feature in ("speech", "../face", None, []):
+    for feature in ("transcript", "../face", None, []):
         with pytest.raises(AiPortConfigurationError):
             store.restrict_recognition(store.snapshot().revision, feature, [])
     assert digest(tmp_path) == before
@@ -223,7 +223,7 @@ async def test_refused_http_requests_cannot_change_saved_scope(tmp_path, kind):
         if kind == "profile":
             fields["profile"] = "aiport:missing"
         if kind == "feature":
-            fields["feature"] = "speech"
+            fields["feature"] = "transcript"
         if kind == "revision":
             fields["revision"] = "0" * 64
         if kind == "cross_feature":

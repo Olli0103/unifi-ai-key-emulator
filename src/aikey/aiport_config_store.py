@@ -26,7 +26,7 @@ _FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
 _OPTIONAL_FIELDS = frozenset({"api_key_file", "max_requests_per_hour"})
 _PROVIDER_FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
                               "allow_insecure_http", "max_output_tokens", "api_key_file"})
-_RECOGNITION_SCOPES = {"face": "live_face", "sound": "live_sound"}
+_RECOGNITION_SCOPES = {"face": "live_face", "sound": "live_sound", "speech": "live_speech_cameras"}
 
 
 class AiPortConfigurationError(ValueError):
@@ -138,7 +138,9 @@ class AiPortConfigurationStore:
             raise AiPortConfigurationError("aiport_unknown_recognition_feature")
         content, current = self._read()
         role = current.get(_RECOGNITION_SCOPES[feature])
-        return self._revision(content), tuple(role["cameras"]) if role is not None else None
+        if role is None:
+            return self._revision(content), None
+        return self._revision(content), tuple(role if feature == "speech" else role["cameras"])
 
     def _recognition_restriction(self, expected_revision: str, feature: str,
                                 retained: list[str]) -> tuple[bytes, dict, bytes]:
@@ -152,20 +154,31 @@ class AiPortConfigurationStore:
         role = current.get(field)
         if role is None:
             raise AiPortConfigurationError("aiport_recognition_not_configured")
-        if (not isinstance(retained, list) or len(retained) > len(role["cameras"])
+        cameras = role if feature == "speech" else role["cameras"]
+        if (not isinstance(retained, list) or len(retained) > len(cameras)
                 or any(not isinstance(camera, str) for camera in retained)
                 or len(set(retained)) != len(retained)
-                or not set(retained) <= set(role["cameras"])):
+                or not set(retained) <= set(cameras)):
             raise AiPortConfigurationError("aiport_recognition_remove_only")
+        if (feature == "speech" and not set(current.get("live_sound", {}).get("cameras", ()))
+                <= set(retained)):
+            raise AiPortConfigurationError("aiport_audio_required_by_sound")
         # Validate against canonical camera IDs, but preserve every unrelated
         # saved value/default omission instead of writing loader normalization.
         original = json.loads(content)
         candidate = deepcopy(original)
         if retained:
-            candidate[field]["cameras"] = [raw for raw, camera in zip(
-                original[field]["cameras"], role["cameras"], strict=True) if camera in retained]
+            raw_cameras = original[field] if feature == "speech" else original[field]["cameras"]
+            remaining = [raw for raw, camera in zip(raw_cameras, cameras, strict=True)
+                         if camera in retained]
+            if feature == "speech":
+                candidate[field] = remaining
+            else:
+                candidate[field]["cameras"] = remaining
         else:
             del candidate[field]
+            if feature == "speech":
+                candidate.pop("live_speech_max_events_per_hour", None)
         if candidate == original:
             return content, current, content
         self._validate(candidate)
