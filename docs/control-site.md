@@ -91,6 +91,31 @@ visual/mobile acceptance or a deployed permission change. See [checks and limits
 
 ## Model catalogs
 
+### Preview a role-model change
+
+Editable caption, configured speech and API-detection models use **Preview model
+change** before the normal confirmation form. The preview reports the old/new
+model, unchanged provider/key/permissions and search index, and whether a
+controlled processor restart is needed. Current jobs keep the current runtime;
+the preview neither drains/cancels jobs nor restarts or hot-swaps a processor.
+The unchanged-model case adds no new restart requirement; it does not prove
+that a prior saved change is already active. Search encoders
+remain non-editable here and require the separate migration flow.
+
+Preview reads and validates only: it does not load a provider key, create history
+or undo records, contact a model/catalog, prove model capability or activate the
+selection. It does not turn a catalog/manual model ID into verified modality or
+versioned weights. Confirmation keeps the same revision and the existing
+write/uncertain-outcome rules; an intervening save is refused rather than
+overwritten. The revision-checked apply API remains available for explicit
+clients, not as proof that a human viewed a preview. Both POST endpoints require
+the normal session/origin/CSRF and shared operation-rate checks. The
+confirmation form is withheld if the session expires or is revoked during the
+read-only preview.
+
+This is source/HTTP evidence; native browser/mobile use and the remaining
+complete role registry/capability requirements stay open in #8/#17.
+
 Each configured editable API role has a **List available model IDs** action in
 Models by role. The form shows the saved destination before the request. This
 action is authenticated, same-origin/CSRF checked and bound to the configuration

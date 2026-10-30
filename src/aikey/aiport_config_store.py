@@ -17,6 +17,7 @@ from typing import Any, Iterator
 
 from .aiport_candidate import CandidateError, parse_config
 from .config import atomic_private
+from .role_changes import RoleModelPreview
 
 
 _REVISION = re.compile(r"[0-9a-f]{64}\Z")
@@ -259,6 +260,30 @@ class AiPortConfigurationStore:
                                   "reason": "vision_provider_not_configured"}}
         return {"detection": {"model": detector.get("provider_config", {}).get("model"),
                               "editable": True, "reason": None}}
+
+    def preview_role_model(self, expected_revision: str, role: str, model: str) -> RoleModelPreview:
+        """Preview one local config, never instantiate a detector or write a key."""
+        if role != "detection":
+            raise AiPortConfigurationError("unknown_role")
+        if not isinstance(model, str) or not _MODEL_ID.fullmatch(model) or ".." in model:
+            raise AiPortConfigurationError("invalid_model_id")
+        content, current = self._read()
+        revision = self._revision(content)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(revision, expected_revision)):
+            raise AiPortRevisionConflict("aiport_config_changed")
+        detector = current.get("live_pool_detector", {})
+        if detector.get("inference_backend") != "vision_api":
+            raise AiPortConfigurationError("vision_provider_not_configured")
+        previous = detector.get("provider_config", {}).get("model")
+        changed = previous != model
+        resulting = revision
+        if changed:
+            candidate = json.loads(content)
+            candidate["live_pool_detector"]["provider_config"]["model"] = model
+            self._validate(candidate)
+            resulting = self._revision(self._encode(candidate))
+        return RoleModelPreview(revision, resulting, role, previous, model, changed)
 
     def apply_role_model(self, expected_revision: str, role: str, model: str) -> AiPortSettings:
         """Change only the detection model; provider, endpoint, key and streams stay."""

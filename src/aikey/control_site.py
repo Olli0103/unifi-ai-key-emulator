@@ -191,6 +191,7 @@ class ControlSite:
         app.router.add_post("/provider", self.save_provider)
         app.router.add_post("/provider/rollback", self.rollback_provider)
         app.router.add_post("/role-model", self.save_role_model)
+        app.router.add_post("/role-model-preview", self.preview_role_model)
         app.router.add_post("/speech-provider", self.save_speech_provider)
         app.router.add_get("/speech-permissions", self.speech_permissions)
         app.router.add_post("/speech-permissions", self.restrict_speech_permissions)
@@ -1236,14 +1237,14 @@ class ControlSite:
             for role, info in roles.items():
                 label = self._ROLE_LABELS.get(role, role)
                 if info["editable"]:
-                    control = ("<form method='post' action='/role-model'>"
+                    control = ("<form method='post' action='/role-model-preview'>"
                                f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
                                f"<input type='hidden' name='profile' value='{_safe(profile)}'>"
                                f"<input type='hidden' name='role' value='{_safe(role)}'>"
                                f"<input type='hidden' name='revision' value='{_safe(revision)}'>"
                                f"<input name='model' required maxlength='128' "
                                f"value='{_safe(info['model'] or '')}' aria-label='{_safe(label)} model'>"
-                               "<button>Save model</button></form>")
+                               "<button>Preview model change</button></form>")
                     try:
                         saved, _, _ = store.catalog_configuration(revision, role)
                         destination = saved.get("base_url") or DEFAULT_BASE_URLS.get(saved.get("provider"))
@@ -1442,6 +1443,54 @@ class ControlSite:
                      + rows + "</table></div>"
                      + ("<p>The API returned no models.</p>" if not rows else "")
                      + "<p><a href='/'>Back to settings</a></p>")
+
+    async def preview_role_model(self, request: web.Request) -> web.Response:
+        fields = await request.post()
+        cookie = self._session(request, mutate=True, csrf=fields.get("csrf"))
+        if cookie is None:
+            self._audit("role_model", "forbidden")
+            raise web.HTTPForbidden()
+        profile = fields.get("profile", "")
+        store = self.aikey if profile == "aikey" else self.aiports.get(profile)
+        if store is None:
+            self._audit("role_model", "unknown_profile")
+            raise web.HTTPBadRequest(text="Unknown profile")
+        try:
+            p = await asyncio.to_thread(store.preview_role_model, fields.get("revision"),
+                                        fields.get("role"), fields.get("model"))
+        except (ConfigurationStoreError, AiPortConfigurationError, OSError):
+            self._audit("role_model", "preview_refused", profile)
+            return _page("Model preview unavailable", "<h1>Model preview unavailable</h1>"
+                         "<p>The role, model, revision or settings could not be validated. "
+                         "Nothing has been saved or tested. Reload settings before trying again.</p>"
+                         "<p><a href='/'>Back to settings</a></p>")
+        # No save has happened; an expired/revoked session gets no confirmation form.
+        if self._session(request) is None:
+            self._audit("role_model", "forbidden", profile)
+            raise web.HTTPForbidden()
+        self._audit("role_model", "previewed", profile)
+        changes = ("<p>Current jobs keep their current runtime and model. A controlled processor "
+                   "restart is required to use the saved model for new jobs. This page does not "
+                   "drain, cancel or restart a processor.</p>" if p.restart_required else
+                   "<p>This model is already selected in saved settings. This request adds no "
+                   "settings change or restart requirement. It does not check whether prior "
+                   "changes still need activation.</p>")
+        hidden = {"csrf": fields["csrf"], "profile": profile, "role": p.role,
+                  "revision": p.current_revision, "model": p.proposed_model}
+        form = "".join(f"<input type='hidden' name='{name}' value='{_safe(value)}'>"
+                       for name, value in hidden.items())
+        return _page("Preview model change", "<h1>Preview model change</h1>"
+                     "<p>Nothing has been saved. No model request was sent.</p>"
+                     f"<p>Role: {_safe(p.role)}. Saved model: {_safe(p.previous_model or '—')} "
+                     f"→ {_safe(p.proposed_model)}.</p>" + changes +
+                     "<p>Search index unchanged. Provider, destination, credentials and camera "
+                     "permissions are unchanged. Changing an encoder requires a separate index "
+                     "migration. No past events are reprocessed.</p><p>Model capability has not been tested. A valid model ID "
+                     "or catalog entry is not proof of modality, quality or versioned weights.</p>"
+                     "<p>Confirmation rechecks the same configuration revision; an intervening "
+                     "save requires a fresh preview.</p><form method='post' action='/role-model'>"
+                     + form + "<button>Confirm model change</button></form>"
+                     "<p><a href='/'>Cancel and return to settings</a></p>")
 
     async def save_role_model(self, request: web.Request) -> web.Response:
         fields = await request.post()
