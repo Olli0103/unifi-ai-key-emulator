@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import deque
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 import getpass
@@ -11,6 +12,7 @@ import hashlib
 import hmac
 import html
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -50,6 +52,8 @@ from .provider_probe import ProbeError, ProbeGrants, probe_speech, probe_vision
 _COOKIE = "aikey_admin_local"
 _G3_G5_MODEL = re.compile(r"UVC G[345](?:\s|\Z)")
 _INSTANCE_NAME = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
+_MUTATION_LIMIT = 60
+_MUTATION_WINDOW = 60.0
 _STYLE = """
 :root { font-family: system-ui, sans-serif; color: #192430; background: #f4f7fb; }
 body { max-width: 1100px; margin: 2rem auto; padding: 0 1.2rem; }
@@ -164,6 +168,11 @@ class ControlSite:
         self._catalog_lock = asyncio.Lock()
         self._catalog_next_at = 0.0
         self._probe_grants = ProbeGrants()
+        # One bounded runtime-wide window, not per cookie/IP: a fresh login or
+        # forged forwarding header cannot buy more file/provider operations.
+        self._mutation_times: deque[float] = deque(maxlen=_MUTATION_LIMIT)
+        self._mutation_clock = time.monotonic
+        self._mutation_limited_logged = False
 
     def app(self) -> web.Application:
         app = web.Application(client_max_size=8192)
@@ -580,6 +589,23 @@ class ControlSite:
         origin = request.headers.get("Origin", "") if mutate else self.origin
         decision = self.security.authorize(
             "POST" if mutate else "GET", origin, cookie, csrf)
+        if decision.allowed and mutate and request.path != "/logout":
+            now = self._mutation_clock()
+            while self._mutation_times and self._mutation_times[0] <= now - _MUTATION_WINDOW:
+                self._mutation_times.popleft()
+            if len(self._mutation_times) >= _MUTATION_LIMIT:
+                if not self._mutation_limited_logged:
+                    self._audit("mutation", "rate_limited")
+                    self._mutation_limited_logged = True
+                retry = max(1, math.ceil(self._mutation_times[0] + _MUTATION_WINDOW - now))
+                page = _page("Too many changes", "<h1>Too many changes</h1>"
+                             "<p>No configuration change or provider request was started by "
+                             "this request. Wait before trying again. You can still view "
+                             "settings and sign out.</p>")
+                page.headers["Retry-After"] = str(retry)
+                raise web.HTTPTooManyRequests(text=page.text, headers=page.headers)
+            self._mutation_times.append(now)
+            self._mutation_limited_logged = False
         return cookie if decision.allowed else None
 
     async def login_page(self, request: web.Request) -> web.Response:
