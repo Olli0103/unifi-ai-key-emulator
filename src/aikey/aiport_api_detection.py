@@ -120,7 +120,7 @@ FALLBACK_REASONS = ("http_429", "http_5xx", "request_failed", "dns_unavailable",
 _FALLBACK_BACKOFF_S = (30, 300)
 
 
-def _detection_json(text: str) -> object:
+def _detection_json(text: str | bytes) -> object:
     """Reject ambiguity before field selection or coordinate normalization."""
     def unique_fields(pairs):
         result = {}
@@ -546,6 +546,20 @@ class _NoRedirect(HTTPRedirectHandler):
         return None
 
 
+def _reply_object(raw: bytes, failure: str) -> dict:
+    """Reject outer ambiguity before extraction, without raw parser chaining."""
+    try:
+        result = _detection_json(raw)
+    except (ValueError, TypeError, RecursionError):
+        result = None
+    if not isinstance(result, dict):
+        # Raise outside the decoder handler: its exception can hold the entire
+        # private reply. Keep the existing failure codes/fallback policy, not a
+        # raw parser __cause__/__context__, in the transport error.
+        raise ApiDetectionError(failure) from None
+    return result
+
+
 def _post(url: str, headers: dict, payload: dict, *, timeout: float = 15) -> dict:
     body = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode()
     request = Request(url, data=body, headers={**headers, "Content-Type": "application/json"},
@@ -559,10 +573,7 @@ def _post(url: str, headers: dict, payload: dict, *, timeout: float = 15) -> dic
             raw = response.read(_MAX_REPLY_BYTES + 1)
             if len(raw) > _MAX_REPLY_BYTES:
                 raise ApiDetectionError("api_detection_response_too_large")
-            result = json.loads(raw)
-            if not isinstance(result, dict):
-                raise ValueError
-            return result
+            return _reply_object(raw, "api_detection_request_failed")
     except ApiDetectionError:
         raise
     except ProviderLookupError:
@@ -614,10 +625,7 @@ def _post_jpeg(url: str, jpeg: bytes, *, timeout: float = _SCORE_TIMEOUT_S) -> d
             raw = response.read(_MAX_REPLY_BYTES + 1)
             if len(raw) > _MAX_REPLY_BYTES:
                 raise ApiDetectionError("score_response_too_large")
-            result = json.loads(raw)
-            if not isinstance(result, dict):
-                raise ValueError
-            return result
+            return _reply_object(raw, "score_unavailable")
     except ApiDetectionError:
         raise
     except (ProviderAddressError, HTTPError, URLError, OSError, ValueError) as exc:
