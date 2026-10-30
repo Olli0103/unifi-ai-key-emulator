@@ -65,6 +65,14 @@ def normalize_embedding(values: Any) -> list[float]:
     return [float(value / norm) for value in values]
 
 
+def validate_embedding_settings(config: dict) -> None:
+    """Refuse ignored provider parameters without loading any model or key."""
+    if (not isinstance(config, dict) or set(config) - {
+            "backend", "model", "base_url", "endpoint", "allow_remote", "allow_insecure_http",
+            "bearer_token_file", "timeout_seconds", "model_path", "device", "revision"}):
+        raise EmbeddingError("Unsupported embedding provider settings")
+
+
 class EmbeddingService:
     """One encoder configuration shared by document and query inference.
 
@@ -73,6 +81,7 @@ class EmbeddingService:
     """
 
     def __init__(self, config: dict[str, Any]):
+        validate_embedding_settings(config)
         self.config = dict(config)
         self.backend = self.config.get("backend", "disabled")
         self.model = self.config.get("model", MODEL)

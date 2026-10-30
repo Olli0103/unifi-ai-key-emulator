@@ -356,6 +356,11 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
     # configuration can be persisted. Local/disabled encoders still construct
     # EmbeddingService at startup and must use its supported model identity.
     backend = config["embeddings"].get("backend", "disabled")
+    from .search import EmbeddingError, validate_embedding_settings
+    try:
+        validate_embedding_settings(config["embeddings"])
+    except EmbeddingError as exc:
+        raise ConfigError(str(exc)) from None
     if not isinstance(backend, str) or backend not in {"http", "sentence-transformers", "disabled"}:
         raise ConfigError("embeddings.backend must be http, sentence-transformers or disabled")
     from .search import EmbeddingError, EmbeddingService

@@ -54,6 +54,10 @@ class VisionProvider:
     """An explicitly selected API and model, independent of controller sessions."""
 
     def __init__(self, config: dict, *, lab: bool = False, require_api_key: bool = True):
+        if (not isinstance(config, dict) or set(config) - {
+                "provider", "model", "base_url", "api_key", "api_key_file", "allow_remote",
+                "allow_insecure_http", "max_output_tokens", "temperature"}):
+            raise ProviderError("Unsupported vision provider settings")
         self.provider = config.get("provider", "openai-compatible")
         if self.provider not in DEFAULT_BASE_URLS:
             raise ProviderError("Unsupported inference.provider")
