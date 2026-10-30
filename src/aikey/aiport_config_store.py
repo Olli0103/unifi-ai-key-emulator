@@ -264,6 +264,11 @@ class AiPortConfigurationStore:
         return {role: {"model": detector[field].get("model"), "editable": True, "reason": None}
                 for role, field in _ROLE_PROVIDER_FIELDS.items() if isinstance(detector.get(field), dict)}
 
+    def model_registry(self) -> dict:
+        from .model_roles import port_roles
+        content, current = self._read()
+        return port_roles(current, self._revision(content))
+
     def preview_role_model(self, expected_revision: str, role: str, model: str) -> RoleModelPreview:
         """Preview one local config, never instantiate a detector or write a key."""
         if role not in _ROLE_PROVIDER_FIELDS:

@@ -186,6 +186,7 @@ class ControlSite:
         app.router.add_get("/audit", self.audit_page)
         app.router.add_get("/caption-preflight", self.caption_preflight_page)
         app.router.add_get("/state-backup-preflight", self.state_backup_page)
+        app.router.add_get("/model-registry", self.model_registry_page)
         app.router.add_get("/login", self.login_page)
         app.router.add_post("/login", self.login)
         app.router.add_post("/provider", self.save_provider)
@@ -205,6 +206,55 @@ class ControlSite:
 
     async def health(self, _: web.Request) -> web.Response:
         return web.json_response({"service": "control-site"})
+
+    async def model_registry_page(self, request: web.Request) -> web.Response:
+        """Saved role contracts only, never a capability/active-runtime probe."""
+        if self._session(request) is None:
+            raise web.HTTPSeeOther("/login")
+        rows = []
+        stores = [("AI Key", self.aikey)] + [
+            ("this AI Port" if profile == "aiport" else "AI Port " + profile.partition(":")[2], store)
+            for profile, store in self.aiports.items()]
+        policies = {"role_model_preview": "Model preview and revision-checked save",
+                    "index_migration": "Separate index migration required",
+                    "separate_ocr_configuration": "Configure a separate OCR assignment first",
+                    "separate_feature_flow": "Separate feature/model procedure; not editable here"}
+        for title, store in stores:
+            try:
+                report = await asyncio.to_thread(store.model_registry)
+            except (ConfigurationStoreError, AiPortConfigurationError, OSError, ValueError):
+                rows.append(f"<tr><th scope='row'>{_safe(title)}</th>"
+                            "<td colspan='7'>Saved role data unavailable. Nothing was changed.</td></tr>")
+                continue
+            for entry in report["roles"]:
+                shape = entry["dimensions"]
+                if entry["source_dimensions"] is not None:
+                    shape = f"{entry['source_dimensions']} source → {shape} stored"
+                contract = entry["expected_model"] + "; " + entry["output"]
+                if shape is not None:
+                    contract += f" ({shape})"
+                status = "Configured in saved settings" if entry["configured"] else "Not configured"
+                if entry["assignment"] == "legacy_shared_detection" and entry["configured"]:
+                    status += "; shares the detection assignment"
+                selected = entry["model"] or ("Server-managed; not reported" if entry["configured"] else "—")
+                cells = (title, self._ROLE_LABELS.get(entry["role"], entry["role"]), status,
+                         selected, entry["backend"] or "—", contract, entry["selection_id"] or "—",
+                         policies[entry["change_policy"]])
+                rows.append("<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in cells) + "</tr>")
+        return _page("Saved model role registry", "<h1 id='role-registry'>Saved model role registry</h1>"
+                     "<p><a href='/'>Settings</a></p><p>Read-only, schema version 1. Saved assignments "
+                     "are not active-runtime status. This read sends no provider request, reads no "
+                     "referenced model or key file, and changes no settings.</p>"
+                     "<p>Selection IDs version the declared role, model, backend, source and contract. "
+                     "They do not verify server-managed weights, modality, quality, or vector "
+                     "compatibility. Capability and weights are not checked by this read. Catalog "
+                     "availability and a synthetic API test are separate, limited evidence.</p>"
+                     "<div class='scroll' role='region' aria-labelledby='role-registry' tabindex='0'>"
+                     "<table><tr><th scope='col'>Profile</th><th scope='col'>Role</th>"
+                     "<th scope='col'>Saved binding</th><th scope='col'>Saved model</th>"
+                     "<th scope='col'>Provider/backend</th>"
+                     "<th scope='col'>Role contract</th><th scope='col'>Selection ID</th>"
+                     "<th scope='col'>Change boundary</th></tr>" + "".join(rows) + "</table></div>")
 
     async def _rollout_plan(self) -> tuple[dict, dict]:
         report = await self.inventory_loader()
@@ -677,7 +727,8 @@ class ControlSite:
                 + "<p><a href='/data-retention'>Data flow and retention (read-only)</a> · "
                   "<a href='/audit'>Audit log</a> · "
                   "<a href='/caption-preflight'>Caption preflight</a> · "
-                  "<a href='/state-backup-preflight'>Backup preflight</a></p>"
+                  "<a href='/state-backup-preflight'>Backup preflight</a> · "
+                  "<a href='/model-registry'>Saved model role registry</a></p>"
                 + ("<p><a href='/aiport-permissions'>Remove saved AI Port face, sound or speech permissions</a></p>"
                    if ports else "")
                 + undo_form + self._role_models_section(csrf) + self._speech_form(key, csrf)
@@ -881,6 +932,9 @@ class ControlSite:
 
     _ROLE_LABELS = {"caption": "Captions (vision)", "speech": "Speech to text",
                     "ocr": "AI Port plate text (OCR)",
+                    "reverification": "Local reverification", "recognition": "Face recognition",
+                    "reidentification": "Person Re-ID", "reranking": "Search reranking",
+                    "enhancement": "Image enhancement",
                     "detection": "AI Port detection", "search_image_text": "Search image/text encoder",
                     "text_embedding": "Text embeddings"}
     _ROLE_REASONS = {"index_migration_required": "Pinned by the search index; change it through the "

@@ -91,6 +91,14 @@ visual/mobile acceptance or a deployed permission change. See [checks and limits
 
 ## Model catalogs
 
+The authenticated [saved model-role registry](model-roles.md) at
+`/model-registry` covers fixed and external-service roles as well as editable
+API models. It reports saved assignments and versioned selection IDs, not active
+runtime status or checked model capability/weights. It reads no referenced key
+or model file and sends no backend request. Unreported server-managed models
+stay unknown. Separate camera/enrollment/migration procedures are not offered
+as available generic model-edit actions.
+
 ### Preview a role-model change
 
 Editable caption, configured speech and API-detection models use **Preview model

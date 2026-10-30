@@ -339,6 +339,11 @@ class ConfigurationStore:
             roles[role] = {"model": model, "editable": False, "reason": "index_migration_required"}
         return roles
 
+    def model_registry(self) -> dict:
+        from .model_roles import key_roles
+        content, current = self._read(self.path)
+        return key_roles(current, _revision(content))
+
     def preview_role_model(self, expected_revision: str, role: str, model: str) -> RoleModelPreview:
         """Read/validate consequences only: no key load, history, inference or save."""
         if role in FIXED_ROLE_MODELS:
