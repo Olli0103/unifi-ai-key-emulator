@@ -43,6 +43,12 @@ See the [backup-status boundary and limits](evidence/index-backup-status-2026102
 
 ## Data flow and retention
 
+The private, versioned [administration JSON adapter](admin-api.md) reuses this
+listener's current session, Host/Origin/CSRF checks and shared mutation window.
+Its configuration responses are private operator data, not a public diagnostic
+export. It currently provides saved profile/configuration/role views and Key
+preview/apply/rollback; Port full edits and maintenance actions remain unavailable.
+
 The signed-in [data-flow and retention page](data-retention.md) separately shows
 all output/state categories, other destinations, product defaults and current
 lifecycle mechanisms. It is read-only: unavailable counts are not zero, local

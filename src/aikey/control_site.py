@@ -202,6 +202,9 @@ class ControlSite:
         app.router.add_post("/provider-probe", self.provider_probe)
         app.router.add_post("/logout", self.logout)
         app.router.add_get("/healthz", self.health)
+        from .admin_api import AdminAPI
+        self.admin_api = AdminAPI(self)
+        self.admin_api.register(app)
         return app
 
     async def health(self, _: web.Request) -> web.Response:
