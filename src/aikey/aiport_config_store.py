@@ -222,6 +222,48 @@ class AiPortConfigurationStore:
                 raise AiPortConfigurationError("aiport_policy_write_uncertain")
             return ConfigurationSnapshot(target_revision, _public(checked))
 
+    def plate_camera_status(self) -> dict:
+        """Internal existing-camera scope and public OCR route; never a key reference."""
+        content, current = self._read()
+        detector = current.get("live_pool_detector", {})
+        route = detector.get("ocr_provider_config") or detector.get("provider_config") or {}
+        return {"revision": self._revision(content),
+                "eligible": detector.get("inference_backend") == "vision_api",
+                "cameras": tuple(s["camera_mac"] for s in current.get("paired_streams", ())),
+                "plate_cameras": tuple(detector.get("plate_cameras", ())),
+                "separate_ocr": bool(detector.get("ocr_provider_config")),
+                "vehicle_detection_enabled": "vehicle" in detector.get("smart_types", ()),
+                "route": {k: route.get(k) for k in ("provider", "model", "base_url")}}
+
+    def _plate_camera_patch(self, expected_revision, selected):
+        content, current = self._read()
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(self._revision(content), expected_revision)):
+            raise AiPortRevisionConflict("aiport_config_changed")
+        detector = current.get("live_pool_detector", {})
+        cameras = [s["camera_mac"] for s in current.get("paired_streams", ())]
+        if (detector.get("inference_backend") != "vision_api" or not isinstance(selected, list)
+                or len(selected) > len(cameras) or any(not isinstance(c, str) for c in selected)
+                or len(set(selected)) != len(selected) or not set(selected) <= set(cameras)):
+            raise AiPortConfigurationError("aiport_plate_camera_selection_invalid")
+        if set(selected) == set(detector.get("plate_cameras", ())):
+            return {}
+        if not selected:
+            # An OCR route without plate permission is invalid in the runtime schema.
+            # The explicit preview must disclose this removal; key files are retained.
+            change = {"plate_cameras": None, "ocr_provider_config": None}
+        else:
+            original = json.loads(content)
+            change = {"plate_cameras": [raw["camera_mac"] for raw, camera in
+                       zip(original["paired_streams"], cameras, strict=True) if camera in selected]}
+        return {"live_pool_detector": change}
+
+    def preview_plate_cameras(self, expected_revision, selected) -> ConfigurationPreview:
+        return self.preview_patch(expected_revision, self._plate_camera_patch(expected_revision, selected))
+
+    def apply_plate_cameras(self, expected_revision, selected) -> ConfigurationSnapshot:
+        return self.apply_patch(expected_revision, self._plate_camera_patch(expected_revision, selected))
+
     def camera_threshold_status(self) -> dict:
         """Internal camera IDs; the browser adapter substitutes opaque choices."""
         content, current = self._read()

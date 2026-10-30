@@ -72,6 +72,9 @@ class AdminAPI:
         from .camera_threshold_control import CameraThresholdControl
         self.camera_threshold_control = CameraThresholdControl(self.site)
         self.camera_threshold_control.register(app)
+        from .plate_camera_control import PlateCameraControl
+        self.plate_camera_control = PlateCameraControl(self.site)
+        self.plate_camera_control.register(app)
 
     async def maintenance_history(self, request):
         if not self.authenticated(request):

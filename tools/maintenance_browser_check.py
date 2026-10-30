@@ -286,6 +286,42 @@ async def scenario(output, name, viewport, executable):
             await gate_undo.get_by_role("button", name="Undo camera thresholds", exact=True).click()
             await expect(page.get_by_text("Prior camera thresholds restored; running service unchanged.", exact=True)).to_be_visible()
             assert port_config.read_bytes() == port_bytes and not fixture_requests
+            await page.goto(origin + "/plate-cameras")
+            plates = page.locator("form[action='/plate-cameras/preview']")
+            await plates.get_by_role("checkbox", name="Allow plate crops: Fictional hall", exact=True).uncheck()
+            await plates.get_by_role("button", name="Preview plate permissions", exact=True).click()
+            await expect(page.get_by_role("heading", name="Confirm plate permissions", exact=True)).to_be_visible()
+            assert port_config.read_bytes() == port_bytes and not fixture_requests
+            await page.get_by_role("checkbox", name="I authorize the selected cameras' plate crops", exact=False).check()
+            await page.get_by_role("button", name="Save plate permissions", exact=True).click()
+            await expect(page.get_by_text("Plate permissions saved; running service unchanged.", exact=True)).to_be_visible()
+            cleared = json.loads(port_config.read_text())
+            expected = json.loads(port_bytes)
+            expected["live_pool_detector"].pop("plate_cameras")
+            assert cleared == expected and not fixture_requests
+            plates = page.locator("form[action='/plate-cameras/preview']")
+            await plates.get_by_role("checkbox", name="Allow plate crops: Fictional hall", exact=True).check()
+            await plates.get_by_role("button", name="Preview plate permissions", exact=True).click()
+            await expect(page.get_by_role("heading", name="Confirm plate permissions", exact=True)).to_be_visible()
+            plate_button = page.get_by_role("button", name="Save plate permissions", exact=True)
+            await plate_button.click()
+            assert "plate_cameras" not in json.loads(port_config.read_text())["live_pool_detector"]
+            plate_ack = page.get_by_role("checkbox", name="I authorize the selected cameras' plate crops", exact=False)
+            await plate_ack.focus()
+            await page.keyboard.press("Space")
+            await expect(plate_ack).to_be_checked()
+            await page.keyboard.press("Tab")
+            await expect(plate_button).to_be_focused()
+            assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+            await page.screenshot(path=str(output / (name + "-plate-camera-confirm.png")), full_page=True)
+            await page.keyboard.press("Enter")
+            await expect(page.get_by_text("Plate permissions saved; running service unchanged.", exact=True)).to_be_visible()
+            assert json.loads(port_config.read_text()) == json.loads(port_bytes) and not fixture_requests
+            assert config.read_bytes() == config_bytes
+            await page.screenshot(path=str(output / (name + "-plate-camera-saved.png")), full_page=True)
+            # Permission removal intentionally has no automatic Undo/regrant.
+            # The fixture alone restores formatting after checking full semantic equality.
+            atomic_private(port_config, port_bytes)
             await page.goto(origin + "/")
             probe = page.locator("form[action='/provider-probe']").filter(
                 has=page.locator("input[name='profile'][value='aiport']")).filter(
@@ -367,6 +403,10 @@ async def scenario(output, name, viewport, executable):
                 "ocr_administration_provider_calls": 0,
                 "camera_threshold_preview_keyboard_save_and_exact_undo": True,
                 "camera_threshold_provider_calls": 0,
+                "plate_camera_revoke_and_explicit_new_grant": True,
+                "plate_camera_keyboard_cost_destination_confirmation": True,
+                "plate_camera_provider_calls": 0,
+                "plate_fixture_restored_original_format_after_semantic_equality": True,
                 "synthetic_fixture_provider_calls": len(fixture_requests),
                 "provider_result": "http_503_no_retry" if name == "desktop" else "synthetic_answer_mismatch",
                 "synthetic_cost_acknowledgement_required": True}

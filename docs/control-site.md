@@ -605,3 +605,44 @@ reconcile; no automatic retry, restart or rollback is attempted.
 The maintained fictional desktop/mobile browser check covers preview, required
 acknowledgement, Space/Tab/Enter confirmation, saved result and exact undo.
 This is not live camera tuning, native Flur acceptance or full #17 completion.
+
+## Plate-crop camera permission
+
+`/plate-cameras` lets the operator explicitly select **already paired API Port
+cameras** whose detected vehicle crops may use the displayed OCR provider,
+model and base URL. It neither adds a stream nor silently enables vehicle
+classes. If vehicle detection is off, the page says permission alone will not
+make plate processing work. Capability and recognition accuracy stay unverified.
+
+Named selection uses the same fresh validated inventory and unambiguous opaque
+camera choices as the score-gate page, but a separate server-private signing
+key and plate-specific confirmation protocol. Every save requires explicit
+plate-data/destination/cost/restart consent. Confirmation binds the login,
+profile, raw configuration revision, current camera ID/name selection, full
+selection and resulting revision. Each random draft is usable once for ten
+minutes; admitting a change also invalidates older open drafts for that profile.
+This prevents an old grant from replaying after exact-byte revocation. Pending
+authority is bounded to 256 unexpired drafts and is lost on Admin restart;
+expired/evicted/restarted forms must be previewed again.
+
+The typed store changes only `live_pool_detector.plate_cameras`. If no camera
+remains, it also removes a separate `ocr_provider_config`, because the runtime
+schema disallows an OCR assignment without plate scope; that removal is shown
+explicitly before confirmation. Private key files remain. Detection route/key,
+classes, global/per-camera gates, fallback, request allowance, other recognition
+permissions, identity and streams remain unchanged. Selecting the current set
+is a byte-exact no-op; complete runtime validation and revision/lock checks are
+reused, not a new settings engine.
+
+These are **saved permissions only**, not immediate revocation: restart the
+selected Port separately to change running processing. The form sends no crop,
+model test, native pairing or restart. No one-click Undo silently regrants a
+removed permission. Re-enabling requires a fresh camera/destination review and
+explicit consent. An uncertain admitted write consumes its confirmation and
+requires saved-state reconciliation, not automatic retry, rollback or regrant.
+
+The fictional browser fixture exercises removal followed by a genuinely new
+explicit grant. It checks full semantic config equality and then the fixture
+restores its own original formatting; that is **not a product permission Undo**
+or proof of live-camera revocation/recognition. Real-client/native #19 acceptance
+and the broader #17 workflow remain outstanding.
