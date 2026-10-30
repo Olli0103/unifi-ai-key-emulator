@@ -21,6 +21,7 @@ from .config import atomic_private
 
 _PARENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}\Z")
 _NETWORK_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
+_PROJECT_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,62}\Z")
 _IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}\Z")
 _REQUIRED_STATE = ("config.json", "identity.json", "controller-ca.pem",
                    "device.crt", "device.key")
@@ -62,8 +63,11 @@ def _verified_state(state_dir: Path, uid: int) -> None:
 def build_nas_compose(plan: dict, state_dirs: dict[int, Path], *,
                       controller_ip: str, controller_pin: str, nas_ip: str,
                       subnet: str, gateway: str, parent: str, image: str,
-                      uid: int, gid: int, external_network: str | None = None) -> dict:
+                      uid: int, gid: int, external_network: str | None = None,
+                      project_name: str = "local-aiport") -> dict:
     """Build a static-IP Compose model after verifying every selected slot."""
+    if not isinstance(project_name, str) or not _PROJECT_NAME.fullmatch(project_name):
+        raise NasComposeError("A bounded lowercase Compose project name is required")
     if (not isinstance(plan, dict) or plan.get("schema") != "aikey-aiport-deployment-plan/2"
             or not isinstance(plan.get("instances"), list)
             or not isinstance(plan.get("ai_key"), dict)
@@ -150,7 +154,7 @@ def build_nas_compose(plan: dict, state_dirs: dict[int, Path], *,
                                         "mac_address": colon_mac}},
         }
     result = {
-        "name": "local-aiport",
+        "name": project_name,
         "services": services,
         "networks": {"aiport_lan": {
             "driver": "macvlan", "driver_opts": {"parent": parent},
@@ -179,6 +183,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--parent", required=True)
     parser.add_argument("--external-network",
                         help="Use an existing macvlan; the reconciler verifies its parent and IPAM")
+    parser.add_argument("--project-name", default="local-aiport",
+                        help="Freeze the reviewed Compose project name (default: local-aiport)")
     parser.add_argument("--image", required=True)
     parser.add_argument("--uid", required=True, type=int)
     parser.add_argument("--gid", required=True, type=int)
@@ -197,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
             plan, states, controller_ip=args.controller_ip, controller_pin=args.controller_pin,
             nas_ip=args.nas_ip, subnet=args.subnet, gateway=args.gateway,
             parent=args.parent, image=args.image, uid=args.uid, gid=args.gid,
-            external_network=args.external_network)
+            external_network=args.external_network, project_name=args.project_name)
         output = args.output
         if output.is_symlink() or (output.exists() and not stat.S_ISREG(output.stat().st_mode)):
             raise NasComposeError("Output must be a regular private file")
