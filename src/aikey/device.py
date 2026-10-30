@@ -15,6 +15,7 @@ import hmac
 import ipaddress
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -226,6 +227,79 @@ def _speech_rejection_reason(message: str) -> str:
     return reason
 
 
+class _RecentRecognizeRejections:
+    """Process-local, linkable diagnostics, never admission or native outcome proof.
+
+    At most 64 distinct safe tuples are visible for 900 monotonic seconds since
+    first observation. Pruning is lazy on record/read; restart loses all tuples.
+    No request body, identifier, URL, coordinates or error message is retained.
+    """
+
+    def __init__(self, *, reasons, clock=time.monotonic):
+        self.reasons = frozenset(reasons)
+        if any(type(reason) is not str or not re.fullmatch(r"[a-z][a-z0-9_]{0,47}", reason)
+               for reason in self.reasons):
+            raise ValueError("Invalid diagnostic reason policy")
+        self.clock = clock
+        self.rows = OrderedDict()
+
+    def _now(self):
+        try:
+            now = self.clock()
+            if type(now) not in (int, float) or not math.isfinite(now) or now < 0:
+                return None
+            return now
+        except Exception:
+            return None
+
+    def _prune(self, now):
+        if now is None:
+            self.rows.clear()
+        else:
+            for key, (created, _) in list(self.rows.items()):
+                if not 0 <= now - created < 900:
+                    del self.rows[key]
+
+    def record(self, body, reason):
+        if (not isinstance(body, dict) or type(reason) is not str or reason not in self.reasons
+                or type(body.get("camera")) is not str
+                or not re.fullmatch(r"[0-9a-fA-F]{24}", body["camera"])
+                or type(body.get("event")) is not str
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", body["event"])):
+            return
+        now = self._now()
+        self._prune(now)
+        if now is None:
+            return
+        schema = "local-aikey-native-rejection/1"
+        pair = json.dumps([body["camera"], body["event"]], separators=(",", ":"))
+        digest = hashlib.sha256((schema + "\0" + pair).encode("ascii")).hexdigest()
+        start, end = body.get("start"), body.get("end")
+        span = (end - start if type(start) is int and type(end) is int
+                and 0 <= start < end <= 2**53 - 1 else None)
+        ram_type = body.get("ramType")
+        moments = body.get("keyMoments")
+        row = {"event_fingerprint": digest, "reason": reason,
+               "ram_type": ram_type if type(ram_type) is str and ram_type in _RAM_TYPES else "other",
+               "post_vlm": body.get("postVLM") if type(body.get("postVLM")) is bool else None,
+               "metadata_mask": sum(1 << i for i, key in enumerate(
+                   ("personMeta", "faceMeta", "vehicleMeta", "thumbnailMeta")) if key in body),
+               "source_span_ms": span,
+               "key_moment_count": min(len(moments), 129) if isinstance(moments, list) else None}
+        key = tuple(row.values())
+        if key not in self.rows:
+            self.rows[key] = (now, row)
+            while len(self.rows) > 64:
+                self.rows.popitem(last=False)
+
+    def view(self):
+        self._prune(self._now())
+        return {"schema": "local-aikey-native-rejection/1",
+                "scope": "worker_rejection_only_native_outcome_unknown",
+                "capacity": 64, "retention_seconds": 900,
+                "records": [dict(row) for _, row in self.rows.values()]}
+
+
 def _increment(counter, key):
     counter[key] = min(counter[key] + 1, _COUNTER_LIMIT)
 
@@ -431,6 +505,8 @@ class DeviceService:
         self._lock = asyncio.Lock()
         self._pending: dict[str, tuple[bytes, asyncio.Future]] = {}
         self._completed: OrderedDict[str, tuple[bytes, bytes]] = OrderedDict()
+        self._recent_recognize_rejections = _RecentRecognizeRejections(
+            reasons=set(_WORKER_REJECTION_REASONS.values()) | {"unclassified_worker_error"})
         self._connections = 0
         self._last_error: str | None = None
         self._last_close_code: int | None = None
@@ -527,6 +603,7 @@ class DeviceService:
                 "unlisted": deepcopy(self._unlisted),
                 "sync_shapes": deepcopy(self._sync_shapes),
                 "recognize_key_frames": deepcopy(self._recognize_diagnostics),
+                "recognize_rejection_samples": self._recent_recognize_rejections.view(),
                 "speech_to_text": deepcopy(self._speech_diagnostics),
                 "request_ai_rejection_counts": deepcopy(self._request_ai_rejections),
                 "request_ai_rejection_targets": deepcopy(self._request_ai_rejection_targets),
@@ -1377,6 +1454,10 @@ class DeviceService:
                 _increment(phases, "worker_rejected")
                 reason = _WORKER_REJECTION_REASONS.get(str(exc), "unclassified_worker_error")
                 _increment(self._recognize_diagnostics["worker_rejection_counts"], reason)
+                try:
+                    self._recent_recognize_rejections.record(body, reason)
+                except Exception:
+                    pass  # Best-effort diagnostics cannot replace the original refusal.
                 raise
             except asyncio.TimeoutError:
                 _increment(phases, "admission_timeout")
