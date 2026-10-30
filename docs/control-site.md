@@ -259,6 +259,15 @@ load/download/check the presence of a checkpoint, verify encoder dimensions or
 test inference. Existing index-migration and credential-destination guards still
 apply; this does not add an embedding-provider form or activate a new model.
 
+For an existing CLIP index, unrelated saves and provider undo compare the
+configured CLIP identity with its stored profile, rather than comparing it to
+E5. Valid pinned revisions are compared without contacting the encoder or
+rewriting the profile; legacy profiles without a revision stay unpinned. A
+different CLIP server, primary search profile or E5 encoder identity still
+requires migration, even when search is temporarily disabled. A corrupt profile
+or malformed revision remains blocked. These checks do not rebuild an index,
+validate live encoder weights or activate a changed configuration.
+
 ## Explicit direct HTTPS
 
 Mac and Linux can also serve the same authenticated site over direct TLS.
