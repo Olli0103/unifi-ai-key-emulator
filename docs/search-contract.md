@@ -1,8 +1,25 @@
-# E5 search contract
+# Search profiles and E5 interface
 
-The implemented `e5-session-v1` profile sends real text embeddings over Protect's UCP4 search connection. It targets the 384-dimensional session-description contract observed in Protect 7.2.105. The target is Protect 7.3.56 on a UDM Pro Max. That exact version and a working adoption/search session remain unverified. Search is disabled until `search.enabled` is explicitly true.
+Search is disabled until `search.enabled` is explicitly true. The implementation
+has two distinct profiles; their vectors are not interchangeable:
 
-This implementation does not produce the legacy 768-dimensional CLIP image embeddings. It rejects requests with a missing model, `clip-ViT-L-14`, and `IMAGE_SEARCH`. No zero, random, padded, or fabricated vector is used as a fallback.
+| Profile | Query contract | Boundary |
+| --- | --- | --- |
+| `e5-session-v1` | Explicit `NL_PARSE` for `multilingual-e5-small`, 384 values | Session-description space; no CLIP image/text fallback. |
+| `clip-basic-v1` | Basic `NL_PARSE` for `clip-ViT-L-14`, 768 values; `IMAGE_SEARCH` returns `imgEmbed` | Requires the configured CLIP service and pinned model revision. The CLIP basic branch defaults a missing model to CLIP; this does not apply to E5-only mode. |
+
+The E5-only path rejects a missing/wrong model and `IMAGE_SEARCH`. No zero,
+random, padded or fabricated vector is used as a fallback. With the CLIP profile,
+an explicit E5 session query can also be served when a real E5 backend is
+configured; this does not turn a CLIP index into an E5 index or prove native
+Deep retrieval.
+
+The E5 contract was initially observed in Protect 7.2.105. Later bounded native
+**basic** search/image-upload observations on Protect 7.3.74 are recorded in
+[the dated native evidence](evidence/native-search-alarm-20261030.md). They
+establish the exercised transport/UI path, not complete retrieval quality,
+negative UI behavior, Deep acceptance or hardware equivalence. The remainder
+of the adapter/backend interface below describes **E5** unless stated otherwise.
 
 ## Python interface
 
@@ -70,8 +87,25 @@ Both adapters prepend `query: ` for queries and `passage: ` for descriptions, th
 
 The service connects to `wss://{controller.host}:{controller.search_port}/wss/nl-search/v1`, default port 7443, using the supplied device SSL context and the normalized MAC in `x-ident`. It uses `VerifiedConnector`, including the optional controller fingerprint check before sending HTTP headers. TLS certificate verification stays required. Startup sends the observed UCP4 echo registration.
 
-Only explicit `NL_PARSE` requests for `multilingual-e5-small` receive E5 results. The response preserves the request ID, returns `txtEmbed`, model and dimension, and empty tag/object-type arrays with `exact_match: false`. Temporal parsing, tag extraction and legacy image search are not implemented. Backend errors return a nonzero error code without embedding data.
+Only explicit `NL_PARSE` requests for `multilingual-e5-small` receive E5 results. The response preserves the request ID, returns `txtEmbed`, model and dimension, and empty tag/object-type arrays with `exact_match: false`. The E5-only branch does not parse temporal/tag filters or serve legacy image search. Backend errors return a nonzero error code without embedding data.
+
+The CLIP basic branch additionally parses supported object/time expressions using
+the controller timezone and returns its tag/filter fields with `exact_match:
+false`. Those fields are not a strict-filter or human-relevance guarantee.
+`IMAGE_SEARCH` accepts only the configured controller's HTTPS media-port
+`/internal/files/` route, without credentials, query/fragment, traversal or
+redirects. It uses verified/pinned TLS, a bounded response and timeout, JPEG/PNG
+validation and the existing CLIP region encoder. Failures have fixed private
+status categories; no vector is fabricated to hide a failed image query.
 
 The PostgreSQL container profile is documented in [deployment/postgres](../deployment/postgres/README.md). A matching controller must create its task ledger and session, dispatch the description job, accept the callback and migrate/index the remote database. In the inspected controller, HTTP 200 acknowledges the callback before persistence, unknown task IDs are dropped, and both dense and BM25 retrieval exclude a null description embedding.
 
-Hybrid BM25 extensions and reranking are not implemented. Controllers expecting them may return no results even when the dense index exists. Local tests cover adapters, framing, verified TLS WebSocket exchange, validation and shell configuration. They use named synthetic fixtures and do not prove real model quality, PostgreSQL migration, Protect UI behavior or NAS deployment.
+The minimal PostgreSQL image linked above does not install hybrid BM25
+extensions or reranking. This query adapter does not implement a reranking
+service; a controller mode requiring unavailable components can return no
+results even when the dense index exists. Do not infer the provisioned live
+NAS stack from that minimal image's dependency list. Local adapter tests cover
+framing, verified TLS exchange, validation and shell configuration using named
+synthetic fixtures. Those tests alone do not prove model quality, native
+migration/UI behavior or NAS deployment; dated native/runtime observations have
+their own narrower evidence and limits.
