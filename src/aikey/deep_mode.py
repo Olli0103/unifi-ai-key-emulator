@@ -40,6 +40,7 @@ DESCRIBE_TARGET = ":7968/describe"
 EMBED_CALLBACK = re.compile(r"^/internal/aiprocessors/embeddings/([A-Za-z0-9_-]{1,128})$")
 PROMPTS_FILE = "describe-prompts.json"
 REID_DIMENSIONS = 512             # smartDetectSessionObjects.reidEmbedding is vector(512)
+REID_SOURCE_DIMENSIONS = 256      # fixed retail-0288 encoder, before zero padding
 REID_MODEL = "person-reidentification-retail-0288"
 MAX_PROMPTS_BYTES = 64000         # Protect refuses to ship a larger config
 DESCRIBE_TYPES = ("person", "face", "vehicle", "animal")
@@ -218,6 +219,21 @@ def parse_description(text: str) -> tuple[str, list[str]]:
             seen.add(normalized)
             kept.append(normalized)
     return description.strip(), kept[:MAX_LABELS]
+
+
+def reid_response(raw: bytes) -> list[float]:
+    """Validate this encoder's role/shape before adapting it to the stored ABI."""
+    try:
+        body = _json_object(raw)
+    except ContractError as exc:
+        raise DeepModeError("Invalid Re-ID response") from exc
+    if (set(body) != {"embedding", "model", "dim"}
+            or body["model"] != REID_MODEL
+            or type(body["dim"]) is not int or body["dim"] != REID_SOURCE_DIMENSIONS
+            or not isinstance(body["embedding"], list)
+            or len(body["embedding"]) != REID_SOURCE_DIMENSIONS):
+        raise DeepModeError("Incompatible Re-ID model or dimensions")
+    return padded_reid(body["embedding"])
 
 
 def padded_reid(vector: list[float]) -> list[float]:

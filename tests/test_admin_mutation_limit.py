@@ -45,7 +45,7 @@ async def test_burst_refuses_before_provider_key_creation_or_config_apply(tmp_pa
         assert "default-src 'none'" in response.headers["Content-Security-Policy"]
         assert "No configuration change or provider request" in body
         assert SECRET not in body and not calls
-        for route in ("/provider", "/provider/rollback", "/role-model", "/speech-provider",
+        for route in ("/provider", "/provider/rollback", "/role-model", "/role-model-preview", "/speech-provider",
                       "/speech-permissions", "/aiport-permissions", "/model-catalog",
                       "/provider-probe", "/aiport-rollout"):
             blocked = await client.post(route, data={"csrf": site.security.csrf_token(cookie)},

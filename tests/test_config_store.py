@@ -32,7 +32,9 @@ def store(tmp_path):
 def test_snapshot_redacts_all_secret_references(tmp_path):
     config_store, config_path = store(tmp_path)
     raw = json.loads(config_path.read_text())
-    raw["inference"]["authorization_header"] = "synthetic-secret-value"
+    # Unknown provider arguments are refused now; retain the generic nested
+    # secret-redaction canary in inert configuration metadata instead.
+    raw["metadata"] = {"authorization_header": "synthetic-secret-value"}
     config_path.write_text(json.dumps(raw))
     snapshot = config_store.snapshot()
     encoded = json.dumps(snapshot.configuration)

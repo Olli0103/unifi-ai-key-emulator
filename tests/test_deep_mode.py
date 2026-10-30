@@ -258,6 +258,7 @@ class Controller:
             {"description": "A person in a red hoodie walks to the door.",
              "labels": ["top:hoodie", "topColor:red"]})
         self.reid_embedding = [0.6, 0.8] + [0.0] * 254
+        self.reid_reply = None
 
     async def crop(self, request):
         out = io.BytesIO()
@@ -268,7 +269,10 @@ class Controller:
         self.reid_calls += 1
         if self.reid_status != 200:
             return web.json_response({}, status=self.reid_status)
-        return web.json_response({"embedding": self.reid_embedding, "dim": 256})
+        if isinstance(self.reid_reply, bytes):
+            return web.Response(body=self.reid_reply, content_type="application/json")
+        return web.json_response(self.reid_reply if self.reid_reply is not None else {
+            "embedding": self.reid_embedding, "dim": 256, "model": deep_mode.REID_MODEL})
 
     async def chat(self, request):
         self.chat_requests.append(await request.json())

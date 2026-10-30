@@ -366,6 +366,16 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
     if (config["search"].get("enabled") is True and profile == "e5-session-v1"
             and backend == "disabled"):
         raise ConfigError("Enabled e5-session-v1 search requires a real embedding backend")
+    from .deep_mode import DeepModeError, validate_config as validate_deep_config
+    from .face_policy import FacePolicyError, recognition_policy, enhancement_policy
+    try:
+        # Check the existing runtime contracts without constructing a worker,
+        # opening templates or rewriting optional saved defaults/camera spelling.
+        recognition_policy(config.get("face_recognition"))
+        enhancement_policy(config.get("face_enhancement"))
+        validate_deep_config(config.get("deep_understanding"))
+    except (FacePolicyError, DeepModeError) as exc:
+        raise ConfigError(str(exc)) from None
     config["controller_origins"] = []
     if host:
         authority = f"[{host}]" if ":" in host else host

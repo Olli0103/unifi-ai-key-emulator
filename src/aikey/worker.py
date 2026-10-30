@@ -650,55 +650,29 @@ class JobProcessor:
 
     def _face_config(self, value, state_root):
         """Local-only face recognition for explicitly listed cameras (#20)."""
-        if value is None:
-            return None
-        if (not isinstance(value, dict)
-                or set(value) - {"server", "camera_ids", "max_faces", "native_face_cameras"}
-                or not {"server", "camera_ids"} <= set(value)):
-            raise WorkerError("face_recognition needs server and camera_ids")
-        policy = value.get("native_face_cameras", "skip")
-        if policy not in ("skip", "process"):
-            raise WorkerError("face_recognition.native_face_cameras must be skip or process")
-        server = value["server"]
-        parsed = urlsplit(server) if isinstance(server, str) else None
+        from .face_policy import FacePolicyError, recognition_policy
         try:
-            address = ipaddress.ip_address(parsed.hostname or "") if parsed else None
-        except ValueError:
-            address = None
-        if (parsed is None or parsed.scheme != "http" or address is None
-                or not (address.is_loopback or address.is_private) or parsed.path not in {"", "/"}):
-            # Face crops and embeddings never leave this host or its container network.
-            raise WorkerError("face_recognition.server must be a local HTTP server")
-        cameras = value["camera_ids"]
-        if (not isinstance(cameras, list) or not 1 <= len(cameras) <= 8
-                or any(not isinstance(c, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", c)
-                       for c in cameras) or len(set(cameras)) != len(cameras)):
-            raise WorkerError("face_recognition.camera_ids must list 1 to 8 camera IDs")
-        limit = value.get("max_faces", 8)
-        if type(limit) is not int or not 1 <= limit <= 16:
-            raise WorkerError("face_recognition.max_faces must be 1..16")
-        return {"url": server.rstrip("/") + "/v1/faces", "cameras": frozenset(cameras),
-                "max_faces": limit, "store": FaceStore(state_root),
-                "native": _native_face_cameras(state_root) if policy == "skip" else frozenset(),
+            checked = recognition_policy(value)
+        except FacePolicyError as exc:
+            raise WorkerError(str(exc)) from exc
+        if checked is None:
+            return None
+        return {"url": checked["server"] + "/v1/faces", "cameras": frozenset(checked["camera_ids"]),
+                "max_faces": checked["max_faces"], "store": FaceStore(state_root),
+                "native": (_native_face_cameras(state_root)
+                           if checked["native_face_cameras"] == "skip" else frozenset()),
                 "counts": {"skipped_native_face_camera": 0, "processed": 0}}
 
     def _enhance_config(self, value):
         """Opt-in local face enhancement (#23); the result is a separate derivative."""
-        if value is None:
-            return None
-        if not isinstance(value, dict) or set(value) != {"server"}:
-            raise WorkerError("face_enhancement needs only server")
-        server = value["server"]
-        parsed = urlsplit(server) if isinstance(server, str) else None
+        from .face_policy import FacePolicyError, enhancement_policy
         try:
-            address = ipaddress.ip_address(parsed.hostname or "") if parsed else None
-        except ValueError:
-            address = None
-        if (parsed is None or parsed.scheme != "http" or address is None
-                or not (address.is_loopback or address.is_private) or parsed.path not in {"", "/"}):
-            # Face crops never leave this host or its container network.
-            raise WorkerError("face_enhancement.server must be a local HTTP server")
-        return {"url": server.rstrip("/") + "/v1/enhance",
+            checked = enhancement_policy(value)
+        except FacePolicyError as exc:
+            raise WorkerError(str(exc)) from exc
+        if checked is None:
+            return None
+        return {"url": checked["server"] + "/v1/enhance",
                 "counts": {"requests": 0, "uploaded": 0, "declined": 0, "rejected_output": 0}}
 
     def _positive(self, name, default):
@@ -2495,10 +2469,9 @@ class JobProcessor:
                 timeout=aiohttp.ClientTimeout(total=_TAG_TIMEOUT_S)) as response:
             if response.status != 200:
                 raise WorkerError(f"Re-ID server returned HTTP {response.status}")
-            body = json.loads(await self._read_response(response, 131072))
-        vector = body.get("embedding") if isinstance(body, dict) else None
+            raw = await self._read_response(response, 131072)
         try:
-            return deep_mode.padded_reid(vector)
+            return deep_mode.reid_response(raw)
         except deep_mode.DeepModeError as exc:
             raise WorkerError("Re-ID server returned an invalid vector") from exc
 

@@ -291,7 +291,7 @@ def parse_config(raw: bytes, *, state_dir: Path, check_decoder_executable: bool 
                         or is_api and (api_fields - {"max_requests_per_hour"}
                                        <= set(detector) - legacy
                                        <= api_fields | {"held_package_followup",
-                                                        "plate_cameras", "fallback",
+                                                        "plate_cameras", "ocr_provider_config", "fallback",
                                                         "camera_thresholds", "score_server"}))
                 or detector.get("held_package_followup", "shadow") not in {"shadow", "announce"}
                 or backend is not None and not (is_api or is_onnx)
@@ -386,6 +386,19 @@ def parse_config(raw: bytes, *, state_dir: Path, check_decoder_executable: bool 
                 validate_inference_config(provider, require_api_key=False)
             except ProviderError as exc:
                 raise CandidateError("Invalid live API detector provider") from exc
+            if "ocr_provider_config" in detector:
+                ocr = detector["ocr_provider_config"]
+                if (not detector.get("plate_cameras") or not isinstance(ocr, dict)
+                        or not set(ocr) <= allowed_provider_fields
+                        or "api_key_file" in ocr and (not isinstance(ocr["api_key_file"], str)
+                                                      or not Path(ocr["api_key_file"]).is_absolute())
+                        or type(ocr.get("max_output_tokens", 256)) is not int
+                        or not 1 <= ocr.get("max_output_tokens", 256) <= 512):
+                    raise CandidateError("Invalid OCR role policy")
+                try:
+                    validate_inference_config(ocr, require_api_key=False)
+                except ProviderError as exc:
+                    raise CandidateError("Invalid OCR role provider") from exc
     if "live_speech_cameras" in value:
         # Opt-in speech presence (#15, #28): listed paired cameras of a live pool.
         cameras = value["live_speech_cameras"]
@@ -907,6 +920,7 @@ class CandidateService:
                         max_requests_per_hour=detector.get("max_requests_per_hour"),
                         package_lens_owned=self._package_lens_owned,
                         plate_cameras=frozenset(detector.get("plate_cameras", ())),
+                        ocr_provider_config=detector.get("ocr_provider_config"),
                         fallback=detector.get("fallback"),
                         camera_thresholds=detector.get("camera_thresholds"),
                         full_frame=self._full_frame_blocking,

@@ -17,6 +17,7 @@ from typing import Any, Iterator
 
 from .aiport_candidate import CandidateError, parse_config
 from .config import atomic_private
+from .role_changes import RoleModelPreview
 
 
 _REVISION = re.compile(r"[0-9a-f]{64}\Z")
@@ -27,6 +28,7 @@ _OPTIONAL_FIELDS = frozenset({"api_key_file", "max_requests_per_hour"})
 _PROVIDER_FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
                               "allow_insecure_http", "max_output_tokens", "api_key_file"})
 _RECOGNITION_SCOPES = {"face": "live_face", "sound": "live_sound", "speech": "live_speech_cameras"}
+_ROLE_PROVIDER_FIELDS = {"detection": "provider_config", "ocr": "ocr_provider_config"}
 
 
 class AiPortConfigurationError(ValueError):
@@ -117,15 +119,17 @@ class AiPortConfigurationStore:
         return self._public(content, value)
 
     def catalog_configuration(self, expected_revision: str, role: str) -> tuple[dict, Path, bool]:
-        """Internal-only detection settings/references, never an HTTP response."""
+        """Internal-only selected-role references, never an HTTP response."""
         content, current = self._read()
         if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
                 or not hmac.compare_digest(self._revision(content), expected_revision)):
             raise AiPortRevisionConflict("aiport_config_changed")
         detector = current.get("live_pool_detector", {})
-        if role != "detection" or detector.get("inference_backend") != "vision_api":
+        field = _ROLE_PROVIDER_FIELDS.get(role)
+        if (field is None or detector.get("inference_backend") != "vision_api"
+                or not isinstance(detector.get(field), dict)):
             raise AiPortConfigurationError("catalog_role_not_configured")
-        return deepcopy(detector["provider_config"]), self.runtime_state_dir, False
+        return deepcopy(detector[field]), self.runtime_state_dir, False
 
     def configured_camera_macs(self) -> frozenset[str]:
         """Return the validated local allowlist, not Protect pairing state."""
@@ -257,13 +261,46 @@ class AiPortConfigurationStore:
         if detector.get("inference_backend") != "vision_api":
             return {"detection": {"model": None, "editable": False,
                                   "reason": "vision_provider_not_configured"}}
-        return {"detection": {"model": detector.get("provider_config", {}).get("model"),
-                              "editable": True, "reason": None}}
+        return {role: {"model": detector[field].get("model"), "editable": True, "reason": None}
+                for role, field in _ROLE_PROVIDER_FIELDS.items() if isinstance(detector.get(field), dict)}
+
+    def model_registry(self) -> dict:
+        from .model_roles import port_roles
+        content, current = self._read()
+        return port_roles(current, self._revision(content))
+
+    def preview_role_model(self, expected_revision: str, role: str, model: str) -> RoleModelPreview:
+        """Preview one local config, never instantiate a detector or write a key."""
+        if role not in _ROLE_PROVIDER_FIELDS:
+            raise AiPortConfigurationError("unknown_role")
+        field = _ROLE_PROVIDER_FIELDS[role]
+        if not isinstance(model, str) or not _MODEL_ID.fullmatch(model) or ".." in model:
+            raise AiPortConfigurationError("invalid_model_id")
+        content, current = self._read()
+        revision = self._revision(content)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(revision, expected_revision)):
+            raise AiPortRevisionConflict("aiport_config_changed")
+        detector = current.get("live_pool_detector", {})
+        if detector.get("inference_backend") != "vision_api":
+            raise AiPortConfigurationError("vision_provider_not_configured")
+        if not isinstance(detector.get(field), dict):
+            raise AiPortConfigurationError("role_not_configured")
+        previous = detector[field].get("model")
+        changed = previous != model
+        resulting = revision
+        if changed:
+            candidate = json.loads(content)
+            candidate["live_pool_detector"][field]["model"] = model
+            self._validate(candidate)
+            resulting = self._revision(self._encode(candidate))
+        return RoleModelPreview(revision, resulting, role, previous, model, changed)
 
     def apply_role_model(self, expected_revision: str, role: str, model: str) -> AiPortSettings:
-        """Change only the detection model; provider, endpoint, key and streams stay."""
-        if role != "detection":
+        """Change only the selected model; other roles, keys and streams stay."""
+        if role not in _ROLE_PROVIDER_FIELDS:
             raise AiPortConfigurationError("unknown_role")
+        field = _ROLE_PROVIDER_FIELDS[role]
         if (not isinstance(model, str) or not _MODEL_ID.fullmatch(model) or ".." in model):
             raise AiPortConfigurationError("invalid_model_id")
         with self._locked():
@@ -275,10 +312,12 @@ class AiPortConfigurationStore:
             detector = current.get("live_pool_detector", {})
             if detector.get("inference_backend") != "vision_api":
                 raise AiPortConfigurationError("vision_provider_not_configured")
-            if detector.get("provider_config", {}).get("model") == model:
+            if not isinstance(detector.get(field), dict):
+                raise AiPortConfigurationError("role_not_configured")
+            if detector[field].get("model") == model:
                 return self._public(content, current)
             candidate = json.loads(content)
-            candidate["live_pool_detector"]["provider_config"]["model"] = model
+            candidate["live_pool_detector"][field]["model"] = model
             self._validate(candidate)
             encoded = self._encode(candidate)
             self._archive(content)
@@ -335,8 +374,15 @@ class AiPortConfigurationStore:
         return content
 
     def _prior_key_present(self, target: dict) -> bool:
-        reference = (target.get("live_pool_detector", {}).get("provider_config", {})
-                     .get("api_key_file"))
+        detector = target.get("live_pool_detector", {})
+        if not isinstance(detector, dict) or any(
+                field in detector and not isinstance(detector[field], dict)
+                for field in _ROLE_PROVIDER_FIELDS.values()):
+            return False
+        return all(self._key_reference_present((detector.get(field) or {}).get("api_key_file"))
+                   for field in _ROLE_PROVIDER_FIELDS.values())
+
+    def _key_reference_present(self, reference) -> bool:
         if reference is None:
             return True
         if not isinstance(reference, str) or not reference:
@@ -428,7 +474,7 @@ class AiPortConfigurationStore:
         # A legacy object-event cap
         # is dropped: object events have no per-camera ceiling.
         kept = {key: value for key, value in current.get("live_pool_detector", {}).items()
-                if key in {"fallback", "plate_cameras", "held_package_followup",
+                if key in {"fallback", "plate_cameras", "ocr_provider_config", "held_package_followup",
                            "camera_thresholds", "score_server"}}
         candidate["live_pool_detector"] = {
             "inference_backend": "vision_api", "provider_config": provider,

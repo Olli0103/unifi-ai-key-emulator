@@ -59,6 +59,10 @@ class SpeechProvider:
     def __init__(self, config: dict, *, lab: bool = False, require_api_key: bool = True):
         if not isinstance(config, dict):
             raise SpeechError("speech_to_text must be an object")
+        # Role policy/reference fields are not provider request parameters.
+        if set(config) - {"provider", "model", "base_url", "language", "local_network",
+                          "api_key", "api_key_file", "camera_ids", "max_audio_ms"}:
+            raise SpeechError("Unsupported speech provider settings")
         self.provider = config.get("provider")
         if self.provider not in {"openai", "openai-compatible"}:
             raise SpeechError("speech_to_text.provider must be openai or openai-compatible")

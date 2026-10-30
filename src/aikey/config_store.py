@@ -16,6 +16,7 @@ import stat
 from typing import Any, Iterator
 
 from .config import ConfigError, atomic_private, validate_config
+from .role_changes import RoleModelPreview
 
 
 _MAX_CONFIG_BYTES = 1024 * 1024
@@ -337,6 +338,36 @@ class ConfigurationStore:
         for role, model in FIXED_ROLE_MODELS.items():
             roles[role] = {"model": model, "editable": False, "reason": "index_migration_required"}
         return roles
+
+    def model_registry(self) -> dict:
+        from .model_roles import key_roles
+        content, current = self._read(self.path)
+        return key_roles(current, _revision(content))
+
+    def preview_role_model(self, expected_revision: str, role: str, model: str) -> RoleModelPreview:
+        """Read/validate consequences only: no key load, history, inference or save."""
+        if role in FIXED_ROLE_MODELS:
+            raise UnsafeConfigurationChange("role_not_editable: index_migration_required")
+        if role not in EDITABLE_ROLE_PATHS:
+            raise UnsafeConfigurationChange("unknown_role")
+        if not isinstance(model, str) or not _MODEL_ID.fullmatch(model) or ".." in model:
+            raise UnsafeConfigurationChange("invalid_model_id")
+        content, current = self._read(self.path)
+        revision = _revision(content)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(revision, expected_revision)):
+            raise RevisionConflict("Configuration changed since it was read")
+        section, field = EDITABLE_ROLE_PATHS[role]
+        if not isinstance(current.get(section), dict):
+            raise UnsafeConfigurationChange("role_not_configured")
+        previous = current[section].get(field)
+        changed = previous != model
+        resulting = revision
+        if changed:
+            candidate = deepcopy(current)
+            candidate[section][field] = model
+            resulting = _revision(self._encode(self._validate(candidate)))
+        return RoleModelPreview(revision, resulting, role, previous, model, changed)
 
     def apply_role_model(self, expected_revision: str, role: str, model: str) -> ConfigurationSnapshot:
         """Change only one role's model; provider, endpoint and key stay as they are."""

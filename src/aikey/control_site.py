@@ -186,11 +186,13 @@ class ControlSite:
         app.router.add_get("/audit", self.audit_page)
         app.router.add_get("/caption-preflight", self.caption_preflight_page)
         app.router.add_get("/state-backup-preflight", self.state_backup_page)
+        app.router.add_get("/model-registry", self.model_registry_page)
         app.router.add_get("/login", self.login_page)
         app.router.add_post("/login", self.login)
         app.router.add_post("/provider", self.save_provider)
         app.router.add_post("/provider/rollback", self.rollback_provider)
         app.router.add_post("/role-model", self.save_role_model)
+        app.router.add_post("/role-model-preview", self.preview_role_model)
         app.router.add_post("/speech-provider", self.save_speech_provider)
         app.router.add_get("/speech-permissions", self.speech_permissions)
         app.router.add_post("/speech-permissions", self.restrict_speech_permissions)
@@ -204,6 +206,55 @@ class ControlSite:
 
     async def health(self, _: web.Request) -> web.Response:
         return web.json_response({"service": "control-site"})
+
+    async def model_registry_page(self, request: web.Request) -> web.Response:
+        """Saved role contracts only, never a capability/active-runtime probe."""
+        if self._session(request) is None:
+            raise web.HTTPSeeOther("/login")
+        rows = []
+        stores = [("AI Key", self.aikey)] + [
+            ("this AI Port" if profile == "aiport" else "AI Port " + profile.partition(":")[2], store)
+            for profile, store in self.aiports.items()]
+        policies = {"role_model_preview": "Model preview and revision-checked save",
+                    "index_migration": "Separate index migration required",
+                    "separate_ocr_configuration": "Configure a separate OCR assignment first",
+                    "separate_feature_flow": "Separate feature/model procedure; not editable here"}
+        for title, store in stores:
+            try:
+                report = await asyncio.to_thread(store.model_registry)
+            except (ConfigurationStoreError, AiPortConfigurationError, OSError, ValueError):
+                rows.append(f"<tr><th scope='row'>{_safe(title)}</th>"
+                            "<td colspan='7'>Saved role data unavailable. Nothing was changed.</td></tr>")
+                continue
+            for entry in report["roles"]:
+                shape = entry["dimensions"]
+                if entry["source_dimensions"] is not None:
+                    shape = f"{entry['source_dimensions']} source → {shape} stored"
+                contract = entry["expected_model"] + "; " + entry["output"]
+                if shape is not None:
+                    contract += f" ({shape})"
+                status = "Configured in saved settings" if entry["configured"] else "Not configured"
+                if entry["assignment"] == "legacy_shared_detection" and entry["configured"]:
+                    status += "; shares the detection assignment"
+                selected = entry["model"] or ("Server-managed; not reported" if entry["configured"] else "—")
+                cells = (title, self._ROLE_LABELS.get(entry["role"], entry["role"]), status,
+                         selected, entry["backend"] or "—", contract, entry["selection_id"] or "—",
+                         policies[entry["change_policy"]])
+                rows.append("<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in cells) + "</tr>")
+        return _page("Saved model role registry", "<h1 id='role-registry'>Saved model role registry</h1>"
+                     "<p><a href='/'>Settings</a></p><p>Read-only, schema version 1. Saved assignments "
+                     "are not active-runtime status. This read sends no provider request, reads no "
+                     "referenced model or key file, and changes no settings.</p>"
+                     "<p>Selection IDs version the declared role, model, backend, source and contract. "
+                     "They do not verify server-managed weights, modality, quality, or vector "
+                     "compatibility. Capability and weights are not checked by this read. Catalog "
+                     "availability and a synthetic API test are separate, limited evidence.</p>"
+                     "<div class='scroll' role='region' aria-labelledby='role-registry' tabindex='0'>"
+                     "<table><tr><th scope='col'>Profile</th><th scope='col'>Role</th>"
+                     "<th scope='col'>Saved binding</th><th scope='col'>Saved model</th>"
+                     "<th scope='col'>Provider/backend</th>"
+                     "<th scope='col'>Role contract</th><th scope='col'>Selection ID</th>"
+                     "<th scope='col'>Change boundary</th></tr>" + "".join(rows) + "</table></div>")
 
     async def _rollout_plan(self) -> tuple[dict, dict]:
         report = await self.inventory_loader()
@@ -676,7 +727,8 @@ class ControlSite:
                 + "<p><a href='/data-retention'>Data flow and retention (read-only)</a> · "
                   "<a href='/audit'>Audit log</a> · "
                   "<a href='/caption-preflight'>Caption preflight</a> · "
-                  "<a href='/state-backup-preflight'>Backup preflight</a></p>"
+                  "<a href='/state-backup-preflight'>Backup preflight</a> · "
+                  "<a href='/model-registry'>Saved model role registry</a></p>"
                 + ("<p><a href='/aiport-permissions'>Remove saved AI Port face, sound or speech permissions</a></p>"
                    if ports else "")
                 + undo_form + self._role_models_section(csrf) + self._speech_form(key, csrf)
@@ -879,6 +931,10 @@ class ControlSite:
                 f"<button>Roll back the last {_safe(title)} provider change</button></form>")
 
     _ROLE_LABELS = {"caption": "Captions (vision)", "speech": "Speech to text",
+                    "ocr": "AI Port plate text (OCR)",
+                    "reverification": "Local reverification", "recognition": "Face recognition",
+                    "reidentification": "Person Re-ID", "reranking": "Search reranking",
+                    "enhancement": "Image enhancement",
                     "detection": "AI Port detection", "search_image_text": "Search image/text encoder",
                     "text_embedding": "Text embeddings"}
     _ROLE_REASONS = {"index_migration_required": "Pinned by the search index; change it through the "
@@ -1236,14 +1292,14 @@ class ControlSite:
             for role, info in roles.items():
                 label = self._ROLE_LABELS.get(role, role)
                 if info["editable"]:
-                    control = ("<form method='post' action='/role-model'>"
+                    control = ("<form method='post' action='/role-model-preview'>"
                                f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
                                f"<input type='hidden' name='profile' value='{_safe(profile)}'>"
                                f"<input type='hidden' name='role' value='{_safe(role)}'>"
                                f"<input type='hidden' name='revision' value='{_safe(revision)}'>"
                                f"<input name='model' required maxlength='128' "
                                f"value='{_safe(info['model'] or '')}' aria-label='{_safe(label)} model'>"
-                               "<button>Save model</button></form>")
+                               "<button>Preview model change</button></form>")
                     try:
                         saved, _, _ = store.catalog_configuration(revision, role)
                         destination = saved.get("base_url") or DEFAULT_BASE_URLS.get(saved.get("provider"))
@@ -1271,7 +1327,7 @@ class ControlSite:
                 + "".join(rows) + "</table></div></section>")
 
     def _probe_form(self, csrf, profile, role, revision, destination, model) -> str:
-        if role not in {"caption", "detection", "speech"}:
+        if role not in {"caption", "detection", "speech", "ocr"}:
             return "<p>A synthetic test for this role is not available.</p>"
         if not isinstance(model, str) or not model.strip():
             return "<p>Save a model before running a synthetic test.</p>"
@@ -1301,7 +1357,7 @@ class ControlSite:
         expected = {"csrf", "profile", "role", "revision", "grant", "acknowledge_cost"}
         if (set(fields) != expected or any(len(fields.getall(k)) != 1 for k in expected)
                 or not all(isinstance(fields[k], str) for k in expected)
-                or fields["acknowledge_cost"] != "yes" or fields["role"] not in {"caption", "detection", "speech"}):
+                or fields["acknowledge_cost"] != "yes" or fields["role"] not in {"caption", "detection", "speech", "ocr"}):
             self._audit("provider_probe", "invalid_request")
             raise web.HTTPBadRequest(text="A fresh synthetic-test form and cost acknowledgement are required")
         profile, role, revision = fields["profile"], fields["role"], fields["revision"]
@@ -1442,6 +1498,54 @@ class ControlSite:
                      + rows + "</table></div>"
                      + ("<p>The API returned no models.</p>" if not rows else "")
                      + "<p><a href='/'>Back to settings</a></p>")
+
+    async def preview_role_model(self, request: web.Request) -> web.Response:
+        fields = await request.post()
+        cookie = self._session(request, mutate=True, csrf=fields.get("csrf"))
+        if cookie is None:
+            self._audit("role_model", "forbidden")
+            raise web.HTTPForbidden()
+        profile = fields.get("profile", "")
+        store = self.aikey if profile == "aikey" else self.aiports.get(profile)
+        if store is None:
+            self._audit("role_model", "unknown_profile")
+            raise web.HTTPBadRequest(text="Unknown profile")
+        try:
+            p = await asyncio.to_thread(store.preview_role_model, fields.get("revision"),
+                                        fields.get("role"), fields.get("model"))
+        except (ConfigurationStoreError, AiPortConfigurationError, OSError):
+            self._audit("role_model", "preview_refused", profile)
+            return _page("Model preview unavailable", "<h1>Model preview unavailable</h1>"
+                         "<p>The role, model, revision or settings could not be validated. "
+                         "Nothing has been saved or tested. Reload settings before trying again.</p>"
+                         "<p><a href='/'>Back to settings</a></p>")
+        # No save has happened; an expired/revoked session gets no confirmation form.
+        if self._session(request) is None:
+            self._audit("role_model", "forbidden", profile)
+            raise web.HTTPForbidden()
+        self._audit("role_model", "previewed", profile)
+        changes = ("<p>Current jobs keep their current runtime and model. A controlled processor "
+                   "restart is required to use the saved model for new jobs. This page does not "
+                   "drain, cancel or restart a processor.</p>" if p.restart_required else
+                   "<p>This model is already selected in saved settings. This request adds no "
+                   "settings change or restart requirement. It does not check whether prior "
+                   "changes still need activation.</p>")
+        hidden = {"csrf": fields["csrf"], "profile": profile, "role": p.role,
+                  "revision": p.current_revision, "model": p.proposed_model}
+        form = "".join(f"<input type='hidden' name='{name}' value='{_safe(value)}'>"
+                       for name, value in hidden.items())
+        return _page("Preview model change", "<h1>Preview model change</h1>"
+                     "<p>Nothing has been saved. No model request was sent.</p>"
+                     f"<p>Role: {_safe(p.role)}. Saved model: {_safe(p.previous_model or '—')} "
+                     f"→ {_safe(p.proposed_model)}.</p>" + changes +
+                     "<p>Search index unchanged. Provider, destination, credentials and camera "
+                     "permissions are unchanged. Changing an encoder requires a separate index "
+                     "migration. No past events are reprocessed.</p><p>Model capability has not been tested. A valid model ID "
+                     "or catalog entry is not proof of modality, quality or versioned weights.</p>"
+                     "<p>Confirmation rechecks the same configuration revision; an intervening "
+                     "save requires a fresh preview.</p><form method='post' action='/role-model'>"
+                     + form + "<button>Confirm model change</button></form>"
+                     "<p><a href='/'>Cancel and return to settings</a></p>")
 
     async def save_role_model(self, request: web.Request) -> web.Response:
         fields = await request.post()

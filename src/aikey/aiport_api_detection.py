@@ -660,6 +660,7 @@ class ApiObjectDetector:
                  transport: Callable[[str, dict, dict], dict] = _post,
                  package_lens_owned: Callable[[str], bool] | None = None,
                  plate_cameras: frozenset[str] = frozenset(),
+                 ocr_provider_config: dict[str, Any] | None = None,
                  fallback: dict[str, Any] | None = None,
                  fallback_transport: Callable[..., dict] | None = None,
                  camera_thresholds: dict[str, float] | None = None,
@@ -674,20 +675,13 @@ class ApiObjectDetector:
                 and (type(max_requests_per_hour) is not int
                      or not 2 <= max_requests_per_hour <= 3600)):
             raise ApiDetectionError("invalid_api_detection_policy")
-        config = dict(provider_config)
-        if "api_key" in config:
-            raise ApiDetectionError("inline_api_key_forbidden")
-        if config.get("api_key_file"):
-            config["api_key"] = _read_private_key(config["api_key_file"])
-        try:
-            self.provider = validate_inference_config(config)
-        except ProviderError as exc:
-            raise ApiDetectionError("invalid_api_detection_provider") from exc
+        if ocr_provider_config is not None and not plate_cameras:
+            raise ApiDetectionError("api_ocr_requires_plate_scope")
+        self.provider = self._role_provider(provider_config, "detection")
+        self._separate_ocr = ocr_provider_config is not None
+        self.ocr_provider = (self._role_provider(ocr_provider_config, "ocr")
+                             if self._separate_ocr else self.provider)
         endpoint = urlsplit(self.provider.base_url)
-        if not ((self.provider.provider == "openai" and endpoint.hostname == "api.openai.com")
-                or (self.provider.provider == "anthropic" and endpoint.hostname == "api.anthropic.com")
-                or endpoint.hostname in {"localhost", "127.0.0.1", "::1"}):
-            raise ApiDetectionError("api_detection_endpoint_not_approved")
         self.threshold = float(threshold)
         # Owner-set per-camera score gates (e.g. a bounded reverification
         # test on one camera); every other camera keeps the slot threshold.
@@ -888,7 +882,7 @@ class ApiObjectDetector:
         try:
             plates = camera_mac in self.plate_cameras
             url, headers, payload = self.provider.build_request(
-                [frame], _PROMPT + _PLATE_PROMPT if plates else _PROMPT)
+                [frame], _PROMPT + _PLATE_PROMPT if plates and not self._separate_ocr else _PROMPT)
             if self.provider.provider == "openai" and self.provider.model == "gpt-6-luna":
                 payload["reasoning"] = {"effort": "none"}
             reply = None
@@ -921,7 +915,8 @@ class ApiObjectDetector:
             categories: dict[str, int] = {}
             try:
                 reported = parse_detections(text, threshold=0, rejected=rejected,
-                                            plates=plates, categories=categories)
+                                            plates=plates and not self._separate_ocr,
+                                            categories=categories)
             except ApiDetectionError:
                 self._count_failure(camera_mac, _parse_failure(text))
                 raise
@@ -1058,6 +1053,27 @@ class ApiObjectDetector:
         counts = self._failure_reasons.setdefault(camera_mac, dict.fromkeys(_FAILURE_REASONS, 0))
         counts[reason] = counts.get(reason, 0) + 1
 
+    @staticmethod
+    def _role_provider(provider_config: dict[str, Any], role: str):
+        """Build exactly this role's approved adapter; never inherit another key."""
+        if not isinstance(provider_config, dict):
+            raise ApiDetectionError(f"invalid_api_{role}_provider")
+        config = dict(provider_config)
+        if "api_key" in config:
+            raise ApiDetectionError("inline_api_key_forbidden")
+        if config.get("api_key_file"):
+            config["api_key"] = _read_private_key(config["api_key_file"])
+        try:
+            provider = validate_inference_config(config)
+        except ProviderError as exc:
+            raise ApiDetectionError(f"invalid_api_{role}_provider") from exc
+        endpoint = urlsplit(provider.base_url)
+        if not ((provider.provider == "openai" and endpoint.hostname == "api.openai.com")
+                or (provider.provider == "anthropic" and endpoint.hostname == "api.anthropic.com")
+                or endpoint.hostname in {"localhost", "127.0.0.1", "::1"}):
+            raise ApiDetectionError(f"api_{role}_endpoint_not_approved")
+        return provider
+
     def _read_plates(self, camera_mac: str, frame: bytes,
                      items: tuple[ObjectObservation, ...]) -> tuple[ObjectObservation, ...]:
         """A plate-only read of one vehicle on a full-resolution crop.
@@ -1177,11 +1193,13 @@ class ApiObjectDetector:
                                     max(1, round(crop.height * scale))), Image.Resampling.LANCZOS)
             out = BytesIO()
             crop.save(out, format="JPEG", quality=92)
-            url, headers, payload = self.provider.build_request([out.getvalue()], _PLATE_PROMPT_CROP)
-            if self.provider.provider == "openai" and self.provider.model == "gpt-6-luna":
+            provider = self.ocr_provider
+            url, headers, payload = provider.build_request([out.getvalue()], _PLATE_PROMPT_CROP)
+            if provider.provider == "openai" and provider.model == "gpt-6-luna":
                 payload["reasoning"] = {"effort": "none"}
-            answer = json.loads(self.provider.parse_response(self.transport(url, headers, payload)))
-            if not isinstance(answer, dict) or set(answer) != {"plate"}:
+            answer = _detection_json(provider.parse_response(self.transport(url, headers, payload)))
+            if (not isinstance(answer, dict) or set(answer) != {"plate"}
+                    or answer["plate"] is not None and not isinstance(answer["plate"], str)):
                 raise ValueError
         except (ApiDetectionError, ProviderError, OSError, TypeError, ValueError,
                 UnidentifiedImageError):
