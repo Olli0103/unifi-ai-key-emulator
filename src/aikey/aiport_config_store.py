@@ -222,6 +222,111 @@ class AiPortConfigurationStore:
                 raise AiPortConfigurationError("aiport_policy_write_uncertain")
             return ConfigurationSnapshot(target_revision, _public(checked))
 
+    def camera_threshold_status(self) -> dict:
+        """Internal camera IDs; the browser adapter substitutes opaque choices."""
+        content, current = self._read()
+        detector = current.get("live_pool_detector", {})
+        return {"revision": self._revision(content),
+                "eligible": detector.get("inference_backend") == "vision_api",
+                "global_threshold": detector.get("threshold"),
+                "cameras": tuple(s["camera_mac"] for s in current.get("paired_streams", ())),
+                "thresholds": deepcopy(detector.get("camera_thresholds", {}))}
+
+    def _camera_threshold_candidate(self, content, current, expected_revision, thresholds):
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(self._revision(content), expected_revision)):
+            raise AiPortRevisionConflict("aiport_config_changed")
+        cameras = {s["camera_mac"] for s in current.get("paired_streams", ())}
+        detector = current.get("live_pool_detector", {})
+        if (detector.get("inference_backend") != "vision_api" or not isinstance(thresholds, dict)
+                or not set(thresholds) <= cameras
+                or any(type(v) not in (int, float) or not 0 < v <= 1 for v in thresholds.values())):
+            raise AiPortConfigurationError("aiport_camera_thresholds_invalid")
+        candidate = json.loads(content)
+        # A semantic no-op must retain omission, raw MAC formatting and exact bytes.
+        if detector.get("camera_thresholds", {}) == thresholds:
+            return content
+        if thresholds:
+            candidate["live_pool_detector"]["camera_thresholds"] = deepcopy(thresholds)
+        else:
+            candidate["live_pool_detector"].pop("camera_thresholds", None)
+        self._validate(candidate)
+        encoded = self._encode(candidate)
+        if len(encoded) > 4096:
+            raise AiPortConfigurationError("aiport_camera_thresholds_invalid")
+        return encoded
+
+    def preview_camera_thresholds(self, expected_revision, thresholds) -> AiPortPreview:
+        content, current = self._read()
+        encoded = self._camera_threshold_candidate(content, current, expected_revision, thresholds)
+        return AiPortPreview(self._revision(content), self._revision(encoded),
+                             self._public(content, current), encoded != content)
+
+    @property
+    def _threshold_journal(self):
+        return self.history_dir / ("camera-threshold-change-" + self.path.name + ".json")
+
+    def apply_camera_thresholds(self, expected_revision, thresholds) -> AiPortSettings:
+        with self._locked():
+            content, current = self._read()
+            encoded = self._camera_threshold_candidate(content, current, expected_revision, thresholds)
+            if encoded != content:
+                self._archive(content)
+                atomic_private(self.path, encoded)
+            persisted, current = self._read()
+            if persisted != encoded:
+                raise AiPortConfigurationError("aiport_camera_threshold_write_uncertain")
+            if encoded != content:
+                atomic_private(self._threshold_journal, self._encode({"schema": 1,
+                    "from": self._revision(content), "to": self._revision(encoded)}))
+            return self._public(persisted, current)
+
+    def _threshold_undo_target(self, content):
+        info = self._threshold_journal.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_mode & 0o077):
+            raise AiPortConfigurationError("aiport_camera_threshold_undo_invalid")
+        journal = json.loads(ConfigurationStore._read_regular_bytes(self._threshold_journal, 4096))
+        if (not isinstance(journal, dict) or set(journal) != {"schema", "from", "to"}
+                or type(journal["schema"]) is not int or journal["schema"] != 1
+                or not all(isinstance(journal[k], str) and _REVISION.fullmatch(journal[k])
+                           for k in ("from", "to")) or journal["to"] != self._revision(content)):
+            raise AiPortRevisionConflict("aiport_camera_threshold_undo_unavailable")
+        target = self._archived(journal["from"])
+        before, after = json.loads(content), json.loads(target)
+        self._validate(after)
+        for raw in (before, after):
+            detector = raw.get("live_pool_detector")
+            if not isinstance(detector, dict):
+                raise AiPortConfigurationError("aiport_camera_threshold_undo_invalid")
+            detector.pop("camera_thresholds", None)
+        if before != after or target == content:
+            raise AiPortConfigurationError("aiport_camera_threshold_undo_invalid")
+        return target
+
+    def camera_threshold_undo_status(self):
+        try:
+            content, _ = self._read()
+            self._threshold_undo_target(content)
+        except (OSError, ValueError, ConfigurationStoreError):
+            return {"available": False}
+        return {"available": True, "revision": self._revision(content)}
+
+    def undo_camera_thresholds(self, expected_revision):
+        with self._locked():
+            content, _ = self._read()
+            if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                    or not hmac.compare_digest(self._revision(content), expected_revision)):
+                raise AiPortRevisionConflict("aiport_config_changed")
+            target = self._threshold_undo_target(content)
+            self._archive(content)
+            atomic_private(self.path, target)
+            persisted, checked = self._read()
+            if persisted != target:
+                raise AiPortConfigurationError("aiport_camera_threshold_write_uncertain")
+            self._threshold_journal.unlink()
+            return self._public(persisted, checked)
+
     def catalog_configuration(self, expected_revision: str, role: str) -> tuple[dict, Path, bool]:
         """Internal-only selected-role references, never an HTTP response."""
         content, current = self._read()

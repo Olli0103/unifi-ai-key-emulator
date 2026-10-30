@@ -563,3 +563,45 @@ provider cases return HTTP 503 and a wrong challenge answer; neither involves
 a model, camera media or a real provider. A mismatch remains a mismatch, not a
 verified model identity or quality failure. These source/browser fixtures do
 not replace native controller or physical mobile-device acceptance.
+
+
+## Camera-local detection score gates
+
+`/camera-thresholds` edits the already implemented API detector's
+`camera_thresholds` policy, without JSON editing. It requires an existing API
+Port and a validated inventory no older than five minutes. Every saved stream
+must have a matching, unambiguous camera name, MAC and ID. Missing or ambiguous
+inventory disables named editing; it does not enroll cameras or guess labels.
+
+An empty camera field inherits the unchanged global threshold. An explicit
+finite value must be greater than zero and at most one. A lower gate admits
+weaker detections (and potentially more false positives); a higher gate can
+miss real detections. Preview shows every camera's old/new effective gate and
+whether the new value is inherited. Scores are not calibrated accuracy claims.
+
+Saving requires the normal login, CSRF/Origin checks, shared mutation limit and
+an explicit preview confirmation. Server-private, ten-minute signatures bind
+the login, profile, exact camera identity/name selection, old/resulting config
+revisions and every value. Replaced/renamed cameras, stale settings and expired
+sessions refuse. Browser fields carry opaque camera choices, not MACs or IDs.
+
+Only `live_pool_detector.camera_thresholds` changes. Empty mappings remove that
+optional field; a semantic no-op preserves exact prior bytes, including raw MAC
+spellings and omitted defaults. The complete runtime parser and 4-KiB limit
+still apply. Provider/key, global gate, classes, fallback, request allowance,
+plate/face/audio scope, identity, streams and all sibling profiles stay intact.
+No model request, restart or native controller write is performed. Saved gates
+become active only after a separately managed restart of that Port.
+
+A separate revision-checked **Undo camera thresholds** restores exact prior
+bytes only while the current config still matches this change and every
+non-camera-gate value is unchanged. It is not labeled as provider rollback and
+cannot restore a later provider/permission change. Missing/unsafe history
+refuses; a successful undo consumes its record. Admitted file writes are
+tracked and drained even after a browser waiter disconnects. A post-write or
+acknowledgement failure is uncertain, not a confirmed rollback: reload and
+reconcile; no automatic retry, restart or rollback is attempted.
+
+The maintained fictional desktop/mobile browser check covers preview, required
+acknowledgement, Space/Tab/Enter confirmation, saved result and exact undo.
+This is not live camera tuning, native Flur acceptance or full #17 completion.

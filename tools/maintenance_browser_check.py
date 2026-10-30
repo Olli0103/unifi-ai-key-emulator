@@ -90,6 +90,12 @@ async def scenario(output, name, viewport, executable):
     site = ControlSite(config, port_config, signing_key=b"b" * 32,
         password_record=AdminSecurity.create_password_record(PASSWORD), port=port,
         audit_log=root / "audit.jsonl")
+    async def inventory():
+        return {"schema": "aikey-camera-preflight/1", "protect_version": "7.3.74",
+            "fetched_at": int(time.time()), "cameras": [{"id": "c" * 24,
+                "mac": "02000000F0C3", "name": "Fictional hall", "model": "Fixture camera",
+                "state": "CONNECTED", "smart_detect_types": ["person"], "audio_detect_types": []}]}
+    site.inventory_loader = inventory
     script = root / "approved.py"
     script.write_text(CODE)
     host, bridge = root / "host", root / "bridge"
@@ -251,6 +257,36 @@ async def scenario(output, name, viewport, executable):
             await page.locator("form[action='/provider/rollback']").get_by_role("button").click()
             await expect(page).to_have_url(origin + "/?rolledback=1")
             assert port_config.read_bytes() == port_bytes and len(ocr_posts) == 1
+            await page.goto(origin + "/camera-thresholds")
+            gates = page.locator("form[action='/camera-thresholds/preview']")
+            await gates.get_by_label("Fictional hall score threshold", exact=True).fill("0.375")
+            await gates.get_by_role("button", name="Preview camera thresholds", exact=True).click()
+            await expect(page.get_by_role("heading", name="Confirm camera thresholds", exact=True)).to_be_visible()
+            assert port_config.read_bytes() == port_bytes and not fixture_requests
+            assert "02000000F0C3" not in await page.content()
+            gate_button = page.get_by_role("button", name="Save camera thresholds", exact=True)
+            await gate_button.click()
+            assert port_config.read_bytes() == port_bytes
+            gate_ack = page.get_by_role("checkbox", name="I approve these camera score gates", exact=False)
+            await gate_ack.focus()
+            await page.keyboard.press("Space")
+            await expect(gate_ack).to_be_checked()
+            await page.keyboard.press("Tab")
+            await expect(gate_button).to_be_focused()
+            assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+            await page.screenshot(path=str(output / (name + "-camera-threshold-confirm.png")), full_page=True)
+            await page.keyboard.press("Enter")
+            await expect(page.get_by_text("Camera thresholds saved; running service unchanged.", exact=True)).to_be_visible()
+            changed = json.loads(port_config.read_text())
+            assert changed["live_pool_detector"].pop("camera_thresholds") == {"02000000F0C3": .375}
+            assert changed == json.loads(port_bytes) and config.read_bytes() == config_bytes
+            await page.screenshot(path=str(output / (name + "-camera-threshold-saved.png")), full_page=True)
+            gate_undo = page.locator("form[action='/camera-thresholds/undo']")
+            await gate_undo.get_by_role("checkbox").check()
+            await gate_undo.get_by_role("button", name="Undo camera thresholds", exact=True).click()
+            await expect(page.get_by_text("Prior camera thresholds restored; running service unchanged.", exact=True)).to_be_visible()
+            assert port_config.read_bytes() == port_bytes and not fixture_requests
+            await page.goto(origin + "/")
             probe = page.locator("form[action='/provider-probe']").filter(
                 has=page.locator("input[name='profile'][value='aiport']")).filter(
                 has=page.locator("input[name='role'][value='detection']"))
@@ -329,6 +365,8 @@ async def scenario(output, name, viewport, executable):
                 "role_preview_confirm_and_exact_rollback": True,
                 "separate_ocr_preview_key_confirmation_and_exact_rollback": True,
                 "ocr_administration_provider_calls": 0,
+                "camera_threshold_preview_keyboard_save_and_exact_undo": True,
+                "camera_threshold_provider_calls": 0,
                 "synthetic_fixture_provider_calls": len(fixture_requests),
                 "provider_result": "http_503_no_retry" if name == "desktop" else "synthetic_answer_mismatch",
                 "synthetic_cost_acknowledgement_required": True}
