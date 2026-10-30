@@ -763,7 +763,7 @@ class ControlSite:
         for profile, port in ports.items():
             title = ("AI Port" if profile == "aiport" else
                      "AI Port " + profile.partition(":")[2])
-            if port.camera_count >= 2:
+            if port.camera_count >= 1:
                 current = {"provider": port.provider or "openai",
                            "model": port.model or "gpt-6-luna",
                            "base_url": port.base_url or "https://api.openai.com/v1",
@@ -781,7 +781,7 @@ class ControlSite:
                                         csrf)
             else:
                 body += (f"<section><h2>{_safe(title)}</h2><p>No camera pool is configured. "
-                         "Provider settings become available after configuring at least two streams."
+                         "Provider settings become available after configuring a camera stream."
                          "</p></section>")
         if not ports:
             body += ("<section><h2>AI Ports</h2><p>No AI Port configuration is attached. "
@@ -800,7 +800,7 @@ class ControlSite:
             for name, label in (("openai", "OpenAI"), ("anthropic", "Claude / Anthropic"),
                                 ("ollama", "Ollama"),
                                 ("openai-compatible", "Compatible API")))
-        detail = (f"<p>{camera_count} configured camera slots. "
+        detail = (f"<p>{camera_count} configured camera slot{'s' if camera_count != 1 else ''}. "
                   f"Configured detector: {_safe(backend or 'off')}.</p>"
                   if camera_count else "")
         if profile.startswith("aiport") and backend != "vision_api":
