@@ -334,6 +334,10 @@ records an admin-only update followed by same-certificate HUP with unchanged
 process/session/core containers. It is not an issuer-renewal or automatic
 certificate-maintenance result.
 
+The separate [NAS certificate-maintenance checkpoint](evidence/native-admin-certificate-maintenance-20261030.md)
+records a guarded user timer and its initial `not_due` result, without claiming
+an actual issuer call, new-certificate rotation or future unattended renewal.
+
 The [30 October NAS loopback qualification](evidence/native-admin-loopback-20261030.md)
 records a separate authenticated service reading the actual Key/four-Port
 profiles, five maintenance-page responses, explicit refusal cases, one admin-only
