@@ -69,6 +69,9 @@ class AdminAPI:
         from .ocr_provider_control import OcrProviderControl
         self.ocr_provider_control = OcrProviderControl(self.site)
         self.ocr_provider_control.register(app)
+        from .camera_threshold_control import CameraThresholdControl
+        self.camera_threshold_control = CameraThresholdControl(self.site)
+        self.camera_threshold_control.register(app)
 
     async def maintenance_history(self, request):
         if not self.authenticated(request):
