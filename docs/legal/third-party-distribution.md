@@ -84,3 +84,16 @@ obligations, optional extras, OS/FFmpeg/base-image inventory, model-weight right
 complete package/image delivery review and the independent origin/legal gates.
 All release clearance fields remain `needs_evidence`; no package/image is
 published by this inventory update.
+
+## Optional browser test tooling — 30 October 2026
+
+The `browser` development extra pins `playwright==1.64.1` (Microsoft's
+[Python source](https://github.com/microsoft/playwright-python), Apache-2.0
+upstream declaration). Its resolved local test environment also contains pyee
+14.0.0 and greenlet 3.5.6. These optional tools are not added to the runtime lock,
+runtime images or runtime SBOM; this declaration is not a complete optional-
+wheel/native-library license audit. Local E2E uses an already installed Chrome
+executable with a new empty profile; CI likewise records its installed Chrome
+version. No browser binary, profile or model is redistributed by the package.
+A separately downloaded Playwright Chromium remains a distinct artifact with
+its own exact version, sources and notice obligations if ever redistributed.

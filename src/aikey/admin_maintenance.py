@@ -33,6 +33,13 @@ _REQUEST = re.compile(r"[0-9a-f]{32}\Z")
 _KINDS = {"backup", "restore", "update"}
 _STATES = {"started", "succeeded", "rejected", "rolled_back", "uncertain"}
 _SCHEMA = "aikey-maintenance/1"
+_PURPOSES = {
+    "device_file_backup": ("backup", "private_backup_export"),
+    "device_file_restore": ("restore", "isolated_restore"),
+    "search_index_backup": ("backup", "isolated_restore"),
+    "search_index_restore": ("restore", "isolated_restore"),
+    "apple_image_update": ("update", "offline_replace"),
+}
 
 
 class MaintenanceError(ValueError):
@@ -82,9 +89,23 @@ def _identifier(value, pattern=_ID):
     return value
 
 
+def _public_plan(plan, identifier, *, target=True, description=True):
+    public = {key: plan[key] for key in ("kind", "profile", "revision", "timeout", "expected_effect")}
+    public.update(schema=_SCHEMA, operation=identifier, one_use=True,
+                  scope="host_approved_frozen_runbook", worker_liveness="not_asserted")
+    image = plan.get("inputs", {}).get("image")
+    if (target and plan["kind"] == "update" and isinstance(image, str)
+            and re.fullmatch(r"(?:[^\s@]+@)?sha256:[0-9a-f]{64}", image)):
+        public["target_image"] = image.rsplit("@", 1)[-1]
+    if description and "purpose" in plan:
+        public["purpose"] = plan["purpose"]
+    return public
+
+
 def prepare(host: Path, bridge: Path, *, script: Path, inputs: dict,
             kind: str, profile: str, revision: str, timeout: int,
-            expected_effect: str, guard_files: list[str], resources: dict[str, str] | None = None) -> str:
+            expected_effect: str, guard_files: list[str], resources: dict[str, str] | None = None,
+            purpose: str | None = None) -> str:
     """Publish one frozen operator-qualified Python runbook; never a web action.
 
     The runbook must perform its own locked preflight, current-state checks,
@@ -92,6 +113,12 @@ def prepare(host: Path, bridge: Path, *, script: Path, inputs: dict,
     host inputs on stdin and emits the fixed result protocol documented below.
     """
     initialize(host, bridge)
+    if purpose is not None and (not isinstance(purpose, str)
+            or _PURPOSES.get(purpose) != (kind, expected_effect)):
+        raise MaintenanceError("invalid_maintenance_purpose")
+    if purpose == "apple_image_update" and (not isinstance(inputs, dict) or not isinstance(inputs.get("image"), str)
+            or not re.fullmatch(r"(?:[^\s@]+@)?sha256:[0-9a-f]{64}", inputs["image"])):
+        raise MaintenanceError("invalid_maintenance_update_target")
     if (not isinstance(kind, str) or kind not in _KINDS or not isinstance(profile, str)
             or not re.fullmatch(r"aikey|aiport(?::[a-z0-9-]{1,32})?", profile)
             or type(timeout) is not int or not 1 <= timeout <= 1800
@@ -123,14 +150,14 @@ def prepare(host: Path, bridge: Path, *, script: Path, inputs: dict,
             "revision": revision, "timeout": timeout, "expected_effect": expected_effect,
             "script": source.decode("utf-8"), "inputs": inputs, "guards": guards, "resources": resources,
             "interpreter": str(interpreter), "interpreter_sha256": _digest(_read(interpreter, 64 * 1024 * 1024))}
+    if purpose is not None:
+        plan["purpose"] = purpose
     raw = _encode(plan)
     identifier = _digest(raw)
     if len(list((Path(host) / "plans").iterdir())) >= 128 and not (Path(host) / "plans" / (identifier + ".json")).exists():
         raise MaintenanceError("maintenance_plan_capacity")
     atomic_private(Path(host) / "plans" / (identifier + ".json"), raw)
-    public = {key: plan[key] for key in ("kind", "profile", "revision", "timeout", "expected_effect")}
-    public.update(schema=_SCHEMA, operation=identifier, one_use=True,
-                  scope="host_approved_frozen_runbook", worker_liveness="not_asserted")
+    public = _public_plan(plan, identifier)
     atomic_private(Path(bridge) / "catalog" / (identifier + ".json"), _encode(public))
     return identifier
 
@@ -150,8 +177,9 @@ class Bridge:
             if path.suffix != ".json":
                 raise MaintenanceError("invalid_maintenance_catalog")
             row = _json_object(_read(path, 4096))
-            if (set(row) != {"schema", "kind", "profile", "revision", "timeout", "expected_effect",
-                             "operation", "one_use", "scope", "worker_liveness"}
+            fields = {"schema", "kind", "profile", "revision", "timeout", "expected_effect",
+                      "operation", "one_use", "scope", "worker_liveness"}
+            if (not fields <= set(row) <= fields | {"target_image", "purpose"}
                     or row["schema"] != _SCHEMA or row["operation"] != path.stem
                     or not isinstance(row["kind"], str) or row["kind"] not in _KINDS or row["one_use"] is not True
                     or not isinstance(row["profile"], str)
@@ -162,6 +190,13 @@ class Bridge:
                     or row["scope"] != "host_approved_frozen_runbook"
                     or row["worker_liveness"] != "not_asserted"):
                 raise MaintenanceError("invalid_maintenance_catalog")
+            if "target_image" in row and (row["kind"] != "update"
+                    or not isinstance(row["target_image"], str)
+                    or not re.fullmatch(r"sha256:[0-9a-f]{64}", row["target_image"])):
+                raise MaintenanceError("invalid_maintenance_target")
+            if "purpose" in row and (not isinstance(row["purpose"], str)
+                    or _PURPOSES.get(row["purpose"]) != (row["kind"], row["expected_effect"])):
+                raise MaintenanceError("invalid_maintenance_purpose")
             _identifier(row["revision"])
             result.append(row)
         return result
@@ -209,6 +244,35 @@ class Bridge:
             raise MaintenanceError("maintenance_receipt_invalid")
         _identifier(row["operation"])
         return row
+
+    def history(self):
+        """Bounded request/result metadata; never runbooks, inputs or host paths."""
+        paths = []
+        with os.scandir(_directory(self.root / "requests")) as entries:
+            for entry in entries:
+                paths.append(Path(entry.path))
+                if len(paths) > 128:
+                    raise MaintenanceError("maintenance_queue_full")
+        paths.sort()
+        result = []
+        for path in paths:
+            if path.name.startswith(".pending-") and path.suffix != ".json":
+                continue  # An atomic publisher's temporary file is not a request.
+            _identifier(path.stem, _REQUEST)
+            if path.suffix != ".json":
+                raise MaintenanceError("maintenance_request_invalid")
+            row = _json_object(_read(path, 4096))
+            if (path.suffix != ".json" or set(row) != {"schema", "request", "operation", "revision"}
+                    or row["schema"] != _SCHEMA or row["request"] != path.stem):
+                raise MaintenanceError("maintenance_request_invalid")
+            _identifier(row["operation"])
+            _identifier(row["revision"])
+            receipt = self.receipt(row["request"])
+            if receipt.get("operation", row["operation"]) != row["operation"]:
+                raise MaintenanceError("maintenance_receipt_conflict")
+            result.append({key: row[key] for key in ("request", "operation", "revision")}
+                          | {"state": receipt["state"], "automatic_retry": False})
+        return result
 
 
 @contextmanager
@@ -342,7 +406,7 @@ def work_once(host: Path, bridge: Path):
     initialize(host, bridge)
     handled = 0
     with _owner(host) as lease:
-        published = {row["operation"] for row in Bridge(bridge).catalog()}
+        published = {row["operation"]: row for row in Bridge(bridge).catalog()}
         unresolved = set()
         ledgers = list((Path(host) / "ledger").iterdir())
         if len(ledgers) > 128:
@@ -384,8 +448,10 @@ def work_once(host: Path, bridge: Path):
                 state = prior["state"] if prior["state"] != "started" else "uncertain"
                 if state not in _STATES:
                     raise MaintenanceError("maintenance_ledger_invalid")
-            elif operation not in published:
-                state = "rejected"  # Withdrawn before admission: no runbook effect.
+            elif (operation not in published or published[operation] != _public_plan(
+                    plan, operation, target="target_image" in published[operation],
+                    description="purpose" in published[operation])):
+                state = "rejected"  # Withdrawn/description drift: no runbook effect.
             else:
                 atomic_private(ledger, _encode({"state": "started"}))
                 state = "uncertain"

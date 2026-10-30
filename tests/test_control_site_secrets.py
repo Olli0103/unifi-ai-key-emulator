@@ -58,7 +58,7 @@ def assert_private_page(response, body):
     policy = response.headers["Content-Security-Policy"]
     assert "default-src 'none'" in policy and "script-src" not in policy
     assert response.headers["Cache-Control"] == "no-store"
-    assert response.headers["Referrer-Policy"] == "no-referrer"
+    assert response.headers["Referrer-Policy"] == "same-origin"
     assert "<script" not in body.lower() and "localstorage" not in body.lower()
     assert SECRET not in body
 

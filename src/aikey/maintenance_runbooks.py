@@ -46,6 +46,7 @@ def prepare_search(host: Path, bridge: Path, *, kind: str, config: Path,
     return maintenance.prepare(host, bridge, script=Path(__file__).with_name("maintenance_search_runbook.py"),
         inputs=inputs, kind=kind, profile="aikey", revision=revision, timeout=1800,
         expected_effect="isolated_restore", guard_files=guards,
+        purpose="search_index_backup" if kind == "backup" else "search_index_restore",
         resources={"search_backup_backend.py": maintenance._read(Path(search_backup.__file__)).decode()})
 
 
@@ -109,6 +110,7 @@ def prepare_apple_update(host: Path, bridge: Path, *, config: Path, state_dir: P
     return maintenance.prepare(host, bridge, script=package / "maintenance_apple_runbook.py",
         inputs=inputs, kind="update", profile=profile, revision=revision, timeout=600,
         expected_effect="offline_replace",
+        purpose="apple_image_update",
         guard_files=[str(config), str(state_dir / apple_supervisor.SPEC_FILE), str(certificate),
                      str(config.parent / "device.crt")], resources=resources)
 
@@ -166,4 +168,5 @@ def prepare_state(host: Path, bridge: Path, *, kind: str, profile_kind: str,
     return maintenance.prepare(host, bridge, script=package / "maintenance_state_runbook.py", inputs=inputs,
         kind=kind, profile=profile, revision=revision, timeout=1800,
         expected_effect="private_backup_export" if kind == "backup" else "isolated_restore",
+        purpose="device_file_backup" if kind == "backup" else "device_file_restore",
         guard_files=[str(directory / "config.json"), str(directory / "device.crt")], resources=resources)

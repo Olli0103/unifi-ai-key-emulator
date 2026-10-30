@@ -70,6 +70,35 @@ jobs:
       - name: Audit package contents without approving release
         run: python tools/community_release_check.py --audit-only --dist dist
 
+  browser-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - name: Install optional browser automation, not a production dependency
+        run: python -m pip install --disable-pip-version-check -r requirements-runtime.lock '.[browser]'
+      - name: Exercise fictional loopback forms with installed sandboxed Chrome
+        run: |
+          browser="$(command -v google-chrome)"
+          "${browser}" --version
+          python tools/maintenance_browser_check.py --browser-executable "${browser}" --output browser-results
+      - name: Retain only fictional screenshots and source-bound results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fictional-maintenance-browser
+          path: |
+            browser-results/*.png
+            browser-results/result.json
+          if-no-files-found: error
+          retention-days: 14
+
   dependency-and-sbom:
     runs-on: ubuntu-latest
     timeout-minutes: 15

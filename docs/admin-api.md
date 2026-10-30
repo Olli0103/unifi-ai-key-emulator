@@ -374,3 +374,67 @@ do not establish an actual native update, database recovery or hardware parity.
 These checkpoints alone do not close #13. The exact frozen integration still
 requires full applicable suites, a separate source-derived gate, qualified
 private/native read-back and original rejection/concurrency/identity criteria.
+
+## Browser maintenance console
+
+The authenticated **Maintenance operations** link opens `/maintenance`. It is a
+server-rendered form, not a shell, path editor or implicit worker. Only host-
+prepared, typed built-in plans with the current saved configuration revision
+are offered: device-file backup, **inactive** file restore, search backup with
+scratch verification, isolated search restore verification, and the maintained
+Apple image-update adapter. It does not turn that Apple adapter into a NAS
+update or activate a restored directory. An update shows the immutable image
+**digest**, not a private registry name, URL, credential or host path. Old/custom
+plans without a reviewable built-in scope remain visible but cannot be
+submitted here. They retain their constrained JSON API compatibility.
+
+The host publisher attaches `purpose` (one of the above fixed scopes) and, for
+an image update, `target_image`. The worker compares all published metadata to
+the frozen plan before executing it. A changed profile, kind, timeout, effect,
+scope or target cannot silently describe another frozen action. Update host
+worker source deliberately when adopting these new typed plans; an older
+worker is not silently upgraded by changing the web image. Historical frozen
+plans, source and receipts must not be rewritten to make a used plan available.
+
+The form requires explicit confirmation and existing same-origin/session/CSRF
+and shared mutation limits. Its correlation ID is stable for that session and
+plan; double submission does not create another request. Competing HTML forms
+are serialized through durable admission, including after the HTTP waiter
+leaves. Used plans are not offered again. Any retained request with no reported
+result, `started` or `uncertain` disables new console submissions until the host
+reconciles it. The console never resets, prunes, automatically retries or
+reconciles a plan. A lost acknowledgement links the **same** request and does
+not claim that nothing happened. Durable admission auditing must be available.
+
+`GET /api/admin/v1/maintenance/requests` exposes bounded validated correlation
+metadata only (at most 128 retained requests), with `automatic_retry: false` and
+worker liveness explicitly unasserted. `/maintenance/requests/REQUEST` reads the
+same retained results, even if the current configuration or catalogue becomes
+unavailable. “No host result reported” is **not** a claim of queued, idle or
+running execution. A reported success is the frozen runbook's result, not a
+full host disaster-recovery, power-loss or all-platform acceptance result.
+There is no automatic history deletion; exhausted bounded storage requires
+host review and preservation of the one-use ledger, not a web reset button.
+
+HTML uses `Referrer-Policy: same-origin`: real Chrome form submissions retain
+an own-origin `Origin` header, while cross-origin navigation sends no referrer.
+The previous HTML `no-referrer` policy caused Chrome to send `Origin: null`,
+which the authentication policy correctly rejected. JSON API responses retain
+`no-referrer`; no origin/CSRF check or HTTPS requirement has been weakened.
+
+### Isolated browser check
+
+Install `.[browser]` in a separate development environment. Run
+`python tools/maintenance_browser_check.py --output PRIVATE_OUTPUT` after
+installing Playwright's matching Chromium, or specify `--browser-executable`
+with an existing Chrome executable. The runner creates and collects **empty,
+owned headless profiles**; it never imports a user's cookies/profile or contacts
+a processor, controller or model provider. It tests fictional loopback state
+in desktop and 390-pixel mobile-width views, login, confirmation, keyboard
+submission, one-use result reads and session expiry. CI uses its installed
+Chrome with the Chromium sandbox enabled and records its actual version;
+that rolling browser is not an immutable version pin. Screenshots and the
+source-digest result contain only fictional fixtures. Inspect the screenshots
+before claiming visual acceptance; the script reports that review as pending.
+This is not an iPhone, Tailscale-client, native Protect or production-browser
+acceptance test. No browser is installed into the runtime images.
