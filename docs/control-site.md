@@ -247,6 +247,18 @@ Reconcile any in-flight operation's result separately. These source/HTTP tests
 are not a deployed service change or full security-audit approval. See the
 [session-lifecycle checks](evidence/admin-session-lifecycle-20261029.md).
 
+## Embedding configuration admission
+
+Configuration preview/apply validates supported embedding backends and the E5
+model identity before saving, including local and disabled backends. Enabled
+`e5-session-v1` search requires an HTTP or sentence-transformers encoder; an
+omitted backend has the runtime's disabled meaning. Disabled search and CLIP
+search can keep E5 disabled. Invalid changes preserve the previous configuration
+and do not create a history entry. This validation does not contact a provider,
+load/download/check the presence of a checkpoint, verify encoder dimensions or
+test inference. Existing index-migration and credential-destination guards still
+apply; this does not add an embedding-provider form or activate a new model.
+
 ## Explicit direct HTTPS
 
 Mac and Linux can also serve the same authenticated site over direct TLS.
