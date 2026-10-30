@@ -238,7 +238,7 @@ class FakeDocker:
                     "Destination": volume["target"], "RW": True}])
             network = service["networks"]["aiport_lan"]
             network_name = (self.manifest["networks"]["aiport_lan"].get("name")
-                            or "local-aiport_aiport_lan")
+                            or f"{self.manifest['name']}_aiport_lan")
             if self.unsafe_network == "attachment":
                 network_name = "wrong"
             return json.dumps({network_name: {

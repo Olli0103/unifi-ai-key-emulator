@@ -1,0 +1,31 @@
+{
+  "schema": "aikey-compose-project-verification/1",
+  "date": "2026-10-30",
+  "issue": 45,
+  "parent_regression_cases_failed": 49,
+  "corrected_focused_cases_passed": 134,
+  "native_parent_status_calls": 2,
+  "native_parent_ambient_override_rows": 0,
+  "native_parent_explicit_project_rows": 4,
+  "native_corrected_status_calls": 1,
+  "native_corrected_rows": 4,
+  "source_helper_sha256": "66a3f6bb8720b9d074d22f6e98da24dfbfe67454060c13ec83bc5952912a3265",
+  "same_agent_separate_harness": {
+    "invalid_values_rejected_before_transport": 23,
+    "valid_argv_cases": 6,
+    "real_isolated_compose_operations": ["config", "up", "ps", "exec", "stop"],
+    "owned_fixture_count": 1,
+    "fixture_network": "none",
+    "live_state_mounts": 0,
+    "published_ports": 0,
+    "fixture_collected_and_absent": true
+  },
+  "live_containers_unchanged": 7,
+  "native_apply": false,
+  "producer_upgrade": false,
+  "camera_reassignment": false,
+  "model_or_provider_probe": false,
+  "human_review": false,
+  "feature_parity": false,
+  "issue_complete": false
+}

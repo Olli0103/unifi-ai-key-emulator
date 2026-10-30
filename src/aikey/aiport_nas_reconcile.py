@@ -22,7 +22,7 @@ from .aiport_candidate import CandidateError, _private_file, load_config
 from .aiport_deployment import (
     AI_PORT_CONTAINER_PORT, AiPortPlanError, _eligible, _ip, plan_ai_ports,
 )
-from .aiport_nas_compose import NasComposeError, build_nas_compose
+from .aiport_nas_compose import NasComposeError, _PROJECT_NAME, build_nas_compose
 from .aiport_ingest import IngressError, normalize_mac
 from .camera_inventory import InventoryError, fetch_inventory, is_supported_protect_version
 
@@ -228,8 +228,11 @@ def _run(argv: list[str], timeout: int = 15) -> str:
     return result.stdout
 
 
-def _compose(manifest_path: Path, *args: str) -> list[str]:
-    return ["docker", "compose", "-f", str(manifest_path), *args]
+def _compose(manifest_path: Path, project_name: str, *args: str) -> list[str]:
+    if not isinstance(project_name, str) or not _PROJECT_NAME.fullmatch(project_name):
+        raise ReconcileError("A bounded lowercase Compose project name is required")
+    return ["docker", "compose", "--project-name", project_name,
+            "-f", str(manifest_path), *args]
 
 
 def _rows(output: str, services: list[str]) -> dict[str, dict]:
@@ -349,11 +352,11 @@ def _inspect(run: Callable[[list[str], int], str], row: dict, service: dict,
 
 
 def _health(run: Callable[[list[str], int], str], manifest_path: Path,
-            service: str, state: Path) -> dict:
+            service: str, state: Path, project_name: str) -> dict:
     try:
         raw = state.joinpath("device.crt").read_text()
         pin = hashlib.sha256(ssl.PEM_cert_to_DER_cert(raw)).hexdigest()
-        output = run(_compose(manifest_path, "exec", "-T", service,
+        output = run(_compose(manifest_path, project_name, "exec", "-T", service,
                               "python", "-c", _HEALTH_SCRIPT, pin), 12)
         health = json.loads(output)
     except (OSError, ValueError) as exc:
@@ -376,10 +379,11 @@ def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
               pause: Callable[[float], None] = time.sleep) -> dict:
     """Validate Compose, inspect state, and optionally start only missing slots."""
     services = sorted(manifest["services"])
-    run(_compose(manifest_path, "config", "--quiet"), 15)
+    project_name = manifest.get("name")
+    run(_compose(manifest_path, project_name, "config", "--quiet"), 15)
     network_name = _network_name(manifest)
     _verify_external_network(run, manifest)
-    found = _rows(run(_compose(manifest_path, "ps", "--all", "--format", "json"), 15),
+    found = _rows(run(_compose(manifest_path, project_name, "ps", "--all", "--format", "json"), 15),
                   services)
     running = [name for name in services if name in found and found[name]["State"] == "running"]
     to_start = [name for name in services if name not in running]
@@ -389,7 +393,7 @@ def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
         _inspect(run, row, manifest["services"][name], network_name)
     for name in running:
         slot = int(name.removeprefix("aiport_slot_"))
-        health[name] = _health(run, manifest_path, name, states[slot])
+        health[name] = _health(run, manifest_path, name, states[slot], project_name)
         readiness[name] = _readiness(health[name])
     if not apply:
         return {"mode": "dry_run", "running": running, "would_start": to_start,
@@ -400,9 +404,9 @@ def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
     try:
         for name in to_start:
             attempted.append(name)
-            run(_compose(manifest_path, "up", "-d", "--no-deps", "--no-recreate",
+            run(_compose(manifest_path, project_name, "up", "-d", "--no-deps", "--no-recreate",
                          "--no-build", "--pull", "never", name), 90)
-            current = _rows(run(_compose(manifest_path, "ps", "--all", "--format", "json"),
+            current = _rows(run(_compose(manifest_path, project_name, "ps", "--all", "--format", "json"),
                                 15), services)
             if name not in current or current[name]["State"] != "running":
                 raise ReconcileError(f"{name} did not enter running state")
@@ -410,7 +414,7 @@ def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
             slot = int(name.removeprefix("aiport_slot_"))
             for attempt in range(_HEALTH_ATTEMPTS):
                 try:
-                    health[name] = _health(run, manifest_path, name, states[slot])
+                    health[name] = _health(run, manifest_path, name, states[slot], project_name)
                     readiness[name] = _readiness(health[name])
                     if readiness[name] == "controller_disconnected":
                         raise ReconcileError(f"{name} is adopted but disconnected from Protect")
@@ -424,7 +428,7 @@ def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
     except ReconcileError:
         for name in reversed(attempted):
             try:
-                run(_compose(manifest_path, "stop", "--timeout", "10", name), 30)
+                run(_compose(manifest_path, project_name, "stop", "--timeout", "10", name), 30)
             except ReconcileError:
                 pass
         raise
@@ -442,6 +446,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gateway", required=True)
     parser.add_argument("--parent", required=True)
     parser.add_argument("--external-network")
+    parser.add_argument("--project-name", default="local-aiport")
     parser.add_argument("--image", required=True)
     parser.add_argument("--uid", required=True, type=int)
     parser.add_argument("--gid", required=True, type=int)
@@ -466,7 +471,7 @@ def main(argv: list[str] | None = None) -> int:
         options = {"controller_ip": args.controller_ip, "controller_pin": args.controller_pin,
                    "nas_ip": args.nas_ip, "subnet": args.subnet, "gateway": args.gateway,
                    "parent": args.parent, "image": args.image, "uid": args.uid, "gid": args.gid,
-                   "external_network": args.external_network}
+                   "external_network": args.external_network, "project_name": args.project_name}
         verify_inputs(plan, manifest, report, states, options)
         outcome = reconcile(args.compose, manifest, states, apply=args.apply)
     except (InventoryError, ReconcileError, OSError, ValueError) as exc:

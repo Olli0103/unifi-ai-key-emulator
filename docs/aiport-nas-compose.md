@@ -51,6 +51,17 @@ local-aiport-nas-reconcile \
 
 When generation used `--external-network`, pass the same option and name to reconciliation. An edited network name or changed Docker network stops the run before it starts a slot.
 
+Both commands accept `--project-name` (default `local-aiport`). Use the same
+reviewed name for generation and reconciliation; it is frozen in the manifest
+and checked with the rest of the deployment inputs. Names contain 1–63 lowercase
+ASCII letters, digits, underscores or hyphens and start with a letter or digit.
+Every Compose operation explicitly selects that project, including status,
+health, start and rollback. An ambient `COMPOSE_PROJECT_NAME` cannot redirect
+those operations. This does not import an existing stack, verify an untrusted
+vendor Compose file, or authorize repacking adopted camera assignments.
+See the [30 October namespace verification](evidence/compose-project-fencing-20261030.md)
+for the native status reproduction and isolated lifecycle check.
+
 Protect's Integration API does not report stream resolution. In the 24 September live read, it also classified the two initially legacy G3 cameras as smart-event candidates after AI Port pairing. If a previously verified, unselected Mac slot relied on a lower resolution than the conservative unknown-camera fallback, reconciliation checks that its camera IDs and source still match but does not let that untouched slot block a separate NAS start. The verifier tolerates only the descriptive legacy/enhancement counts changing after pairing; camera IDs, slot assignments, addresses, listener settings and reserved capacity must still match. Every **selected** NAS slot must still fit the fresh inventory's conservative capacity; a lower-resolution assumption for a selected slot requires fresh evidence before it can start. This exception does not create or modify a Mac container.
 
 The command cannot prove that a router reservation exists, that the NAS kernel accepts the container's networking and port sysctl, or that Protect can reach the service. Check those on the real LAN before `--apply`, then verify each started slot from the controller or another LAN host and in Protect. Do not start an overlapping NAS service at the Mac candidate's existing IP. Retire that Mac service only as a deliberate migration after its replacement state and network are ready. Preserve the adopted state directory; never regenerate its MAC or certificate to troubleshoot reconnects.
