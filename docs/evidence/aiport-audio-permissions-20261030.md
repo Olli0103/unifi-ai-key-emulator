@@ -51,3 +51,66 @@ camera audio/recording opt-out everywhere, erasure of existing recordings,
 transcripts/templates, expiry of controller/provider/backup copies, or new
 browser/mobile/native-quality/deletion/independent-human acceptance. Existing
 private history remains. Broad privacy/administration issues stay open.
+
+## Final checks and native administrator activation
+
+Frozen source `13d3554c1146d47743c4dc6ef348631542702ac0` passed 85 focused
+scope/store/Undo/accessibility cases and 280 audit/session/uncertainty/document
+checks. The full native Mac run passed **3,094 tests, three skipped** with 22
+existing warnings and 56 passing subtests. Linux CI for the head, including the
+current merged documentation context, passed **3,097 tests, one skipped**, with
+22 existing warnings and 56 passing subtests; the remaining skip requires real
+CLIP weights. All four required PR and integrated-main jobs passed, and the
+integrated main's complete production-module bytes equal the frozen source.
+
+A separate same-agent source-derived gate passed 103 assertions against the
+clean exact commit. Three owned numeric-loopback TCP connections were observed,
+with zero unowned transport/DNS attempts and no fixture/task/thread or tracked
+byte/mode residue. It exercised explicit Sound removal before audio removal,
+dependency/stale/cross-profile/cross-feature refusals and retained the earlier
+scope/authentication/uncertainty cases. It is not independent human review.
+
+A separate candidate image was built without a network and all 92 installed
+modules/license matched. Its owned network-disabled read-only profile test
+returned twelve configured panels:
+
+| Port slot | Face | Sound | Audio / speech presence |
+| --- | ---: | ---: | ---: |
+| 1 | 3 | 3 | 3 |
+| 2 | 2 | 2 | 2 |
+| 3 | 2 | 2 | 2 |
+| 4 | 2 | 2 | 2 |
+
+These are **saved permitted-camera counts**, not people, sounds, transcripts,
+events or quality. Inventory names were not configured, so individual selection
+was not qualified there. Anonymous/bad-CSRF/unknown-profile operations refused;
+no valid policy/provider/model operation was admitted. The proof signed out and
+collected its server/container. All seven existing containers, five profiles
+and administrator authority remained unchanged during that qualification.
+
+Before activation, six administrator authority/TLS/compose inputs were privately
+byte-verified on the NAS and separate SSD. The first rollout helper stopped
+before transport and before publishing compose: a broad numeric replacement had
+changed its internal expected port from 8765 to 12765 while the real configured
+port stayed 8765. No service operation was admitted; the old image stayed healthy
+and compose matched its verified before-copy. The failed helper/staged inputs
+remain separate. The corrected helper changed only that expectation and used
+distinct receipt/stage names, retaining the twelve-panel checks and full
+destination-keyed mount comparison.
+
+Only the separate administrator image was then replaced. Private-VPN direct
+HTTPS/default-CA/SNI verification, secure host-only session cookie, exact command,
+healthcheck, complete mount descriptors, resource/hardening configuration,
+authority and TLS bytes remained. It became healthy with zero automatic
+restarts/no OOM, refused the old cookie, accepted the **same administrator
+credential**, read twelve panels and signed out. The previous image remains.
+Five profile bytes and six processor/database container identities/images/
+restarts stayed unchanged; no valid policy/provider/model operation was admitted.
+
+Fresh Protect reads before, before retry and after retained the original
+one-Key/four-Port identities, nine pairings and five adopted/connected processors.
+A separate final read found the expected image healthy, its private VPN socket
+reachable and the old HTTP-loopback/NAS-LAN ports closed. No processor restart or
+actual audio opt-out/live enforcement test was performed. Browser/mobile,
+owner credential handoff, automated certificate renewal, deletion, recovery,
+quality and broader acceptance remain open.
