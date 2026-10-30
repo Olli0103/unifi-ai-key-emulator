@@ -215,9 +215,12 @@ def live_status(state_root: Path | None, backups_dir: Path | None = None) -> dic
     if state_root is None or not Path(state_root).is_dir():
         return status
     root = Path(state_root)
-    report = inventory(root)
+    report = inventory(root, max_entries=2048, max_seconds=.25)
     status["worker_archive"] = {"markers": report["tombstones"],
                                 "problems": sum(report["problems"].values())}
+    if report.get("complete", True) is not True:
+        status["worker_archive"] = {"markers": None, "problems": None,
+                                    "scan": "incomplete; entry or time limit reached"}
     try:
         status["face_store"] = {"identities": len(FaceStore(root).names())}
     except (FaceStoreError, OSError, ValueError):

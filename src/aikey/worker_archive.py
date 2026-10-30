@@ -72,98 +72,170 @@ def _read_json(path: Path):
         return json.loads(handle.read(_MAX_BYTES + 1))
 
 
-def _references(state_root: Path, problems: dict) -> tuple[set[str], dict[str, int]]:
+class _ScanLimit(Exception):
+    pass
+
+
+class _ReadBudget:
+    def __init__(self, max_entries: int | None, max_seconds: float | None):
+        if max_entries is not None and (type(max_entries) is not int or max_entries <= 0):
+            raise ValueError("Archive entry limit must be a positive integer")
+        if max_seconds is not None and (type(max_seconds) not in (int, float)
+                or not math.isfinite(max_seconds) or max_seconds <= 0):
+            raise ValueError("Archive time limit must be positive and finite")
+        self.remaining = max_entries
+        self.deadline = time.monotonic() + max_seconds if max_seconds is not None else None
+        self.limited = max_entries is not None or max_seconds is not None
+
+    def take(self):
+        if self.remaining is not None:
+            if self.remaining == 0:
+                raise _ScanLimit
+            self.remaining -= 1
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            raise _ScanLimit
+
+    def entries(self, directory: Path):
+        # Do not materialize/sort a large directory before checking a UI budget.
+        if not self.limited:
+            yield from sorted(directory.iterdir())
+            return
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                yield Path(entry.path)
+
+
+def _references(state_root: Path, problems: dict, budget: _ReadBudget) -> tuple[set[str], dict[str, int]]:
     """Job IDs something local still points at, and how many per source."""
     refs: dict[str, set[str]] = {"active_journal": set(), "test_permit": set(), "caption_reservation": set()}
     jobs = state_root / "worker-jobs"
     if jobs.is_symlink():
         problems["unsafe"] += 1
     elif jobs.is_dir():
-        refs["active_journal"] = {p.stem for p in jobs.glob("*.json") if _HEX64.fullmatch(p.stem)}
+        for path in budget.entries(jobs):
+            budget.take()
+            if path.suffix == ".json" and _HEX64.fullmatch(path.stem):
+                refs["active_journal"].add(path.stem)
     scopes = state_root / "worker-test-scopes"
     if scopes.is_symlink():
         problems["unsafe"] += 1
     elif scopes.is_dir():
-        for path in scopes.glob("*.json"):
+        for path in budget.entries(scopes):
+            budget.take()
+            if path.suffix != ".json":
+                continue
             try:
                 value = _read_json(path)
                 if isinstance(value, dict) and isinstance(value.get("job_id"), str):
                     refs["test_permit"].add(value["job_id"])
             except (OSError, ValueError):
                 problems["unreadable_reference"] += 1
-    budget = state_root / "caption-budget.json"
-    if budget.exists() or budget.is_symlink():
+    budget_path = state_root / "caption-budget.json"
+    budget.take()
+    if budget_path.exists() or budget_path.is_symlink():
         try:
-            value = _read_json(budget)
+            value = _read_json(budget_path)
             refs["caption_reservation"] = {item["job_id"] for item in value["reservations"]}
         except (OSError, ValueError, KeyError, TypeError):
             problems["unreadable_reference"] += 1
     return set().union(*refs.values()), {key: len(value) for key, value in refs.items()}
 
 
-def inventory(state_root: Path, *, now: float | None = None) -> dict:
-    """Counts only; never modifies the archive. ``_tombstones`` is for plan()."""
+def inventory(state_root: Path, *, now: float | None = None,
+              max_entries: int | None = None, max_seconds: float | None = None) -> dict:
+    """Read-only inventory; optional cooperative UI budget is never an expiry proof.
+
+    Default CLI/planner behavior remains complete. A budget checks between local
+    file operations, not a hard deadline for an individual filesystem syscall.
+    An incomplete report cannot be passed to ``plan``.
+    """
+    budget = _ReadBudget(max_entries, max_seconds)
     now = time.time() if now is None else now
     state_root = Path(state_root)
     archive = state_root / "worker-archive"
     problems = {"unsafe": 0, "malformed": 0, "stray": 0, "interrupted_temp": 0,
                 "unreadable_reference": 0}
     tombstones: dict[str, dict] = {}
-    if archive.is_symlink() or (archive.exists() and not _private_dir(archive)):
-        problems["unsafe"] += 1
-    elif archive.is_dir():
-        for bucket in sorted(archive.iterdir()):
-            if bucket.is_symlink() or not bucket.is_dir():
-                problems["unsafe" if bucket.is_symlink() else "stray"] += 1
-                continue
-            if not _BUCKET.fullmatch(bucket.name) or not _private_dir(bucket):
-                problems["unsafe" if _BUCKET.fullmatch(bucket.name) else "stray"] += 1
-                continue
-            for path in sorted(bucket.iterdir()):
-                if path.name.startswith(".archive-"):
-                    # The worker died between writing a tombstone and linking it.
-                    problems["interrupted_temp"] += 1
+    complete = True
+    referenced: set[str] = set()
+    by_source = {"active_journal": None, "test_permit": None, "caption_reservation": None}
+    interrupted = None
+    try:
+        if archive.is_symlink() or (archive.exists() and not _private_dir(archive)):
+            problems["unsafe"] += 1
+        elif archive.is_dir():
+            for bucket in budget.entries(archive):
+                budget.take()
+                if bucket.is_symlink() or not bucket.is_dir():
+                    problems["unsafe" if bucket.is_symlink() else "stray"] += 1
                     continue
-                job_id = path.stem
-                if path.suffix != ".json" or not _HEX64.fullmatch(job_id) or job_id[:2] != bucket.name:
-                    problems["stray"] += 1
+                if not _BUCKET.fullmatch(bucket.name) or not _private_dir(bucket):
+                    problems["unsafe" if _BUCKET.fullmatch(bucket.name) else "stray"] += 1
                     continue
-                if path.is_symlink():
-                    problems["unsafe"] += 1
-                    continue
-                try:
-                    record = _read_json(path)
-                except (OSError, ValueError):
-                    record = None
-                if not valid_tombstone(record, job_id, now=now):
-                    problems["malformed"] += 1
-                    continue
-                tombstones[job_id] = record
-    referenced, by_source = _references(state_root, problems)
-    interrupted = len(referenced & tombstones.keys() & _active(state_root))
+                for path in budget.entries(bucket):
+                    budget.take()
+                    if path.name.startswith(".archive-"):
+                        # The worker died between writing a tombstone and linking it.
+                        problems["interrupted_temp"] += 1
+                        continue
+                    job_id = path.stem
+                    if path.suffix != ".json" or not _HEX64.fullmatch(job_id) or job_id[:2] != bucket.name:
+                        problems["stray"] += 1
+                        continue
+                    if path.is_symlink():
+                        problems["unsafe"] += 1
+                        continue
+                    try:
+                        record = _read_json(path)
+                    except (OSError, ValueError):
+                        record = None
+                    if not valid_tombstone(record, job_id, now=now):
+                        problems["malformed"] += 1
+                        continue
+                    tombstones[job_id] = record
+        referenced, by_source = _references(state_root, problems, budget)
+        interrupted = len(referenced & tombstones.keys() & _active(state_root, budget))
+    except _ScanLimit:
+        complete = False
+        # Even previously collected references may be partial: never use them
+        # to prove that a retained replay guard is unreferenced.
+        referenced = set()
+        by_source = {"active_journal": None, "test_permit": None, "caption_reservation": None}
     states = {"completed": 0, "failed": 0}
     ages = {label: 0 for _, label in _AGE_BUCKETS} | {"over_90d": 0}
     for record in tombstones.values():
         states[record["state"]] += 1
         age = (now - record["updatedAt"]) / 86400
         ages[next((label for limit, label in _AGE_BUCKETS if age < limit), "over_90d")] += 1
-    return {"schema": "aikey-worker-archive-inventory/1", "tombstones": len(tombstones),
+    result = {"schema": "aikey-worker-archive-inventory/1", "tombstones": len(tombstones),
             "states": states, "ages": ages, "problems": problems,
             "references": by_source | {"archived_and_referenced": len(referenced & tombstones.keys()),
                                        "archived_and_still_active": interrupted},
             "_tombstones": tombstones, "_referenced": referenced}
+    if not complete:
+        result["complete"] = False
+        result["references"]["archived_and_referenced"] = None
+        result["references"]["archived_and_still_active"] = None
+    return result
 
 
-def _active(state_root: Path) -> set[str]:
+def _active(state_root: Path, budget: _ReadBudget) -> set[str]:
     jobs = state_root / "worker-jobs"
     if jobs.is_symlink() or not jobs.is_dir():
         return set()
-    return {p.stem for p in jobs.glob("*.json") if _HEX64.fullmatch(p.stem)}
+    active = set()
+    for path in budget.entries(jobs):
+        budget.take()
+        if path.suffix == ".json" and _HEX64.fullmatch(path.stem):
+            active.add(path.stem)
+    return active
 
 
 def plan(report: dict, *, min_age_days: float, controller_absent: frozenset[str] | None = None,
          now: float | None = None) -> dict:
     """Dry run: which tombstones could expire, and why the rest cannot."""
+    if report.get("complete", True) is not True:
+        raise ArchiveError("Archive inventory is incomplete; expiry cannot be planned")
     if type(min_age_days) not in {int, float} or not math.isfinite(min_age_days) or min_age_days < 1:
         raise ArchiveError("min_age_days must be chosen explicitly and be at least 1")
     now = time.time() if now is None else now
