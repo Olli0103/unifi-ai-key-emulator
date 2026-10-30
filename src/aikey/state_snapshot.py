@@ -24,7 +24,9 @@ from .state_schema import check_schema
 
 SCHEMA = "aikey-cold-state/1"
 MAX_BYTES = 1024**3
-MAX_FILES = 20000
+MAX_FILES = 200000
+MAX_MANIFEST_BYTES = 64 * 1024**2
+MAX_ARCHIVE_BYTES = MAX_BYTES + 320 * 1024**2
 MANIFEST = "_aikey_snapshot_manifest.json"
 
 
@@ -48,6 +50,19 @@ class _SnapshotMember(tarfile.TarInfo):
         member = super().frombuf(buf, encoding, errors)
         if member.type not in {tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE}:
             raise SnapshotError("snapshot_extension_or_link_refused")
+        return member
+
+
+class _SnapshotTar(tarfile.TarFile):
+    """No redundant TarInfo cache for a sequential, digest-checked archive."""
+
+    def addfile(self, *args, **kwargs):
+        super().addfile(*args, **kwargs)
+        self.members.clear()
+
+    def next(self):
+        member = super().next()
+        self.members.clear()
         return member
 
 
@@ -188,14 +203,14 @@ def inspect_archive(source, *, identity=None, revision=None):
         None,
         None,
     )
-    identity_records = {}
-    with tarfile.open(fileobj=source, mode="r:", tarinfo=_SnapshotMember) as archive:
+    identity_records, directory_names = {}, set()
+    with _SnapshotTar.open(fileobj=source, mode="r:", tarinfo=_SnapshotMember) as archive:
         for member in archive:
             name = _name(member.name)
             if (
                 not (member.isfile() or member.isdir())
                 or name in files
-                or name in directories
+                or name in directory_names
                 or manifest is not None
                 or len(files) + len(directories) >= MAX_FILES
                 or member.size < 0
@@ -207,9 +222,10 @@ def inspect_archive(source, *, identity=None, revision=None):
                 if member.size != 0:
                     raise SnapshotError("invalid_snapshot_directory")
                 directories.append(name)
+                directory_names.add(name)
                 continue
             if name == MANIFEST:
-                if member.size > 8 * 1024 * 1024:
+                if member.size > MAX_MANIFEST_BYTES:
                     raise SnapshotError("snapshot_manifest_too_large")
                 manifest = _object(archive.extractfile(member).read())
                 continue
@@ -290,7 +306,7 @@ def inspect_archive(source, *, identity=None, revision=None):
         raise SnapshotError("snapshot_name_collision")
     for name in names:
         if any(
-            parent.as_posix() != "." and parent.as_posix() not in directories
+            parent.as_posix() != "." and parent.as_posix() not in directory_names
             for parent in PurePosixPath(name).parents
         ):
             raise SnapshotError("snapshot_parent_directory_missing")
@@ -377,8 +393,8 @@ def backup(directory: Path, output: Path, *, kind: str, expected_revision: str) 
     files, directories, total, selected = {}, [], 0, {}
     try:
         root = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        with tempfile.TemporaryFile() as target:
-            with tarfile.open(fileobj=target, mode="w:", format=tarfile.USTAR_FORMAT) as archive:
+        with tempfile.TemporaryFile(dir=output.parent) as target:
+            with _SnapshotTar.open(fileobj=target, mode="w:", format=tarfile.USTAR_FORMAT) as archive:
 
                 def visit(fd, prefix="", depth=0):
                     nonlocal total
@@ -470,6 +486,7 @@ def backup(directory: Path, output: Path, *, kind: str, expected_revision: str) 
                 member.size = len(raw)
                 member.mode = 0o600
                 archive.addfile(member, io.BytesIO(raw))
+                del raw
             target.flush()
             os.fsync(target.fileno())
             inspect_archive(target, identity=manifest["identity"], revision=expected_revision)
@@ -532,13 +549,13 @@ def restore(
     # Immutable anonymous copy; verification and extraction use this same FD,
     # even if the original archive pathname/inode changes during the operation.
     with (
-        _regular(archive, MAX_BYTES + 32 * 1024 * 1024) as original,
-        tempfile.TemporaryFile() as snapshot,
+        _regular(archive, MAX_ARCHIVE_BYTES) as original,
+        tempfile.TemporaryFile(dir=destination.parent) as snapshot,
     ):
         total, digest = 0, hashlib.sha256()
         while raw := original.read(1024 * 1024):
             total += len(raw)
-            if total > MAX_BYTES + 32 * 1024 * 1024:
+            if total > MAX_ARCHIVE_BYTES:
                 raise SnapshotError("snapshot_archive_too_large")
             snapshot.write(raw)
             digest.update(raw)
@@ -558,7 +575,7 @@ def restore(
                 destination.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_root
             )
             snapshot.seek(0)
-            with tarfile.open(fileobj=snapshot, mode="r:", tarinfo=_SnapshotMember) as bundle:
+            with _SnapshotTar.open(fileobj=snapshot, mode="r:", tarinfo=_SnapshotMember) as bundle:
                 for member in bundle:
                     if member.name == MANIFEST:
                         continue

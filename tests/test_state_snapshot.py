@@ -1,6 +1,7 @@
 """Cold full-file backup and fresh offline restore, with byte/path race cases."""
 
 import hashlib
+import io
 import json
 import os
 import ssl
@@ -256,3 +257,32 @@ def test_unsupported_encrypted_state_key_never_opens_a_password_prompt(tmp_path)
         snapshot.backup(root, tmp_path / "unsupported.tar", kind="aikey",
             expected_revision=hashlib.sha256((root / "config.json").read_bytes()).hexdigest())
     assert time.monotonic() - started < 1 and not (tmp_path / "unsupported.tar").exists()
+
+
+def test_complete_marker_table_beyond_old_twenty_thousand_limit_is_not_truncated(tmp_path):
+    root, seed, report = saved(tmp_path, "aikey")
+    larger = tmp_path / "many-markers.tar"
+    with tarfile.open(seed, "r:") as original:
+        manifest = json.loads(original.extractfile(snapshot.MANIFEST).read())
+        with tarfile.open(larger, "w:", format=tarfile.USTAR_FORMAT) as writer:
+            for member in original:
+                if member.name != snapshot.MANIFEST:
+                    writer.addfile(member, original.extractfile(member) if member.isfile() else None)
+            directory = tarfile.TarInfo("replay")
+            directory.type, directory.mode = tarfile.DIRTYPE, 0o700
+            writer.addfile(directory)
+            manifest["directories"].append("replay")
+            for index in range(25000):
+                name = f"replay/{index:064x}.json"
+                member = tarfile.TarInfo(name)
+                member.size, member.mode = 0, 0o600
+                writer.addfile(member, io.BytesIO(b""))
+                manifest["files"][name] = {"bytes":0,"mode":0o600,"sha256":hashlib.sha256(b"").hexdigest()}
+            encoded = json.dumps(manifest, sort_keys=True).encode()
+            member = tarfile.TarInfo(snapshot.MANIFEST)
+            member.size, member.mode = len(encoded), 0o600
+            writer.addfile(member, io.BytesIO(encoded))
+    with larger.open("rb") as source:
+        actual = snapshot.inspect_archive(source, identity=report["identity"], revision=report["revision"])
+    assert len(actual["files"]) == len(manifest["files"]) == report["files"] + 25000
+    assert actual["files"][f"replay/{24999:064x}.json"] == manifest["files"][f"replay/{24999:064x}.json"]

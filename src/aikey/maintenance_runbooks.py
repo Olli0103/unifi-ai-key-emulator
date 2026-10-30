@@ -151,8 +151,8 @@ def prepare_state(host: Path, bridge: Path, *, kind: str, profile_kind: str,
               "destination": str(destination) if destination is not None else None,
               "approval_nonce": secrets.token_hex(16)}
     if kind == "restore":
-        inputs["archive_sha256"] = artifact_digest(archive, state_snapshot.MAX_BYTES + 32 * 1024 * 1024)
-        with state_snapshot._regular(archive, state_snapshot.MAX_BYTES + 32 * 1024 * 1024) as source:
+        inputs["archive_sha256"] = artifact_digest(archive, state_snapshot.MAX_ARCHIVE_BYTES)
+        with state_snapshot._regular(archive, state_snapshot.MAX_ARCHIVE_BYTES) as source:
             manifest = state_snapshot.inspect_archive(source, identity=identity)
         inputs["backup_revision"] = manifest["revision"]
         if Path(destination) == directory or directory in Path(destination).parents or Path(destination) in directory.parents:

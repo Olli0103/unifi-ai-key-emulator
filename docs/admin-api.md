@@ -307,7 +307,11 @@ Symlinks, hardlinks, special files, unsafe paths, duplicate members, extension
 headers, hidden trailing payload and mismatched metadata are rejected. Source
 files are copied via anchored descriptors; the bytes actually copied and a
 second same-descriptor read must match, not merely timestamps. The default cap
-is 1 GiB of file data and 20,000 total entries, not a silently truncated backup.
+is 1 GiB of file data and 200,000 total entries, with a 64-MiB manifest and
+separately bounded tar overhead, not a silently truncated backup. Sequential
+tar readers/writers do not retain an additional complete `TarInfo` cache.
+Anonymous staging uses the chosen private destination volume rather than
+placing a potentially large backup in a default system temporary directory.
 Model inputs outside the state root and the database are **separate** artifacts;
 this is not a complete installation/host backup. Archive output must be in a
 private host directory. It is **not application-encrypted**: select protected
