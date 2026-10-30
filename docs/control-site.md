@@ -484,3 +484,19 @@ not start a host worker, infer its liveness, retry a lost acknowledgement,
 activate a restored directory or provide a NAS update adapter. Existing host
 plans/ledgers and operator-qualified cold windows remain authoritative.
 See the [API boundary and isolated browser check](admin-api.md#browser-maintenance-console).
+
+
+## One-camera AI Port controls and browser coverage
+
+A validated one-camera AI Port pool receives the same provider, threshold,
+request-cap and rollback forms as larger pools. Diagnostic-only configurations
+without a paired stream still receive no provider form. This does not create
+a stream, pair a camera or enable another device.
+
+The optional isolated Chrome runner covers required-input refusal, one-camera
+provider save/byte-exact rollback, role-model preview/confirmation/byte-exact
+rollback and invalid model rejection. Its two explicitly fictional loopback
+provider cases return HTTP 503 and a wrong challenge answer; neither involves
+a model, camera media or a real provider. A mismatch remains a mismatch, not a
+verified model identity or quality failure. These source/browser fixtures do
+not replace native controller or physical mobile-device acceptance.

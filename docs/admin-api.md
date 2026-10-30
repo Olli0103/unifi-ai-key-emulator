@@ -429,8 +429,13 @@ Install `.[browser]` in a separate development environment. Run
 installing Playwright's matching Chromium, or specify `--browser-executable`
 with an existing Chrome executable. The runner creates and collects **empty,
 owned headless profiles**; it never imports a user's cookies/profile or contacts
-a processor, controller or model provider. It tests fictional loopback state
-in desktop and 390-pixel mobile-width views, login, confirmation, keyboard
+a real processor, controller or model provider. The expanded fixture also
+provides an explicitly fictional loopback provider, returning a 503 or a wrong
+synthetic image answer; no inference server or model is involved. It tests fictional loopback state
+in desktop and 390-pixel mobile-width views: login, required input refusal,
+one-camera provider save/exact rollback, role-model preview/confirm/exact
+rollback, invalid model refusal, separate synthetic cost acknowledgement,
+fictional provider failure/answer mismatch, maintenance confirmation, keyboard
 submission, one-use result reads and session expiry. CI uses its installed
 Chrome with the Chromium sandbox enabled and records its actual version;
 that rolling browser is not an immutable version pin. Screenshots and the
