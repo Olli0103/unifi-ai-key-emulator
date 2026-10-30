@@ -440,6 +440,9 @@ class CameraPolicyEngine:
             policy = self._policies[camera]
             result.append({
                 "policy_enabled": policy is not None,
+                "policy_smart_zones": len(policy.smart_zones) if policy is not None else None,
+                "policy_exclude_zones": len(policy.exclude_zones) if policy is not None else None,
+                "policy_secondary_lens_zones": len(policy.secondary_lens_zones) if policy is not None else None,
                 "policy_enabled_types": ([kind for kind in _KIND_ORDER
                                           if kind in policy.enabled_types]
                                          if policy is not None else []),

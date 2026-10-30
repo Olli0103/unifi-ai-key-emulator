@@ -2161,6 +2161,7 @@ class CandidateService:
                    if "max_per_hour" in (detector.get("fallback") or {}) else []))
 
     async def _health(self, request: web.Request) -> web.Response:
+        from .camera_bindings import SCHEMA as binding_schema, binding_revision
         live_budget_remaining = None
         live_budget_healthy = None
         if "live_detector" in self.config:
@@ -2177,6 +2178,9 @@ class CandidateService:
                 live_budget_remaining = 0
                 live_budget_healthy = False
         return web.json_response({"service": "aiport-candidate", "adopted": self.adoption.adopted,
+            "pool_binding_schema": binding_schema if self._pool_camera_order else None,
+            "pool_binding_revision": (binding_revision(self.config["mac"], self._pool_camera_order)
+                                      if self._pool_camera_order else None),
             "adoption_pending": self.adoption.pending_token is not None,
             "control_connected": self.connected, "websocket_upgrades": self.upgrades,
             "last_result": self.last_result, "manage_requests": self.manage_requests,

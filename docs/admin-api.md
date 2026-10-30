@@ -98,7 +98,7 @@ Per-profile coalescing and a two-second result cache limit polling; at most two
 peers are contacted concurrently. Successful reports include observation time,
 allowlisted boolean/count fields and CA+leaf-pin verification. Missing metrics
 remain null, not zero. Raw images, camera identifiers, descriptions, provider
-errors and arbitrary health namespaces are not copied into this response. The
+errors and arbitrary health namespaces are not copied from the peer. The
 running process does not report its loaded configuration revision, so that
 field remains null; a live connection is not proof it uses the newest saved
 settings. PTZ is not an implemented action here; recording remains
@@ -110,6 +110,26 @@ Logout/expiry after an awaited read still refuses delivery. The helper's tests
 use owned TLS peers: CA refusal, separately trusted-but-wrong leaf pin, redirect,
 ambiguous/oversized/mistyped JSON, bounded slow response, twelve concurrent
 coalesced reads and explicit unknown/zero distinctions.
+
+### Runtime camera/policy order
+
+New Port runtimes report versioned `aikey-runtime-pool-binding/1`: a digest of
+their own MAC and ordered camera MACs, without raw identifiers in the health
+payload. Per-camera policy/zone counts retain runtime order; absent policy is
+unknown, while a received policy with no zone has zero zones. Detection types,
+event counters and remaining budget are allowlisted, not arbitrary peer data.
+No zone geometry or private model/media data is copied.
+
+The private admin API compares this declaration to the captured saved Port
+configuration. Only an exact identity/order match permits joining configured
+camera MACs to those ordinals. A mismatch, missing old-runtime declaration or
+unavailable saved config leaves the mapping false/unknown and never labels
+another camera's counters as this camera. The matching saved revision and runtime
+observation time are retained separately. This is **not** controller-native
+pairing proof, proof of the latest complete loaded settings, zone-quality
+ground truth or authorization to edit a controller zone. Older running Ports
+cannot be claimed to report these new fields before an explicitly qualified
+runtime upgrade.
 
 ## Saved identity and controller trust
 
@@ -152,9 +172,7 @@ does not change pairing, permissions, configuration or processing activation.
 
 ## Remaining #13 work
 
-These local checkpoints do not close #13. Complete runtime camera/policy
-binding, native controller-owned unsupported status,
-authenticated supported maintenance
+These local checkpoints do not close #13. Complete authenticated supported maintenance
 operations, their approval/preflight/recovery boundaries, full original scope
 and rejection/concurrency qualification before the integration PR. No unqualified
 backup/export/restore/update/PTZ/recording operation is advertised as available.

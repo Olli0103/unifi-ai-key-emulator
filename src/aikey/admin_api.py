@@ -163,6 +163,25 @@ class AdminAPI:
         if self.store(profile) is None:
             return error("unknown_profile", 404)
         result = await self.site.runtime_observer.read(profile)
+        if profile != "aikey" and result.get("runtime") is not None:
+            from .camera_bindings import binding_revision
+            try:
+                content, config = await asyncio.to_thread(self.store(profile)._read)
+                cameras = [entry["camera_mac"] for entry in config.get("paired_streams", [])]
+                reported = result["runtime"].get("pool_binding_revision")
+                matches = (hmac.compare_digest(reported, binding_revision(config["mac"], cameras))
+                           if reported is not None and cameras else None)
+                result.update(saved_revision=hashlib.sha256(content).hexdigest(),
+                              saved_order_matches_reported_runtime_order=matches)
+                observed = result["runtime"].get("cameras")
+                if matches and observed is not None:
+                    if len(observed) != len(cameras):
+                        raise ValueError
+                    for camera, mac in zip(observed, cameras, strict=True):
+                        camera["saved_camera_mac"] = mac
+            except (ConfigurationStoreError, AiPortConfigurationError, OSError, ValueError):
+                result["saved_order_matches_reported_runtime_order"] = None
+                result["saved_binding_observation"] = "unavailable"
         if not self.authenticated(request):
             return error("authentication_required", 401)
         return reply({"profile": profile, **result,

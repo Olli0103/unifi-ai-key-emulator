@@ -11,6 +11,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import ipaddress
+import re
 from pathlib import Path
 import ssl
 import time
@@ -23,6 +24,7 @@ from cryptography.hazmat.primitives import serialization
 from .config_store import ConfigurationStore, ConfigurationStoreError
 from .device import VerifiedConnector
 from .protocol import _json_object
+from .camera_bindings import SCHEMA as BINDING_SCHEMA
 
 
 _NETWORKS = tuple(ipaddress.ip_network(n) for n in (
@@ -78,6 +80,9 @@ def _normalize(kind, value):
         result = {"adopted": _flag(device, "adopted"), "connected": _flag(device, "connected"),
                   "search_connected": _flag(search, "connected")}
         result.update({name: _count(worker, name) for name in ("queued", "active", "pending", "ledger", "capacity")})
+        captions = _object(worker, "captions") if "captions" in worker else None
+        result["captions"] = ({name: _count(captions, name) for name in (
+            "admitted", "exhausted", "deferred_fair_share")} if captions is not None else None)
     else:
         result = {name: _flag(value, name) for name in ("adopted", "control_connected", "adoption_pending")}
         result.update({name: _count(value, name) for name in (
@@ -85,6 +90,30 @@ def _normalize(kind, value):
             "detector_frames_attempted", "detector_frames_succeeded", "snapshot_uploads",
             "live_event_budget_remaining")})
         result["live_event_budget_healthy"] = _flag(value, "live_event_budget_healthy")
+        binding = value.get("pool_binding_revision")
+        if binding is not None and (not isinstance(binding, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", binding)
+                or value.get("pool_binding_schema") != BINDING_SCHEMA):
+            raise ValueError("Invalid runtime camera binding")
+        result["pool_binding_revision"] = binding
+        cameras = value.get("pool_cameras")
+        result["cameras"] = None
+        if cameras is not None:
+            if not isinstance(cameras, list) or len(cameras) > 5 or any(not isinstance(c, dict) for c in cameras):
+                raise ValueError("Invalid runtime camera counters")
+            result["cameras"] = []
+            for index, camera in enumerate(cameras):
+                types = camera.get("policy_enabled_types")
+                if types is not None and (not isinstance(types, list) or len(types) > 4
+                        or any(not isinstance(t, str) or t not in {"person", "vehicle", "animal", "package"} for t in types)
+                        or len(set(types)) != len(types)):
+                    raise ValueError("Invalid runtime camera types")
+                entry = {"ordinal": index + 1, "policy_received": _flag(camera, "policy_enabled"),
+                         "enabled_types": types, "event_budget_healthy": _flag(camera, "event_budget_healthy")}
+                entry.update({name: _count(camera, name) for name in (
+                    "policy_smart_zones", "policy_exclude_zones", "policy_secondary_lens_zones",
+                    "event_budget_remaining", "active_tracks", "events_entered")})
+                result["cameras"].append(entry)
     if result["adopted"] is None:
         raise ValueError("Runtime adoption flag is unavailable")
     return result
