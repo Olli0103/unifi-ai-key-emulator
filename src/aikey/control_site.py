@@ -629,8 +629,9 @@ class ControlSite:
         key_configured = bool(inference.get("api_key_file", {}).get("configured"))
         notice = ("<p class='notice'>Settings saved. Restart the affected service to apply them.</p>"
                   if request.query.get("saved") == "1" else
-                  "<p class='notice'>The previous provider settings were restored locally. Restart "
-                  "the affected service to apply them; deployed NAS copies are not changed.</p>"
+                  "<p class='notice'>The previous provider settings were restored in the selected "
+                  "profile. Restart the affected service to apply them. The site changes only "
+                  "the configuration files mounted or supplied to it.</p>"
                   if request.query.get("rolledback") == "1" else "")
         undo_form = self._undo_form("aikey", "AI Key", self.aikey.provider_rollback_status(), csrf)
         body = ("<div class='row'><div><h1>Local AI processor</h1>"
