@@ -44,7 +44,12 @@ connection.request('GET', '/healthz')
 response = connection.getresponse()
 if response.status != 200:
     raise SystemExit(4)
-body = json.loads(response.read(4097))
+# Match the admin runtime reader's bounded health-response contract. Current
+# per-camera telemetry is larger than 4 KiB; never parse a truncated prefix.
+raw_body = response.read(256 * 1024 + 1)
+if len(raw_body) > 256 * 1024:
+    raise SystemExit(6)
+body = json.loads(raw_body)
 if body.get('service') != 'aiport-candidate' or type(body.get('adopted')) is not bool or type(body.get('control_connected')) is not bool:
     raise SystemExit(5)
 print(json.dumps({'service': body['service'], 'adopted': body['adopted'], 'control_connected': body['control_connected']}))
