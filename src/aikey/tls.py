@@ -92,6 +92,29 @@ def import_controller_trust(host: str, port: int, expected_sha256: str, output: 
     return actual
 
 
+def import_controller_certificate(pem: bytes, expected_sha256: str, output: Path) -> str:
+    """Install one independently pinned public certificate without any network."""
+    if not isinstance(expected_sha256, str):
+        raise ConfigError("Supply the independently verified controller SHA-256 fingerprint")
+    normalized = expected_sha256.replace(":", "").lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", normalized):
+        raise ConfigError("Supply the independently verified controller SHA-256 fingerprint")
+    if output.exists() or output.is_symlink():
+        raise ConfigError("Controller trust file already exists; refusing to overwrite it")
+    if (not isinstance(pem, bytes) or not 0 < len(pem) <= 8192
+            or not re.fullmatch(rb"-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n]+-----END CERTIFICATE-----", pem.strip())):
+        raise ConfigError("Supply exactly one public PEM certificate, not a private key or chain")
+    try:
+        certificate = x509.load_pem_x509_certificate(pem)
+    except ValueError:
+        raise ConfigError("Cannot validate the supplied public certificate") from None
+    actual = certificate.fingerprint(hashes.SHA256()).hex()
+    if not hmac.compare_digest(actual, normalized):
+        raise ConfigError("Controller certificate fingerprint does not match; no trust was saved")
+    _save_new_trust(output, certificate.public_bytes(serialization.Encoding.PEM).decode("ascii"))
+    return actual
+
+
 def _save_new_trust(output: Path, pem: str) -> None:
     """Publish a complete private file only if the destination is still absent.
 

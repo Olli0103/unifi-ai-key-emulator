@@ -157,22 +157,10 @@ def main(argv=None):
             print(json.dumps(report, indent=2))
             return 0 if report["ready_for_device_start"] else 2
         if args.command == "trust":
+            from .first_run import trust_target
             from .tls import import_controller_trust
-            if not config["controller"]["host"]:
-                raise ConfigError("Set controller.host before importing trust")
-            controller = config["controller"]
-            search = args.channel == "search"
-            if search and not controller.get("search_ca_file"):
-                raise ConfigError("Search trust requires a separately configured search CA path and pin")
-            pin = controller.get("search_expected_fingerprint" if search else "expected_fingerprint")
-            if pin is not None and (not isinstance(pin, str)
-                    or pin.replace(":", "").lower() != args.fingerprint.replace(":", "").lower()):
-                raise ConfigError("Supplied fingerprint differs from the selected channel's configured pin")
-            port = args.port if args.port is not None else controller["search_port" if search else "control_port"]
-            if not 1 <= port <= 65535:
-                raise ConfigError("Trust endpoint must be a TCP port between 1 and 65535")
-            fingerprint = import_controller_trust(config["controller"]["host"],
-                port, args.fingerprint, Path(controller["search_ca_file" if search else "ca_file"]))
+            host, port, output = trust_target(config, args.channel, args.fingerprint, args.port)
+            fingerprint = import_controller_trust(host, port, args.fingerprint, output)
             print(json.dumps({"trusted_sha256": fingerprint, "http_requests_sent": 0}))
             return 0
         if not report["ready_for_device_start"]:

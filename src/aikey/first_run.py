@@ -7,11 +7,32 @@ remain for inspection: never reuse, reset or repair a possibly adopted identity.
 
 import json
 import os
+from pathlib import Path
 import stat
 
 from .config import ConfigError, atomic_private, defaults, initialize, validate_config
 from .protocol import classify_controller_version
 from .providers import validate_inference_config
+
+
+def trust_target(config, channel, fingerprint, port=None):
+    """Resolve only a declared channel/pin, without network or configuration writes."""
+    if channel not in {"control", "search"} or not isinstance(fingerprint, str):
+        raise ConfigError("Invalid controller trust channel or fingerprint")
+    controller = config["controller"]
+    if not controller.get("host"):
+        raise ConfigError("Set controller.host before importing trust")
+    search = channel == "search"
+    if search and not controller.get("search_ca_file"):
+        raise ConfigError("Search trust requires a separately configured search CA path and pin")
+    pin = controller.get("search_expected_fingerprint" if search else "expected_fingerprint")
+    if pin is not None and (not isinstance(pin, str)
+            or pin.replace(":", "").lower() != fingerprint.replace(":", "").lower()):
+        raise ConfigError("Supplied fingerprint differs from the selected channel's configured pin")
+    selected_port = port if port is not None else controller["search_port" if search else "control_port"]
+    if type(selected_port) is not int or not 1 <= selected_port <= 65535:
+        raise ConfigError("Trust endpoint must be a TCP port between 1 and 65535")
+    return controller["host"], selected_port, Path(controller["search_ca_file" if search else "ca_file"])
 
 
 def prepare(args, inference):
