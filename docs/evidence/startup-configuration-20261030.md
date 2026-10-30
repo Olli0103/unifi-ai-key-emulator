@@ -61,7 +61,8 @@ all credential headers, observed Protect 7.3.74: metadata 200, camera list 200
 with 11 entries, one observed-camera detail 200. Neither the list nor that detail
 contained recording/PTZ fields. The native camera list refused that credential
 with 401; an earlier native bootstrap returned 500, not a proved login failure.
-No new account, cookie copy, credential export, recording/PTZ write or media read
-was attempted. This does not establish that every native account or other
+No new account or copied cookies were used. The saved key stayed inside the
+Admin container. No recording/PTZ changes or media reads occurred.
+This does not establish that every native account or other
 possible source is unavailable. The broader native recording/PTZ criteria in
 #13 and #17 remain OPEN.
