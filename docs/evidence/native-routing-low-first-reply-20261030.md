@@ -105,3 +105,47 @@ hardware. No standalone model probe, enrollment, new privacy scope, alarm
 action or public binary/image release occurred. Private native playback was
 viewed; no camera media, descriptions, raw identities or linkable fingerprints
 are included in this public record.
+
+## Later activation and exact Key readback
+
+The earlier checkpoint above is retained. Subsequently #208, frozen source
+`bd39b7c6d3f278335c8b33f4ea84a767e4e77713`, passed 139 focused tests,
+3,575 Mac tests (three skips), 3,577 Linux tests (one skip), the real Chrome CI
+lane and a separate same-agent 500-case/5,375-assertion response/budget matrix.
+The overall CI run completed successfully with five successful job conclusions;
+one scanner job's status metadata inconsistently remained in-progress despite
+all its steps, including completion, succeeding. The normal merge succeeded
+without an administrator bypass. Skipped CodeRabbit review is not a review PASS.
+
+Only the same existing three-camera Port was then image-updated once. A
+network-disabled real-state/model constructor preflight and all 111 installed
+module/license hashes passed. Its complete new 34-file cold archive was verified
+on the NAS, provider-key bytes matched, the producer watchdog settled, and the
+old image remained available. Five profile hashes, immutable identity/trust,
+the other six containers, Key/PostgreSQL/admin PIDs, namespace coupling and
+certificate-maintenance pin were preserved. Fresh monitoring was UP. The
+controller again acknowledged its management update; password equality remains
+unknown. Fresh native reads retained five original identities and nine pairings.
+
+Three new completed-send fingerprints matched three saved native snapshots
+without a duplicate tuple in that sample: Person and Animal on the paired G3,
+and Person on the G5. Both G3 events had ended with `ramState: done` and stored
+descriptions. These precede the requested post-fix human countertest and do not
+prove that countertest or execution of the near-threshold recovery branch.
+
+The newer G5 event initially showed failed/empty RAM. Its exact deterministic
+caption-job record was initially absent, later completed with an HTTP-accepted
+callback and stored description, and a fresh exact native read then showed
+done/nonempty RAM. That delayed recovery is not a permanent Key failure. The
+older 259.25-second G5 event still showed failed RAM despite an earlier completed
+caption and accepted callback. Neither HTTP 200 nor a previous caption erases
+that failed native state.
+
+Read-only Key diagnostics also counted over-duration and changed-input
+admission refusals. They are cumulative, not exact causes attributed to these
+two events. The bounded long-caption window change addresses an independently
+reproduced duration limitation, not an inferred cause of every RAM failure.
+It preserves changed-input, uncertain-callback and retry guards, performs no
+old-job replay and does not change transcription behavior. Its source tests
+are distinct from future activation/native long-event acceptance. No new Key
+runtime is implied by either Port-only deployment.
