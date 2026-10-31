@@ -1087,7 +1087,8 @@ class ControlSite:
         current = snapshot.configuration.get("speech_to_text")
         if not isinstance(current, dict):
             return ("<section><h2>Speech provider</h2><p>Not configured. Per-camera audio "
-                    "permission must be configured before choosing a speech provider.</p></section>")
+                    "permission must be configured before choosing a speech provider.</p>"
+                    "<p><a href='/speech-enrollment'>Set up speech transcription</a></p></section>")
         options = "".join(f"<option value='{name}'"
                           f"{' selected' if current.get('provider') == name else ''}>{label}</option>"
                           for name, label in (("openai-compatible", "Local compatible API"),
