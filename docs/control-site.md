@@ -862,3 +862,40 @@ configured state and explicit-camera count (`null` means no explicit list, not
 zero), with `saved_policy_not_running_authority`. It does not return identifiers,
 geometry, media or credentials. Both new POST routes share the existing mutation
 admission limit and shielded/drained file-operation boundary.
+
+### Redacted diagnostic download
+
+`/diagnostics` discloses the export boundary before collection. The keyboard-
+accessible **Download redacted JSON** link uses authenticated
+`GET /api/admin/v1/diagnostics`; it does not upload, send a support request or
+start processing. Unlike private configuration/runtime APIs, this download has
+its own `aikey-redacted-diagnostics/1` schema and fixed filename
+`aikey-redacted-diagnostics.json`.
+
+Only Admin-registered profile kinds and per-file anonymous ordinals, own pinned
+HTTPS health-reader availability, strict boolean flags and allowlisted aggregate
+runtime counters are included. These registered handles are not evidence of a
+completed setup or native adoption. The generated time is the export time; reader
+results may come from the existing two-second runtime cache. Unknown/null, false
+and zero remain distinct. No target is `not_configured`; a refused or failed
+reader is `unavailable`, not a declaration that the actual device is offline.
+
+The export excludes saved profile labels, device/camera identities, per-camera
+records, names, model/provider identifiers, URLs/addresses, file paths, config
+contents or revisions, credentials, logs, raw errors, media and transcripts. It
+does not inspect arbitrary host files, run host commands, load inventory, contact
+Protect/providers or collect a host/dependency inventory. It is not native event,
+compatibility, quality, accuracy or billing acceptance. Counter values, including
+observed ledger size, are not all lifetime totals or counts of actual events.
+
+The existing CA/leaf-pinned runtime observer handles at most 32 registered
+profiles, with its unchanged transport/concurrency/cache bounds. One export may
+collect at a time; another returns fixed `diagnostics_busy`/429 and `Retry-After`.
+Collection's asyncio observation deadline is six seconds. On failure, timeout or
+cancellation, all owned reader tasks are cancelled and observed before the slot is
+released; this is not a guarantee that a kernel-blocked filesystem thread can be
+aborted. The session is checked again before returning bytes. Unsupported query
+parameters, POST and HEAD do not collect; an expired session never receives an
+attachment. Failures return fixed error JSON, not a partial bundle. The complete
+serialized attachment is capped at 64 KiB and served with no-store, no-referrer,
+CSP and nosniff headers.
