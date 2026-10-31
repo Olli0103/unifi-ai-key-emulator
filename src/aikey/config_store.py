@@ -174,6 +174,72 @@ class ConfigurationStore:
         return {"revision": _revision(content), "configured": isinstance(continuous, dict),
                 "camera_ids": tuple(cameras) if isinstance(cameras, list) else None}
 
+    def caption_enrollment_status(self):
+        """Private UI input only; no identifiers or file routes may reach HTTP JSON."""
+        from .protocol import _json_object
+        content, _ = self._read(self.path)
+        raw = _json_object(content)
+        policy = (raw.get("worker") or {}).get("continuous")
+        configured = isinstance(policy, dict)
+        cameras = policy.get("camera_ids") if configured else None
+        return {"revision": _revision(content), "configured": configured,
+                "camera_ids": tuple(cameras) if isinstance(cameras, list) else None,
+                "camera_models": tuple(policy["camera_models"]) if configured else (),
+                "unmetered": policy.get("unmetered") is True if configured else False,
+                "protect_version": (raw.get("controller") or {}).get("protect_version")}
+
+    def _prepare_caption_enrollment(self, content, current, expected_revision, additions):
+        from .protocol import _json_object
+        revision = _revision(content)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(revision, expected_revision)):
+            raise RevisionConflict("Configuration changed since it was read")
+        if (not isinstance(additions, list) or not 1 <= len(additions) <= 16
+                or any(not isinstance(c, dict) or set(c) != {"id", "model"}
+                       or not isinstance(c["id"], str) or not re.fullmatch(r"[0-9a-f]{24}", c["id"])
+                       or not isinstance(c["model"], str) for c in additions)
+                or len({c["id"] for c in additions}) != len(additions)):
+            raise UnsafeConfigurationChange("Select distinct named caption camera candidates")
+        raw = _json_object(content)
+        policy = (raw.get("worker") or {}).get("continuous")
+        existing = policy.get("camera_ids") if isinstance(policy, dict) else None
+        if (not isinstance(existing, list) or not existing or len(existing) + len(additions) > 16
+                or any(not re.fullmatch(r"[0-9a-f]{24}", c) for c in existing)
+                or any(c["id"] in existing or c["model"] not in policy["camera_models"] for c in additions)):
+            raise UnsafeConfigurationChange("Existing explicit camera scope and allowed model families required")
+        candidate = deepcopy(raw)
+        candidate["worker"]["continuous"]["camera_ids"] = existing + sorted(c["id"] for c in additions)
+        checked = self._validate(candidate)
+        self._assert_immutable(current, checked)
+        self._assert_search_profile(checked, current)
+        self._assert_credential_routes(current, checked)
+        changes = tuple(_changed(raw, candidate))
+        if changes != ("worker.continuous.camera_ids",):
+            raise UnsafeConfigurationChange("Caption enrollment must change only the explicit camera list")
+        encoded = self._encode(candidate)
+        if len(encoded) > _MAX_CONFIG_BYTES:
+            raise UnsafeConfigurationChange("Caption enrollment configuration is too large")
+        return ConfigurationPreview(revision, _revision(encoded), _public(checked), changes, True), encoded
+
+    def preview_caption_enrollment(self, expected_revision, additions):
+        content, current = self._read(self.path)
+        return self._prepare_caption_enrollment(content, current, expected_revision, additions)[0]
+
+    def enroll_caption_cameras(self, expected_revision, additions):
+        """Extend only saved caption scope; running authority and usage are untouched."""
+        with self._locked():
+            content, current = self._read(self.path)
+            preview, encoded = self._prepare_caption_enrollment(content, current, expected_revision, additions)
+            self._archive(content)
+            try:
+                self._replace(encoded)
+                persisted, checked = self._read(self.path)
+                if _revision(persisted) != preview.resulting_revision:
+                    raise ConfigurationStoreError("Caption enrollment read-back differs")
+            except (OSError, ValueError, ConfigurationStoreError) as exc:
+                raise ConfigurationStoreError("Caption enrollment replacement outcome is uncertain") from exc
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
+
     def _prepare_caption_restriction(self, content, current, expected_revision, retained):
         from .protocol import _json_object
         revision = _revision(content)

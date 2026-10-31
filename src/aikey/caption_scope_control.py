@@ -105,6 +105,7 @@ class CaptionScopeControl:
             raise web.HTTPBadRequest()
         body = ("<h1>Saved automatic-caption cameras</h1><p><a href='/'>Settings</a> · "
             "<a href='/processing'>Running processing status</a> · <a href='/caption-policy'>Caption cost policy</a></p>"
+            "<p><a href='/caption-camera-enrollment'>Add named cameras with separate consent</a></p>"
             "<p>Remove cameras from an existing explicit list, or disable the saved continuous-caption policy. "
             "No camera can be added here. A separate AI Key restart is required: running jobs and camera "
             "permissions in Protect remain unchanged. Speech, search/indexing, face recognition and AI Port "

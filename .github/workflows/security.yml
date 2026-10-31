@@ -95,6 +95,7 @@ jobs:
           python tools/speech_enrollment_browser_check.py --browser-executable "${browser}" --output speech-enrollment-browser-results
           python tools/caption_policy_browser_check.py --browser-executable "${browser}" --output caption-policy-browser-results
           python tools/caption_scope_browser_check.py --browser-executable "${browser}" --output caption-scope-browser-results
+          python tools/caption_enrollment_browser_check.py --browser-executable "${browser}" --output caption-enrollment-browser-results
           python tools/diagnostic_browser_check.py --browser-executable "${browser}" --output diagnostic-browser-results
       - name: Retain only fictional screenshots and source-bound results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -115,6 +116,8 @@ jobs:
             caption-policy-browser-results/result.json
             caption-scope-browser-results/*.png
             caption-scope-browser-results/result.json
+            caption-enrollment-browser-results/*.png
+            caption-enrollment-browser-results/result.json
             diagnostic-browser-results/*.png
             diagnostic-browser-results/*.json
           if-no-files-found: error
