@@ -80,3 +80,47 @@ symlinks, descriptor/path replacement, first-note preservation, kernel lock
 contention and two independent writer processes under a one-note capacity.
 These are synthetic checks, not independent human review or proof that a real
 native caption failure is fixed. No service update follows from source alone.
+
+## Version 2: observed exception boundary
+
+New workers publish schema `aikey-worker-failure-note/2`, adding just `phase`.
+The reader continues to validate exact version-1 records, without inventing a
+missing phase. Version-2 records retain the **version-1 filename namespace**:
+an existing first note is never overwritten or accompanied by a second first
+note. Old readers refuse version-2 records rather than reinterpret them. A
+rollback therefore preserves evidence but cannot read new notes until a
+compatible reader is used. Journals/tombstones, capacity, permissions and
+publication accounting are unchanged. Other callers that omit `phase` still
+write version 1.
+
+The finite values are:
+
+| Phase | Directly observed boundary, not a root-cause assertion |
+| --- | --- |
+| `queue_expired` | The admission deadline was already expired on entry to the job runner, and that attempt raised TimeoutError. |
+| `model_work_fence` | Awaiting the existing shared model-work lease. |
+| `media_fetch` | Existing controller media retrieval, including bounded 503 waits/body reads. |
+| `media_decode` | Existing video/audio extraction adapter, including local input validation. |
+| `inference_wait` | Awaiting the existing caption inference gate, before its request. |
+| `inference_request` | Caption HTTP request/response-body read, not successful model execution. |
+| `inference_response` | Parsing/validating the returned caption response. |
+| `speech_request` | Existing speech adapter, including request preparation, body read and parsing. |
+| `callback` | Existing callback method, including durable marker and multipart preparation. |
+| `execution` | Other/uninstrumented job-runner code; exact phase remains unknown. |
+
+A task-local, worker-bound observation tracks the actual escaping exception.
+Nested boundaries retain the innermost observation. Explicit exception causes
+are inspected for at most four links, including asyncio's timeout cancellation
+conversion. A recovered error or implicit exception context cannot label an
+unrelated later error. The original observation is captured before any
+on-demand error callback, even if that callback also fails. No exception text
+or traceback is serialized; its temporary in-memory reference is cleared when
+the runner leaves. Deep timing stages are independent and unchanged. Not all
+model families/auxiliary adapters have dedicated phases; `execution` is honest
+fallback, not evidence of provider latency.
+
+Phases do not change deadlines, admission, lane ordering, inference concurrency,
+requests, response parsing, callback state, failed-job replay refusal, model
+selection or permissions. They cannot retrospectively locate old timeouts or
+prove that a particular backend is faulty. Stopped/cancelled jobs still do not
+publish failure notes. Public redacted exports do not collect these files.

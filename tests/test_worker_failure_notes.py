@@ -252,6 +252,9 @@ async def test_real_loopback_failure_preserves_note_and_original_journal(service
         note = processor._failure_notes.lookup(job, history["fingerprint"])["record"]
         assert (note["category"], note["http_status"], history["state"]) == (
             category, status, expected_state)
+        assert note["schema"] == notes.PHASE_SCHEMA
+        assert note["phase"] == {"media": "media_fetch", "model": "inference_request",
+                                 "callback": "callback", "timeout": "inference_request"}[boundary]
         assert note["observed_at"] == history["updatedAt"]
         encoded = json.dumps(note)
         assert all(value not in encoded for value in (
