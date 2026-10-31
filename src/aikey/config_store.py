@@ -161,6 +161,88 @@ class ConfigurationStore:
         content, checked = self._read(self.path)
         return ConfigurationSnapshot(_revision(content), _public(checked))
 
+    def _prepare_caption_policy(self, content, current, expected_revision, mode):
+        from .protocol import _json_object
+        revision = _revision(content)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(revision, expected_revision)):
+            raise RevisionConflict("Configuration changed since it was read")
+        if not isinstance(mode, str) or mode not in {"metered", "unmetered"}:
+            raise UnsafeConfigurationChange("Select an explicit caption policy")
+        try:
+            raw = _json_object(content)
+        except ValueError as exc:
+            raise UnsafeConfigurationChange("Caption policy source is ambiguous") from exc
+        continuous = (raw.get("worker") or {}).get("continuous")
+        if not isinstance(continuous, dict):
+            raise UnsafeConfigurationChange("Existing continuous camera policy required")
+        candidate = deepcopy(raw)
+        previous = "unmetered" if continuous.get("unmetered") is True else "metered"
+        if mode != previous:
+            if mode == "unmetered":
+                candidate["worker"]["continuous"]["unmetered"] = True
+            else:
+                candidate["worker"]["continuous"].pop("unmetered", None)
+        checked = self._validate(candidate)
+        self._assert_immutable(current, checked)
+        self._assert_search_profile(checked, current)
+        self._assert_credential_routes(current, checked)
+        changes = tuple(_changed(raw, candidate))
+        if changes not in ((), ("worker.continuous.unmetered",)):
+            raise UnsafeConfigurationChange("Caption policy must not change other settings")
+        encoded = self._encode(candidate)
+        if len(encoded) > _MAX_CONFIG_BYTES:
+            raise UnsafeConfigurationChange("Caption policy configuration is too large")
+        preview = ConfigurationPreview(revision, _revision(encoded) if changes else revision,
+            _public(checked), changes, bool(changes))
+        return preview, encoded
+
+    def caption_policy_status(self):
+        content, current = self._read(self.path)
+        from .protocol import _json_object
+        try:
+            raw = _json_object(content)
+        except ValueError as exc:
+            raise UnsafeConfigurationChange("Caption policy source is ambiguous") from exc
+        continuous = (raw.get("worker") or {}).get("continuous")
+        result = {"revision": _revision(content), "configured": isinstance(continuous, dict),
+                  "mode": "not_configured", "unmetered_available": False}
+        if not result["configured"]:
+            return result
+        result["mode"] = "unmetered" if continuous.get("unmetered") is True else "metered"
+        try:
+            self._prepare_caption_policy(content, current, result["revision"], "unmetered")
+        except UnsafeConfigurationChange:
+            pass
+        else:
+            result["unmetered_available"] = True
+        return result
+
+    def preview_caption_policy(self, expected_revision, mode):
+        content, current = self._read(self.path)
+        return self._prepare_caption_policy(content, current, expected_revision, mode)[0]
+
+    def apply_caption_policy(self, expected_revision, mode):
+        """Change one saved flag; never reset the journal or offer a bypass Undo."""
+        with self._locked():
+            content, current = self._read(self.path)
+            preview, encoded = self._prepare_caption_policy(content, current, expected_revision, mode)
+            if not preview.changed_fields:
+                return ConfigurationSnapshot(preview.current_revision, _public(current))
+            self._archive(content)
+            try:
+                self._replace(encoded)
+                persisted, checked = self._read(self.path)
+                if _revision(persisted) != preview.resulting_revision:
+                    raise ConfigurationStoreError("Caption policy read-back differs")
+            except (OSError, ValueError, ConfigurationStoreError) as exc:
+                # A post-publication validation failure is not a pre-write
+                # refusal. Preserve the possible commit and refuse blind retry.
+                raise ConfigurationStoreError("Caption policy replacement outcome is uncertain") from exc
+            # No provider-undo record: a fresh reviewed choice is required to
+            # bypass a limit again. Any old provider undo has a stale revision.
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
+
     def preview(self, expected_revision: str, patch: dict[str, Any]) -> ConfigurationPreview:
         content, current = self._read(self.path)
         return self._prepare(content, current, expected_revision, patch)

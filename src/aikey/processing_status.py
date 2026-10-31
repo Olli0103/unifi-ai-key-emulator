@@ -83,7 +83,8 @@ class ProcessingStatus:
         if not self.api.authenticated(request):
             raise web.HTTPSeeOther("/login")
         body = ("<h1>Processing and budgets</h1><p><a href='/'>Settings</a> · "
-                "<a href='/processing'>Refresh</a> · <a href='/caption-preflight'>Caption preflight</a></p>"
+                "<a href='/processing'>Refresh</a> · <a href='/caption-preflight'>Caption preflight</a> · "
+                "<a href='/caption-policy'>Saved caption cost policy</a></p>"
                 "<p>Queues, streams and processing counters from your configured processors. "
                 "Refresh to check again; this page changes no settings or services.</p>"
                 "<details><summary>How to read these counters</summary><p>"

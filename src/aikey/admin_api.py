@@ -82,6 +82,9 @@ class AdminAPI:
         from .speech_enrollment import SpeechEnrollment
         self.speech_enrollment = SpeechEnrollment(self.site)
         self.speech_enrollment.register(app)
+        from .caption_policy_control import CaptionPolicyControl
+        self.caption_policy_control = CaptionPolicyControl(self.site)
+        self.caption_policy_control.register(app)
 
     async def maintenance_history(self, request):
         if not self.authenticated(request):

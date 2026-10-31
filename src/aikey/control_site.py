@@ -861,6 +861,7 @@ class ControlSite:
                 + "<p><a href='/data-retention'>Data flow and retention (read-only)</a> · "
                   "<a href='/audit'>Audit log</a> · "
                   "<a href='/caption-preflight'>Caption preflight</a> · "
+                  "<a href='/caption-policy'>Caption cost policy</a> · "
                   "<a href='/state-backup-preflight'>Backup preflight</a> · "
                   "<a href='/maintenance'>Maintenance operations</a> · "
                   "<a href='/runtime-status'>Runtime configuration</a> · "
