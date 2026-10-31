@@ -97,7 +97,7 @@ jobs:
           python tools/caption_scope_browser_check.py --browser-executable "${browser}" --output caption-scope-browser-results
           python tools/caption_enrollment_browser_check.py --browser-executable "${browser}" --output caption-enrollment-browser-results
           python tools/caption_setup_browser_check.py --browser-executable "${browser}" --output caption-setup-browser-results
-          python tools/worker_limits_browser_check.py --browser-executable "${browser}" --output worker-limits-browser-results
+          python tools/worker_limits_browser_check.py --executable "${browser}" --output worker-limits-browser-results
           python tools/diagnostic_browser_check.py --browser-executable "${browser}" --output diagnostic-browser-results
       - name: Retain only fictional screenshots and source-bound results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
