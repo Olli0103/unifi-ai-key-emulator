@@ -76,6 +76,9 @@ class AdminAPI:
         from .plate_camera_control import PlateCameraControl
         self.plate_camera_control = PlateCameraControl(self.site)
         self.plate_camera_control.register(app)
+        from .processing_status import ProcessingStatus
+        self.processing_status = ProcessingStatus(self)
+        self.processing_status.register(app)
 
     async def maintenance_history(self, request):
         if not self.authenticated(request):

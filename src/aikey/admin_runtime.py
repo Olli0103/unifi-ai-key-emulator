@@ -85,6 +85,14 @@ def _object(value, name):
     return result
 
 
+def _counters(value, name, fields):
+    """Allowlisted process counters; omitted namespaces remain unknown, not zero."""
+    if name not in value or value[name] is None:
+        return None
+    group = _object(value, name)
+    return {field: _count(group, field) for field in fields}
+
+
 def _normalize(kind, value):
     expected = "local-aikey" if kind == "aikey" else "aiport-candidate"
     if value.get("service") != expected:
@@ -97,6 +105,25 @@ def _normalize(kind, value):
         captions = _object(worker, "captions") if "captions" in worker else None
         result["captions"] = ({name: _count(captions, name) for name in (
             "admitted", "exhausted", "deferred_fair_share")} if captions is not None else None)
+        result["speech"] = _counters(worker, "speech", ("refused_long", "clipped"))
+        result["reverification"] = _counters(worker, "reverification",
+            ("narrowed", "confirmed", "retyped", "unchanged"))
+        result["deep"] = _counters(worker, "deep", ("embed_tasks", "crops_embedded",
+            "crops_failed", "describe_tasks", "described", "labels", "export_windows"))
+        result["inference_gate"] = _counters(worker, "inference_gate", ("capacity", "active",
+            "waiting", "on_demand_waiting", "caption_lane", "captions_active", "captions_waiting"))
+        result["failure_notes"] = None
+        if "failure_notes" in worker:
+            from .worker_failure_notes import CAPACITY, OUTCOMES
+            notes = _object(worker, "failure_notes")
+            scope = "current_process_publication_counts_not_current_job_outcomes"
+            if (notes.get("scope") != scope or type(notes.get("capacity")) is not int
+                    or notes["capacity"] != CAPACITY or "current_process" not in notes):
+                raise ValueError("Invalid failure note scope")
+            result["failure_notes"] = {"scope": scope, "capacity": CAPACITY,
+                "current_process": _counters(notes, "current_process", sorted(OUTCOMES))}
+            if result["failure_notes"]["current_process"] is None:
+                raise ValueError("Invalid failure note counts")
     else:
         result = {name: _flag(value, name) for name in ("adopted", "control_connected", "adoption_pending")}
         result.update({name: _count(value, name) for name in (
@@ -104,6 +131,16 @@ def _normalize(kind, value):
             "detector_frames_attempted", "detector_frames_succeeded", "snapshot_uploads",
             "live_event_budget_remaining")})
         result["live_event_budget_healthy"] = _flag(value, "live_event_budget_healthy")
+        result["inference"] = None
+        if value.get("pool_inference") is not None:
+            pool = _object(value, "pool_inference")
+            result["inference"] = {name: _count(pool, name) for name in (
+                "camera_count", "attempts", "successes", "dropped_frames", "failed_cameras",
+                "api_failures", "pending_cameras", "api_request_cap", "api_provider_failures",
+                "api_backoff_skips", "api_consecutive_provider_failures")}
+            result["inference"].update({name: _flag(pool, name) for name in (
+                "model_load_failed", "closed")})
+            result["inference"]["api_request_cap_reported"] = "api_request_cap" in pool
         binding = value.get("pool_binding_revision")
         if binding is not None and (not isinstance(binding, str)
                 or not re.fullmatch(r"[0-9a-f]{64}", binding)
@@ -141,7 +178,10 @@ def _normalize(kind, value):
                 entry = {"ordinal": index + 1, "policy_received": _flag(camera, "policy_enabled"),
                          "enabled_types": types, "event_budget_healthy": _flag(camera, "event_budget_healthy"),
                          "stream_active": _flag(camera, "stream_active"), "stream_geometry": _geometry(camera)}
+                entry.update({name: _flag(camera, name) for name in (
+                    "disabled", "pending", "api_request_budget_healthy")})
                 entry.update({name: _count(camera, name) for name in (
+                    "attempts", "successes", "api_failures", "api_requests_remaining",
                     "policy_smart_zones", "policy_exclude_zones", "policy_secondary_lens_zones",
                     "event_budget_remaining", "active_tracks", "events_entered", "stream_points",
                     "stream_restart_attempts", "stream_restart_successes", "stream_deferred_starts", "stream_full_frames")})

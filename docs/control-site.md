@@ -669,3 +669,50 @@ POST preview/apply remains fresh: camera identity and current configuration are
 re-observed before consent can be admitted. Rollout authority remains separate.
 The legacy remove-only permission view keeps its existing source contract. See
 [the reproduced Protect quota refusal and correction](evidence/shared-camera-inventory-20261030.md).
+
+## Processing and budgets
+
+The signed-in **Processing and budgets** link opens `/processing` and a compact
+overview of every attached Key/Port profile. Expand a profile for its queue,
+inference gate, stream, provider failure and per-camera API-budget observations.
+Keyboard users can focus the horizontally scrollable overview and open the
+profile details with Enter. The same data is available to authenticated clients
+at `GET /api/admin/v1/processing` (`processing_schema: aikey-processing-status/1`).
+Neither route accepts options or implements a POST/action.
+
+This uses the existing explicitly configured, CA-verified and leaf-pinned HTTPS
+health peers, byte/deadline bounds, concurrency limit and two-second cache. It
+does not discover peers, use native Protect credentials, fetch media, call a
+provider, read a state journal, apply configuration, replay jobs or restart a
+service. No new dependency, listener or authentication authority is added.
+Authentication is checked before and after awaited observations. A missing,
+invalid or unavailable peer stays unknown, independently of healthy peers.
+
+Only declared boolean flags and nonnegative integer counters are returned.
+Camera rows use **positions in the observed runtime's stream order**, not
+inventory names or stable camera identities. Native IDs, correlation hashes,
+endpoints, private error messages, model replies and frame/observation content
+are not part of this view. Missing groups/counters remain null/Unknown; an
+explicit zero is not replaced by an empty or unknown value.
+
+Interpret the counters separately:
+
+- Key caption `admitted`, `exhausted` and `deferred_fair_share` are current-process
+  admission counters, not remaining hourly permits or evidence of the active
+  budget policy. The conditional continuous metered policy is globally 12 new
+  attempts per rolling hour; an explicit local unmetered override is separate.
+  Local routing is not a billing guarantee. The existing Caption preflight
+  reads **saved** policy/journal data, which may differ from running settings.
+- Failure-note counters describe publication attempts by the current process,
+  not failed jobs, unique events, present outages or historical missing causes.
+- Port attempts/successes include empty detections; they are not event, object,
+  paid-request, precision or quality metrics. Provider failure history does not
+  itself prove a current outage; the consecutive-failure counter is separate.
+- The optional Port API-attempt cap is per camera/rolling hour and is distinct
+  from Key captions and native object-event admission. An explicitly reported
+  null cap means no cap configured; an omitted cap means unknown. Remaining
+  permits are a health snapshot, not a new reservation or admission guarantee.
+
+This completes a read-only processing view, not configuration of all feature
+policies, native event/recording/quality acceptance or the full scope of #13/#17.
+See [checks and limits](evidence/processing-status-20261031.md).
