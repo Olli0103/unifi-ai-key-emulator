@@ -56,6 +56,11 @@ controls remain limited as documented in [the control site](control-site.md).
   is no time-based expiry, auto-replay or automatic deletion of one-use history.
   Preserve/reconcile that history before retirement; archiving a backup does
   not erase its contents or revoke a published plan automatically.
+- An explicitly enrolled model-work fence is a separate private shared inode.
+  It retains only maintenance phase/transaction metadata without automatic
+  expiry. Do not delete it to release uncertain maintenance. Per-profile file
+  copies do not restore its shared-inode relationship; the restore preflight
+  requires separate [fence re-enrollment](model-work-fence.md).
 
 ## Protection and recovery boundary
 

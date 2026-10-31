@@ -90,8 +90,13 @@ def _profile_spec(kind: str, directory: Path) -> dict:
         journals = {"config_history": directory / ".aiport-config-history"}
         sensitive = {}
         identity = _mac(config.get("mac"))
+    from .model_work_fence import FILENAME
+    fence = directory / FILENAME
+    enrolled = fence.exists() or fence.is_symlink()
+    if enrolled:
+        required["model_work_fence"] = fence
     return {"config": config, "required": required, "secrets": secrets, "journals": journals,
-            "sensitive": sensitive, "identity": identity}
+            "sensitive": sensitive, "identity": identity, "model_work_fence": enrolled}
 
 
 def _present(path: Path | None) -> str:
@@ -103,7 +108,9 @@ def _present(path: Path | None) -> str:
         return "missing"
     if stat.S_ISLNK(info.st_mode):
         return "symlink"
-    if stat.S_ISREG(info.st_mode) and info.st_mode & 0o077 and path.name in {"device.key"}:
+    if path.name == "model-work.lock" and not stat.S_ISREG(info.st_mode):
+        return "not_regular"
+    if stat.S_ISREG(info.st_mode) and info.st_mode & 0o077 and path.name in {"device.key", "model-work.lock"}:
         return "unsafe_mode"
     return "present"
 
@@ -189,6 +196,10 @@ def validate(backup: Path, profiles: dict[str, tuple[str, Path]]) -> dict:
         for name, path in spec["required"].items():
             if path is None or _present(path) != "present" or not listed(path):
                 codes.append(f"missing:{name}")
+        if spec["model_work_fence"]:
+            # Content/digest equality does not restore shared inode identity or
+            # settle old maintenance intent. No generic green restore claim.
+            codes.append("model_work_fence_reenrollment_required")
         for name, path in spec["secrets"].items():
             if path is None or _present(path) != "present" or not listed(path):
                 codes.append(f"missing_secret:{name}")

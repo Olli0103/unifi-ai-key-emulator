@@ -51,7 +51,8 @@ class FairInference:
                  on_result: Callable[[str, tuple[ObjectObservation, ...], int, bytes], Awaitable[None]],
                  on_unavailable: Callable[[str], Awaitable[None]] | None = None,
                  max_frames_per_camera: int | None,
-                 preserve_first_pending: bool = False):
+                 preserve_first_pending: bool = False,
+                 work_fence=None):
         if (not isinstance(camera_macs, list) or not 1 <= len(camera_macs) <= 5
                 or max_frames_per_camera is not None
                 and (type(max_frames_per_camera) is not int
@@ -71,6 +72,7 @@ class FairInference:
         self._on_unavailable = on_unavailable
         self._max_frames = max_frames_per_camera
         self._preserve_first_pending = preserve_first_pending
+        self._work_fence = work_fence
         self._model: Detector | None = None
         self._pending: dict[str, tuple[bytes, int]] = {}
         self._latest_pending: dict[str, tuple[bytes, int]] = {}
@@ -144,7 +146,19 @@ class FairInference:
         raise RuntimeError("inference queue is empty")
 
     async def _call_in_thread(self, function, *args):
-        job = asyncio.create_task(asyncio.to_thread(function, *args))
+        lease = await self._work_fence.acquire() if self._work_fence is not None else None
+        invocation = asyncio.to_thread(function, *args)
+        try:
+            job = asyncio.create_task(invocation)
+        except BaseException:
+            invocation.close()
+            if lease is not None:
+                lease.close()
+            raise
+        if lease is not None:
+            # Cancellation of this async waiter does not stop its model thread.
+            # Retain the shared kernel lock until that actual thread completes.
+            job.add_done_callback(lambda _: lease.close())
         self._active_thread = job
         try:
             # Keep an explicit handle even if an async waiter is cancelled.
