@@ -223,6 +223,7 @@ class NativeStatusReader:
                                                         "Accept": "application/json"}) as session:
             attempted = False
             try:
+                deadline = self._clock() + 15
                 async with asyncio.timeout(15):
                     attempted = True
                     async with session.post(origin + "/api/auth/login", allow_redirects=False,
@@ -241,6 +242,8 @@ class NativeStatusReader:
                             if len(csrf) > 4096 or any(ord(c) < 32 for c in csrf):
                                 raise NativeStatusError("native_status_unavailable")
                             session.headers["X-CSRF-Token"] = csrf
+                    if self._clock() >= deadline:
+                        raise NativeStatusError("native_status_unavailable")
                     if not jar:
                         raise NativeStatusError("native_status_unavailable")
                     async with session.get(origin + "/proxy/protect/api/bootstrap",
@@ -253,17 +256,22 @@ class NativeStatusReader:
                         raw = await _body(response, 2097152)
                         value = inventory._json(raw)
                     result = parse_bootstrap(value, observed_at=int(time.time()))
+                    if self._clock() >= deadline:
+                        raise NativeStatusError("native_status_unavailable")
             finally:
                 # A login may have been accepted even when its response failed.
                 # No retry or server-session-cleanup claim follows uncertain logout.
                 cancelled = asyncio.current_task().cancelling() > 0
                 try:
                     if attempted:
+                        cleanup_deadline = self._clock() + 3
                         async with asyncio.timeout(3):
                             async with session.post(origin + "/api/auth/logout", allow_redirects=False,
                                     timeout=aiohttp.ClientTimeout(total=3)) as response:
                                 await _body(response, 4096)
                                 if response.status not in {200, 204}:
+                                    raise NativeStatusError("native_session_cleanup_unconfirmed")
+                                if self._clock() >= cleanup_deadline:
                                     raise NativeStatusError("native_session_cleanup_unconfirmed")
                 except asyncio.CancelledError:
                     self._cleanup_uncertain = True

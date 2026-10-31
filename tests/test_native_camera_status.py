@@ -60,6 +60,7 @@ async def controller(
     segmented=False,
     gate=None,
     login_gate=None,
+    logout_hook=None,
 ):
     ensure_identity_certificate(tmp_path, "020000000001")
     der = ssl.PEM_cert_to_DER_cert((tmp_path / "device.crt").read_text())
@@ -111,6 +112,8 @@ async def controller(
         seen.append((request.method, request.path))
         if request.cookies.get("TOKEN") != "FICTIONAL-SESSION":
             return web.Response(status=401)
+        if logout_hook:
+            logout_hook()
         return web.Response(status=logout_status)
 
     async def leak(request):
