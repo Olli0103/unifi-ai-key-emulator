@@ -79,6 +79,9 @@ class AdminAPI:
         from .processing_status import ProcessingStatus
         self.processing_status = ProcessingStatus(self)
         self.processing_status.register(app)
+        from .speech_enrollment import SpeechEnrollment
+        self.speech_enrollment = SpeechEnrollment(self.site)
+        self.speech_enrollment.register(app)
 
     async def maintenance_history(self, request):
         if not self.authenticated(request):

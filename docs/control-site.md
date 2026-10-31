@@ -4,7 +4,7 @@ For a credentials-free, read-only preview with invented data, use the separate
 [synthetic demo](synthetic-demo.md). It is not an administration or device server
 and cannot read deployment state or send a provider request.
 
-The control site is a separate loopback HTTP service for the AI Key and optional AI Port configuration files. It has administrator sign-in, a signed session, CSRF protection, revision-checked saves and write-only API-key replacement. It manages the vision provider, model and endpoint for AI Key descriptions and AI Port object detections. OpenAI, Claude/Anthropic, Ollama and an OpenAI-compatible endpoint are selectable. Each AI Port form also manages classes, score threshold and an optional API-request cost cap (empty means no cap) for that instance only. Object events have no per-camera cap, and a save keeps the local fallback, plate cameras, held-package mode, existing per-camera score gates and existing local score-server routing. Provider/model edits preserve unrelated raw camera spellings and omitted defaults; these forms do not add or retarget per-camera gates or a score server. A configured AI Key speech role has its own provider form, described below. The site does not manage embeddings, audio camera opt-ins, face/plate models, adoption, camera pairing or service restarts yet. Those controls remain open work under [issue #17](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17).
+The control site is a separate loopback HTTP service for the AI Key and optional AI Port configuration files. It has administrator sign-in, a signed session, CSRF protection, revision-checked saves and write-only API-key replacement. It manages the vision provider, model and endpoint for AI Key descriptions and AI Port object detections. OpenAI, Claude/Anthropic, Ollama and an OpenAI-compatible endpoint are selectable. Each AI Port form also manages classes, score threshold and an optional API-request cost cap (empty means no cap) for that instance only. Object events have no per-camera cap, and a save keeps the local fallback, plate cameras, held-package mode, existing per-camera score gates and existing local score-server routing. Provider/model edits preserve unrelated raw camera spellings and omitted defaults; these forms do not add or retarget per-camera gates or a score server. A configured AI Key speech role has its own provider form, described below. Initial AI Key audio opt-in is available through the separate explicit speech setup below. The site does not manage embeddings, face model enrollment, adoption, camera pairing or service restarts yet. Those controls remain open work under [issue #17](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17).
 
 For a new AI Key, the separate [authenticated first-run mode](first-run.md#authenticated-browser-preparation)
 prepares only a new directory and pinned public trust, without network access,
@@ -84,7 +84,7 @@ Protect, model-server, host-log or backup copies.
 
 ## Speech provider
 
-If `speech_to_text` already contains a valid explicit camera allowlist, the Speech provider form changes only that role's provider, model, API base URL, optional language, private-network permission and write-only key. The existing camera list and clip-length policy stay unchanged. No provider form is offered for an unconfigured role. Initial audio enrollment remains unsupported; the separate remove-only permission controls are described below.
+If `speech_to_text` already contains a valid explicit camera allowlist, the Speech provider form changes only that role's provider, model, API base URL, optional language, private-network permission and write-only key. The existing camera list and clip-length policy stay unchanged. No provider form is offered for an unconfigured role. For an absent speech role, the separate initial audio setup below requires fresh camera selection and consent. Existing roles retain the remove-only permission controls described below.
 
 Choose OpenAI's official API or a local compatible speech server. Every OpenAI save requires the separate audio-sharing checkbox, including a model-only change through this form. Audio may incur provider charges independently of the caption budget. The form shows its destination; it does not send a connection test, audio or any provider request when saved. Local-network HTTP needs an explicit checkbox and remains unencrypted. Existing provider URL validation rejects arbitrary public compatible servers.
 
@@ -109,7 +109,7 @@ acknowledgement that the AI Key must be restarted to change active processing.
 It does not stop or restart a service, cancel in-flight work, delete recordings
 or transcripts, clean backups, remove key files or revoke provider credentials.
 No audio or inference request is sent by loading or saving it; name lookup may
-read the configured Protect inventory. Initial audio enrollment remains unsupported.
+read the configured Protect inventory. Initial audio enrollment uses the separate setup below; this remove-only view never grants permission.
 
 Selection values are opaque and bound to the signed-in session/configuration
 revision. Raw camera IDs are not put into selection values or URLs/audit entries.
@@ -716,3 +716,52 @@ Interpret the counters separately:
 This completes a read-only processing view, not configuration of all feature
 policies, native event/recording/quality acceptance or the full scope of #13/#17.
 See [checks and limits](evidence/processing-status-20261031.md).
+
+
+## Initial speech transcription setup
+
+When no AI Key speech role is saved (absent or null), **Set up speech transcription**
+opens `/speech-enrollment`. It lists only connected, unambiguously named Protect
+cameras reporting `alrmSpeak` in a fresh validated inventory. No camera is
+preselected. Reported capability is not native task-delivery proof; cameras
+without reported speech support cannot be enrolled by this flow. Unknown,
+stale, unavailable or ambiguous inventory leaves no setup form.
+
+Select 1–32 cameras and a separate speech provider, model, API destination and
+optional two-letter language. OpenAI uses its canonical official endpoint; a
+compatible API must be loopback or an explicitly allowed private numeric host.
+The initial page accepts no secret. Preview shows the exact selected camera
+names and destination, without contacting a model or creating a key/config.
+
+Confirmation requires explicit audio sharing and separate cost acknowledgement,
+plus a new write-only speech credential for OpenAI (optional for a local API).
+A vision key is never reused. The server holds at most 32 one-use preview records
+without provider credentials or raw session cookies. They are
+session/revision-bound preview records for ten monotonic minutes; a full registry
+refuses new previews instead of evicting another valid form. Restart discards
+previews. Both preview and apply re-read inventory; changed identity/name/model/
+state/audio support refuses the old selection. A second confirmation cannot
+claim the same preview. Logout/expiry during awaited reads prevents admission.
+
+Saving adds only `speech_to_text` through the existing private atomic/OCC store
+and exact prior-configuration archive. Already configured speech is never
+overwritten or widened; its existing provider/restriction controls remain
+separate. The setup creates no provider-Undo record that silently regrants audio.
+Existing remove-only controls can disable the saved role. A later provider save
+keeps its ordinary revision-bound Undo; a permission removal invalidates it.
+
+This is **saved consent only**: no processor restart, microphone/Protect setting,
+camera pairing, audio export, model/API test or native request occurs. Existing
+worker audio bounds and other feature policies are unchanged. The operator must
+restart the Key separately to use the new saved role; this setup does not submit
+a maintenance restart. Already admitted filesystem work is shielded and drained
+on normal Admin shutdown; a disconnected or logged-out HTTP waiter cannot undo
+a save already admitted. A post-write failure is explicitly uncertain, preserves
+the possible live/archived key and is never automatically retried or rolled back.
+
+Audit records use only the fixed `speech_enroll` action/result/profile; no selected
+camera ID, provider setting, key or transcript is logged. Camera selection values
+are opaque and session/revision/source-bound. Credential values, credential file paths and raw camera
+IDs do not appear in forms, browser storage or error output. The browser runner
+uses fictional cameras and keys only; source/browser results are not permission
+to enroll a real household microphone or a quality/native-acceptance claim.

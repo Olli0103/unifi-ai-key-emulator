@@ -309,6 +309,36 @@ class ConfigurationStore:
         return {"speech_to_text": {"camera_ids": [camera for camera in speech["camera_ids"]
                                                 if camera in retained]}}
 
+    def _speech_enrollment_candidate(self, current, selection, cameras):
+        if current.get("speech_to_text") is not None:
+            raise UnsafeConfigurationChange("Speech is already configured; use its existing controls")
+        if (not isinstance(cameras, list) or not 1 <= len(cameras) <= 32
+                or any(not isinstance(c, str) or not re.fullmatch(r"[0-9a-f]{24}", c) for c in cameras)
+                or len(set(cameras)) != len(cameras)):
+            raise UnsafeConfigurationChange("Select distinct observed Protect cameras")
+        template = deepcopy(current)
+        template["speech_to_text"] = {"camera_ids": list(cameras)}
+        return self._speech_candidate(template, selection)
+
+    def preview_speech_enrollment(self, expected_revision, selection, cameras):
+        content, current = self._read(self.path)
+        candidate = self._speech_enrollment_candidate(current, selection, cameras)
+        return self._prepare_inference(content, current, expected_revision, candidate)
+
+    def enroll_speech(self, expected_revision, selection, cameras):
+        """Initial saved audio consent only; no provider undo can silently regrant it."""
+        with self._locked():
+            content, current = self._read(self.path)
+            candidate = self._speech_enrollment_candidate(current, selection, cameras)
+            self._prepare_inference(content, current, expected_revision, candidate)
+            encoded = self._encode(self._validate(candidate))
+            self._archive(content)
+            self._replace(encoded)
+            persisted, checked = self._read(self.path)
+            if _revision(persisted) != _revision(encoded):
+                raise ConfigurationStoreError("Speech enrollment replacement could not be verified")
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
+
     def preview_speech_restriction(self, expected_revision: str,
                                    retained: list[str]) -> ConfigurationPreview:
         """Preview removal only; never change provider, keys or other permissions."""

@@ -92,6 +92,7 @@ jobs:
           python tools/runtime_status_browser_check.py --browser-executable "${browser}" --output runtime-browser-results
           python tools/native_status_browser_check.py --browser-executable "${browser}" --output native-status-browser-results
           python tools/processing_browser_check.py --browser-executable "${browser}" --output processing-browser-results
+          python tools/speech_enrollment_browser_check.py --browser-executable "${browser}" --output speech-enrollment-browser-results
       - name: Retain only fictional screenshots and source-bound results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -105,6 +106,8 @@ jobs:
             native-status-browser-results/result.json
             processing-browser-results/*.png
             processing-browser-results/result.json
+            speech-enrollment-browser-results/*.png
+            speech-enrollment-browser-results/result.json
           if-no-files-found: error
           retention-days: 14
 
