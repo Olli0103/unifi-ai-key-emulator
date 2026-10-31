@@ -131,6 +131,7 @@ class ControlSite:
                  aiport_runtime_state_dir: Path | None = None,
                  aiport_instances: dict[str, Path] | None = None,
                  inventory_loader: Callable[[], Awaitable[dict]] | None = None,
+                 caption_setup_binding=None,
                  native_status_loader: Callable[[], Awaitable[dict]] | None = None,
                  rollout_path: Path | None = None,
                  search_state_dir: Path | None = None,
@@ -166,6 +167,7 @@ class ControlSite:
             paths.add(store.path)
             self.aiports[f"aiport:{name}"] = store
         self.inventory_loader = inventory_loader
+        self.caption_setup_binding = caption_setup_binding
         self.native_status_loader = native_status_loader
         self._inventory_clock = time.monotonic
         self._inventory_source = inventory_loader
@@ -864,6 +866,7 @@ class ControlSite:
                   "<a href='/caption-policy'>Caption cost policy</a> · "
                   "<a href='/caption-cameras'>Caption cameras</a> · "
                   "<a href='/caption-camera-enrollment'>Add caption cameras</a> · "
+                  "<a href='/caption-setup'>Set up automatic captions</a> · "
                   "<a href='/state-backup-preflight'>Backup preflight</a> · "
                   "<a href='/maintenance'>Maintenance operations</a> · "
                   "<a href='/runtime-status'>Runtime configuration</a> · "
@@ -1831,6 +1834,8 @@ def _cli() -> argparse.ArgumentParser:
     run.add_argument("--search-container",
                      help="PostgreSQL container for a read-only live row count")
     run.add_argument("--inventory-controller")
+    run.add_argument("--allow-initial-caption-setup", action="store_true",
+                     help="Allow reviewed initial captions using fixed inventory files; identical absolute paths must be mounted in the Key")
     run.add_argument("--inventory-api-key-file", type=Path)
     run.add_argument("--inventory-web-trust-file", type=Path)
     run.add_argument("--inventory-web-cert-file", type=Path)
@@ -1965,6 +1970,14 @@ def main(argv: list[str] | None = None) -> int:
             trust_file=args.inventory_web_trust_file,
             cert_file=args.inventory_web_cert_file)) if all(
                 value is not None for value in inventory_fields) else None
+        caption_setup_binding = None
+        if args.allow_initial_caption_setup:
+            if inventory_loader is None:
+                raise ValueError("Initial captions require complete pinned inventory settings")
+            from .caption_setup import CaptionSetupBinding
+            caption_setup_binding = CaptionSetupBinding(args.inventory_controller,
+                str(args.inventory_api_key_file), str(args.inventory_web_trust_file),
+                str(args.inventory_web_cert_file))
         native_fields = (args.native_status_username_file, args.native_status_password_file)
         native_status_loader = None
         if any(p is not None for p in native_fields):
@@ -1995,6 +2008,7 @@ def main(argv: list[str] | None = None) -> int:
                            runtime_health_urls=runtime_health,
                            maintenance_bridge=args.maintenance_bridge,
                            inventory_loader=inventory_loader,
+                           caption_setup_binding=caption_setup_binding,
                            native_status_loader=native_status_loader,
                            rollout_path=args.aiport_rollout,
                            search_state_dir=args.search_state_dir,

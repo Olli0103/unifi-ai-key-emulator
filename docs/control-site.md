@@ -933,3 +933,40 @@ provider/media/controller request, camera permission or caption-cost-policy
 change, budget refund, index operation or AI Port edit. Check Runtime
 configuration separately; these numbers are not the active worker's settings.
 The page is not a stalled-backend repair or a native performance/quality test.
+
+
+## Initial automatic-caption setup
+
+`/caption-setup` is a separate initial-policy flow. It does not replace an
+existing continuous/model-wide policy, convert one-use scopes, or enable
+callbacks/MP4 exports automatically. Those prerequisites, a supported saved
+Protect version and an existing caption model must already be configured.
+Existing policies use their separate removal/addition and cost-policy pages.
+
+The host may explicitly enable the flow with `--allow-initial-caption-setup`
+on `local-aikey-control run`, alongside all four existing pinned inventory
+arguments. The inventory controller must be the exact private IPv4 controller
+in the Key configuration. The three inventory files must be mounted at the
+**same absolute paths in both Admin and Key** before enabling this option.
+The browser cannot supply/retarget these paths, controller, credential or trust.
+The flag is off by default and is not enabled on an existing deployment by
+installing this code. No key/certificate is copied or read by the new store
+method; existing pinned inventory GETs validate the inventory access separately.
+This is not a complete controller-credential onboarding wizard.
+
+Choose one to sixteen fresh, connected, unambiguously named smart-event
+cameras, then review the exact names/model families and existing caption
+provider/model/destination. All choices and confirmations begin unchecked.
+Separate camera-processing/cost consent and save confirmation create an
+explicit saved camera list; later same-family cameras are not implicitly added.
+All selected cameras share the existing **12 reservations per rolling hour**,
+not twelve per camera or a total-bill/price cap. Existing usage is preserved,
+including consumed reservations after failed/uncertain work. There is no
+unmetered bypass in initial setup. Other feature permissions/costs are separate.
+
+A separate controlled Key restart is needed for activation. This page performs
+no model/media request, native camera/recording/microphone change, service
+restart, budget reset/refund, credential replacement or index operation.
+Metadata eligibility is not native event-delivery or quality proof. Interrupted
+admitted writes are owned/drained; uncertain acknowledgements require current
+saved-state reconciliation, not automatic retry or reversal.
