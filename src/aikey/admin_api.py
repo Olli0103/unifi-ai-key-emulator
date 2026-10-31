@@ -88,6 +88,9 @@ class AdminAPI:
         from .caption_scope_control import CaptionScopeControl
         self.caption_scope_control = CaptionScopeControl(self.site)
         self.caption_scope_control.register(app)
+        from .diagnostic_export import DiagnosticExport
+        self.diagnostic_export = DiagnosticExport(self)
+        self.diagnostic_export.register(app)
 
     async def maintenance_history(self, request):
         if not self.authenticated(request):
