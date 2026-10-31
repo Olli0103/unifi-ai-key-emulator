@@ -868,6 +868,7 @@ class ControlSite:
                   "<a href='/maintenance'>Maintenance operations</a> · "
                   "<a href='/runtime-status'>Runtime configuration</a> · "
                   "<a href='/processing'>Processing and budgets</a> · "
+                  "<a href='/worker-limits'>Key processing limits</a> · "
                   "<a href='/diagnostics'>Redacted diagnostics</a> · "
                   "<a href='/camera-status'>Native camera status</a> · "
                   "<a href='/model-registry'>Saved model role registry</a></p>"
