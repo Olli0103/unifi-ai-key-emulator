@@ -71,6 +71,7 @@ from .aiport_virtual_hardware import (
 from .device import VerifiedConnector
 from .providers import ProviderError, validate_inference_config
 from .native_event_correlation import SentSnapshots
+from .model_work_fence import ModelWorkFence, ModelWorkFenceError
 
 
 _MAC = re.compile(r"[0-9A-Fa-f]{12}\Z")
@@ -700,6 +701,14 @@ class CandidateService:
             raise CandidateError("Invalid diagnostic disconnect grace")
         self.config = config
         self.state_dir = Path(state_dir)
+        try:
+            self._model_work_fence = ModelWorkFence.from_state(self.state_dir)
+        except ModelWorkFenceError as exc:
+            raise CandidateError("Candidate model-work fence is unavailable") from exc
+        if (self._model_work_fence.enabled
+                and not {"paired_streams", "live_pool_detector"} <= set(config)):
+            self._model_work_fence.close()
+            raise CandidateError("Model-work fencing requires the live multi-camera profile")
         live_config = config.get("live_pool_detector", config.get("live_detector"))
         # Only the legacy single-stream live_detector keeps an event ceiling;
         # the live pool admits every confirmed, zone-matched object event.
@@ -928,6 +937,7 @@ class CandidateService:
                                      else None))
             self._inference = FairInference(
                 cameras,
+                work_fence=self._model_work_fence,
                 load_detector=(
                     (lambda: ApiObjectDetector(
                         detector["provider_config"], self.state_dir,
@@ -2352,6 +2362,7 @@ class CandidateService:
             "live_event_budget_healthy": live_budget_healthy,
             "pool_inference": (self._inference.snapshot()
                                if self._inference is not None else None),
+            "model_work_fence": self._model_work_fence.status(),
             "pool_cameras": ([dict(inference, **policy, **stream,
                                     policy_rejection=self._pool_policy_errors.get(
                                         self._pool_camera_order[index]),
@@ -3276,6 +3287,7 @@ class CandidateService:
         if self.runner is not None:
             await self.runner.cleanup()
             self.runner = None
+        self._model_work_fence.close()
 
     async def _connect_loop(self):
         connector = VerifiedConnector(ssl_context=self._client_context(),

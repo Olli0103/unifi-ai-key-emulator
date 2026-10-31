@@ -29,6 +29,7 @@ import aiohttp
 from .worker_archive import valid_tombstone
 from .worker_failure_notes import (FailureNotes, OUTCOMES as FAILURE_NOTE_OUTCOMES,
                                    CAPACITY as FAILURE_NOTE_CAPACITY)
+from .model_work_fence import ModelWorkFence, ModelWorkFenceError
 from .caption_budget import (CaptionBudget, CaptionBudgetDeferred, CaptionBudgetError,
                              CaptionBudgetExhausted)
 from .providers import ProviderError, validate_inference_config
@@ -696,6 +697,10 @@ class JobProcessor:
                     self.config["speech_to_text"], lab=self.lab)
             except SpeechError as exc:
                 raise WorkerError(str(exc)) from exc
+        try:
+            self._model_work_fence = ModelWorkFence.from_state(Path(state_dir))
+        except ModelWorkFenceError as exc:
+            raise WorkerError("Worker model-work fence is unavailable") from exc
 
     def _face_config(self, value, state_root):
         """Local-only face recognition for explicitly listed cameras (#20)."""
@@ -1923,6 +1928,7 @@ class JobProcessor:
                 "failure_notes": {"scope": "current_process_publication_counts_not_current_job_outcomes",
                                   "capacity": FAILURE_NOTE_CAPACITY,
                                   "current_process": dict(self._failure_note_counts)},
+                "model_work_fence": self._model_work_fence.status(),
                 "speech": dict(self.speech_counts),
                 **({"ram_tagging": dict(self.ram_tagging)} if self._tag_server() else {}),
                 **({"reverification": dict(self.reverify_counts)}
@@ -1969,10 +1975,12 @@ class JobProcessor:
                 self._caption_active -= 1
 
     async def _run_job(self, job):
+        lease = None
         try:
             if job.operation == "sessionDescribe":
                 self._describe_stage(job, "fetch", job.admitted)
             async with asyncio.timeout(max(0, job.deadline - time.monotonic())):
+                lease = await self._model_work_fence.acquire(deadline=job.deadline)
                 result = await self._execute(job)
             self._record(job, "completed", result=result)
             if job.operation == "indexImages":
@@ -2013,6 +2021,8 @@ class JobProcessor:
             if not job.future.done():
                 job.future.set_exception(WorkerError("Job interrupted before durable completion"))
             self._pending.pop(job.job_id, None)
+            if lease is not None:
+                lease.close()
 
     def _note_worker_exception(self, job, error):
         outcome = "unavailable"
@@ -2961,3 +2971,4 @@ class JobProcessor:
             await self._session.close()
         if self._inference_session is not None:
             await self._inference_session.close()
+        self._model_work_fence.close()

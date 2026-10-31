@@ -67,6 +67,31 @@ def digest(root):
     return value.hexdigest()
 
 
+def test_enrolled_marker_is_backed_up_but_copy_is_not_reenrollment(live, tmp_path):
+    from aikey.model_work_fence import initialize
+    root = live["aikey"][1]
+    initialize(root, "0"*32)
+    report = inventory(live)
+    assert report["ready_for_backup"] is True
+    assert report["profiles"]["aikey"]["required"] == 6
+    backup = backup_of(tmp_path, live)
+    result = validate(backup, live)
+    assert result["restorable"] is False
+    assert "model_work_fence_reenrollment_required" in result["profiles"]["aikey"]["problems"]
+
+
+def test_fenced_marker_must_be_private_and_regular_without_reading_fifo(live):
+    import os
+    from aikey.model_work_fence import initialize, FILENAME
+    root = live["aikey"][1]
+    initialize(root, "0"*32)
+    (root/FILENAME).chmod(0o644)
+    assert "unsafe_mode:model_work_fence" in inventory(live)["profiles"]["aikey"]["problems"]
+    (root/FILENAME).unlink()
+    os.mkfifo(root/FILENAME, 0o600)
+    assert "not_regular:model_work_fence" in inventory(live)["profiles"]["aikey"]["problems"]
+
+
 def codes(report, label):
     return report["profiles"][label]["problems"]
 
