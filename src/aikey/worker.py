@@ -564,6 +564,12 @@ class JobProcessor:
         unmetered = (self.options.get("continuous") or {}).get("unmetered") is True
         self.caption_budget = (CaptionBudget(state_dir)
                                if self.continuous and not unmetered else None)
+        from .caption_budget_health import CaptionBudgetHealth
+        self._caption_budget_health = (CaptionBudgetHealth(self.caption_budget)
+                                       if self.caption_budget is not None else None)
+        self._caption_policy_mode = ("metered" if self.caption_budget is not None else
+                                     "unmetered" if self.continuous else
+                                     "one_use" if self.test_scopes else "disabled")
         # Sanitized admission counts only (#12); no camera or event identifiers.
         self.captions = {"admitted": 0, "exhausted": 0, "deferred_fair_share": 0}
         self.archive_dir = Path(state_dir) / "worker-archive"
@@ -1920,6 +1926,10 @@ class JobProcessor:
         record = self._history.get(job_id) or self._archived_record(job_id)
         return {key: value for key, value in record.items() if key != "fingerprint"} if record else None
 
+    async def refresh_caption_budget_status(self):
+        if self._caption_budget_health is not None:
+            await self._caption_budget_health.refresh()
+
     def status(self):
         queued = self._queue.qsize()
         return {"queued": queued, "active": max(0, len(self._pending) - queued),
@@ -1930,6 +1940,10 @@ class JobProcessor:
                                   "current_process": dict(self._failure_note_counts)},
                 "model_work_fence": self._model_work_fence.status(),
                 "speech": dict(self.speech_counts),
+                "caption_policy": {"mode": self._caption_policy_mode,
+                    "scope": "continuous_captions_not_speech_port_or_all_paid_calls",
+                    "budget": (self._caption_budget_health.status()
+                               if self._caption_budget_health is not None else None)},
                 **({"ram_tagging": dict(self.ram_tagging)} if self._tag_server() else {}),
                 **({"reverification": dict(self.reverify_counts)}
                    if self.find_anything and self.find_anything.get("reverification") is True else {}),

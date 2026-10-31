@@ -105,6 +105,7 @@ def _normalize(kind, value):
         captions = _object(worker, "captions") if "captions" in worker else None
         result["captions"] = ({name: _count(captions, name) for name in (
             "admitted", "exhausted", "deferred_fair_share")} if captions is not None else None)
+        result["caption_policy"] = _caption_policy(worker)
         result["speech"] = _counters(worker, "speech", ("refused_long", "clipped"))
         result["reverification"] = _counters(worker, "reverification",
             ("narrowed", "confirmed", "retyped", "unchanged"))
@@ -197,6 +198,38 @@ def _normalize(kind, value):
     if result["adopted"] is None:
         raise ValueError("Runtime adoption flag is unavailable")
     return result
+
+
+def _caption_policy(worker):
+    if "caption_policy" not in worker:
+        return None  # Older workers did not report their active policy.
+    value = _object(worker, "caption_policy")
+    scope = "continuous_captions_not_speech_port_or_all_paid_calls"
+    mode = value.get("mode")
+    if (not isinstance(mode, str) or mode not in {"metered", "unmetered", "one_use", "disabled"}
+            or value.get("scope") != scope):
+        raise ValueError("Invalid caption policy")
+    budget = value.get("budget")
+    if mode != "metered":
+        if budget is not None:
+            raise ValueError("Inactive caption budget reported")
+        return {"mode": mode, "scope": scope, "budget": None}
+    if (not isinstance(budget, dict) or not isinstance(budget.get("observation"), str)
+            or budget["observation"] not in {"available", "unavailable"}):
+        raise ValueError("Invalid caption budget")
+    if budget["observation"] == "unavailable":
+        selected = {"observation": "unavailable"}
+    else:
+        from .caption_budget import LIMIT
+        selected = {name: _count(budget, name) for name in (
+            "sampled_at_ns", "window_seconds", "limit", "used_reservations", "remaining_reservations")}
+        if (selected["sampled_at_ns"] is None or selected["sampled_at_ns"] <= 0
+                or selected["window_seconds"] != 3600 or selected["limit"] != LIMIT
+                or selected["used_reservations"] is None or selected["remaining_reservations"] is None
+                or selected["used_reservations"] + selected["remaining_reservations"] != LIMIT):
+            raise ValueError("Inconsistent caption budget")
+        selected["observation"] = "available"
+    return {"mode": mode, "scope": scope, "budget": selected}
 
 
 def _trust(directory):

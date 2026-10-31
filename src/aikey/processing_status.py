@@ -1,6 +1,7 @@
 """Read-only operating counters, never native acceptance or billing evidence."""
 
 import asyncio
+from datetime import datetime, timezone
 from html import escape
 
 from aiohttp import web
@@ -9,7 +10,7 @@ from aiohttp import web
 SCHEMA = "aikey-processing-status/1"
 _KEY = ("adopted", "connected", "search_connected", "queued", "active", "pending",
         "capacity", "ledger", "captions", "speech", "reverification", "deep",
-        "inference_gate", "failure_notes")
+        "inference_gate", "failure_notes", "caption_policy")
 _PORT = ("adopted", "control_connected", "active_streams", "streams_with_decoded_frames",
          "detector_frames_attempted", "detector_frames_succeeded", "snapshot_uploads", "inference")
 _CAMERA = ("ordinal", "stream_active", "policy_received", "enabled_types", "disabled", "pending",
@@ -159,10 +160,32 @@ class ProcessingStatus:
         body += ("<h3>Caption admission</h3><p>When enabled, the metered continuous-caption policy "
                  "allows 12 new attempts per rolling hour globally, not per camera. An explicit "
                  "local unmetered override can bypass that cap; local routing is not proof of free "
-                 "inference. These process counters do not report the active policy or remaining "
-                 "hourly permits. Caption preflight separately reads the saved policy and journal; "
+                 "inference. Admission counters alone do not report the active policy or remaining "
+                 "hourly permits. The running-policy observation below is separate from these counters. "
+                 "Older workers do not report it. Caption preflight separately reads the saved policy and journal; "
                  "saved settings may differ from the running processor. Failed or uncertain "
                  "metered attempts are not refunded. Speech and Port requests use separate policies.</p>")
+        policy = r.get("caption_policy") or {}
+        modes = {"metered": "Metered continuous captions", "unmetered": "Explicit unmetered continuous captions",
+                 "one_use": "One-use test scopes (not continuous)", "disabled": "Continuous captions disabled"}
+        budget = policy.get("budget") or {}
+        sampled = budget.get("sampled_at_ns")
+        sampled = (datetime.fromtimestamp(sampled / 1_000_000_000, timezone.utc).isoformat()
+                   if sampled is not None else None)
+        body += _table("Running caption policy and sampled budget", [
+            ("Active worker policy", modes.get(policy.get("mode"))),
+            ("Durable journal observation", budget.get("observation") if policy.get("mode") == "metered"
+             else "Not applicable" if policy else None),
+            ("Journal sample time (UTC)", sampled),
+            ("Global rolling window (seconds)", budget.get("window_seconds")),
+            ("Global new-reservation limit", budget.get("limit")),
+            ("Reservations in sampled hour", budget.get("used_reservations")),
+            ("Unreserved slots at sample time", budget.get("remaining_reservations"))])
+        body += ("<p>A sampled unreserved slot is not an admission promise or a monetary balance. "
+                 "Fair sharing may hold slots for other cameras; concurrent work can consume them. "
+                 "The processor may cache its journal sample for two seconds, in addition to this "
+                 "page's health cache. An unavailable journal is not zero usage or permission to retry. "
+                 "Loading this view never reserves, refunds, repairs or resets a budget.</p>")
         body += _table("Caption process counters", [(label, captions.get(key)) for label, key in (
             ("New metered attempts admitted", "admitted"), ("Budget-exhausted refusals", "exhausted"),
             ("Deferred for other cameras", "deferred_fair_share"))])

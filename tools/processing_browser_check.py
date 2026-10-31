@@ -50,6 +50,11 @@ async def scenario(output, name, viewport, executable):
             "aikey": {"service": "local-aikey", "device": {"adopted": True, "connected": True},
                 "worker": {"queued": 0, "active": 1, "pending": 1, "capacity": 20, "ledger": 32,
                     "captions": {"admitted": 5, "exhausted": 2, "deferred_fair_share": 1},
+                    "caption_policy": {"mode": "metered",
+                        "scope": "continuous_captions_not_speech_port_or_all_paid_calls",
+                        "budget": {"observation": "available", "sampled_at_ns": 1793450000000000000,
+                            "window_seconds": 3600, "limit": 12, "used_reservations": 5,
+                            "remaining_reservations": 7, "private": "CANARY-PRIVATE-BUDGET"}},
                     "failure_notes": {"scope": "current_process_publication_counts_not_current_job_outcomes",
                         "capacity": 1024, "current_process": {"written": 3, "already_recorded": 0,
                             "busy": 0, "capacity": 0, "unavailable": 1}}}},
@@ -113,6 +118,22 @@ async def scenario(output, name, viewport, executable):
                     assert await region.evaluate("el => el === document.activeElement")
                     assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
                     await page.screenshot(path=str(output / (name + "-processing-overview.png")), full_page=True)
+                    key_summary = page.locator("summary", has_text="Processing details for AI Key")
+                    await key_summary.focus()
+                    await page.keyboard.press("Enter")
+                    await expect(page.get_by_text("Metered continuous captions", exact=True)).to_be_visible()
+                    budget_table = page.get_by_role("table", name="Running caption policy and sampled budget", exact=True)
+                    await expect(budget_table.get_by_role("row", name="Unreserved slots at sample time 7", exact=True)).to_be_visible()
+                    await expect(page.get_by_text("A sampled unreserved slot is not an admission promise", exact=False)).to_be_visible()
+                    assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+                    await page.screenshot(path=str(output / (name + "-caption-budget.png")), full_page=True)
+                    values["aikey"]["worker"]["caption_policy"] = {
+                        "mode": "unmetered", "scope": "continuous_captions_not_speech_port_or_all_paid_calls",
+                        "budget": None}
+                    site.runtime_observer.cache.clear()
+                    await page.get_by_role("link", name="Refresh", exact=True).click()
+                    await page.locator("summary", has_text="Processing details for AI Key").click()
+                    await expect(page.get_by_text("Explicit unmetered continuous captions", exact=True)).to_be_visible()
                     summary = page.locator("summary", has_text="Processing details for AI Port")
                     await summary.focus()
                     await page.keyboard.press("Enter")
@@ -137,6 +158,7 @@ async def scenario(output, name, viewport, executable):
                     assert all(p.read_bytes() == b for p, b in config_bytes.items())
                     result = {"viewport": viewport, "browser_version": context.browser.version,
                         "zero_unknown_and_uncapped_distinct": True, "keyboard_region_and_details": True,
+                        "metered_sample_and_explicit_unmetered_distinct": True,
                         "expired_session_refused": True, "settings_posts": 0, "health_reads": len(calls),
                         "real_controller_model_or_media_calls": 0, "unowned_requests": 0,
                         "fixture_config_bytes_unchanged": True, "body_horizontal_overflow": False,

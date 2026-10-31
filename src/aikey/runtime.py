@@ -81,6 +81,7 @@ class Application:
             raise
 
     async def _health(self, request):
+        await self.worker.refresh_caption_budget_status()
         return web.json_response({"service": "local-aikey", "version": "0.1.0",
             "startup_configuration": self._startup_configuration,
             "device": self.device.status, "worker": self.worker.status(),
