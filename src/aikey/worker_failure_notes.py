@@ -22,6 +22,10 @@ import time
 from .protocol import _json_object
 
 SCHEMA = "aikey-worker-failure-note/1"
+PHASE_SCHEMA = "aikey-worker-failure-note/2"
+PHASES = frozenset({"queue_expired", "model_work_fence", "execution", "media_fetch",
+    "media_decode", "inference_wait", "inference_request", "inference_response",
+    "speech_request", "callback"})
 SCOPE = "first_observed_worker_exception_per_job_and_input_not_current_outcome"
 CAPACITY = 1024
 CATEGORIES = frozenset({"timeout", "controller_media_http", "controller_callback_http",
@@ -46,14 +50,20 @@ def _name(job_id, fingerprint):
 
 
 def _validate(value):
-    if (not isinstance(value, dict) or set(value) != _FIELDS
-            or value["schema"] != SCHEMA or value["scope"] != SCOPE
+    if not isinstance(value, dict):
+        raise ValueError("invalid_failure_note")
+    schema = value.get("schema")
+    expected = _FIELDS | {"phase"} if schema == PHASE_SCHEMA else _FIELDS
+    if (set(value) != expected
+            or schema not in {SCHEMA, PHASE_SCHEMA} or value["scope"] != SCOPE
             or not isinstance(value["category"], str) or value["category"] not in CATEGORIES
             or not isinstance(value["journal_state"], str) or value["journal_state"] not in STATES
             or type(value["observed_at"]) not in (int, float)
             or not 0 < value["observed_at"] <= time.time() + 300
             or not math.isfinite(value["observed_at"])):
         raise ValueError("invalid_failure_note")
+    if schema == PHASE_SCHEMA and (not isinstance(value["phase"], str) or value["phase"] not in PHASES):
+        raise ValueError("invalid_failure_note_phase")
     _name(value["job_id"], value["input_fingerprint"])
     status = value["http_status"]
     if value["category"] in {"controller_media_http", "controller_callback_http"}:
@@ -117,13 +127,18 @@ class FailureNotes:
             if root_fd >= 0:
                 os.close(root_fd)
 
-    def record(self, job_id, fingerprint, *, observed_at, journal_state, category, http_status=None):
+    def record(self, job_id, fingerprint, *, observed_at, journal_state, category, http_status=None,
+               phase=None):
         """First-note-wins publication with a non-waiting lock, not an I/O deadline."""
         fd = root_fd = -1
         pending = None
         try:
             name = _name(job_id, fingerprint)
-            value = _validate({"schema": SCHEMA, "scope": SCOPE, "job_id": job_id,
+            # Keep the v1 filename namespace: a v2 writer must not create a
+            # second "first" note beside existing immutable v1 evidence.
+            value = _validate({"schema": PHASE_SCHEMA if phase is not None else SCHEMA,
+                **({"phase": phase} if phase is not None else {}),
+                "scope": SCOPE, "job_id": job_id,
                 "input_fingerprint": fingerprint, "observed_at": observed_at,
                 "journal_state": journal_state, "category": category, "http_status": http_status})
             root_fd = self._directory(create=True)

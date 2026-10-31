@@ -7,7 +7,10 @@ Controller HTTP acceptance is recorded separately from semantic indexing.
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from functools import wraps
 import hashlib
 import heapq
 from io import BytesIO
@@ -45,6 +48,56 @@ _LOCAL_INDEX_OPERATIONS = frozenset({"indexImages", "indexKeyFrames"})
 _LOCAL_OPERATIONS = frozenset({"speechToText", "recognizeFaces", "indexKeyFrames", "indexImages",
                                "reverify", "describeImage", "reidEmbed", "sessionDescribe"})
 _INDEX_IMAGES_BUDGET_S = 600
+
+# Only the owning worker task can annotate its private diagnostic job. This
+# never changes the separate Deep timing stage or any execution authority.
+_FAILURE_JOB = ContextVar("aikey_failure_job", default=None)
+
+
+@dataclass
+class _FailureObservation:
+    owner: object
+    phase: str | None = None
+    exception: BaseException | None = None
+
+    def for_exception(self, error):
+        # Match the actual escaping exception, including asyncio.timeout's
+        # CancelledError -> TimeoutError conversion. A recovered frame error
+        # must not label a later, unrelated model timeout.
+        seen = set()
+        for _ in range(4):
+            if error is None or id(error) in seen:
+                break
+            if error is self.exception:
+                return self.phase
+            seen.add(id(error))
+            # Implicit __context__ can be a recovered, unrelated exception.
+            # Only explicit chaining is sufficient to retain its observation.
+            error = error.__cause__
+        return None
+
+
+@contextmanager
+def _failure_boundary(owner, phase):
+    try:
+        yield
+    except BaseException as error:
+        current = _FAILURE_JOB.get()
+        if current is not None and current.owner is owner and current.for_exception(error) is None:
+            # The innermost observed boundary wins, including timeout-induced
+            # CancelledError before asyncio.timeout converts it to TimeoutError.
+            current.phase, current.exception = phase, error
+        raise
+
+
+def _failure_observed(phase):
+    def decorate(method):
+        @wraps(method)
+        async def observed(self, *args, **kwargs):
+            with _failure_boundary(self, phase):
+                return await method(self, *args, **kwargs)
+        return observed
+    return decorate
 
 
 def _native_face_cameras(state_root) -> frozenset:
@@ -1990,12 +2043,19 @@ class JobProcessor:
 
     async def _run_job(self, job):
         lease = None
+        # An already expired admission deadline is a directly observed fact,
+        # not a guess based on the exception text or a later reproduction.
+        expired_on_entry = job.deadline <= time.monotonic()
+        diagnostic = _FailureObservation(self)
+        diagnostic_token = _FAILURE_JOB.set(diagnostic)
         try:
             if job.operation == "sessionDescribe":
                 self._describe_stage(job, "fetch", job.admitted)
             async with asyncio.timeout(max(0, job.deadline - time.monotonic())):
-                lease = await self._model_work_fence.acquire(deadline=job.deadline)
-                result = await self._execute(job)
+                with _failure_boundary(self, "model_work_fence"):
+                    lease = await self._model_work_fence.acquire(deadline=job.deadline)
+                with _failure_boundary(self, "execution"):
+                    result = await self._execute(job)
             self._record(job, "completed", result=result)
             if job.operation == "indexImages":
                 self.retroactive["completed"] += 1
@@ -2006,6 +2066,8 @@ class JobProcessor:
                 job.future.set_exception(WorkerError("Worker stopped before job completion"))
             raise
         except Exception as exc:
+            failure_phase = ("queue_expired" if expired_on_entry and isinstance(exc, TimeoutError)
+                             else diagnostic.for_exception(exc) or "execution")
             message = "Job timed out" if isinstance(exc, TimeoutError) else str(exc)
             if isinstance(exc, TimeoutError) and job.operation == "sessionDescribe":
                 self.deep_timeouts[job.stage] += 1
@@ -2028,17 +2090,19 @@ class JobProcessor:
                     self._record(job, "failed", error=message)
             # The replay guard is already durable. Best-effort diagnostic notes
             # must not replace this error, change callbacks or authorize a retry.
-            self._note_worker_exception(job, exc)
+            self._note_worker_exception(job, exc, phase=failure_phase)
             if not job.future.done():
                 job.future.set_exception(WorkerError(message))
         finally:
+            _FAILURE_JOB.reset(diagnostic_token)
+            diagnostic.exception = None  # Do not retain a recovered exception's traceback/payload.
             if not job.future.done():
                 job.future.set_exception(WorkerError("Job interrupted before durable completion"))
             self._pending.pop(job.job_id, None)
             if lease is not None:
                 lease.close()
 
-    def _note_worker_exception(self, job, error):
+    def _note_worker_exception(self, job, error, *, phase="execution"):
         outcome = "unavailable"
         try:
             record = self._history.get(job.job_id)
@@ -2046,7 +2110,7 @@ class JobProcessor:
                 category, status = _failure_category(error)
                 reported = self._failure_notes.record(job.job_id, job.fingerprint,
                     observed_at=record["updatedAt"], journal_state=record["state"],
-                    category=category, http_status=status)
+                    category=category, http_status=status, phase=phase)
                 outcome = (reported if type(reported) is str and reported in FAILURE_NOTE_OUTCOMES
                            else "unavailable")
         except Exception:
@@ -2068,6 +2132,7 @@ class JobProcessor:
     # only that status, a bounded number of times, inside the job timeout.
     MEDIA_RETRY_DELAYS = (2.0, 4.0, 8.0)
 
+    @_failure_observed("media_fetch")
     async def _fetch(self, url, kind):
         for delay in (*self.MEDIA_RETRY_DELAYS, None):
             async with self._session.get(url, headers=self._headers, allow_redirects=False) as response:
@@ -2092,6 +2157,7 @@ class JobProcessor:
             return "image/webp"
         raise WorkerError("Unsupported image format; expected JPEG, PNG, or WebP")
 
+    @_failure_observed("media_decode")
     async def _video_frame(self, data, headers, url, job, *, timestamp=None):
         executable = self.options.get("ffmpeg_path")
         if not executable or not Path(executable).is_absolute() or not Path(executable).is_file():
@@ -2153,24 +2219,28 @@ class JobProcessor:
             raise WorkerError(str(exc)) from exc
         gate = self._inference_gate
         if gate is not None:
-            await gate.acquire(priority)
+            with _failure_boundary(self, "inference_wait"):
+                await gate.acquire(priority)
         try:
-            async with self._inference_session.post(url, json=request,
-                        headers=headers, allow_redirects=False) as response:
-                if response.status != 200:
-                    raise _VisionHTTPError(f"Inference returned HTTP {response.status}")
-                raw = await self._read_response(response, 1024 * 1024)
+            with _failure_boundary(self, "inference_request"):
+                async with self._inference_session.post(url, json=request,
+                            headers=headers, allow_redirects=False) as response:
+                    if response.status != 200:
+                        raise _VisionHTTPError(f"Inference returned HTTP {response.status}")
+                    raw = await self._read_response(response, 1024 * 1024)
         finally:
             if gate is not None:
                 gate.release()
-        try:
-            description = self.provider.parse_response(json.loads(raw))
-            if len(description) > self.max_description:
-                raise ValueError
-            return description
-        except (ValueError, ProviderError) as exc:
-            raise WorkerError("Inference did not return a complete, nonempty text description") from exc
+        with _failure_boundary(self, "inference_response"):
+            try:
+                description = self.provider.parse_response(json.loads(raw))
+                if len(description) > self.max_description:
+                    raise ValueError
+                return description
+            except (ValueError, ProviderError) as exc:
+                raise WorkerError("Inference did not return a complete, nonempty text description") from exc
 
+    @_failure_observed("media_decode")
     async def _audio(self, data):
         """16 kHz mono WAV of the export's audio track, bounded in size."""
         executable = self.options.get("ffmpeg_path")
@@ -2199,6 +2269,7 @@ class JobProcessor:
                 raise WorkerError("ffmpeg could not extract an audio track")
             return output.read_bytes()
 
+    @_failure_observed("speech_request")
     async def _transcribe(self, wav, clip_ms):
         form = aiohttp.FormData()
         for name, value in self.speech.form_fields():
@@ -2897,6 +2968,7 @@ class JobProcessor:
                                 "keyMomentsTags": len(key_moment_tags)}
         return result
 
+    @_failure_observed("callback")
     async def _post_callback(self, job, payload, *, images=(), ram=None):
         self._record(job, "callback_sending")
         try:
