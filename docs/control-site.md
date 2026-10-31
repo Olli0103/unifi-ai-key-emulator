@@ -672,6 +672,9 @@ The legacy remove-only permission view keeps its existing source contract. See
 
 ## Processing and budgets
 
+The [saved caption cost policy](#saved-caption-cost-policy) has a separate
+reviewed form; the observations below do not change a running or saved policy.
+
 The signed-in **Processing and budgets** link opens `/processing` and a compact
 overview of every attached Key/Port profile. Expand a profile for its queue,
 inference gate, stream, provider failure and per-camera API-budget observations.
@@ -732,6 +735,55 @@ This completes a read-only processing view, not configuration of all feature
 policies, native event/recording/quality acceptance or the full scope of #13/#17.
 See [checks and limits](evidence/processing-status-20261031.md).
 
+
+## Saved caption cost policy
+
+Signed-in `/caption-policy` configures the cost policy of an **existing** Key
+continuous-caption camera policy. It cannot create that camera policy, add or
+enable a camera, convert one-use test scopes, change a provider/key/model,
+start a processor or modify Port/speech/base-detection policies.
+
+No mode is implicitly selected. Choose and preview either the global metered
+policy (12 new caption reservations per rolling hour) or, when existing model
+configuration permits it, the explicit local unmetered override. Local routing
+does not prove free inference or an absence of upstream billing. Unmetered
+confirmation requires a separate unchecked cost-bypass acknowledgement in
+addition to the saved-settings confirmation. A remote-only route cannot bypass
+the existing configuration validator by posting a hidden option manually.
+
+Preview is read-only and grants one session/revision/result-bound confirmation,
+valid for ten monotonic minutes. At most 32 live previews exist across sessions;
+capacity refusal does not evict another valid preview. Grants retain no raw
+cookie, provider key or configuration body. Apply revalidates the revision after
+awaited work, rechecks current session/expiry/one-use authority, consumes the
+grant and hands the write to the existing shielded/drained file-operation owner.
+Two overlapping confirmations cannot admit two saves. Logout or expired
+authority before admission refuses; disconnect/logout does not undo an already
+admitted save. An uncertain acknowledgement asks the operator to read saved
+policy before another attempt and never auto-retries, resets usage or rolls back.
+
+The typed store changes **only** `worker.continuous.unmetered`: setting the
+existing permitted `true` override, or removing it to restore metering. It
+preserves unrelated raw fields, spellings and omitted defaults, archives exact
+prior bytes, applies under the existing private lock/OCC rules and verifies the
+new bytes. Same-policy no-ops keep the original revision/bytes. It never reads,
+prunes, clears, repairs or refunds the budget journal. Re-enabling metering can
+therefore leave zero available slots if existing reservations exhaust the hour.
+There is no new provider-Undo record that silently restores an unmetered bypass;
+changing the policy again uses a fresh reviewed choice. Generic administrative
+configuration/restore authority is not removed by this convenience form.
+
+`GET /api/admin/v1/caption-policy` returns only saved-policy status/revision and
+whether current model configuration allows the local override. Its explicit
+scope is `saved_policy_not_running_authority`; it is not an observation of the
+running Key. Older workers without the separate running-policy health field
+remain unknown in Processing. POST form routes require the existing same-origin
+session/CSRF and shared 60-per-minute admission policy. There is no new listener,
+credential authority, runtime reload/restart, provider test or dependency.
+
+A separate Key restart is required to apply a changed saved policy. Review
+running/startup revision status separately; a successful file save or a visible
+option does not prove native work, admission, provider capability or billing.
 
 ## Initial speech transcription setup
 
