@@ -232,6 +232,67 @@ class ConfigurationStore:
         return {"revision": _revision(content), "configured": isinstance(continuous, dict),
                 "camera_ids": tuple(cameras) if isinstance(cameras, list) else None}
 
+    def caption_setup_status(self, binding):
+        from .caption_setup import prerequisites
+        from .providers import DEFAULT_BASE_URLS
+        from .protocol import _json_object
+        content, current = self._read(self.path)
+        raw = _json_object(content)
+        try:
+            prerequisites(raw, binding)
+            available = True
+        except ValueError:
+            available = False
+        inference = current["inference"]
+        return {"revision": _revision(content), "available": available,
+                "protect_version": current["controller"].get("protect_version"),
+                "provider": inference["provider"], "model": inference["model"],
+                "destination": inference.get("base_url") or DEFAULT_BASE_URLS[inference["provider"]]}
+
+    def _prepare_caption_setup(self, content, current, expected_revision, binding, cameras):
+        from .caption_setup import initial_policy
+        from .protocol import _json_object
+        revision = _revision(content)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(revision, expected_revision)):
+            raise RevisionConflict("Configuration changed since it was read")
+        raw = _json_object(content)
+        try:
+            policy = initial_policy(raw, binding, cameras)
+        except ValueError as exc:
+            raise UnsafeConfigurationChange("Initial caption setup prerequisites unavailable") from exc
+        candidate = deepcopy(raw)
+        candidate["worker"]["continuous"] = policy
+        checked = self._validate(candidate)
+        self._assert_immutable(current, checked)
+        self._assert_search_profile(checked, current)
+        self._assert_credential_routes(current, checked)
+        changes = tuple(_changed(raw, candidate))
+        if changes != ("worker.continuous",):
+            raise UnsafeConfigurationChange("Initial captions may only add the reviewed policy")
+        encoded = self._encode(candidate)
+        if len(encoded) > _MAX_CONFIG_BYTES:
+            raise UnsafeConfigurationChange("Caption configuration is too large")
+        return ConfigurationPreview(revision, _revision(encoded), _public(checked), changes, True), encoded
+
+    def preview_caption_setup(self, expected_revision, binding, cameras):
+        content, current = self._read(self.path)
+        return self._prepare_caption_setup(content, current, expected_revision, binding, cameras)[0]
+
+    def apply_caption_setup(self, expected_revision, binding, cameras):
+        with self._locked():
+            content, current = self._read(self.path)
+            preview, encoded = self._prepare_caption_setup(content, current, expected_revision, binding, cameras)
+            self._archive(content)
+            try:
+                self._replace(encoded)
+                persisted, checked = self._read(self.path)
+                if _revision(persisted) != preview.resulting_revision:
+                    raise ConfigurationStoreError("Caption setup read-back differs")
+            except (OSError, ValueError, ConfigurationStoreError) as exc:
+                raise ConfigurationStoreError("Caption setup replacement outcome is uncertain") from exc
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
+
     def caption_enrollment_status(self):
         """Private UI input only; no identifiers or file routes may reach HTTP JSON."""
         from .protocol import _json_object

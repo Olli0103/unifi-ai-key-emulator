@@ -91,6 +91,9 @@ class AdminAPI:
         from .caption_camera_enrollment import CaptionCameraEnrollment
         self.caption_camera_enrollment = CaptionCameraEnrollment(self.site)
         self.caption_camera_enrollment.register(app)
+        from .caption_setup_control import CaptionSetupControl
+        self.caption_setup_control = CaptionSetupControl(self.site)
+        self.caption_setup_control.register(app)
         from .worker_limits_control import WorkerLimitsControl
         self.worker_limits_control = WorkerLimitsControl(self.site)
         self.worker_limits_control.register(app)
