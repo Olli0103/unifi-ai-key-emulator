@@ -131,6 +131,7 @@ class ControlSite:
                  aiport_runtime_state_dir: Path | None = None,
                  aiport_instances: dict[str, Path] | None = None,
                  inventory_loader: Callable[[], Awaitable[dict]] | None = None,
+                 native_status_loader: Callable[[], Awaitable[dict]] | None = None,
                  rollout_path: Path | None = None,
                  search_state_dir: Path | None = None,
                  search_backups_dir: Path | None = None,
@@ -165,6 +166,7 @@ class ControlSite:
             paths.add(store.path)
             self.aiports[f"aiport:{name}"] = store
         self.inventory_loader = inventory_loader
+        self.native_status_loader = native_status_loader
         self._inventory_clock = time.monotonic
         self._inventory_source = inventory_loader
         self._inventory_snapshot = None
@@ -194,6 +196,7 @@ class ControlSite:
         app = web.Application(client_max_size=8192)
         app.router.add_get("/", self.index)
         app.router.add_get("/cameras", self.cameras)
+        app.router.add_get("/camera-status", self.native_camera_status_page)
         app.router.add_get("/aiport-rollout", self.rollout_page)
         app.router.add_post("/aiport-rollout", self.rollout_apply)
         # Apply remains unavailable. Cancellation only retires an idle staged generation.
@@ -631,6 +634,56 @@ class ControlSite:
         self._audit("rollout_apply", "applied")
         raise web.HTTPSeeOther("/aiport-rollout")
 
+    async def native_camera_status_page(self, request: web.Request) -> web.Response:
+        cookie = self._session(request)
+        if cookie is None:
+            raise web.HTTPSeeOther("/login")
+        if request.query:
+            raise web.HTTPBadRequest(text="Invalid request")
+        from .native_camera_status import NativeStatusError
+        try:
+            view = await self.admin_api.native_status_view()
+        except (NativeStatusError, OSError, ValueError, ClientError, TimeoutError):
+            view = None
+        if self._session(request) != cookie:
+            raise web.HTTPSeeOther("/login")
+        title = "Native camera status"
+        intro = ("<h1>Native camera status</h1><p><a href='/'>Settings</a> · "
+                 "<a href='/camera-status'>Refresh</a></p>"
+                 "<p>Current Protect metadata only. Recording is a reported momentary state; "
+                 "PTZ support is a capability, not a control test. No camera settings change.</p>")
+        if view is None:
+            return _page(title, intro + "<p class='error'>Native status unavailable. "
+                         "No stale observation is substituted.</p>")
+        if not view["configured"]:
+            return _page(title, intro + "<p>Not configured. The integration API alone does not "
+                         "supply recording/PTZ status. No native login was attempted.</p>")
+        snapshot = view["snapshot"]
+        observed = datetime.fromtimestamp(snapshot["fetched_at"], timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S UTC")
+        labels = {True: "Reported active", False: "Reported inactive", None: "Unknown"}
+        capabilities = {True: "Reported supported", False: "Reported unsupported", None: "Unknown"}
+        rows = []
+        for camera in snapshot["cameras"]:
+            channels = ", ".join(str(c["id"]) + ": " +
+                (f"{c['width']}×{c['height']}" if "width" in c and "height" in c else "size unknown") +
+                (f" at {c['fps']} fps" if "fps" in c else "") for c in camera["channels"]) or "Unknown"
+            cells = (camera["name"] or "Unnamed", camera["state"],
+                     labels[camera["recording_active"]], capabilities[camera["ptz_capable"]], channels)
+            rows.append("<tr>" + "".join(f"<td>{_safe(c)}</td>" for c in cells) + "</tr>")
+        return _page(title, intro + f"<p>Protect {_safe(snapshot['protect_version'])} · "
+                     f"Observed {_safe(observed)}</p>"
+                     "<div class='scroll' role='region' aria-label='Native camera status' tabindex='0'>"
+                     "<table><thead><tr><th scope='col'>Camera</th><th scope='col'>Connection</th>"
+                     "<th scope='col'>Recording</th><th scope='col'>PTZ capability</th>"
+                     "<th scope='col'>Reported channels</th></tr></thead><tbody>" +
+                     "".join(rows) + "</tbody></table></div>"
+                     "<details><summary>Observation and session limits</summary>"
+                     "<p>No media, PTZ or model request. Channels are reported metadata, not "
+                     "verified playback or the selected recording stream. Temporary session "
+                     "logout acknowledged; local cookies discarded. Server-side token "
+                     "revocation is not verified.</p></details>")
+
     async def cameras(self, request: web.Request) -> web.Response:
         if self._session(request) is None:
             raise web.HTTPSeeOther("/login")
@@ -811,6 +864,7 @@ class ControlSite:
                   "<a href='/state-backup-preflight'>Backup preflight</a> · "
                   "<a href='/maintenance'>Maintenance operations</a> · "
                   "<a href='/runtime-status'>Runtime configuration</a> · "
+                  "<a href='/camera-status'>Native camera status</a> · "
                   "<a href='/model-registry'>Saved model role registry</a></p>"
                 + ("<p><a href='/aiport-permissions'>Remove saved AI Port face, sound or speech permissions</a></p>"
                    if ports else "")
@@ -1773,6 +1827,10 @@ def _cli() -> argparse.ArgumentParser:
     run.add_argument("--inventory-api-key-file", type=Path)
     run.add_argument("--inventory-web-trust-file", type=Path)
     run.add_argument("--inventory-web-cert-file", type=Path)
+    run.add_argument("--native-status-username-file", type=Path,
+                     help="Optional private existing local Protect username; read-only native metadata")
+    run.add_argument("--native-status-password-file", type=Path,
+                     help="Optional private password file; no browser-cookie import or account creation")
     return parser
 
 
@@ -1900,6 +1958,17 @@ def main(argv: list[str] | None = None) -> int:
             trust_file=args.inventory_web_trust_file,
             cert_file=args.inventory_web_cert_file)) if all(
                 value is not None for value in inventory_fields) else None
+        native_fields = (args.native_status_username_file, args.native_status_password_file)
+        native_status_loader = None
+        if any(p is not None for p in native_fields):
+            if not all(p is not None for p in native_fields) or inventory_loader is None:
+                raise ValueError("Native status needs both credential files and pinned inventory settings")
+            from .native_camera_status import NativeStatusReader
+            native_reader = NativeStatusReader(args.inventory_controller,
+                username_file=args.native_status_username_file,
+                password_file=args.native_status_password_file,
+                trust_file=args.inventory_web_trust_file, cert_file=args.inventory_web_cert_file)
+            native_status_loader = native_reader.read
         instances = {}
         for assignment in args.aiport_instance:
             name, separator, config_path = assignment.partition("=")
@@ -1919,6 +1988,7 @@ def main(argv: list[str] | None = None) -> int:
                            runtime_health_urls=runtime_health,
                            maintenance_bridge=args.maintenance_bridge,
                            inventory_loader=inventory_loader,
+                           native_status_loader=native_status_loader,
                            rollout_path=args.aiport_rollout,
                            search_state_dir=args.search_state_dir,
                            search_backups_dir=args.search_backups,

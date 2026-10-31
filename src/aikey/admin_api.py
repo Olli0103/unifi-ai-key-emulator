@@ -53,6 +53,7 @@ class AdminAPI:
         app.router.add_get(PREFIX + "/session", self.session)
         app.router.add_get(PREFIX + "/profiles", self.profiles)
         app.router.add_get(PREFIX + "/cameras", self.cameras)
+        app.router.add_get(PREFIX + "/cameras/native-status", self.native_camera_status)
         app.router.add_get(PREFIX + "/maintenance", self.maintenance)
         app.router.add_get(PREFIX + "/maintenance/requests", self.maintenance_history)
         app.router.add_post(PREFIX + "/maintenance", self.maintenance_submit)
@@ -232,6 +233,35 @@ class AdminAPI:
         except (OSError, ValueError, ClientError, InventoryError,
                 AiPortConfigurationError, asyncio.TimeoutError):
             return error("inventory_unavailable", 503)
+        if not self.authenticated(request):
+            return error("authentication_required", 401)
+        return reply(result)
+
+    async def native_status_view(self):
+        from .native_camera_status import public_snapshot
+        if self.site.native_status_loader is None:
+            return {"configured": False, "observation": "not_configured", "cameras": None}
+        async with asyncio.timeout(20):
+            value = await self.site.native_status_loader()
+        return {"configured": True, "observation": "native_camera_status",
+                "snapshot": public_snapshot(value)}
+
+    async def native_camera_status(self, request):
+        if not self.authenticated(request):
+            return error("authentication_required", 401)
+        if request.query:
+            return error("invalid_request", 400)
+        from .native_camera_status import NativeStatusError
+        try:
+            result = await self.native_status_view()
+        except NativeStatusError as exc:
+            if not self.authenticated(request):
+                return error("authentication_required", 401)
+            return reply({"error": "native_status_unavailable", "reason": exc.code}, status=503)
+        except (OSError, ValueError, ClientError, TimeoutError):
+            if not self.authenticated(request):
+                return error("authentication_required", 401)
+            return error("native_status_unavailable", 503)
         if not self.authenticated(request):
             return error("authentication_required", 401)
         return reply(result)

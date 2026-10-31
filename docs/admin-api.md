@@ -502,3 +502,26 @@ positive tuples does not establish outside-zone behavior, alarm delivery,
 recording playback, ONVIF support or an entire parity contract. The API refuses
 oversized, duplicate or malformed correlation replies rather than laundering
 an arbitrary runtime field into private output.
+
+## Optional native camera metadata
+
+`GET /api/admin/v1/cameras/native-status` and `/camera-status` use the existing
+authenticated Admin listener. They are separate from the Integration inventory
+and saved-profile/runtime observations. Without explicit operator file-based
+native credentials and the pinned controller settings, the API reports
+`configured: false`, `observation: not_configured`, `cameras: null`; it does not
+try another credential or claim an empty camera list.
+
+An opt-in reader fetches a bounded native bootstrap through its own temporary
+session, validates exact version/identity/field shapes, acknowledges logout and
+discards local cookies. It publishes momentary recording state, PTZ capability
+and bounded channel metadata, not playback, PTZ control, recording policy,
+native pairing acceptance or active channel selection. Missing flags are unknown,
+not false. No browser cookie import/export, account/right creation, background
+poll, camera setting, media/model request or automatic login retry is added.
+
+The ordinary inventory and processing paths do not enable this reader. An
+uncertain logout blocks another session in the process; its acknowledgement
+does not attest server-side token revocation. No real account/credential-based
+native activation follows merely from the source/interface tests. See the
+[transport, credential, caching and observation contract](native-camera-status.md).
