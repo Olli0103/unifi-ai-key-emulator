@@ -88,6 +88,9 @@ class AdminAPI:
         from .caption_scope_control import CaptionScopeControl
         self.caption_scope_control = CaptionScopeControl(self.site)
         self.caption_scope_control.register(app)
+        from .caption_camera_enrollment import CaptionCameraEnrollment
+        self.caption_camera_enrollment = CaptionCameraEnrollment(self.site)
+        self.caption_camera_enrollment.register(app)
         from .diagnostic_export import DiagnosticExport
         self.diagnostic_export = DiagnosticExport(self)
         self.diagnostic_export.register(app)
