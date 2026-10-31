@@ -102,6 +102,13 @@ Back up state and the database together before upgrades. Protect firmware change
 
 ## Dated recovery evidence
 
+For hosts whose separately mounted `/home` arrives after the lingering user
+manager, see [boot ordering and recovery](nas-boot-recovery.md). An optional,
+bounded systemd drop-in prevents loading an empty user timer target before that
+mount. The [31 October kernel-panic observation](evidence/nas-kernel-panic-recovery-20261031.md)
+records actual processor reconnection, a recovered timer-discovery failure and
+an unresolved private-network/Admin dependency; it is not a full recovery PASS.
+
 The [29 October source upgrade](evidence/nas-source-upgrade-20261029.md) records
 the later private hybrid-search deployment, current source/runtime versions,
 verified cold backups, identity/index preservation, paired network-namespace
