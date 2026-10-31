@@ -703,6 +703,21 @@ Interpret the counters separately:
   attempts per rolling hour; an explicit local unmetered override is separate.
   Local routing is not a billing guarantee. The existing Caption preflight
   reads **saved** policy/journal data, which may differ from running settings.
+- New Key workers separately report their loaded continuous-caption policy:
+  metered, explicitly unmetered, one-use test scopes, or disabled. Older workers
+  remain unknown. In metered mode, the worker samples its own atomically published
+  durable journal without reserving, locking, repairing, pruning or writing it.
+  The bounded observation gives sample time, rolling window, limit, used and
+  unreserved slots. Missing journals start empty under the existing budget
+  contract; corrupt/unsafe journals or backward clocks are unavailable, not zero.
+  The single-flight off-loop read waits at most 150 ms per health caller; repeated
+  requests/cancelled waiters cannot queue additional reads behind a slow one.
+  A completed sample is valid for at most two seconds from read admission; an
+  overdue completion is unavailable. Admin may additionally cache health for two
+  seconds. Fair sharing and concurrent reservations can still refuse an attempt;
+  an unreserved slot is neither admission nor monetary credit. No saved or active
+  policy is changed by viewing these observations. Unmetered/noncontinuous modes
+  do not read a budget journal or invent a zero/remaining value.
 - Failure-note counters describe publication attempts by the current process,
   not failed jobs, unique events, present outages or historical missing causes.
 - Port attempts/successes include empty detections; they are not event, object,

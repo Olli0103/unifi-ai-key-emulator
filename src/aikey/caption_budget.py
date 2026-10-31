@@ -120,6 +120,33 @@ class CaptionBudget:
             next_at = min(item["at_ns"] for item in recent) + HOUR_NS if recent else None
             return Reservation(True, LIMIT - len(recent) - 1, next_at)
 
+    def snapshot(self) -> dict:
+        """Observe one atomically published journal; never reserve, lock or repair.
+
+        This is a sampled global ceiling, not a camera's admission promise. Fair
+        sharing and concurrent reservations can still refuse the next attempt.
+        """
+        try:
+            meta = self.directory.lstat()
+            if (not stat.S_ISDIR(meta.st_mode) or meta.st_uid != os.geteuid()
+                    or meta.st_mode & 0o077):
+                raise ValueError
+            now = self.clock_ns()
+            if type(now) is not int or now <= 0:
+                raise ValueError
+            state = self._read(read_only=True)
+            if now < state["high_water_ns"]:
+                raise ValueError
+            used = sum(now - HOUR_NS < item["at_ns"] <= now
+                       for item in state["reservations"])
+            if used > LIMIT:
+                raise ValueError
+        except (OSError, ValueError, CaptionBudgetError) as exc:
+            raise CaptionBudgetError("Caption budget observation unavailable") from exc
+        return {"observation": "available", "sampled_at_ns": now,
+                "window_seconds": HOUR_NS // 1_000_000_000, "limit": LIMIT,
+                "used_reservations": used, "remaining_reservations": LIMIT - used}
+
     def _check_directory(self) -> None:
         try:
             meta = self.directory.lstat()
@@ -155,10 +182,12 @@ class CaptionBudget:
                 raise CaptionBudgetError("Cannot lock caption budget") from exc
             yield
 
-    def _read(self) -> dict:
+    def _read(self, *, read_only: bool = False) -> dict:
         try:
             flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-            fd = os.open(self.path, flags)
+            if read_only:
+                flags |= os.O_NONBLOCK
+            fd = self._snapshot_fd(flags) if read_only else os.open(self.path, flags)
         except FileNotFoundError:
             return {"schema": 1, "high_water_ns": 0, "reservations": []}
         except OSError as exc:
@@ -168,12 +197,21 @@ class CaptionBudget:
                 meta = os.fstat(source.fileno())
                 if not stat.S_ISREG(meta.st_mode) or meta.st_size > _MAX_BYTES:
                     raise ValueError
+                if read_only and (meta.st_uid != os.geteuid() or meta.st_mode & 0o077):
+                    raise ValueError
                 data = source.read(_MAX_BYTES + 1)
-            state = json.loads(data)
+                if read_only and len(data) > _MAX_BYTES:
+                    raise ValueError
+            if read_only:
+                from .protocol import _json_object
+                state = _json_object(data)
+            else:
+                state = json.loads(data)
             if (
                 not isinstance(state, dict)
                 or set(state) != {"schema", "high_water_ns", "reservations"}
                 or state["schema"] != 1
+                or (read_only and type(state["schema"]) is not int)
                 or type(state["high_water_ns"]) is not int
                 or state["high_water_ns"] < 0
                 or not isinstance(state["reservations"], list)
@@ -200,6 +238,21 @@ class CaptionBudget:
             return state
         except (OSError, ValueError, TypeError, UnicodeError) as exc:
             raise CaptionBudgetError("Caption budget is corrupt; review before admission") from exc
+
+    def _snapshot_fd(self, flags):
+        # Hold the validated directory inode across the leaf open. A directory
+        # rename cannot retarget a sample to a replacement/symlinked tree.
+        try:
+            directory = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError as exc:
+            raise CaptionBudgetError("Cannot open caption snapshot directory") from exc
+        try:
+            meta = os.fstat(directory)
+            if meta.st_uid != os.geteuid() or meta.st_mode & 0o077:
+                raise CaptionBudgetError("Caption snapshot directory is unsafe")
+            return os.open(self.path.name, flags, dir_fd=directory)
+        finally:
+            os.close(directory)
 
     def _write(self, state: dict) -> None:
         encoded = json.dumps(state, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()

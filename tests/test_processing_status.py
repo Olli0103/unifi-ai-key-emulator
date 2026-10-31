@@ -14,6 +14,11 @@ def key_processing():
     return {**key_health(), "worker": {"queued": 0, "active": 1, "pending": 1,
         "capacity": 20, "ledger": 31,
         "captions": {"admitted": 7, "exhausted": 2, "deferred_fair_share": 3},
+        "caption_policy": {"mode": "metered",
+            "scope": "continuous_captions_not_speech_port_or_all_paid_calls",
+            "budget": {"observation": "available", "sampled_at_ns": 1793450000000000000,
+                "window_seconds": 3600, "limit": 12, "used_reservations": 5,
+                "remaining_reservations": 7, "private": "CANARY-budget-record"}},
         "speech": {"refused_long": 4, "clipped": 0},
         "deep": {"describe_tasks": 8, "described": 6, "crops_failed": 1},
         "reverification": {"confirmed": 2, "unchanged": 1},
@@ -65,6 +70,7 @@ async def test_processing_api_and_page_share_pinned_observations_without_private
         assert [row["profile"] for row in rows] == ["aikey", "aiport"]
         assert rows[0]["runtime"]["queued"] == 0 and rows[0]["runtime"]["captions"]["admitted"] == 7
         assert rows[0]["runtime"]["failure_notes"]["current_process"]["written"] == 4
+        assert rows[0]["runtime"]["caption_policy"]["budget"]["remaining_reservations"] == 7
         assert rows[1]["runtime"]["inference"]["api_request_cap"] is None
         assert rows[1]["runtime"]["inference"]["api_request_cap_reported"] is True
         assert rows[1]["runtime"]["cameras"][0]["api_requests_remaining"] == 0
@@ -79,6 +85,7 @@ async def test_processing_api_and_page_share_pinned_observations_without_private
                          "not event, object, paid-request or quality counts"):
             assert required in html
         assert "CANARY" not in html and str(tmp_path) not in html
+        assert "Metered continuous captions" in html and "not an admission promise" in html
         assert "<form" not in html and "<button" not in html and "localStorage" not in html
         assert [p.read_bytes() for p in paths] == before and set(tmp_path.rglob("*")) == files_before
         assert len(key_calls) == len(port_calls) == 1
