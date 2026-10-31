@@ -10,7 +10,7 @@ import json
 import math
 import re
 
-from .benchmark import BenchmarkError, _text
+from .benchmark import BenchmarkError, _text, _run_identity
 
 CASES_SCHEMA = "aikey-multimodal-cases/1"
 REPORT_SCHEMA = "aikey-multimodal-report/1"
@@ -39,7 +39,7 @@ def validate(document):
     run = document["run"]
     if not isinstance(run, dict) or set(run) != {"model", "provider", "profile", "code_revision"}:
         raise BenchmarkError("Invalid run identity")
-    run = {k: _text(v, "run identity") for k, v in sorted(run.items())}
+    run = _run_identity(run)
     cases = document["cases"]
     if not isinstance(cases, list) or not 1 <= len(cases) <= 10000:
         raise BenchmarkError("Expected 1 to 10000 cases")
@@ -227,8 +227,7 @@ def compare(report, reference):
                 or not isinstance(value.get("run"), dict)
                 or set(value["run"]) != {"model", "provider", "profile", "code_revision"}):
             raise BenchmarkError("Expected multimodal reports")
-        for item in value["run"].values():
-            _text(item, "run identity")
+        _run_identity(value["run"])
         finite_tree(value["metrics"])
     if report["corpus_sha256"] != reference["corpus_sha256"]:
         raise BenchmarkError("Reports scored different corpora")

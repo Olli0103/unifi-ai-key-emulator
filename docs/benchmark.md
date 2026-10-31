@@ -66,6 +66,25 @@ migrated; the common CLI now also refuses duplicate-key/nonfinite JSON records.
 
 `python -m aikey.benchmark compare <report> <reference>` reports differences only for validated input-bound v2 reports on the same declared corpus, as described above. Matching old label-only digests are not sufficient. No scorer can establish truthful labels, physical source identity or a real hardware reference merely from an aggregate report.
 
+## Exact model identifiers in run metadata
+
+Detection (legacy and v2) and multimodal runs retain all previously accepted
+flat1–64-character model tags. An additional1–200-character form begins with
+a letter/digit followed by ASCII letters, digits, `.`, `_`, `:`, `+`, `/` or
+`-`. This matches the existing catalog character vocabulary and permits a
+provider-supplied namespace/tag spelling such as
+`fictional-org/fictional-model:tag`, instead of requiring a flattened alias.
+The spelling is preserved exactly; leading/trailing whitespace, control
+characters and oversized values are refused, never trimmed or truncated.
+
+Only `run.model` has this vocabulary. Provider/profile/code revision, case IDs
+and camera classes retain their existing strict 1–64-character tag rules.
+This is metadata validation, not model discovery, identity/availability or
+weight verification. The scorer never uses the identifier as an endpoint,
+filename or load command. Different run/model identities on matching declared
+inputs can still be compared; changing model metadata does not change corpus
+identity or numerical metrics.
+
 ## What still needs evaluation material
 
 - Producing predictions from footage: an owner-local step. The multimodal scorer below closes the metric-computation gap, not this input gap.
