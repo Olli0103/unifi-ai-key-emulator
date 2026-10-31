@@ -862,6 +862,7 @@ class ControlSite:
                   "<a href='/audit'>Audit log</a> · "
                   "<a href='/caption-preflight'>Caption preflight</a> · "
                   "<a href='/caption-policy'>Caption cost policy</a> · "
+                  "<a href='/caption-cameras'>Caption cameras</a> · "
                   "<a href='/state-backup-preflight'>Backup preflight</a> · "
                   "<a href='/maintenance'>Maintenance operations</a> · "
                   "<a href='/runtime-status'>Runtime configuration</a> · "

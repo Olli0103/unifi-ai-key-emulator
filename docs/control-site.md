@@ -832,3 +832,33 @@ are opaque and session/revision/source-bound. Credential values, credential file
 IDs do not appear in forms, browser storage or error output. The browser runner
 uses fictional cameras and keys only; source/browser results are not permission
 to enroll a real household microphone or a quality/native-acceptance claim.
+
+### Remove-only automatic-caption camera policy
+
+`/caption-cameras` manages only the AI Key's **saved** existing continuous-caption
+policy. A fresh validated camera inventory supplies unambiguous display names for
+an existing explicit `camera_ids` list. Uncheck cameras, review the retained names,
+and confirm the one-use preview. Unknown cameras cannot be added. A stale revision,
+changed camera identity/name/model, expired/foreign preview or lost session refuses
+the save. Camera IDs/MACs and private file paths are not put in this form.
+
+If inventory is missing/ambiguous, or the saved policy selects model families
+without an explicit camera list, individual editing is unavailable. A separate
+preview and unchecked confirmation can still remove the **entire saved continuous
+policy**, including its unmetered override; it never fabricates an empty list (which
+would be invalid) or converts a model-wide policy into a new allowlist. A missing
+continuous policy and one-use scopes have no editable camera form.
+
+These are saved settings, not immediate privacy revocation: the running Key and
+pending jobs keep their loaded authority until a separate processor restart. No
+processor, model, media, Protect setting, camera pairing or budget operation is
+performed. Search/indexing, face, speech and AI Port policies stay unchanged.
+Existing usage/reservations, keys and history remain; no refund or automatic Undo
+is offered. A lost acknowledgement is reported as uncertain: read saved settings
+before trying again, rather than replaying the confirmation.
+
+Authenticated `GET /api/admin/v1/caption-cameras` returns only the revision,
+configured state and explicit-camera count (`null` means no explicit list, not
+zero), with `saved_policy_not_running_authority`. It does not return identifiers,
+geometry, media or credentials. Both new POST routes share the existing mutation
+admission limit and shielded/drained file-operation boundary.
