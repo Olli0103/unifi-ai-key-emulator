@@ -161,6 +161,80 @@ class ConfigurationStore:
         content, checked = self._read(self.path)
         return ConfigurationSnapshot(_revision(content), _public(checked))
 
+    def caption_scope_status(self):
+        """Private adapter input; camera identifiers must not be serialized by HTTP."""
+        from .protocol import _json_object
+        content, _ = self._read(self.path)
+        try:
+            raw = _json_object(content)
+        except ValueError as exc:
+            raise UnsafeConfigurationChange("Caption scope source is ambiguous") from exc
+        continuous = (raw.get("worker") or {}).get("continuous")
+        cameras = continuous.get("camera_ids") if isinstance(continuous, dict) else None
+        return {"revision": _revision(content), "configured": isinstance(continuous, dict),
+                "camera_ids": tuple(cameras) if isinstance(cameras, list) else None}
+
+    def _prepare_caption_restriction(self, content, current, expected_revision, retained):
+        from .protocol import _json_object
+        revision = _revision(content)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(revision, expected_revision)):
+            raise RevisionConflict("Configuration changed since it was read")
+        if (not isinstance(retained, list) or len(retained) > 16
+                or any(not isinstance(c, str) for c in retained)
+                or len(set(retained)) != len(retained)):
+            raise UnsafeConfigurationChange("Select distinct existing caption cameras")
+        try:
+            raw = _json_object(content)
+        except ValueError as exc:
+            raise UnsafeConfigurationChange("Caption scope source is ambiguous") from exc
+        policy = (raw.get("worker") or {}).get("continuous")
+        if not isinstance(policy, dict):
+            raise UnsafeConfigurationChange("Existing continuous camera policy required")
+        existing = policy.get("camera_ids")
+        if retained and (not isinstance(existing, list) or not set(retained) <= set(existing)):
+            raise UnsafeConfigurationChange("Caption scope can only remove saved cameras")
+        candidate = deepcopy(raw)
+        if retained:
+            candidate["worker"]["continuous"]["camera_ids"] = [c for c in existing if c in retained]
+            allowed = ("worker.continuous.camera_ids",)
+        else:
+            del candidate["worker"]["continuous"]
+            allowed = ("worker.continuous",)
+        checked = self._validate(candidate)
+        self._assert_immutable(current, checked)
+        self._assert_search_profile(checked, current)
+        self._assert_credential_routes(current, checked)
+        changes = tuple(_changed(raw, candidate))
+        if changes not in ((), allowed):
+            raise UnsafeConfigurationChange("Caption restriction must not change other settings")
+        encoded = self._encode(candidate)
+        if len(encoded) > _MAX_CONFIG_BYTES:
+            raise UnsafeConfigurationChange("Caption restriction configuration is too large")
+        return ConfigurationPreview(revision, _revision(encoded) if changes else revision,
+            _public(checked), changes, bool(changes)), encoded
+
+    def preview_caption_restriction(self, expected_revision, retained):
+        content, current = self._read(self.path)
+        return self._prepare_caption_restriction(content, current, expected_revision, retained)[0]
+
+    def restrict_captions(self, expected_revision, retained):
+        """Remove saved automatic-caption scope; do not touch running jobs or usage."""
+        with self._locked():
+            content, current = self._read(self.path)
+            preview, encoded = self._prepare_caption_restriction(content, current, expected_revision, retained)
+            if not preview.changed_fields:
+                return ConfigurationSnapshot(preview.current_revision, _public(current))
+            self._archive(content)
+            try:
+                self._replace(encoded)
+                persisted, checked = self._read(self.path)
+                if _revision(persisted) != preview.resulting_revision:
+                    raise ConfigurationStoreError("Caption restriction read-back differs")
+            except (OSError, ValueError, ConfigurationStoreError) as exc:
+                raise ConfigurationStoreError("Caption restriction replacement outcome is uncertain") from exc
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
+
     def _prepare_caption_policy(self, content, current, expected_revision, mode):
         from .protocol import _json_object
         revision = _revision(content)
