@@ -1,6 +1,7 @@
 """Versioned, deterministic benchmark scoring on a synthetic corpus (#7). No media."""
 
 import copy
+import hashlib
 import json
 
 import pytest
@@ -27,6 +28,14 @@ def corpus(rows=ROWS, run=RUN):
     return {"schema": "aikey-benchmark-cases/1", "run": dict(run),
             "cases": [{"id": i, "camera_class": k, "conditions": list(t), "expected": e,
                        "predicted": p, "confidence": c} for i, k, t, e, p, c in rows]}
+
+
+def bound_corpus(rows=ROWS, run=RUN):
+    value = corpus(rows, run)
+    value["schema"] = "aikey-benchmark-cases/2"
+    for case in value["cases"]:
+        case["input_sha256"] = hashlib.sha256(("FICTIONAL-INPUT-BYTES-" + case["id"]).encode()).hexdigest()
+    return value
 
 
 def test_metrics_match_the_hand_computed_values():
@@ -97,16 +106,16 @@ def test_malformed_case_files_are_refused(mutate, message):
 
 
 def test_comparison_needs_the_same_corpus():
-    ours = score(corpus())
+    ours = score(bound_corpus())
     better = copy.deepcopy(ROWS)
     better[5] = ("c06", "indoor", ["glare"], "none", "none", 0)          # the false alarm fixed
-    reference = score(corpus(better, run=dict(RUN, model="reference")))
+    reference = score(bound_corpus(better, run=dict(RUN, model="reference")))
     result = compare(ours, reference)
     assert result["false_alarm_rate"] == 0.25 and result["missed"] == 0
     assert result["labels"]["person"]["precision"] == round(1 / 3 - 0.5, 6)
     other = copy.deepcopy(ROWS)[:-1]
     with pytest.raises(BenchmarkError, match="different corpora"):
-        compare(ours, score(corpus(other)))
+        compare(ours, score(bound_corpus(other)))
     with pytest.raises(BenchmarkError, match="benchmark reports"):
         compare(ours, {"schema": "something-else"})
 
