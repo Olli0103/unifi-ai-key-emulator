@@ -899,3 +899,37 @@ parameters, POST and HEAD do not collect; an expired session never receives an
 attachment. Failures return fixed error JSON, not a partial bundle. The complete
 serialized attachment is capped at 64 KiB and served with no-store, no-referrer,
 CSP and nosniff headers.
+
+## Saved AI Key processing limits
+
+`/worker-limits` previews and confirms six existing worker settings without
+editing JSON: queued jobs (1–1024), worker slots (1–32), concurrent **gated
+vision** requests (1–worker slots), general job deadline (1–900 seconds),
+caption deadline (1–600 seconds), and speech request deadline (1–900 seconds).
+`GET /api/admin/v1/worker-limits` returns these saved values and their revision;
+an omitted vision gate is `null`, not a zero-capacity or free-inference claim.
+Out-of-editor-range saved values are unavailable rather than silently clamped.
+
+This editor requires an explicit finite vision gate and cannot remove one.
+Speech and separate model paths are not bounded by that gate. More worker
+slots, a larger queue or longer deadlines do not prove faster inference and
+can increase load, waiting or charges. Job deadlines include queue waiting;
+captions also retain general/controller bounds. Speech has a separate request
+budget, not a promised completion time. A single worker does not reserve a
+separate slot for urgent summaries.
+
+Preview writes nothing. Confirmation requires separate, initially unchecked
+load/cost and save acknowledgements, a current session/revision, and one
+expiring single-use grant. Only changed allowlisted worker fields are saved;
+unchanged omitted defaults and other raw configuration are preserved. The
+existing configuration lock, private history, identity/credential/index
+checks, shared mutation limit and shielded/drained file operations apply.
+A lost write acknowledgement is uncertain: reload and reconcile, without
+automatic retry or reversal. Changing the choice again needs a fresh preview;
+there is no automatic Undo that can overwrite later settings.
+
+**Saved only:** there is no processor restart/drain, job cancellation/replay,
+provider/media/controller request, camera permission or caption-cost-policy
+change, budget refund, index operation or AI Port edit. Check Runtime
+configuration separately; these numbers are not the active worker's settings.
+The page is not a stalled-backend repair or a native performance/quality test.

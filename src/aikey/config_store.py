@@ -157,6 +157,64 @@ class ConfigurationStore:
         self.lock_path = self.path.with_name("." + self.path.name + ".lock")
         self.history_dir = self.path.parent / ".aikey-config-history"
 
+    def worker_limits_status(self):
+        from .protocol import _json_object
+        from .worker_limits import saved_limits
+        content, _ = self._read(self.path)
+        raw = _json_object(content)
+        return {"revision": _revision(content), "limits": saved_limits(raw.get("worker", {}))}
+
+    def _prepare_worker_limits(self, content, current, expected_revision, values):
+        from .protocol import _json_object
+        from .worker_limits import proposed_limits, saved_limits
+        revision = _revision(content)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(revision, expected_revision)):
+            raise RevisionConflict("Configuration changed since it was read")
+        try:
+            raw = _json_object(content)
+            previous = saved_limits(raw.get("worker", {}))
+            selected = proposed_limits(values)
+        except ValueError as exc:
+            raise UnsafeConfigurationChange("Invalid saved worker limits") from exc
+        candidate = deepcopy(raw)
+        for name, value in selected.items():
+            if value != previous[name]:
+                candidate.setdefault("worker", {})[name] = value
+        checked = self._validate(candidate)
+        self._assert_immutable(current, checked)
+        self._assert_search_profile(checked, current)
+        self._assert_credential_routes(current, checked)
+        changes = tuple(_changed(raw, candidate))
+        if not set(changes) <= {"worker." + name for name in selected}:
+            raise UnsafeConfigurationChange("Only processing limits may change")
+        encoded = self._encode(candidate)
+        if len(encoded) > _MAX_CONFIG_BYTES:
+            raise UnsafeConfigurationChange("Worker configuration is too large")
+        return ConfigurationPreview(revision, _revision(encoded) if changes else revision,
+            _public(checked), changes, bool(changes)), encoded
+
+    def preview_worker_limits(self, expected_revision, values):
+        content, current = self._read(self.path)
+        return self._prepare_worker_limits(content, current, expected_revision, values)[0]
+
+    def apply_worker_limits(self, expected_revision, values):
+        """Save reviewed bounds only; no process, journal, provider or replay action."""
+        with self._locked():
+            content, current = self._read(self.path)
+            preview, encoded = self._prepare_worker_limits(content, current, expected_revision, values)
+            if not preview.changed_fields:
+                return ConfigurationSnapshot(preview.current_revision, _public(current))
+            self._archive(content)
+            try:
+                self._replace(encoded)
+                persisted, checked = self._read(self.path)
+                if _revision(persisted) != preview.resulting_revision:
+                    raise ConfigurationStoreError("Worker limits read-back differs")
+            except (OSError, ValueError, ConfigurationStoreError) as exc:
+                raise ConfigurationStoreError("Worker limit replacement outcome is uncertain") from exc
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
+
     def snapshot(self) -> ConfigurationSnapshot:
         content, checked = self._read(self.path)
         return ConfigurationSnapshot(_revision(content), _public(checked))
