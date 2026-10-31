@@ -38,6 +38,8 @@ NONE = "none"
 _ID = re.compile(r"[A-Za-z0-9_.:-]{1,64}\Z")
 _TAG = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
 _RUN_KEYS = {"model", "provider", "profile", "code_revision"}
+# Same bounded character vocabulary as catalog model IDs, without importing its HTTP stack.
+_RUN_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+/-]{0,199}\Z")
 _CASE_KEYS = {"id", "camera_class", "conditions", "expected", "predicted", "confidence"}
 _BINS = 10
 _MAX_CASES = 100_000
@@ -53,6 +55,24 @@ def _text(value, field: str) -> str:
     return value
 
 
+def _run_identity(value):
+    """Preserve exact model spelling; other run fields keep the strict tag contract."""
+    if not isinstance(value, dict) or set(value) != _RUN_KEYS:
+        raise BenchmarkError("run needs exactly model, provider, profile and code_revision")
+    result = {}
+    for key in sorted(_RUN_KEYS):
+        item = value[key]
+        if key == "model":
+            if not isinstance(item, str) or not (
+                _ID.fullmatch(item) or _RUN_MODEL_ID.fullmatch(item)
+            ):
+                raise BenchmarkError("Invalid run.model identifier")
+            result[key] = item
+        else:
+            result[key] = _text(item, "run." + key)
+    return result
+
+
 def validate(document: object) -> dict:
     """Strictly check a case file; returns a normalized copy."""
     if not isinstance(document, dict) or set(document) != {"schema", "run", "cases"}:
@@ -61,10 +81,7 @@ def validate(document: object) -> dict:
     if not isinstance(schema, str) or schema not in {CASES_SCHEMA, BOUND_CASES_SCHEMA}:
         raise BenchmarkError("Unsupported case schema")
     input_bound = schema == BOUND_CASES_SCHEMA
-    run = document["run"]
-    if not isinstance(run, dict) or set(run) != _RUN_KEYS:
-        raise BenchmarkError("run needs exactly model, provider, profile and code_revision")
-    run = {key: _text(run[key], f"run.{key}") for key in sorted(_RUN_KEYS)}
+    run = _run_identity(document["run"])
     cases = document["cases"]
     if not isinstance(cases, list) or not 1 <= len(cases) <= _MAX_CASES:
         raise BenchmarkError("cases must be a nonempty list")
@@ -333,8 +350,7 @@ def _validate_comparison_report(value):
         or len(value["claims"]) > 512
     ):
         raise BenchmarkError("Both inputs must be valid input-bound benchmark reports")
-    for key, item in value["run"].items():
-        _text(item, "run." + key)
+    _run_identity(value["run"])
     _validate_counts(value["overall"])
     overall = value["overall"]
     if not overall["positives"] or not overall["negatives"]:
