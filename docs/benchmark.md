@@ -6,7 +6,40 @@ The [29 October public person adapter pilot](evidence/public-person-pilot-202610
 records twelve real local predictions: seven usable/correct and five errors. It
 is separate from owner-camera quality and the deployed fallback route.
 
-## Case file (`aikey-benchmark-cases/1`)
+## Input-bound comparison (`aikey-benchmark-cases/2`)
+
+Use schema `aikey-benchmark-cases/2` for new detection evaluations. It has the
+same fields and metrics as v1 below, plus **exactly one `input_sha256` per
+case**: the lowercase SHA-256 of the exact input used for that prediction.
+Hash the same evaluation unit (for example the exact encoded frame or a
+canonical multi-frame input manifest) across compared runs. The producer must
+retain the local source/manifest and annotation review. The scorer reads no
+media and cannot attest that supplied hashes or labels are truthful.
+
+The v2 corpus digest binds input hashes, case identity/class, sorted conditions
+and expected labels in a separate namespace. Predictions, confidence and run
+model/provider do not change corpus identity. Reusing labels and case names
+with different inputs does not produce matching evidence. Aggregate reports
+omit individual input hashes, case IDs and per-case labels.
+
+`score` emits `aikey-benchmark-report/2` with
+`corpus_binding=producer_declared_exact_input_sha256`. `compare` requires two
+valid v2 reports, equal input-bound digests and consistent labelled membership.
+It refuses invalid hashes, nonfinite/boolean/out-of-range or contradictory
+counts/ratios/calibration and damaged slices, instead of producing a misleading
+comparison or traceback. Undefined calibration/ratios remain null, not zero.
+A comparison is not a native result, independent corpus verification or a
+hardware-equivalence verdict.
+
+**Compatibility:** v1 case files still score with their original numerical
+metrics and label-only digest. Their v1 reports are explicitly unbound and are
+no longer accepted by `compare`, even when their digests match. Keep historical
+reports; do not relabel them as v2 or hash case names as a substitute for actual
+inputs. The trusted producer must add true source hashes and rescore. Existing
+multimodal case/report schemas already bind exact input hashes and are not
+migrated; the common CLI now also refuses duplicate-key/nonfinite JSON records.
+
+## Legacy case file (`aikey-benchmark-cases/1`)
 
 ```json
 {"schema": "aikey-benchmark-cases/1",
@@ -31,7 +64,7 @@ is separate from owner-camera quality and the deployed fallback route.
   separately; valid-only metrics must not be presented as all-scheduled accuracy.
 - The output is deterministic, so the same records give the same report in any case order.
 
-`python -m aikey.benchmark compare <report> <reference>` reports differences only when both reports scored the same corpus (equal `corpus_sha256`). Otherwise it refuses. This is how "no comparative claim without comparative evidence" is enforced.
+`python -m aikey.benchmark compare <report> <reference>` reports differences only for validated input-bound v2 reports on the same declared corpus, as described above. Matching old label-only digests are not sufficient. No scorer can establish truthful labels, physical source identity or a real hardware reference merely from an aggregate report.
 
 ## What still needs evaluation material
 
