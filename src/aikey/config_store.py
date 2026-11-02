@@ -650,6 +650,71 @@ class ConfigurationStore:
         return {"speech_to_text": {"camera_ids": [camera for camera in speech["camera_ids"]
                                                 if camera in retained]}}
 
+    def speech_camera_enrollment_status(self):
+        """Private control input; identifiers and key routes must not reach status JSON."""
+        from .protocol import _json_object
+        content, _ = self._read(self.path)
+        raw = _json_object(content)
+        speech = raw.get("speech_to_text")
+        return {"revision": _revision(content), "configured": isinstance(speech, dict),
+                "camera_ids": tuple(speech["camera_ids"]) if isinstance(speech, dict) else (),
+                "provider": speech["provider"] if isinstance(speech, dict) else None,
+                "model": speech["model"] if isinstance(speech, dict) else None,
+                "base_url": speech["base_url"] if isinstance(speech, dict) else None,
+                "protect_version": raw["controller"]["protect_version"]}
+
+    def _prepare_speech_camera_additions(self, content, current, expected_revision, additions):
+        from .protocol import _json_object
+        revision = _revision(content)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(revision, expected_revision)):
+            raise RevisionConflict("Configuration changed since it was read")
+        raw = _json_object(content)
+        speech = raw.get("speech_to_text")
+        existing = speech.get("camera_ids") if isinstance(speech, dict) else None
+        if (not isinstance(existing, list) or not existing
+                or any(not isinstance(c, str) or not re.fullmatch(r"[0-9a-f]{24}", c)
+                       for c in existing)
+                or not isinstance(additions, list) or not 1 <= len(additions) <= 32
+                or any(not isinstance(c, str) or not re.fullmatch(r"[0-9a-f]{24}", c)
+                       for c in additions)
+                or len(set(additions)) != len(additions)
+                or set(existing) & set(additions) or len(existing) + len(additions) > 32):
+            raise UnsafeConfigurationChange("Select new cameras for an existing explicit speech role")
+        candidate = deepcopy(raw)
+        candidate["speech_to_text"]["camera_ids"] = existing + sorted(additions)
+        checked = self._validate(candidate)
+        self._assert_immutable(current, checked)
+        self._assert_search_profile(checked, current)
+        self._assert_credential_routes(current, checked)
+        changes = tuple(_changed(raw, candidate))
+        if changes != ("speech_to_text.camera_ids",):
+            raise UnsafeConfigurationChange("Only the saved speech camera list may change")
+        encoded = self._encode(candidate)
+        if len(encoded) > _MAX_CONFIG_BYTES:
+            raise UnsafeConfigurationChange("Speech configuration is too large")
+        return ConfigurationPreview(revision, _revision(encoded), _public(checked), changes, True), encoded
+
+    def preview_speech_camera_additions(self, expected_revision, additions):
+        content, current = self._read(self.path)
+        return self._prepare_speech_camera_additions(content, current, expected_revision, additions)[0]
+
+    def add_speech_cameras(self, expected_revision, additions):
+        """Saved audio consent only; retain provider, key, limits and existing camera order."""
+        with self._locked():
+            content, current = self._read(self.path)
+            preview, encoded = self._prepare_speech_camera_additions(
+                content, current, expected_revision, additions)
+            self._archive(content)
+            try:
+                self._replace(encoded)
+                persisted, checked = self._read(self.path)
+                if _revision(persisted) != preview.resulting_revision:
+                    raise ConfigurationStoreError("Speech camera read-back differs")
+            except (OSError, ValueError, ConfigurationStoreError) as exc:
+                raise ConfigurationStoreError("Speech camera save outcome is uncertain") from exc
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
+
     def _speech_enrollment_candidate(self, current, selection, cameras):
         if current.get("speech_to_text") is not None:
             raise UnsafeConfigurationChange("Speech is already configured; use its existing controls")

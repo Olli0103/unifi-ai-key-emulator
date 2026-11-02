@@ -82,6 +82,9 @@ class AdminAPI:
         from .speech_enrollment import SpeechEnrollment
         self.speech_enrollment = SpeechEnrollment(self.site)
         self.speech_enrollment.register(app)
+        from .speech_camera_enrollment import SpeechCameraEnrollment
+        self.speech_camera_enrollment = SpeechCameraEnrollment(self.site)
+        self.speech_camera_enrollment.register(app)
         from .caption_policy_control import CaptionPolicyControl
         self.caption_policy_control = CaptionPolicyControl(self.site)
         self.caption_policy_control.register(app)

@@ -93,6 +93,7 @@ jobs:
           python tools/native_status_browser_check.py --browser-executable "${browser}" --output native-status-browser-results
           python tools/processing_browser_check.py --browser-executable "${browser}" --output processing-browser-results
           python tools/speech_enrollment_browser_check.py --browser-executable "${browser}" --output speech-enrollment-browser-results
+          python tools/speech_camera_browser_check.py --browser-executable "${browser}" --output speech-camera-browser-results
           python tools/caption_policy_browser_check.py --browser-executable "${browser}" --output caption-policy-browser-results
           python tools/caption_scope_browser_check.py --browser-executable "${browser}" --output caption-scope-browser-results
           python tools/caption_enrollment_browser_check.py --browser-executable "${browser}" --output caption-enrollment-browser-results
@@ -104,6 +105,8 @@ jobs:
         with:
           name: fictional-maintenance-browser
           path: |
+            speech-camera-browser-results/*.png
+            speech-camera-browser-results/result.json
             browser-results/*.png
             browser-results/result.json
             runtime-browser-results/*.png
