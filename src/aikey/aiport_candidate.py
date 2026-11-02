@@ -146,6 +146,8 @@ def _private_file(path: Path, max_size: int) -> bytes:
 
 
 def _private_ipv4(value: object) -> str:
+    if not isinstance(value, str):
+        raise CandidateError("Candidate requires an explicit IPv4 address")
     try:
         address = ipaddress.IPv4Address(value)
     except (ipaddress.AddressValueError, TypeError) as exc:
