@@ -968,7 +968,8 @@ class ControlSite:
                      "supports JSON-schema output. A refusal is not retried as free text. "
                      "This does not test model quality or change the separate fallback, "
                      "score gates, camera permissions or request allowance. "
-                     "A separate AI Port restart is required.</p>")
+                     "Requires an updated AI Port that supports this option; saving does not "
+                     "upgrade or restart it.</p>")
             form += ("<input type='hidden' name='request_timeout_present' value='yes'>"
                      "<label>Primary detection request timeout (seconds)"
                      "<input name='request_timeout_s' type='number' min='2' max='60' step='1' "
@@ -976,7 +977,8 @@ class ControlSite:
                      "<p>Default: 15 seconds. This bounds one primary API request, not the "
                      "whole event or queue. Longer waits occupy this AI Port longer. "
                      "OCR, crop and fallback timeouts stay unchanged. "
-                     "Saved only; a separate AI Port restart is required.</p>")
+                     "Requires an updated AI Port that supports this option; saving does not "
+                     "upgrade or restart it.</p>")
             form += (f"<label>Score threshold<input name='threshold' type='number' "
                      f"min='0.01' max='1' step='0.01' value='{_safe(current['threshold'])}'></label>"
                      "<div class='checks'><p>Detection classes</p>" + "".join(

@@ -820,9 +820,14 @@ class AiPortConfigurationStore:
         if settings.get("max_requests_per_hour") is not None:
             candidate["live_pool_detector"]["max_requests_per_hour"] = (
                 settings["max_requests_per_hour"])
-        if "structured_output" in settings:
+        # Do not materialize new optional defaults in legacy profiles merely
+        # because a newer Admin rendered them. Older Port binaries reject
+        # unknown fields; explicit nondefaults still need a compatible runtime.
+        if "structured_output" in settings and (
+                settings["structured_output"] or "structured_output" in kept):
             candidate["live_pool_detector"]["structured_output"] = settings["structured_output"]
-        if "request_timeout_s" in settings:
+        if "request_timeout_s" in settings and (
+                settings["request_timeout_s"] != 15 or "request_timeout_s" in kept):
             candidate["live_pool_detector"]["request_timeout_s"] = settings["request_timeout_s"]
         return candidate
 

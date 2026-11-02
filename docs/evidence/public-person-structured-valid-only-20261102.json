@@ -1,0 +1,86 @@
+{
+  "schema": "aikey-benchmark-report/2",
+  "run": {
+    "code_revision": "130f2aab1df5d53fee8b4b35bbb36fdcfcbb776e",
+    "model": "qwen3-vl-8b",
+    "profile": "public-primary-structured-30s",
+    "provider": "openai-compatible"
+  },
+  "corpus_binding": "producer_declared_exact_input_sha256",
+  "corpus_sha256": "d302b696078ea34be5a8f5e916225a3c57a0f5e5208d48701fe3d1f1e7cfa95c",
+  "overall": {
+    "cases": 11,
+    "labels": {
+      "person": {
+        "tp": 5,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      }
+    },
+    "false_alarms": 0,
+    "negatives": 6,
+    "false_alarm_rate": 0.0,
+    "missed": 0,
+    "misclassified": 0,
+    "positives": 5
+  },
+  "calibration": {
+    "answered": 5,
+    "ece": 0.034,
+    "brier": 0.00122,
+    "bins": [
+      {
+        "range": [
+          0.9,
+          1.0
+        ],
+        "count": 5,
+        "accuracy": 1.0,
+        "mean_confidence": 0.966
+      }
+    ]
+  },
+  "by_camera_class": {
+    "public_images": {
+      "cases": 11,
+      "labels": {
+        "person": {
+          "tp": 5,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "false_alarms": 0,
+      "negatives": 6,
+      "false_alarm_rate": 0.0,
+      "missed": 0,
+      "misclassified": 0,
+      "positives": 5
+    }
+  },
+  "by_condition": {
+    "public_coco": {
+      "cases": 11,
+      "labels": {
+        "person": {
+          "tp": 5,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "false_alarms": 0,
+      "negatives": 6,
+      "false_alarm_rate": 0.0,
+      "missed": 0,
+      "misclassified": 0,
+      "positives": 5
+    }
+  },
+  "claims": "Producer-declared input hashes and labels, not independently verified media, native acceptance or hardware-quality evidence."
+}
