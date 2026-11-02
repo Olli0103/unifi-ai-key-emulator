@@ -8,6 +8,8 @@ Later [29 October NAS observations](evidence/nas-source-upgrade-20261029.md)
 record real Docker/Compose, PostgreSQL and selected native paths on Protect
 7.3.74. The [follow-up through #165](evidence/key-port-batch165-20261030.md)
 records Key/four-Port rolling upgrades with existing identity/pairing retention.
+The later [Admin-only #243 observation](evidence/admin243-native-20261102.md)
+records installed-byte and read-only HTTP checks, with mixed-version limits.
 Neither establishes every recipe command, a fresh independent install, all
 search/recognition quality, host/controller disaster recovery or a sustained pilot.
 

@@ -1,0 +1,23 @@
+{
+  "old_reader_ui_camera_control_count": 27,
+  "scope_panels": 12,
+  "saved_only_warning": true,
+  "restart_warning": true,
+  "inventory_rows": 11,
+  "saved_bindings": 9,
+  "processing_enabled_by_read": false,
+  "runtime_profiles": 5,
+  "active_streams": 9,
+  "runtime_camera_rows": 9,
+  "all_runtime_tls_verified": true,
+  "all_five_saved_revisions_match_startup": true,
+  "running_caption_policy_contract": {
+    "mode": "unmetered",
+    "scope": "continuous_captions_not_speech_port_or_all_paid_calls",
+    "budget": null
+  },
+  "redacted_caption_policy_mode": "unmetered",
+  "settings_or_model_or_maintenance_applies": 0,
+  "default_ca_and_sni_verified": true,
+  "observation": "post_activation_live_reader"
+}
