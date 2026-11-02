@@ -5,6 +5,10 @@
 The [29 October public person adapter pilot](evidence/public-person-pilot-20261029.md)
 records twelve real local predictions: seven usable/correct and five errors. It
 is separate from owner-camera quality and the deployed fallback route.
+The [2 November structured30-second matrix](evidence/public-person-structured-30s-20261102.md)
+completed all twelve cases: eleven usable correct and one normalization error.
+Its valid-only report has eleven cases; it is not a general quality or hardware
+acceptance, and earlier partial runs remain unchanged.
 
 ## Input-bound comparison (`aikey-benchmark-cases/2`)
 
