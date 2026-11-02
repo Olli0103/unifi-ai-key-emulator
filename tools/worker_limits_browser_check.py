@@ -33,6 +33,7 @@ async def scenario(output, name, viewport, executable):
         site = ControlSite(
             path,
             None,
+            audit_log=root / "admin-audit.jsonl",
             signing_key=b"c" * 32,
             password_record=AdminSecurity.create_password_record(password),
             port=8765,
@@ -133,6 +134,10 @@ async def scenario(output, name, viewport, executable):
                     assert changed == before
                     await page.screenshot(path=str(output / f"{name}-saved.png"), full_page=True)
                     assert not errors and not unowned
+                    assert site.audit.failures == 0
+                    assert [(r["action"], r["result"]) for r in site.audit.recent()
+                            if r["action"] == "worker_limits"] == [
+                                ("worker_limits", "saved"), ("worker_limits", "previewed")]
                     assert await page.evaluate("localStorage.length + sessionStorage.length") == 0
                     return {
                         "viewport": viewport,
@@ -142,6 +147,7 @@ async def scenario(output, name, viewport, executable):
                         "native_required_consent_refusal": True,
                         "only_saved_queue_changed": True,
                         "preview_no_write": True,
+                        "private_audit_enabled_and_recorded": True,
                         "foreign_requests": 0,
                         "real_model_controller_processor_or_media_actions": 0,
                         "visual_review": "not_performed_by_runner",
