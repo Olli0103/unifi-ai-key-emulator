@@ -71,6 +71,7 @@ async def scenario(output, name, viewport, executable):
         site = ControlSite(
             path,
             None,
+            audit_log=root / "admin-audit.jsonl",
             signing_key=b"c" * 32,
             password_record=AdminSecurity.create_password_record(password),
             port=8765,
@@ -244,11 +245,16 @@ async def scenario(output, name, viewport, executable):
                         "/caption-camera-enrollment/apply",
                     ]
                     assert not errors and not unowned
+                    assert site.audit.failures == 0
+                    assert [(r["action"], r["result"]) for r in site.audit.recent()
+                            if r["action"] == "caption_enrollment"] == [
+                                ("caption_enrollment", "saved"), ("caption_enrollment", "previewed")]
                     result = {
                         "viewport": viewport,
                         "browser_version": context.browser.version,
                         "eligible_named_addition_only": True,
                         "preview_no_write": True,
+                        "private_audit_enabled_and_recorded": True,
                         "keyboard_confirmed_addition": True,
                         "processing_and_bypass_separately_confirmed": True,
                         "only_saved_caption_scope_changed": True,
