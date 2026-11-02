@@ -1,5 +1,41 @@
 # Owner acceptance gates for AI Key and AI Port parity (30 Sep 2026)
 
+**Historical notebook, not a current deployment or rollback runbook.** The
+September/October image names, state filenames, mode assumptions and commands
+below record earlier experiments. Revalidate the actual source/image, live
+profile, current backup contract and intended native test before any new action.
+An old backup filename or a previously enabled feature is not fresh authority to
+restore state, change a policy or repeat a completed experiment.
+
+## Current evidence index — 2 November 2026
+
+These are dated receipts, not continuous health monitoring or a general parity
+PASS. Later source work does not automatically activate on installed devices.
+
+| Boundary | Current recorded evidence | What it does not prove |
+|---|---|---|
+| Existing Admin | [#243 runtime readback](../evidence/admin243-native-20261102.md), retained authority/profiles and synthetic candidate checks | New permission/configuration apply, owner GUI, whole-system recovery |
+| Four existing Ports | [Serial #243 image update](../evidence/ports243-native-20261102.md), original identities/nine pairings retained, decoded streams resumed | New ONVIF device, controlled native ground truth, host/power-loss recovery |
+| Local model pilot | [Twelve public person/none cases](../evidence/public-person-structured-30s-20261102.md): eleven usable/correct, one whole-case normalization error | Held-out/general/private-camera quality, a calibration PASS or zero cost |
+| Fresh source setup | [Passive Port browser preparation](../first-run-aiport.md) with authentication and private new files | Deployment, adoption, pairing or a fresh independent native installation |
+| Documentation checks | [All package console entries](../evidence/documented-console-entries-20261102.md) and [offline local files/anchors](../evidence/offline-doc-links-ci-20261102.md) | Execution of arbitrary shell/Docker recipes or live external-link availability |
+
+Keep actual owner-ground-truth, independent-installation and native-controller
+outcomes separate from source/fixture work. A controlled native comparison needs
+an actual agreed action and event time; a simulated event or a successful model
+response cannot supply that fact. No ONVIF control/PTZ/recording contract is
+inferred from the availability of a generic ONVIF client or a planning slot.
+Reverification, recognition, alarm actions, media/model permissions, index
+cutovers and additional identities retain their own exact prerequisites.
+
+Public artifact/tag/signing decisions still use the separate
+[release-readiness review](../legal/release-readiness.md); old feature experiments
+do not clear firmware/model redistribution or maintainer decisions. The broader
+product/native/quality issues remain OPEN. Neither this index nor the old
+notebook below is a new instruction to rerun a completed probe or restore state.
+
+## Historical notebook — original text retained
+
 These gates are what still stands between the current code and native parity. None of them can be closed by the agent alone. Each plan is bounded and reversible, and records only states, counts, types and times: never caption text, transcripts, images, faces, names or credentials.
 
 **Standing constraints:**
