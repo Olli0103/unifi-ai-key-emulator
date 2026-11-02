@@ -1,0 +1,14 @@
+{
+  "actual_running_modules_verified": 131,
+  "license_verified": true,
+  "source": "bb477f3108c112e8eddc1a1babffe52c99805daa",
+  "image": "sha256:0fda903bf7e707513c3360a5f98711f9f569950148f28beffdd1076204260f04",
+  "admin_healthy_no_automatic_restart": true,
+  "seven_other_processes_including_gpu_unchanged": true,
+  "five_profile_tls_sets_unchanged": true,
+  "authority_tls_backup_bytes_verified": true,
+  "backup_members": 6,
+  "only_compose_image_and_certificate_expected_image_source_changed": true,
+  "all_prior_timer_states_preserved": true,
+  "new_camera_provider_policy_applies": 0
+}

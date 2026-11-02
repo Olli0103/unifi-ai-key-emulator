@@ -1,0 +1,11 @@
+{
+  "schema": "admin243-native-evidence/1",
+  "source": "bb477f3108c112e8eddc1a1babffe52c99805daa",
+  "files": {
+    "final-independent-readback.json": "2489aca2d5a8221d81d5a0488bc051c6cf9b72b2ccb6bdda8d05e3eb12db8233",
+    "post-live-http-proof.json": "603ceee3523886678bbe01de66964b0c1dc26ffc74984b24d56d0c39cde1e87f"
+  },
+  "same_agent_separate_readback": true,
+  "human_review": false,
+  "new_camera_provider_policy_applies": 0
+}
