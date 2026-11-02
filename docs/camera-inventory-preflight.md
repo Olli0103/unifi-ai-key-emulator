@@ -2,7 +2,23 @@
 
 `local-aikey inventory` reads the local Protect integration API and writes a private report. It does not alter camera settings, enable inference, grant processing scope or send footage to a provider. This is the first, read-only part of [issue #9](https://github.com/Olli0103/unifi-ai-key-emulator/issues/9), not completion of automatic all-camera operation.
 
-The client uses exactly two GET routes from the [official Protect 7.3.60 OpenAPI contract](https://developer.ui.com/protect/v7.3.60/openapi.json): `/v1/meta/info` and `/v1/cameras`, under the local `/proxy/protect/integration` prefix. It requires the version to be exactly 7.3.60. A different version, authentication failure, redirect, invalid JSON, duplicate ID, unexpected camera state or expired/mismatched certificate stops the read. It does not reuse an old report as fresh processing authority.
+The client uses exactly two GET routes, `/v1/meta/info` and `/v1/cameras`, under
+the local `/proxy/protect/integration` prefix. The [actual reader](../src/aikey/camera_inventory.py)
+currently accepts the exact metadata versions **7.3.60, 7.3.68, 7.3.70 and 7.3.74**.
+Other values, including unreviewed patch releases and prerelease suffixes, remain
+blocked. This is inventory-schema support, not blanket feature/native parity or
+permission to process cameras. Authentication failure, redirect, invalid JSON,
+duplicate ID, unexpected camera state or expired/mismatched certificate also
+stops the read. It does not reuse an old report as fresh processing authority.
+
+The original 7.3.60 citation was
+`https://developer.ui.com/protect/v7.3.60/openapi.json`. On 2 November 2026 it
+returned HTTP 404 to both a HEAD request and a bounded GET, so it is retained here
+as a **historical address**, not a working schema-download link. The
+[current official camera-detail reference for 7.3.74](https://developer.ui.com/protect/v7.3.74/get-v1camerasid)
+is a documentation entry point, not a replacement proof of the original 7.3.60
+schema. The [version acceptance/refusal tests](../tests/test_camera_inventory.py)
+exercise the reader's current fixed version boundary with synthetic responses.
 
 Protect's web certificate may be a self-signed leaf that is not a CA certificate. The command requires both a private trust record with the approved SHA-256 leaf fingerprint and a private copy of that leaf certificate. It checks that they match and checks the certificate's validity dates. For each TLS connection it verifies the peer leaf against the pin before aiohttp can send the `X-API-Key` header. The host must be an explicit private IPv4 address; redirects and environment proxies are disabled. The key and trust files must be regular files readable only by the owner.
 
