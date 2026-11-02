@@ -1,5 +1,7 @@
-"""Every documented command parses and every relative doc link resolves (#25).
+"""Project CLI examples parse and local doc file targets exist (#25).
 
+Installed console entries come from pyproject, including their declared callable.
+This does not execute shell/Docker/tool scripts or check anchors/external URLs.
 Commands are parsed by the real argparse parsers and stopped right after
 parsing, so nothing is executed, no file is written and no network is used.
 """
@@ -9,6 +11,7 @@ import importlib
 from pathlib import Path
 import re
 import shlex
+import tomllib
 
 import pytest
 
@@ -17,8 +20,9 @@ DOCS = sorted([*ROOT.glob("*.md"), *(ROOT / "docs").rglob("*.md")])
 _LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)\)")
 _BLOCK = re.compile(r"```[a-z]*\n(.*?)```", re.S)
 _INLINE = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
-_ENTRY = {"local-aikey": "aikey.cli", "local-aikey-control": "aikey.control_site",
-          "local-aikey-demo": "aikey.control_demo"}
+# Keep discovery aligned with the actual installed console scripts, not a hand list.
+_ENTRY = {name: target.split(":", 1) for name, target in
+          tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["scripts"].items()}
 
 
 class _Parsed(Exception):
@@ -61,10 +65,20 @@ def _commands():
                 continue
             program = Path(words[0]).name
             if program in _ENTRY:
-                yield doc, kind, line, _ENTRY[program], words[1:]
+                yield doc, kind, line, *_ENTRY[program], words[1:]
             elif (re.fullmatch(r"python3?(\.\d+)?", program) and words[1:2] == ["-m"]
                   and len(words) > 2 and words[2].startswith("aikey.")):
-                yield doc, kind, line, words[2], words[3:]
+                yield doc, kind, line, words[2], "main", words[3:]
+
+
+def _typed_examples(argv):
+    # These documented numeric placeholders are not real host settings. Substitute
+    # only their exact option/value pair for argparse; unknown values still fail.
+    examples = {("--uid", "NAS_NONROOT_UID"): "1000",
+                ("--gid", "NAS_NONROOT_GID"): "1000",
+                ("--slot", "SLOT_NUMBER"): "1"}
+    return [examples.get((argv[i - 1] if i else "", value), value)
+            for i, value in enumerate(argv)]
 
 
 LINKS = list(_links())
@@ -83,10 +97,10 @@ def test_relative_doc_links_resolve(doc, target):
     assert (doc.parent / path).exists(), f"{doc.relative_to(ROOT)} links to missing {target}"
 
 
-@pytest.mark.parametrize("doc,kind,line,module,argv", COMMANDS,
+@pytest.mark.parametrize("doc,kind,line,module,function,argv", COMMANDS,
                          ids=[f"{d.relative_to(ROOT)}:{k}:{m}:{' '.join(a[:1])}"
-                              for d, k, _, m, a in COMMANDS])
-def test_documented_commands_parse(monkeypatch, doc, kind, line, module, argv):
+                              for d, k, _, m, _f, a in COMMANDS])
+def test_documented_commands_parse(monkeypatch, doc, kind, line, module, function, argv):
     original = argparse.ArgumentParser.parse_args
 
     def parse_then_stop(self, args=None, namespace=None):
@@ -97,14 +111,21 @@ def test_documented_commands_parse(monkeypatch, doc, kind, line, module, argv):
         raise _Refused(message)
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args", parse_then_stop)
     monkeypatch.setattr(argparse.ArgumentParser, "error", refuse)
-    main = getattr(importlib.import_module(module), "main")
+    main = getattr(importlib.import_module(module), function)
     try:
-        main(argv)
+        main(_typed_examples(argv))
     except _Parsed:
         return
     except _Refused as exc:
-        # A prose reference need not list required arguments; anything else is wrong.
-        if kind == "inline" and str(exc).startswith("the following arguments are required"):
+        # Bare command/subcommand references can omit required arguments. A flag-
+        # bearing snippet must parse fully: missing required arguments otherwise
+        # hide a misspelled option because argparse reports required inputs first.
+        if (kind == "inline" and not any(a.startswith("-") for a in argv)
+                and str(exc).startswith("the following arguments are required")):
+            return
+        if (kind == "inline" and not argv
+                and str(exc).startswith("one of the arguments ")
+                and str(exc).endswith(" is required")):
             return
         pytest.fail(f"{doc.relative_to(ROOT)}: `{line}` does not parse: {exc}")
     pytest.fail(f"{doc.relative_to(ROOT)}: `{line}` never reached argument parsing")
@@ -128,3 +149,45 @@ def test_the_checker_catches_a_missing_link(tmp_path):
     doc.write_text("See [the guide](missing-guide.md) and [site](https://example.org).")
     targets = [t for t in _LINK.findall(doc.read_text()) if not t.startswith("https:")]
     assert targets == ["missing-guide.md"] and not (doc.parent / targets[0]).exists()
+
+
+def test_every_installed_console_entry_is_discovered_in_documentation(tmp_path, monkeypatch):
+    declared = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["scripts"]
+    doc = tmp_path / "commands.md"
+    doc.write_text("\n".join("`" + name + " --fictional-invalid-option`" for name in declared))
+    monkeypatch.setitem(globals(), "DOCS", [doc])
+    found = list(_commands())
+    assert {line.split()[0] for _doc, _kind, line, *_ in found} == set(declared)
+
+
+def test_newly_covered_port_example_reaches_real_parser(monkeypatch, tmp_path):
+    doc = tmp_path / "commands.md"
+    doc.write_text("```sh\nlocal-aiport-plan --inventory fictional-not-read.json "
+                   "--fictional-invalid-option\n```\n")
+    monkeypatch.setitem(globals(), "DOCS", [doc])
+    found = list(_commands())
+    assert len(found) == 1
+    assert found[0][3] == "aikey.aiport_deployment"
+    def refuse(self, message):
+        raise _Refused(message)
+    monkeypatch.setattr(argparse.ArgumentParser, "error", refuse)
+    with pytest.raises(_Refused, match="unrecognized arguments: --fictional-invalid-option"):
+        importlib.import_module(found[0][3]).main(found[0][-1])
+
+
+def test_typed_examples_are_exact_option_bound_operands_only():
+    assert _typed_examples(["--uid", "NAS_NONROOT_UID", "--gid", "NAS_NONROOT_GID",
+                            "--slot", "SLOT_NUMBER"]) == ["--uid", "1000", "--gid", "1000", "--slot", "1"]
+    for value in (["NAS_NONROOT_UID"], ["--slot", "NAS_NONROOT_UID"],
+                  ["--uid", "NOT_A_NUMBER"], ["--fictional-flag", "SLOT_NUMBER"]):
+        assert _typed_examples(value) == value
+
+
+def test_missing_required_args_do_not_hide_an_unknown_inline_flag(monkeypatch, tmp_path):
+    monkeypatch.setitem(globals(), "ROOT", tmp_path)
+    doc = tmp_path / "reference.md"
+    doc.write_text("`local-aiport-provision --fictional-invalid-option`")
+    monkeypatch.setitem(globals(), "DOCS", [doc])
+    item, = _commands()
+    with pytest.raises(pytest.fail.Exception, match="does not parse"):
+        test_documented_commands_parse(monkeypatch, *item)

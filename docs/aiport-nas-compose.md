@@ -163,11 +163,11 @@ A second run after applying reports no local action; only pending Protect or NAS
 
 **NAS Compose additions.** With a `compose` section, a new NAS slot gets a service copied from the template service. Only four fields change: the service name, the bind source (`<state_parent>/slot-N`), `ipv4_address`, and `mac_address`. The MAC is derived from the slot label and address, so a dry run and its apply agree. The exact block, service, address, MAC and state path are shown on the rollout page before apply, and the Compose file's hash is part of the plan revision. Apply refuses if the file changed since the dry run. It verifies that every existing service and the networks are unchanged, and appending the same service again is a no-op. The new slot is registered as `pending` with a deadline.
 
-`local-aiport-rollout --rollout … --verify` settles pending slots:
+The `--verify` mode of `local-aiport-rollout` settles pending slots:
 - if the slot's pinned `/healthz` answers, it is kept;
 - if it is still silent after the deadline, exactly its service block is removed from the Compose copy again, the slot is unregistered, and its identity is kept for a later reviewed retry.
 
-`local-aiport-rollout --rollout … --rollback` undoes local rollout changes:
+The `--rollback` mode of `local-aiport-rollout` undoes local rollout changes:
 - every `config.json.before-rollout` is restored byte for byte, then removed, so a later apply takes a fresh backup;
 - every still-`pending` new slot has exactly its Compose block removed and is unregistered (its identity directory stays);
 - a slot that has answered health is never removed.

@@ -1,0 +1,17 @@
+{
+  "status": "passed",
+  "observed_at": "2026-11-02T14:17:27.633Z",
+  "controller_version": "7.3.74",
+  "identity_count": 5,
+  "pairing_count": 9,
+  "all_adopted_connected": true,
+  "identity_hash_matches_1026_checkpoint": true,
+  "pairing_hash_matches_1026_checkpoint": true,
+  "checkpoint_observed_at": "2026-10-30T10:26:07.391Z",
+  "oldest_missing_preupgrade_baseline_recovered": false,
+  "new_own_tab": true,
+  "original_historical_reference_replaced": false,
+  "explicit_get_requests": 1,
+  "settings_or_model_requests": 0,
+  "raw_identifiers_exported": false
+}
