@@ -120,6 +120,39 @@ FALLBACK_REASONS = ("http_429", "http_5xx", "request_failed", "dns_unavailable",
 _FALLBACK_BACKOFF_S = (30, 300)
 
 
+def build_detection_request(provider, frame: bytes, *, plates=False, structured_output=False):
+    """Opt-in primary fraction schema; never normalize a different coordinate contract.
+
+    This is a capability choice, not a successful modality or quality probe.
+    Legacy/free-text requests and every remote provider retain their old shape.
+    A server refusal is not retried without the schema.
+    """
+    if (type(structured_output) is not bool or type(plates) is not bool
+            or structured_output and provider.provider not in {"ollama", "openai-compatible"}):
+        raise ApiDetectionError("invalid_primary_detection_schema_policy")
+    url, headers, payload = provider.build_request([frame], _PROMPT + _PLATE_PROMPT if plates else _PROMPT)
+    if structured_output:
+        properties = {
+            "kind": {"type": "string", "enum": sorted(_LABELS)},
+            "label": {"type": "string", "enum": sorted(set().union(*_LABELS.values()))},
+            "score": {"type": "number", "minimum": 0, "maximum": 1},
+            "box": {"type": "array", "minItems": 4, "maxItems": 4,
+                    "items": {"type": "number", "minimum": 0, "maximum": 1}},
+        }
+        if plates:
+            properties["plate"] = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+        schema = {"type": "object", "required": ["detections"], "additionalProperties": False,
+                  "properties": {"detections": {"type": "array", "maxItems": 20, "items": {
+                      "type": "object", "required": ["kind", "label", "score", "box"],
+                      "additionalProperties": False, "properties": properties}}}}
+        if provider.provider == "ollama":
+            payload["format"] = schema
+        else:
+            payload["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": "object_detections", "schema": schema}}
+    return url, headers, payload
+
+
 def _detection_json(text: str | bytes) -> object:
     """Reject ambiguity before field selection or coordinate normalization."""
     def unique_fields(pairs):
@@ -680,6 +713,7 @@ class ApiObjectDetector:
                  full_frame: Callable[[str, bytes], bytes | None] | None = None,
                  score_server: str | None = None,
                  score_transport: Callable[[str, bytes], dict] | None = None,
+                 structured_output: bool = False,
                  clock: Callable[[], float] = time.time):
         if (type(threshold) not in (float, int) or not 0 < threshold <= 1
                 or any(type(value) not in (float, int) or not 0 < value <= 1
@@ -688,6 +722,11 @@ class ApiObjectDetector:
                 and (type(max_requests_per_hour) is not int
                      or not 2 <= max_requests_per_hour <= 3600)):
             raise ApiDetectionError("invalid_api_detection_policy")
+        if (type(structured_output) is not bool or structured_output and (
+                not isinstance(provider_config, dict)
+                or provider_config.get("provider") not in {"ollama", "openai-compatible"})):
+            raise ApiDetectionError("invalid_primary_detection_schema_policy")
+        self.structured_output = structured_output
         if ocr_provider_config is not None and not plate_cameras:
             raise ApiDetectionError("api_ocr_requires_plate_scope")
         self.provider = self._role_provider(provider_config, "detection")
@@ -894,8 +933,9 @@ class ApiObjectDetector:
             return ()
         try:
             plates = camera_mac in self.plate_cameras
-            url, headers, payload = self.provider.build_request(
-                [frame], _PROMPT + _PLATE_PROMPT if plates and not self._separate_ocr else _PROMPT)
+            url, headers, payload = build_detection_request(
+                self.provider, frame, plates=plates and not self._separate_ocr,
+                structured_output=self.structured_output)
             if self.provider.provider == "openai" and self.provider.model == "gpt-6-luna":
                 payload["reasoning"] = {"effort": "none"}
             reply = None

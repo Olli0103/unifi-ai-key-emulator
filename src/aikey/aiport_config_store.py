@@ -25,8 +25,8 @@ from .role_changes import RoleModelPreview
 _REVISION = re.compile(r"[0-9a-f]{64}\Z")
 _FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
                      "allow_insecure_http", "max_output_tokens", "api_key_file",
-                     "threshold", "smart_types", "max_requests_per_hour"})
-_OPTIONAL_FIELDS = frozenset({"api_key_file", "max_requests_per_hour"})
+                     "threshold", "smart_types", "max_requests_per_hour", "structured_output"})
+_OPTIONAL_FIELDS = frozenset({"api_key_file", "max_requests_per_hour", "structured_output"})
 _PROVIDER_FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
                               "allow_insecure_http", "max_output_tokens", "api_key_file"})
 _RECOGNITION_SCOPES = {"face": "live_face", "sound": "live_sound", "speech": "live_speech_cameras"}
@@ -62,6 +62,7 @@ class AiPortSettings:
     threshold: float | None
     smart_types: tuple[str, ...]
     max_requests_per_hour: int | None
+    structured_output: bool = False
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,7 @@ class AiPortConfigurationStore:
             provider.get("allow_insecure_http") is True,
             provider.get("max_output_tokens"), detector.get("threshold"),
             tuple(detector.get("smart_types", ())), detector.get("max_requests_per_hour"),
+            detector.get("structured_output", False),
         )
 
     def snapshot(self) -> AiPortSettings:
@@ -783,6 +785,8 @@ class AiPortConfigurationStore:
         if ("paired_streams" not in current or not isinstance(settings, dict)
                 or not _FIELDS - _OPTIONAL_FIELDS <= set(settings) <= _FIELDS):
             raise AiPortConfigurationError("aiport_provider_settings_incomplete")
+        if "structured_output" in settings and type(settings["structured_output"]) is not bool:
+            raise AiPortConfigurationError("aiport_schema_policy_invalid")
         if "api_key_file" in settings:
             path = settings["api_key_file"]
             if (not isinstance(path, str) or not Path(path).is_absolute()
@@ -802,7 +806,7 @@ class AiPortConfigurationStore:
         # is dropped: object events have no per-camera ceiling.
         kept = {key: value for key, value in current.get("live_pool_detector", {}).items()
                 if key in {"fallback", "plate_cameras", "ocr_provider_config", "held_package_followup",
-                           "camera_thresholds", "score_server"}}
+                           "camera_thresholds", "score_server", "structured_output"}}
         candidate["live_pool_detector"] = {
             "inference_backend": "vision_api", "provider_config": provider,
             "threshold": settings["threshold"],
@@ -811,6 +815,8 @@ class AiPortConfigurationStore:
         if settings.get("max_requests_per_hour") is not None:
             candidate["live_pool_detector"]["max_requests_per_hour"] = (
                 settings["max_requests_per_hour"])
+        if "structured_output" in settings:
+            candidate["live_pool_detector"]["structured_output"] = settings["structured_output"]
         return candidate
 
     def _validate(self, candidate: dict) -> None:
