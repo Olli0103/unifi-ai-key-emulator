@@ -1104,6 +1104,7 @@ class ControlSite:
         configured = bool(current.get("api_key_file", {}).get("configured"))
         return ("<section><h2>Speech provider</h2>"
                 "<p><a href='/speech-permissions'>Remove saved audio permissions</a></p>"
+                "<p><a href='/speech-camera-enrollment'>Add speech cameras</a></p>"
                 "<p>Only already permitted cameras are affected. "
                 "Their audio is sent to the API base URL below. Choosing OpenAI sends audio "
                 "to OpenAI and may incur charges; it does not use the caption budget. "

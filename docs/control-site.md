@@ -100,7 +100,9 @@ For an already configured speech role, **Remove saved audio permissions** opens
 a separate signed-in page. Uncheck cameras to remove their saved permission;
 unchecking all removes the saved speech role. This operation cannot add cameras,
 change the provider/model/clip policy or alter another feature's permissions.
-Existing camera names are shown when inventory is available. If names cannot be
+The separate [Add speech cameras](#add-saved-speech-cameras) flow can extend an
+existing role with renewed, named audio consent. This removal operation remains
+remove-only. Existing camera names are shown when inventory is available. If names cannot be
 loaded, disabling all saved speech remains available; individual selection is
 not presented with ambiguous camera labels.
 
@@ -121,6 +123,36 @@ scope. An uncertain save is reported as uncertain: reload before retrying.
 
 These are source/HTTP integration results, not native live revocation, browser
 visual/mobile acceptance or a deployed permission change. See [checks and limits](evidence/speech-permission-restrictions-20261029.md).
+
+## Add saved speech cameras
+
+For an existing explicit speech-to-text role, **Add speech cameras** opens
+`/speech-camera-enrollment`. Select additional connected cameras with fresh,
+unambiguous names and reported native speech-event support. No camera or
+acknowledgement is selected by default. The saved Protect version must match
+the inventory; existing cameras are excluded and the resulting list is bounded
+to 32. Metadata support is not native delivery or transcription-quality proof.
+
+Review the named microphones and existing speech provider, model and destination.
+Saving requires separate audio-processing consent, acknowledgement of possible
+speech charges outside the caption budget, and confirmation. The one-use preview
+is session-bound and expires after ten minutes; changed configuration, identity,
+name, capability, state or inventory invalidates the selected candidates. The
+existing provider, language, credential reference and clip/export limits remain
+unchanged, as do other feature permissions and original camera order.
+
+This edits **saved settings only**. It does not enable microphones, alter Protect,
+fetch recordings, call a model, create or rotate keys, clear budget usage, cancel
+work or restart a service. A separate AI Key restart is required. Missing speech
+roles use initial setup, not this additions flow. The read-only authenticated
+`/api/admin/v1/speech-camera-enrollment` endpoint returns revision, configured state
+and counts only, without camera identifiers, names or provider/key routes.
+
+An acknowledgement failure after a possible commit is uncertain: read saved
+permissions before trying again. There is no automatic retry, reversal or key
+cleanup. Configuration changes share the existing writer lock and revision
+checks; prior provider Undo cannot silently overwrite changed audio scope, while
+a later provider-only Undo preserves it. [Qualification and limits](evidence/speech-camera-additions-20261102.md).
 
 ## Separate AI Port plate OCR provider
 
