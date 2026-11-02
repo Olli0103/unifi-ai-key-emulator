@@ -1,0 +1,127 @@
+{
+  "schema": "public-doc-link-observation/1",
+  "source_audited": "88eae79f1c18114b39f6431b950ea78dcd3a4569",
+  "tool": {
+    "project": "https://github.com/lycheeverse/lychee",
+    "tag": "lychee-v0.24.2",
+    "published_at": "2026-05-01T15:41:38Z",
+    "license": "Apache-2.0",
+    "archive_sha256": "c9d3740ea2d891854d37116c9fba840f37b6e7c89d330e7db84ac333631c4977",
+    "binary_sha256": "af111b5890746a863e60b4929720ab383337843ed15b701515871aa6e8817c2b",
+    "architecture": "arm64",
+    "disposable_external_only": true,
+    "checksum_same_release_provider_not_independent_authentication": true
+  },
+  "offline": {
+    "total": 551,
+    "unique": 279,
+    "successful": 302,
+    "unknown": 0,
+    "unsupported": 0,
+    "timeouts": 0,
+    "errors": 0,
+    "excludes": 249,
+    "cached": 0,
+    "input_files": 144,
+    "returncode": 0,
+    "seconds": 0.026,
+    "source": "88eae79f1c18114b39f6431b950ea78dcd3a4569",
+    "offline": true
+  },
+  "external_head": {
+    "total": 98,
+    "unique": 98,
+    "successful": 92,
+    "unknown": 0,
+    "unsupported": 0,
+    "timeouts": 1,
+    "redirects": 0,
+    "errors": 5,
+    "excludes": 0,
+    "cached": 0,
+    "returncode": 2,
+    "seconds": 16.672,
+    "complete": true,
+    "firmware_and_nonhttps_excluded": 6,
+    "method": "HEAD",
+    "redirect_following": false
+  },
+  "non_successes": [
+    {
+      "url": "https://developer.ui.com/protect/v7.3.60/openapi.json",
+      "method": "HEAD",
+      "status": 404,
+      "observation": "Rejected status code: 404 Not Found"
+    },
+    {
+      "url": "https://techspecs.ui.com/unifi/cameras-nvrs/ai-key",
+      "method": "HEAD",
+      "status": 307,
+      "observation": "Rejected status code: 307 Temporary Redirect"
+    },
+    {
+      "url": "https://techspecs.ui.com/unifi/cameras-nvrs/uvc-g4-doorbell-pro?subcategory=all-cameras-nvrs",
+      "method": "HEAD",
+      "status": 307,
+      "observation": "Rejected status code: 307 Temporary Redirect"
+    },
+    {
+      "url": "https://techspecs.ui.com/unifi/cameras-nvrs/uvc-g5-flex?subcategory=all-cameras-nvrs",
+      "method": "HEAD",
+      "status": 307,
+      "observation": "Rejected status code: 307 Temporary Redirect"
+    },
+    {
+      "url": "https://github.com/Olli0103/unifi-ai-key-emulator/security/advisories/new",
+      "method": "HEAD",
+      "status": 302,
+      "observation": "Rejected status code: 302 Found"
+    },
+    {
+      "url": "https://ffmpeg.org/legal.html",
+      "method": "HEAD",
+      "status": null,
+      "observation": "8-second timeout; cause/availability unknown"
+    }
+  ],
+  "narrow_public_boundary_reads": [
+    {
+      "url": "https://developer.ui.com/protect/v7.3.60/openapi.json",
+      "method": "GET",
+      "status": 404,
+      "location": null,
+      "content_type": "application/json",
+      "redirect_followed": false,
+      "body_bytes_read": 21,
+      "body_over_64k": false
+    },
+    {
+      "url": "https://techspecs.ui.com/unifi/cameras-nvrs/ai-key",
+      "method": "HEAD",
+      "status": 307,
+      "location": "/unifi/physical-security/ai-key",
+      "content_type": null,
+      "redirect_followed": false
+    },
+    {
+      "url": "https://techspecs.ui.com/unifi/cameras-nvrs/uvc-g4-doorbell-pro?subcategory=all-cameras-nvrs",
+      "method": "HEAD",
+      "status": 307,
+      "location": "/unifi/physical-security/uvc-g4-doorbell-pro?subcategory=all-physical-security",
+      "content_type": null,
+      "redirect_followed": false
+    },
+    {
+      "url": "https://techspecs.ui.com/unifi/cameras-nvrs/uvc-g5-flex?subcategory=all-cameras-nvrs",
+      "method": "HEAD",
+      "status": 307,
+      "location": "/unifi/physical-security/uvc-g5-flex?subcategory=all-physical-security",
+      "content_type": null,
+      "redirect_followed": false
+    }
+  ],
+  "firmware_or_model_artifact_downloads": 0,
+  "credentials_supplied": false,
+  "redirect_following": false,
+  "same_agent_one_off_not_ci_or_independent_review": true
+}
