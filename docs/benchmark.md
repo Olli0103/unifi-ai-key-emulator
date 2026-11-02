@@ -152,3 +152,10 @@ real AI Key reference evaluation.
 Input hashes and labels are supplied by the corpus producer. The scorer never
 opens the media and cannot attest that a supplied hash or annotation is truthful;
 retain the local source manifest and independent annotation review for that.
+
+## Structured VLM startup smoke check
+
+The separate [caption-backend check](caption-backend-check.md) tests the worker
+request shape with generated red/blue images and retains failed raw responses.
+It is an explicitly admitted isolated-candidate check, not a recognition corpus,
+quality score, automatic health probe or proof of a cold start/native persistence.
