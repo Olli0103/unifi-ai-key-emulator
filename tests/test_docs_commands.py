@@ -117,10 +117,11 @@ def test_documented_commands_parse(monkeypatch, doc, kind, line, module, functio
     except _Parsed:
         return
     except _Refused as exc:
-        # Existing inline references can omit required arguments. A bare command
-        # can also have a required mutually-exclusive input group; no flag-bearing
-        # snippet receives that extra exception.
-        if kind == "inline" and str(exc).startswith("the following arguments are required"):
+        # Bare command/subcommand references can omit required arguments. A flag-
+        # bearing snippet must parse fully: missing required arguments otherwise
+        # hide a misspelled option because argparse reports required inputs first.
+        if (kind == "inline" and not any(a.startswith("-") for a in argv)
+                and str(exc).startswith("the following arguments are required")):
             return
         if (kind == "inline" and not argv
                 and str(exc).startswith("one of the arguments ")
@@ -180,3 +181,13 @@ def test_typed_examples_are_exact_option_bound_operands_only():
     for value in (["NAS_NONROOT_UID"], ["--slot", "NAS_NONROOT_UID"],
                   ["--uid", "NOT_A_NUMBER"], ["--fictional-flag", "SLOT_NUMBER"]):
         assert _typed_examples(value) == value
+
+
+def test_missing_required_args_do_not_hide_an_unknown_inline_flag(monkeypatch, tmp_path):
+    monkeypatch.setitem(globals(), "ROOT", tmp_path)
+    doc = tmp_path / "reference.md"
+    doc.write_text("`local-aiport-provision --fictional-invalid-option`")
+    monkeypatch.setitem(globals(), "DOCS", [doc])
+    item, = _commands()
+    with pytest.raises(pytest.fail.Exception, match="does not parse"):
+        test_documented_commands_parse(monkeypatch, *item)

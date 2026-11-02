@@ -21,8 +21,12 @@ option/value placeholder pairs receive fictional numeric values for argparse
 only; unknown values, flags and placeholder/option combinations remain unchanged
 and refused. The two ellipsis descriptions now name modes separately from the
 bare command. A required mutually-exclusive group may be omitted only for a
-bare inline command reference; flag-bearing snippets do not receive that extra
-exception. Existing required-argument inline-reference handling remains unchanged.
+bare inline command reference. A further negative fixture exposed an older
+exception that accepted an unknown inline flag when argparse reported missing
+required arguments first. That exception is now restricted to flag-free
+command/subcommand references; every flag-bearing snippet must parse fully.
+Three historical Apple mode summaries are explicitly labeled abbreviated prose,
+not rewritten into invented complete command receipts.
 The negative Port example supplies its required input and must fail specifically
 on the unknown flag before reading that fictional path.
 

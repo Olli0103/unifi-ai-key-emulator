@@ -100,7 +100,7 @@ The checklist below is kept as the record of what was run.
 |---|---|---|---|
 | 1 | `aikey-uncertain-resolution plan --state state/apple --evidence-container local-postgres-search` | digest = `92bc7c3b…a223`, 54 × `archive_as_completed` | stop; plan is stale |
 | 2 | Key health | adopted, connected, worker 0/0/0 | wait; do not stop a busy Key |
-| 3 | `local-apple-supervise hold aikey-mac --minutes 20`, then `container stop local-aikey-mac-findanything18` | hold recorded; stop exit 0; `container ls -a` shows it **stopped** (`--key-stopped` is an attestation the tool does not verify) | release the hold; stop |
+| 3 | Supervisor `hold` for `aikey-mac`, 20 minutes (abbreviated: the existing supervisor state directory is also required), then `container stop local-aikey-mac-findanything18` | hold recorded; stop exit 0; `container ls -a` shows it **stopped** (`--key-stopped` is an attestation the tool does not verify) | release the hold; stop |
 | 4 | `aikey-uncertain-resolution apply --state state/apple --evidence-container local-postgres-search --backup state/apple-uncertain-backup-<stamp> --approve 92bc7c3b…a223 --key-stopped` | output `{"archived": 54, "already_archived": 0, "records": 54}` | restart the Key (step 5) with the journal unchanged, or resume or roll back as below |
 | 5 | `container start local-aikey-mac-findanything18`, then `local-apple-supervise release aikey-mac` | ready: adopted, connected, search connected | roll back (below), then start |
 | 6 | Preflight and health | `uncertain_callbacks_pending` gone; journal 567 → 513; 54 new tombstones; worker idle | roll back |
@@ -133,7 +133,7 @@ Nothing in Protect, the search index, the budget, the config, the AI Ports or an
 **Status: DONE, 28 Sep 2026 04:47 UTC, approved by Olli.**
 - **Recheck:** the live image and the recomputed 10-module delta matched this plan exactly.
 - **Image:** `local-aikey:parity-a2-20260928`, `FROM local-aikey:findanything18-rollover-20260927`. Exactly those 10 modules differ, each equals HEAD, and the entry points import.
-- **Swap:** `local-apple-upgrade swap --kind aikey` → `swapped`, after waiting about 1 min for idle. It derived the documented run arguments. The pin is `local-aikey-mac-parity-a2`; `local-aikey-mac-findanything18` is kept stopped for rollback. No abort condition occurred.
+- **Swap:** the `swap` mode of `local-apple-upgrade` with `--kind aikey` (abbreviated mode reference, not complete argv) → `swapped`, after waiting about 1 min for idle. It derived the documented run arguments. The pin is `local-aikey-mac-parity-a2`; `local-aikey-mac-findanything18` is kept stopped for rollback. No abort condition occurred.
 - **After the swap:**
   - Key adopted, connected, search connected; manifest `.15`;
   - `config.json` and `search-profile.json` unchanged; `device-state.json` changed only through Protect's routine reconnect `changeUserPassword`, with no schema backup;
@@ -175,7 +175,7 @@ Nothing in Protect, the search index, the budget, the config, the AI Ports or an
 **Build and swap** (the approval covers these writes only):
 1. Build an overlay image `FROM local-aikey:findanything18-rollover-20260927` that copies exactly the 10 modules from the approved commit.
 2. Check the image: only those 10 modules differ from the live image, and `aikey.cli` imports cleanly.
-3. Swap with `local-apple-upgrade swap --kind aikey --health-url …`: idle-gated, supervisor hold, readiness (adopted, connected, search connected), automatic re-pin of the old container on failure.
+3. Use the `swap` mode of `local-apple-upgrade`, with `--kind aikey` and the reviewed `--health-url` option (the required state/service/new-name/image arguments are omitted in this historical summary): idle-gated, supervisor hold, readiness (adopted, connected, search connected), automatic re-pin of the old container on failure.
 4. Delete the build helper and any throwaway container afterwards.
 
 **Abort and roll back** (the tool's re-pin, or `local-apple-upgrade swap` back to `local-aikey:findanything18-rollover-20260927`):
