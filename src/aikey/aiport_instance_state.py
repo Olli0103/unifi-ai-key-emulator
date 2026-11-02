@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
+import os
 from pathlib import Path
 import re
 import secrets
@@ -110,12 +111,16 @@ def _verify_existing(state_dir: Path, expected: dict, pem: bytes) -> None:
 
 def provision_slot(plan: dict, slot: int, state_dir: Path, *, controller_ip: str,
                    controller_cert_file: Path, controller_pin: str,
-                   firmware_version: str = "5.1.12", mac: str | None = None) -> dict:
+                   firmware_version: str = "5.1.12", mac: str | None = None,
+                   create_only: bool = False) -> dict:
     """Create once or verify, never rotate an already created identity.
 
     ``mac`` fixes the new identity's MAC (a planned slot's reviewed value);
-    an existing identity must already have it.
+    an existing identity must already have it. ``create_only`` refuses existing
+    state before identity reads; ordinary CLI verification remains unchanged.
     """
+    if type(create_only) is not bool:
+        raise InstanceStateError("Create-only mode must be a boolean")
     if mac is not None and not re.fullmatch(r"02[0-9A-F]{10}", mac):
         raise InstanceStateError("A planned MAC must be locally administered")
     address = _slot_address(plan, slot)
@@ -136,6 +141,8 @@ def provision_slot(plan: dict, slot: int, state_dir: Path, *, controller_ip: str
     if state_dir.is_symlink():
         raise InstanceStateError("AI Port state directory cannot be a symlink")
     if state_dir.exists():
+        if create_only:
+            raise InstanceStateError("AI Port state directory already exists; fresh preparation refuses reuse")
         _verify_existing(state_dir, expected, pem)
         if mac is not None and json.loads((state_dir / "config.json").read_text()).get("mac") != mac:
             raise InstanceStateError("The existing identity has a different MAC")
@@ -145,6 +152,12 @@ def provision_slot(plan: dict, slot: int, state_dir: Path, *, controller_ip: str
         raise InstanceStateError("Create a private parent directory before provisioning")
     try:
         state_dir.mkdir(mode=0o700)
+        # Some host ACL policies override mkdir mode; enforce it before keys exist.
+        state_dir.chmod(0o700)
+        info = state_dir.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_mode & 0o077):
+            raise InstanceStateError("New AI Port directory is not private")
         mac = mac or (bytes([0x02]) + secrets.token_bytes(5)).hex().upper()
         ensure_identity_certificate(state_dir, mac)
         certificate = x509.load_pem_x509_certificate(
