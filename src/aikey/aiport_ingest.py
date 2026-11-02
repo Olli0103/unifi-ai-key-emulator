@@ -115,6 +115,8 @@ def normalize_mac(value: object) -> str:
 
 
 def private_source_ip(value: object) -> str:
+    if not isinstance(value, str):
+        raise IngressError("invalid_stream_source")
     try:
         address = ipaddress.IPv4Address(value)
     except (ipaddress.AddressValueError, TypeError) as exc:
