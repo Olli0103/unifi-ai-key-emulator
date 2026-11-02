@@ -25,8 +25,8 @@ from .role_changes import RoleModelPreview
 _REVISION = re.compile(r"[0-9a-f]{64}\Z")
 _FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
                      "allow_insecure_http", "max_output_tokens", "api_key_file",
-                     "threshold", "smart_types", "max_requests_per_hour", "structured_output"})
-_OPTIONAL_FIELDS = frozenset({"api_key_file", "max_requests_per_hour", "structured_output"})
+                     "threshold", "smart_types", "max_requests_per_hour", "structured_output", "request_timeout_s"})
+_OPTIONAL_FIELDS = frozenset({"api_key_file", "max_requests_per_hour", "structured_output", "request_timeout_s"})
 _PROVIDER_FIELDS = frozenset({"provider", "model", "base_url", "allow_remote",
                               "allow_insecure_http", "max_output_tokens", "api_key_file"})
 _RECOGNITION_SCOPES = {"face": "live_face", "sound": "live_sound", "speech": "live_speech_cameras"}
@@ -63,6 +63,7 @@ class AiPortSettings:
     smart_types: tuple[str, ...]
     max_requests_per_hour: int | None
     structured_output: bool = False
+    request_timeout_s: int = 15
 
 
 @dataclass(frozen=True)
@@ -121,7 +122,7 @@ class AiPortConfigurationStore:
             provider.get("allow_insecure_http") is True,
             provider.get("max_output_tokens"), detector.get("threshold"),
             tuple(detector.get("smart_types", ())), detector.get("max_requests_per_hour"),
-            detector.get("structured_output", False),
+            detector.get("structured_output", False), detector.get("request_timeout_s", 15),
         )
 
     def snapshot(self) -> AiPortSettings:
@@ -787,6 +788,10 @@ class AiPortConfigurationStore:
             raise AiPortConfigurationError("aiport_provider_settings_incomplete")
         if "structured_output" in settings and type(settings["structured_output"]) is not bool:
             raise AiPortConfigurationError("aiport_schema_policy_invalid")
+        if "request_timeout_s" in settings and (
+                type(settings["request_timeout_s"]) is not int
+                or not 2 <= settings["request_timeout_s"] <= 60):
+            raise AiPortConfigurationError("aiport_request_timeout_invalid")
         if "api_key_file" in settings:
             path = settings["api_key_file"]
             if (not isinstance(path, str) or not Path(path).is_absolute()
@@ -806,7 +811,7 @@ class AiPortConfigurationStore:
         # is dropped: object events have no per-camera ceiling.
         kept = {key: value for key, value in current.get("live_pool_detector", {}).items()
                 if key in {"fallback", "plate_cameras", "ocr_provider_config", "held_package_followup",
-                           "camera_thresholds", "score_server", "structured_output"}}
+                           "camera_thresholds", "score_server", "structured_output", "request_timeout_s"}}
         candidate["live_pool_detector"] = {
             "inference_backend": "vision_api", "provider_config": provider,
             "threshold": settings["threshold"],
@@ -817,6 +822,8 @@ class AiPortConfigurationStore:
                 settings["max_requests_per_hour"])
         if "structured_output" in settings:
             candidate["live_pool_detector"]["structured_output"] = settings["structured_output"]
+        if "request_timeout_s" in settings:
+            candidate["live_pool_detector"]["request_timeout_s"] = settings["request_timeout_s"]
         return candidate
 
     def _validate(self, candidate: dict) -> None:

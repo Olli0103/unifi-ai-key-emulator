@@ -898,6 +898,7 @@ class ControlSite:
                            "smart_types": port.smart_types or ("person",),
                            "max_requests_per_hour": port.max_requests_per_hour}
                 current["structured_output"] = port.structured_output
+                current["request_timeout_s"] = port.request_timeout_s
                 body += self._provider_form(title, profile, port.revision, current,
                                             port.key_configured, csrf,
                                             camera_count=port.camera_count,
@@ -968,6 +969,14 @@ class ControlSite:
                      "This does not test model quality or change the separate fallback, "
                      "score gates, camera permissions or request allowance. "
                      "A separate AI Port restart is required.</p>")
+            form += ("<input type='hidden' name='request_timeout_present' value='yes'>"
+                     "<label>Primary detection request timeout (seconds)"
+                     "<input name='request_timeout_s' type='number' min='2' max='60' step='1' "
+                     f"value='{_safe(current.get('request_timeout_s', 15))}' required></label>"
+                     "<p>Default: 15 seconds. This bounds one primary API request, not the "
+                     "whole event or queue. Longer waits occupy this AI Port longer. "
+                     "OCR, crop and fallback timeouts stay unchanged. "
+                     "Saved only; a separate AI Port restart is required.</p>")
             form += (f"<label>Score threshold<input name='threshold' type='number' "
                      f"min='0.01' max='1' step='0.01' value='{_safe(current['threshold'])}'></label>"
                      "<div class='checks'><p>Detection classes</p>" + "".join(
@@ -1006,6 +1015,14 @@ class ControlSite:
                 "max_output_tokens": int(fields["max_output_tokens"]),
             }
             if is_port:
+                if "request_timeout_present" in fields:
+                    if (fields.getall("request_timeout_present") != ["yes"]
+                            or len(fields.getall("request_timeout_s", [])) != 1
+                            or not re.fullmatch(r"[0-9]{1,2}", fields["request_timeout_s"])):
+                        raise ValueError
+                    selection["request_timeout_s"] = int(fields["request_timeout_s"])
+                elif "request_timeout_s" in fields:
+                    raise ValueError
                 if "structured_output_present" in fields:
                     if (fields.getall("structured_output_present") != ["yes"]
                             or fields.getall("structured_output", []) not in ([], ["yes"])):

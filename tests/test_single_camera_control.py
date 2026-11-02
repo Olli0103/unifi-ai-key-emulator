@@ -20,7 +20,7 @@ class ProviderForms(HTMLParser):
             self.current = {} if attrs.get('action') == '/provider' else None
             if self.current is not None:
                 self.rows.append(self.current)
-        if tag == 'input' and self.current is not None and attrs.get('type') == 'hidden':
+        if tag == 'input' and self.current is not None and attrs.get('type') in {'hidden', 'number'}:
             self.current[attrs['name']] = attrs.get('value', '')
 
     def handle_endtag(self, tag):
@@ -45,6 +45,7 @@ async def test_single_camera_form_save_and_exact_undo_keep_other_identity_and_pa
         forms = ProviderForms()
         forms.feed(page)
         one, = [row for row in forms.rows if row['profile'] == profile]
+        assert one['request_timeout_present'] == 'yes' and one['request_timeout_s'] == '15'
         assert '1 configured camera slot.' in page
         assert 'at least two streams' not in page and 'No camera pool' not in page
         fields = {**one, 'provider': 'ollama', 'model': 'single-camera-fixture',
