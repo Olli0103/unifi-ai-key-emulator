@@ -10,6 +10,8 @@ record real Docker/Compose, PostgreSQL and selected native paths on Protect
 records Key/four-Port rolling upgrades with existing identity/pairing retention.
 The later [Admin-only #243 observation](evidence/admin243-native-20261102.md)
 records installed-byte and read-only HTTP checks, with mixed-version limits.
+The [four-Port #243 follow-up](evidence/ports243-native-20261102.md) records
+the later serial image-only updates and preserved native identities/pairings.
 Neither establishes every recipe command, a fresh independent install, all
 search/recognition quality, host/controller disaster recovery or a sustained pilot.
 

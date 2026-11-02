@@ -1,0 +1,10 @@
+{
+  "schema": "ports243-public-evidence/1",
+  "source": "bb477f3108c112e8eddc1a1babffe52c99805daa",
+  "files": {
+    "summary.json": "b9c9da4386cdad7145f4915fb989a3eff53e69c376ea836bd47e7b42c7a9bff2",
+    "native-after.json": "0516a3bbe6ddde7df8a357fa10015ceadf852bae163ccb0618d65b30d1389d62"
+  },
+  "same_agent_separate_verifier": true,
+  "human_review": false
+}
