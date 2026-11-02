@@ -10,6 +10,34 @@ For a new AI Key, the separate [authenticated first-run mode](first-run.md#authe
 prepares only a new directory and pinned public trust, without network access,
 device startup or adoption. It does not reopen an existing profile for setup.
 
+## Optional primary detection schema
+
+The AI Port provider form has a separate **Require a JSON schema for primary
+local detections** choice. It is off for existing configurations unless explicitly
+saved as `live_pool_detector.structured_output: true`. Only Ollama and the local
+OpenAI-compatible adapter support this option. The operator must first establish
+that the selected server/model accepts schema output; catalog presence is not
+capability or quality proof. OpenAI and Anthropic assignments refuse this mode.
+
+When enabled, the primary request keeps its existing prompt, image order, model,
+endpoint, sampling and token floor. It adds a bounded detection schema with
+fractional 0–1 boxes, score bounds and allowed kinds/labels. Optional plate text
+is requested only for already permitted plate cameras without a separate OCR
+role. The independent fallback keeps its existing grid-coordinate contract.
+
+The parser remains authoritative: schema-ignoring or malformed answers are not
+accepted, grid boxes are not silently converted, and a schema rejection is not
+retried as free text. Existing configured fallback/backoff/budget policies remain
+unchanged. No new camera permission, provider request, model switch, runtime
+activation, cost override or restart occurs when saving. A separate AI Port
+restart activates saved settings. Old provider clients omitting this new field
+preserve it; disabling it requires an explicit new-form choice or typed setting.
+Normal exact provider rollback includes the saved choice.
+
+This option addresses an observed output-format gap, not a demonstrated cure for
+transport failures or a quality PASS. The partial public-image run and source
+qualification are recorded [separately](evidence/primary-detection-schema-20261102.md).
+
 ## Navigation and accessibility status
 
 The administrative renderer supplies one main landmark and a keyboard skip link

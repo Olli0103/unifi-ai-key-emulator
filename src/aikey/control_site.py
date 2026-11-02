@@ -897,6 +897,7 @@ class ControlSite:
                            "threshold": port.threshold if port.threshold is not None else .8,
                            "smart_types": port.smart_types or ("person",),
                            "max_requests_per_hour": port.max_requests_per_hour}
+                current["structured_output"] = port.structured_output
                 body += self._provider_form(title, profile, port.revision, current,
                                             port.key_configured, csrf,
                                             camera_count=port.camera_count,
@@ -958,6 +959,15 @@ class ControlSite:
                 + ("checked" if current.get("allow_insecure_http") else "") +
                 ">Allow unencrypted remote HTTP</label></div>")
         if profile.startswith("aiport"):
+            form += ("<input type='hidden' name='structured_output_present' value='yes'>"
+                     "<label><input name='structured_output' type='checkbox' value='yes'"
+                     + (" checked" if current.get("structured_output") else "") + ">"
+                     "Require a JSON schema for primary local detections</label>"
+                     "<p>Ollama and compatible local APIs only. Enable only if this server/model "
+                     "supports JSON-schema output. A refusal is not retried as free text. "
+                     "This does not test model quality or change the separate fallback, "
+                     "score gates, camera permissions or request allowance. "
+                     "A separate AI Port restart is required.</p>")
             form += (f"<label>Score threshold<input name='threshold' type='number' "
                      f"min='0.01' max='1' step='0.01' value='{_safe(current['threshold'])}'></label>"
                      "<div class='checks'><p>Detection classes</p>" + "".join(
@@ -996,6 +1006,13 @@ class ControlSite:
                 "max_output_tokens": int(fields["max_output_tokens"]),
             }
             if is_port:
+                if "structured_output_present" in fields:
+                    if (fields.getall("structured_output_present") != ["yes"]
+                            or fields.getall("structured_output", []) not in ([], ["yes"])):
+                        raise ValueError
+                    selection["structured_output"] = "structured_output" in fields
+                elif "structured_output" in fields:
+                    raise ValueError
                 selection.update({
                     "threshold": float(fields["threshold"]),
                     "smart_types": fields.getall("smart_types", []),

@@ -296,7 +296,7 @@ def parse_config(raw: bytes, *, state_dir: Path, check_decoder_executable: bool 
                                        <= set(detector) - legacy
                                        <= api_fields | {"held_package_followup",
                                                         "plate_cameras", "ocr_provider_config", "fallback",
-                                                        "camera_thresholds", "score_server"}))
+                                                        "camera_thresholds", "score_server", "structured_output"}))
                 or detector.get("held_package_followup", "shadow") not in {"shadow", "announce"}
                 or backend is not None and not (is_api or is_onnx)
                 or not is_api and (
@@ -317,6 +317,12 @@ def parse_config(raw: bytes, *, state_dir: Path, check_decoder_executable: bool 
                 and (type(detector["max_events_per_hour"]) is not int
                      or not 1 <= detector["max_events_per_hour"] <= 3600)):
             raise CandidateError("Invalid live pool detector policy")
+        if ("structured_output" in detector and type(detector["structured_output"]) is not bool
+                or detector.get("structured_output") is True and (
+                    not is_api or not isinstance(detector["provider_config"], dict)
+                    or detector["provider_config"].get("provider") not in
+                    {"ollama", "openai-compatible"})):
+            raise CandidateError("Unsupported primary detection schema policy")
         if "fallback" in detector:
             # Local detection used only while the primary provider fails.
             fallback = detector["fallback"]
@@ -949,7 +955,8 @@ class CandidateService:
                         fallback=detector.get("fallback"),
                         camera_thresholds=detector.get("camera_thresholds"),
                         full_frame=self._full_frame_blocking,
-                        score_server=detector.get("score_server")))
+                        score_server=detector.get("score_server"),
+                        structured_output=detector.get("structured_output", False)))
                     if live_pool and detector.get("inference_backend") == "vision_api" else
                     (lambda: OnnxRFDetrNanoDetector.from_model(
                         detector["model_path"], detector["model_sha256"],
