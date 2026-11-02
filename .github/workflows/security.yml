@@ -94,6 +94,7 @@ jobs:
           python tools/processing_browser_check.py --browser-executable "${browser}" --output processing-browser-results
           python tools/speech_enrollment_browser_check.py --browser-executable "${browser}" --output speech-enrollment-browser-results
           python tools/speech_camera_browser_check.py --browser-executable "${browser}" --output speech-camera-browser-results
+          python tools/first_run_port_browser_check.py --browser-executable "${browser}" --output first-run-port-browser-results
           python tools/primary_schema_browser_check.py --browser-executable "${browser}" --output primary-schema-browser-results
           python tools/caption_policy_browser_check.py --browser-executable "${browser}" --output caption-policy-browser-results
           python tools/caption_scope_browser_check.py --browser-executable "${browser}" --output caption-scope-browser-results
@@ -108,6 +109,8 @@ jobs:
           path: |
             speech-camera-browser-results/*.png
             speech-camera-browser-results/result.json
+            first-run-port-browser-results/*.png
+            first-run-port-browser-results/result.json
             primary-schema-browser-results/*.png
             primary-schema-browser-results/result.json
             browser-results/*.png

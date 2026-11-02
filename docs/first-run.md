@@ -3,7 +3,8 @@
 `local-aikey setup` prepares **a fresh AI Key directory**, using the existing
 identity generator, configuration schema and provider validators. It is not
 the complete browser wizard or independent fresh-tester acceptance for #25.
-AI Port profiles use their separate provisioning workflow. Existing installations
+AI Port profiles use their separate provisioning workflow; a new passive profile
+can also use [authenticated Port browser preparation](first-run-aiport.md). Existing installations
 must use their existing configuration/control site, not this command.
 
 ## Prepare without editing JSON

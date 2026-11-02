@@ -1847,6 +1847,13 @@ def _cli() -> argparse.ArgumentParser:
     setup.add_argument("--state-dir", required=True, type=Path, help="Existing private administrator state")
     setup.add_argument("--directory", required=True, type=Path, help="New AI Key directory; existing paths refused")
     _listener_arguments(setup)
+    setup_port = commands.add_parser("setup-port", help="Authenticated fresh AI Port files from a reviewed plan; never start/adopt/pair")
+    setup_port.add_argument("--state-dir", required=True, type=Path, help="Existing private administrator state")
+    setup_port.add_argument("--directory", required=True, type=Path, help="New AI Port directory; existing paths refused")
+    setup_port.add_argument("--plan", required=True, type=Path, help="Existing private addressed deployment plan")
+    setup_port.add_argument("--slot", required=True, type=int, help="One reviewed Protect slot from that plan")
+    setup_port.add_argument("--controller-cert-file", required=True, type=Path, help="Existing private public controller-certificate file; fingerprint reviewed in browser")
+    _listener_arguments(setup_port)
     run = commands.add_parser("run", help="Serve settings on loopback or explicit direct HTTPS")
     run.add_argument("--state-dir", required=True, type=Path)
     run.add_argument("--aikey-config", required=True, type=Path)
@@ -1987,6 +1994,19 @@ def main(argv: list[str] | None = None) -> int:
         _private_directory(state)
         signing_key = _private_bytes(state / "admin-signing-key", 64)
         record = _private_bytes(state / "admin-password-record", 4096).decode().strip()
+        if args.command == "setup-port":
+            from .first_run_port_site import FirstRunPortSite
+            site = FirstRunPortSite(args.directory, plan=args.plan, slot=args.slot,
+                controller_cert_file=args.controller_cert_file,
+                signing_key=signing_key, password_record=record, port=args.port,
+                bind=args.bind, origin=args.origin, tls_certificate=args.tls_certificate,
+                tls_private_key=args.tls_private_key, audit_log=state / "admin-audit.jsonl")
+            print(json.dumps({"first_run_site": site.origin, "profile": "aiport",
+                              "loopback_only": site.listener.loopback_only,
+                              "https": site.listener.ssl_context is not None,
+                              "device_started": False, "cameras_paired": False}))
+            asyncio.run(_run(site, args.port))
+            return 0
         if args.command == "setup":
             from .first_run_site import FirstRunSite
             site = FirstRunSite(args.directory,

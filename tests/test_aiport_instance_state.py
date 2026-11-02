@@ -177,3 +177,66 @@ def test_an_onvif_slot_is_never_provisioned(tmp_path):
         provision_slot(plan, 1, root / "slot-1", controller_ip="192.168.10.1",
                        controller_cert_file=cert, controller_pin=pin)
     assert not (root / "slot-1").exists()
+
+
+def test_create_only_refuses_existing_before_reading_identity(tmp_path, monkeypatch):
+    import aikey.aiport_instance_state as instance
+    plan, cert, pin, root = fixture(tmp_path)
+    state = root / "slot-1"
+    provision_slot(plan, 1, state, controller_ip="192.168.10.1",
+                   controller_cert_file=cert, controller_pin=pin)
+    before = {p.name: p.read_bytes() for p in state.iterdir()}
+    monkeypatch.setattr(instance, "_verify_existing", lambda *_: pytest.fail("existing identity read"))
+    with pytest.raises(InstanceStateError, match="already exists"):
+        provision_slot(plan, 1, state, controller_ip="192.168.10.1",
+                       controller_cert_file=cert, controller_pin=pin, create_only=True)
+    assert {p.name: p.read_bytes() for p in state.iterdir()} == before
+
+
+def test_inherited_directory_permissions_are_fixed_before_private_material(tmp_path, monkeypatch):
+    from pathlib import Path
+    import aikey.aiport_instance_state as instance
+    plan, cert, pin, root = fixture(tmp_path)
+    state = root / "slot-1"
+    original_mkdir = Path.mkdir
+    def inherited_mode(path, *args, **kwargs):
+        existed = path.exists()
+        result = original_mkdir(path, *args, **kwargs)
+        if path == state and not existed:
+            path.chmod(0o777)
+        return result
+    original_identity = instance.ensure_identity_certificate
+    def private_before_identity(path, mac):
+        assert path.stat().st_mode & 0o777 == 0o700
+        return original_identity(path, mac)
+    monkeypatch.setattr(Path, "mkdir", inherited_mode)
+    monkeypatch.setattr(instance, "ensure_identity_certificate", private_before_identity)
+    result = provision_slot(plan, 1, state, controller_ip="192.168.10.1",
+                            controller_cert_file=cert, controller_pin=pin)
+    assert result["state"] == "created"
+
+
+def test_unenforced_directory_mode_refuses_before_identity_material(tmp_path, monkeypatch):
+    import os
+    from pathlib import Path
+    import aikey.aiport_instance_state as instance
+    plan, cert, pin, root = fixture(tmp_path)
+    state = root / "slot-1"
+    original_mkdir = Path.mkdir
+    def inherited_mode(path, *args, **kwargs):
+        existed = path.exists()
+        result = original_mkdir(path, *args, **kwargs)
+        if path == state and not existed:
+            os.chmod(path, 0o777)
+        return result
+    original_chmod = Path.chmod
+    def refused_mode(path, mode, *args, **kwargs):
+        if path != state:
+            return original_chmod(path, mode, *args, **kwargs)
+    monkeypatch.setattr(Path, "mkdir", inherited_mode)
+    monkeypatch.setattr(Path, "chmod", refused_mode)
+    monkeypatch.setattr(instance, "ensure_identity_certificate", lambda *_: pytest.fail("private material created"))
+    with pytest.raises(InstanceStateError):
+        provision_slot(plan, 1, state, controller_ip="192.168.10.1",
+                       controller_cert_file=cert, controller_pin=pin)
+    assert list(state.iterdir()) == []
