@@ -15,6 +15,7 @@ from io import BytesIO
 import os
 from pathlib import Path
 import socket
+import ssl
 import stat
 import time
 from typing import Any, Callable
@@ -606,6 +607,20 @@ def _reply_object(raw: bytes, failure: str) -> dict:
     return result
 
 
+def _transport_subtype(exc: Exception) -> str:
+    """Fixed type-only diagnostic; never retain provider text or nested errors."""
+    reason = exc.reason if isinstance(exc, URLError) else exc
+    if isinstance(reason, TimeoutError):
+        return "timeout"
+    if isinstance(reason, ssl.SSLError):
+        return "tls"
+    if isinstance(reason, ConnectionError):
+        return "connection"
+    if isinstance(reason, OSError):
+        return "io"
+    return "unknown"
+
+
 def _post(url: str, headers: dict, payload: dict, *, timeout: float = 15) -> dict:
     body = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode()
     request = Request(url, data=body, headers={**headers, "Content-Type": "application/json"},
@@ -623,13 +638,13 @@ def _post(url: str, headers: dict, payload: dict, *, timeout: float = 15) -> dic
     except ApiDetectionError:
         raise
     except ProviderLookupError:
-        raise ApiDetectionError("api_detection_dns_unavailable") from None
+        failure = ApiDetectionError("api_detection_dns_unavailable")
     except ProviderDNSTimeout:
-        raise ApiDetectionError("api_detection_dns_timeout") from None
+        failure = ApiDetectionError("api_detection_dns_timeout")
     except ProviderResolverError:
-        raise ApiDetectionError("api_detection_resolver_unavailable") from None
+        failure = ApiDetectionError("api_detection_resolver_unavailable")
     except ProviderAddressError:
-        raise ApiDetectionError("api_detection_address_refused") from None
+        failure = ApiDetectionError("api_detection_address_refused")
     except HTTPError as exc:
         code = ("api_detection_http_429" if exc.code == 429 else
                 "api_detection_http_4xx" if 400 <= exc.code < 500 else
@@ -643,16 +658,23 @@ def _post(url: str, headers: dict, payload: dict, *, timeout: float = 15) -> dic
                 body = b""
             error.category = _http_429_category(body if isinstance(body, bytes) else b"")
         # Not chained: the HTTP error carries the provider's message and headers.
-        raise error from None
+        failure = error
     except URLError as exc:
         code = ("api_detection_resolver_unavailable" if isinstance(exc.reason, ProviderResolverError) else
                 "api_detection_dns_timeout" if isinstance(exc.reason, ProviderDNSTimeout) else
                 "api_detection_dns_unavailable"
                 if isinstance(exc.reason, socket.gaierror)
                 else "api_detection_request_failed")
-        raise ApiDetectionError(code) from exc
+        failure = ApiDetectionError(code)
+        failure.subtype = _transport_subtype(exc)
     except Exception as exc:
-        raise ApiDetectionError("api_detection_request_failed") from exc
+        failure = ApiDetectionError("api_detection_request_failed")
+        failure.subtype = _transport_subtype(exc)
+    # Outside the handlers: suppression alone leaves private __context__ attached.
+    raise failure from None
+
+
+_DEFAULT_DETECTION_TRANSPORT = _post
 
 
 def _post_jpeg(url: str, jpeg: bytes, *, timeout: float = _SCORE_TIMEOUT_S) -> dict:
@@ -714,6 +736,7 @@ class ApiObjectDetector:
                  score_server: str | None = None,
                  score_transport: Callable[[str, bytes], dict] | None = None,
                  structured_output: bool = False,
+                 request_timeout_s: int = 15,
                  clock: Callable[[], float] = time.time):
         if (type(threshold) not in (float, int) or not 0 < threshold <= 1
                 or any(type(value) not in (float, int) or not 0 < value <= 1
@@ -726,6 +749,9 @@ class ApiObjectDetector:
                 not isinstance(provider_config, dict)
                 or provider_config.get("provider") not in {"ollama", "openai-compatible"})):
             raise ApiDetectionError("invalid_primary_detection_schema_policy")
+        if type(request_timeout_s) is not int or not 2 <= request_timeout_s <= 60:
+            raise ApiDetectionError("invalid_primary_detection_timeout")
+        self.request_timeout_s = request_timeout_s
         self.structured_output = structured_output
         if ocr_provider_config is not None and not plate_cameras:
             raise ApiDetectionError("api_ocr_requires_plate_scope")
@@ -782,7 +808,7 @@ class ApiObjectDetector:
         self._package_checks: dict[str, dict[str, int]] = {}
         self._frame_width: dict[str, int] = {}
         self._budget_retry_at: dict[str, float] = {}
-        self._remote_host = (endpoint.hostname if transport is _post
+        self._remote_host = (endpoint.hostname if transport is _DEFAULT_DETECTION_TRANSPORT
                              and self.provider.provider in {"openai", "anthropic"}
                              else None)
         self._dns_ok_until = 0.0
@@ -946,7 +972,7 @@ class ApiObjectDetector:
                 plates = False
             else:
                 try:
-                    reply = self.transport(url, headers, payload)
+                    reply = self._primary_request(url, headers, payload)
                     text = self.provider.parse_response(reply)
                 except (ApiDetectionError, ProviderError, TypeError, ValueError) as exc:
                     gate.count("failed")
@@ -1337,6 +1363,14 @@ class ApiObjectDetector:
                if self.fallback is not None else {}),
         }
 
+    def _primary_request(self, url: str, headers: dict, payload: dict) -> dict:
+        # Only the built-in primary request consumes this saved budget. OCR,
+        # crop and fallback calls keep their existing independent timeouts;
+        # injected test/custom transports continue to own their deadlines.
+        if self.transport is _DEFAULT_DETECTION_TRANSPORT:
+            return _post(url, headers, payload, timeout=self.request_timeout_s)
+        return self.transport(url, headers, payload)
+
     def _provider_failed(self, exc: Exception | None = None) -> None:
         if self.provider_outage_since is None:
             self.provider_outage_since = int(self.clock())
@@ -1384,6 +1418,7 @@ class ApiObjectDetector:
         result["last_frame_width"] = self._frame_width.get(camera_mac)
         result["failure_reasons"] = {k: v for k, v in self._failure_reasons.get(camera_mac, {}).items() if v}
         result["output_token_budget"] = self.provider.max_output_tokens
+        result["primary_request_timeout_s"] = self.request_timeout_s
         result["package_checks"] = dict(self._package_checks.get(
             camera_mac, dict.fromkeys(_PACKAGE_CHECK_KEYS, 0)))
         if camera_mac in self.plate_cameras:

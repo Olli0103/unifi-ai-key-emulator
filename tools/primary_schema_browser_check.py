@@ -83,26 +83,34 @@ async def scenario(output, name, viewport, executable):
                         has=page.get_by_role("heading", name="AI Port", exact=True))
                     choice = section.get_by_role("checkbox", name="Require a JSON schema", exact=False)
                     await expect(choice).not_to_be_checked()
+                    budget = section.get_by_label("Primary detection request timeout (seconds)", exact=True)
+                    await expect(budget).to_have_value("15")
                     assert "structured_output" not in json.loads(port.read_bytes())["live_pool_detector"]
                     assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
                     await section.screenshot(path=str(output / (name + "-schema-off.png")))
+                    await budget.fill("30")
                     await choice.check()
                     await section.get_by_role("button", name="Save provider settings", exact=True).focus()
                     await page.keyboard.press("Enter")
                     await expect(choice).to_be_checked()
                     assert json.loads(port.read_bytes())["live_pool_detector"]["structured_output"] is True
                     await section.screenshot(path=str(output / (name + "-schema-on.png")))
+                    await expect(budget).to_have_value("30")
+                    assert json.loads(port.read_bytes())["live_pool_detector"]["request_timeout_s"] == 30
                     # Provider/model edits carry the displayed capability choice.
                     await section.get_by_label("Model ID", exact=True).fill("fictional-replacement")
                     await section.get_by_role("button", name="Save provider settings", exact=True).click()
                     await expect(choice).to_be_checked()
                     assert json.loads(port.read_bytes())["live_pool_detector"]["structured_output"] is True
+                    await expect(budget).to_have_value("30")
+                    await budget.fill("15")
                     await choice.uncheck()
                     await section.get_by_role("button", name="Save provider settings", exact=True).click()
                     await expect(choice).not_to_be_checked()
                     after = json.loads(port.read_bytes())
                     changed = after["live_pool_detector"]
                     assert changed.pop("structured_output") is False
+                    assert changed.pop("request_timeout_s") == 15
                     assert changed["provider_config"].pop("model") == "fictional-replacement"
                     raw["live_pool_detector"]["provider_config"].pop("model")
                     assert after == raw and key.read_bytes() == key_before
@@ -119,6 +127,7 @@ async def scenario(output, name, viewport, executable):
                     result = {"viewport": viewport, "browser_version": context.browser.version,
                         "legacy_default_off": True, "explicit_toggle_saved": True,
                         "provider_edit_preserves_choice": True, "explicit_disable_saved": True,
+                        "primary_timeout_default_15_set_30_preserved_reset_15": True,
                         "keyboard_save": True, "other_profile_and_policy_preserved": True,
                         "private_audit_enabled_and_recorded": True, "session_expiry_refused": True,
                         "foreign_requests": 0, "real_provider_model_media_or_processor_actions": 0,

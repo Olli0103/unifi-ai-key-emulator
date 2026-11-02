@@ -296,7 +296,7 @@ def parse_config(raw: bytes, *, state_dir: Path, check_decoder_executable: bool 
                                        <= set(detector) - legacy
                                        <= api_fields | {"held_package_followup",
                                                         "plate_cameras", "ocr_provider_config", "fallback",
-                                                        "camera_thresholds", "score_server", "structured_output"}))
+                                                        "camera_thresholds", "score_server", "structured_output", "request_timeout_s"}))
                 or detector.get("held_package_followup", "shadow") not in {"shadow", "announce"}
                 or backend is not None and not (is_api or is_onnx)
                 or not is_api and (
@@ -323,6 +323,10 @@ def parse_config(raw: bytes, *, state_dir: Path, check_decoder_executable: bool 
                     or detector["provider_config"].get("provider") not in
                     {"ollama", "openai-compatible"})):
             raise CandidateError("Unsupported primary detection schema policy")
+        if "request_timeout_s" in detector and (
+                not is_api or type(detector["request_timeout_s"]) is not int
+                or not 2 <= detector["request_timeout_s"] <= 60):
+            raise CandidateError("Invalid primary detection timeout")
         if "fallback" in detector:
             # Local detection used only while the primary provider fails.
             fallback = detector["fallback"]
@@ -956,7 +960,8 @@ class CandidateService:
                         camera_thresholds=detector.get("camera_thresholds"),
                         full_frame=self._full_frame_blocking,
                         score_server=detector.get("score_server"),
-                        structured_output=detector.get("structured_output", False)))
+                        structured_output=detector.get("structured_output", False),
+                        request_timeout_s=detector.get("request_timeout_s", 15)))
                     if live_pool and detector.get("inference_backend") == "vision_api" else
                     (lambda: OnnxRFDetrNanoDetector.from_model(
                         detector["model_path"], detector["model_sha256"],
