@@ -37,6 +37,19 @@ To match CI's locked runtime dependencies, replace the install step with `.venv/
 
 CI runs the same `ruff` and `pytest` commands, plus a Gitleaks history scan and a dependency and SBOM check. A pull request needs all of them green.
 
+The test/build job also runs checksum-pinned lychee 0.24.2 on repository Markdown:
+local file targets and heading anchors, offline and without a cache. It does not
+contact external links, authenticate to services or download linked artifacts.
+With that version installed, the equivalent check from the repository root is:
+
+```sh
+lychee --offline --include-fragments=anchor-only --cache=false --no-progress './**/*.md'
+```
+
+Package CLI examples are checked separately through their actual argument
+parsers, not executed. Shell/Docker commands, live external URLs, human browser
+accessibility and fresh installation remain separate verification.
+
 ## Tests and fixtures
 
 - Write synthetic fixtures only: generated images and audio, invented IDs, loopback doubles. Never commit vendor files, device state or captured traffic.
