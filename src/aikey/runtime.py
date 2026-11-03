@@ -48,11 +48,15 @@ class Application:
             self.rerank = RerankRelay(deep["rerank_server"])
         self.runner = None
         self.https_port = None
+        self._index_authority = None
 
     async def start(self):
-        # Validate the shared embedding identity before any listener or controller connection.
-        self.search.validate_configuration()
+        # Runtime and migration share one stable state lock before any profile
+        # initialization, listener, controller connection or indexing worker.
+        from .index_authority import IndexAuthority
+        self._index_authority = IndexAuthority(self.state_dir, runtime=True)
         try:
+            self.search.validate_configuration()
             if self.camera_registry is not None:
                 await self.camera_registry.start()
             # Worker startup validates document-only profiles and creates idle clients.
@@ -108,3 +112,6 @@ class Application:
         errors = [outcome for outcome in outcomes if isinstance(outcome, Exception)]
         if errors:
             raise RuntimeError("A service failed to close cleanly") from errors[0]
+        if self._index_authority is not None:
+            self._index_authority.close()
+            self._index_authority = None

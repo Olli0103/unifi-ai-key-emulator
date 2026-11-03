@@ -21,6 +21,7 @@ from aiohttp import BodyPartReader, web
 from aiohttp.http_exceptions import BadHttpMessage
 
 from .clip import DIMENSIONS, MODEL, ClipError, normalize
+from .encoding_identity import CLIP_ENCODING
 from .multipart_input import read_part
 
 
@@ -145,7 +146,7 @@ def build_app(encode_text: TextEncoder, encode_image: ImageEncoder, *,
                 "rejected": 0, "failed": 0}
 
     def reply(vectors):
-        return web.json_response({"model": MODEL, "dim": DIMENSIONS,
+        return web.json_response({"model": MODEL, "dim": DIMENSIONS, "encoding": dict(CLIP_ENCODING),
                                   **({"revision": revision} if revision else {}),
                                   "embeddings": [[round(v, 7) for v in normalize(vector)]
                                                  for vector in vectors]})
@@ -228,6 +229,7 @@ def build_app(encode_text: TextEncoder, encode_image: ImageEncoder, *,
 
     async def health(_request: web.Request) -> web.Response:
         return web.json_response({"status": "ok", "model": MODEL, "dim": DIMENSIONS,
+                                  "encoding": dict(CLIP_ENCODING),
                                   **({"revision": revision} if revision else {}), **counters})
 
     app = web.Application(client_max_size=_MAX_IMAGE_BYTES + 131072)

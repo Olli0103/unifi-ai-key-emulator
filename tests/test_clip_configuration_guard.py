@@ -161,3 +161,39 @@ async def test_authenticated_provider_save_and_undo_with_pinned_clip(tmp_path):
     finally:
         await client.close()
         await server.close()
+
+
+@pytest.mark.parametrize('required', [False,True])
+def test_versioned_metadata_still_allows_unrelated_admin_without_rewriting_profiles(tmp_path,offline,required):
+    from aikey.encoding_identity import CLIP_ENCODING
+    store,path,profile=saved_clip(tmp_path)
+    identity=json.loads(profile.read_text())
+    identity.pop('fingerprint')
+    identity.update(CLIP_ENCODING)
+    if required:
+        identity['encoding_required']=True
+    profile.write_text(json.dumps(_with_fingerprint(identity)))
+    before=profile.read_bytes()
+    current=store.snapshot()
+    changed=store.apply(current.revision,{'device':{'name':'Fictional renamed Key'}})
+    assert changed.revision != current.revision and profile.read_bytes()==before
+    with pytest.raises(UnsafeConfigurationChange,match='search-index migration'):
+        store.preview(changed.revision,{'find_anything':{'clip_server':'http://127.0.0.1:9191'}})
+    assert profile.read_bytes()==before
+
+
+def test_hybrid_session_profile_is_checked_without_querying_or_rewriting_it(tmp_path,offline):
+    from aikey.search import EmbeddingService
+    store,path,profile=saved_clip(tmp_path)
+    candidate=store._read(path)[1]
+    session=profile.parent/'session-search'/'search-profile.json'
+    session.parent.mkdir(mode=0o700)
+    identity=EmbeddingService(candidate['embeddings']).identity
+    session.write_text(json.dumps(_with_fingerprint(identity)))
+    before=session.read_bytes(),profile.read_bytes(),path.read_bytes()
+    store.preview(store.snapshot().revision,{})
+    assert (session.read_bytes(),profile.read_bytes(),path.read_bytes())==before
+    identity['revision']='f'*64
+    session.write_text(json.dumps(_with_fingerprint(identity)))
+    with pytest.raises(UnsafeConfigurationChange,match='Session embedding profile'):
+        store.preview(store.snapshot().revision,{})

@@ -139,11 +139,16 @@ complete first-run/feature-control workflow remain open.
 
 ## Search index and backup status
 
-The Search index migration page reports historical scratch-restore
+The Search index migration page separately selects the visual CLIP and session
+text E5 spaces (`?space=clip-basic-v1|e5-session-v1`) and reports historical scratch-restore
 records and live-row comparisons. Damaged/unsafe newest metadata blocks backup
 readiness instead of silently falling back to an older record. It neither
 rehashes nor restores a dump during page loads; re-verify before recovery.
 See the [backup-status boundary and limits](evidence/index-backup-status-20261029.md).
+
+The host-operated export/rebuild/quality/cutover/native-readback/rollback commands
+and their authority boundaries are documented in the [migration runbook](index-migration.md).
+These operations are not HTTP apply buttons; a page view performs no migration.
 
 ### Cancel an idle staged migration
 

@@ -95,3 +95,30 @@ def ensure_embedding_profile(state_dir: Path, identity: dict[str, Any], *,
         raise
     except (OSError, ValueError, TypeError) as exc:
         raise EmbeddingProfileError("Cannot read or persist embedding profile state; inspect it before continuing") from exc
+
+
+def ensure_session_embedding_profile(state_dir: Path, identity: dict[str, Any], *, legacy_root=False) -> None:
+    """Keep E5 session documents/queries separate from the paired visual space.
+
+    The old root profile is checked when it is an E5 profile, or when an E5-only
+    operator explicitly uses it. Hybrid CLIP+E5 installs additionally pin their
+    session space in its own directory. First creation records the configured
+    identity; it does not retroactively attest old native rows/checkpoint bytes.
+    """
+    from .encoding_identity import UPGRADABLE_ENCODING
+    from .startup_configuration import read_snapshot
+    root = Path(state_dir)
+    path = root / 'search-profile.json'
+    previous = None
+    try:
+        raw, _ = read_snapshot(path, limit=16384)
+        previous = json.loads(raw)
+        if not isinstance(previous, dict):
+            raise ValueError
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, UnicodeError):
+        raise EmbeddingProfileError('Cannot validate the existing session/search profile space') from None
+    if legacy_root or (previous is not None and previous.get('profile') == 'e5-session-v1'):
+        ensure_embedding_profile(root, identity, upgradable=UPGRADABLE_ENCODING)
+    ensure_embedding_profile(root / 'session-search', identity, upgradable=UPGRADABLE_ENCODING)

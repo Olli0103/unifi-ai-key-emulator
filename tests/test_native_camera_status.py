@@ -61,6 +61,7 @@ async def controller(
     gate=None,
     login_gate=None,
     logout_hook=None,
+    additional_routes=(),
 ):
     ensure_identity_certificate(tmp_path, "020000000001")
     der = ssl.PEM_cert_to_DER_cert((tmp_path / "device.crt").read_text())
@@ -123,6 +124,7 @@ async def controller(
     app.router.add_get("/proxy/protect/api/bootstrap", native)
     app.router.add_post("/api/auth/logout", logout)
     app.router.add_route("*", "/leak", leak)
+    app.add_routes(additional_routes)
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=server_context(tmp_path))

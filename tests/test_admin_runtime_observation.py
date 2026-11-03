@@ -161,3 +161,42 @@ def test_only_server_owned_literal_private_https_health_targets_are_accepted(tmp
     from aikey.admin_runtime import RuntimeObserver
     with pytest.raises(ValueError):
         RuntimeObserver({"aikey": ("aikey", tmp_path)}, {"aikey": url})
+
+
+async def test_migration_search_identity_is_fresh_even_when_view_cache_is_populated(tmp_path):
+    from aikey.admin_runtime import RuntimeObserver
+    value = key_health()
+    value['search'] = {'connected': True, 'profile': 'clip-basic-v1', 'revision': 'a'*64}
+    server, calls, url = await target(tmp_path, lambda: web.json_response(value))
+    observer = RuntimeObserver({'aikey': ('aikey', tmp_path)}, {'aikey': url})
+    try:
+        await observer.read('aikey')
+        first = await observer.read_search_identity('aikey')
+        value['search']['revision'] = 'b'*64
+        second = await observer.read_search_identity('aikey')
+        assert first['revision'] == 'a'*64 and second['revision'] == 'b'*64
+        assert len(calls) == 3
+        assert set(second) == {'connected', 'profile', 'revision'}
+        assert 'fictional' not in json.dumps(second)
+    finally:
+        await server.close()
+
+
+@pytest.mark.parametrize('mutation', ['revision', 'boolean', 'profile'])
+async def test_migration_identity_rejects_unversioned_or_malformed_health(tmp_path, mutation):
+    from aikey.admin_runtime import RuntimeObserver
+    value = key_health()
+    value['search'] = {'connected': True, 'profile': 'clip-basic-v1', 'revision': 'a'*64}
+    if mutation == 'revision':
+        del value['search']['revision']
+    elif mutation == 'boolean':
+        value['search']['connected'] = 1
+    else:
+        value['search']['profile'] = 'e5-session-v1'
+    server, _, url = await target(tmp_path, value)
+    observer = RuntimeObserver({'aikey': ('aikey', tmp_path)}, {'aikey': url})
+    try:
+        with pytest.raises(ValueError, match='pinned current query-encoder'):
+            await observer.read_search_identity('aikey')
+    finally:
+        await server.close()

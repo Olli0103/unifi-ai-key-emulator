@@ -279,15 +279,22 @@ async def test_a_generation_refuses_a_live_revision_that_moved_on(tmp_path):
     await rebuild(store, tmp_path).stage(Embedder(NEW), source(), batch=1, max_batches=1)
     profile = json.loads((tmp_path / "search-profile.json").read_text())
     profile["revision"] = "c" * 64
-    (tmp_path / "search-profile.json").write_text(json.dumps(profile))
+    profile.pop('fingerprint')
+    (tmp_path / "search-profile.json").write_text(json.dumps(_with_fingerprint(profile)))
     with pytest.raises(RebuildError, match="live revision changed"):
         rebuild(store, tmp_path)
 
 
-def test_an_unpinned_or_identical_revision_is_refused(tmp_path):
+def test_an_invalid_revision_or_identical_full_identity_is_refused(tmp_path):
+    from aikey.encoding_identity import CLIP_ENCODING
     store = setup(tmp_path)
+    path = tmp_path/'search-profile.json'
+    profile = json.loads(path.read_text())
+    profile.pop('fingerprint')
+    profile.update(CLIP_ENCODING, encoding_required=True)
+    path.write_text(json.dumps(_with_fingerprint(profile)))
     with pytest.raises(RebuildError, match="already the live"):
-        Rebuild(store, tmp_path, target_revision=OLD, target_source="x")
+        Rebuild(store, tmp_path, target_revision=OLD, target_source="http://127.0.0.1:8180")
     with pytest.raises(RebuildError, match="64-digit"):
         Rebuild(store, tmp_path, target_revision="short", target_source="x")
 
@@ -302,10 +309,11 @@ async def test_the_clip_embedder_is_pinned_to_the_target_revision(tmp_path):
     async def image(request):
         await request.read()
         return web.json_response({"model": clip.MODEL, "dim": 768, "revision": served["revision"],
-                                  "embeddings": [vector(3)]})
+                                  "encoding": clip.CLIP_ENCODING, "embeddings": [vector(3)]})
 
     async def health(request):
-        return web.json_response({"status": "ok", "revision": served["revision"]})
+        return web.json_response({"status": "ok", "revision": served["revision"],
+                                  "encoding": clip.CLIP_ENCODING})
     app = web.Application()
     app.router.add_post("/v1/image", image)
     app.router.add_get("/healthz", health)
@@ -324,3 +332,94 @@ async def test_the_clip_embedder_is_pinned_to_the_target_revision(tmp_path):
     [entry] = status(tmp_path)
     assert entry["state"] == "staging" and entry["to"] == NEW[:12] and entry["counts"]["embedded"] == 2
     assert main(["status", "--state-dir", str(tmp_path)]) == 0
+
+
+async def test_rollback_restores_the_verbatim_previous_profile_not_a_reserialization(tmp_path):
+    store = setup(tmp_path)
+    path = tmp_path / 'search-profile.json'
+    original = b' \n' + path.read_bytes() + b'\n\n'
+    path.write_bytes(original)
+    run = rebuild(store, tmp_path)
+    await run.stage(Embedder(NEW), source())
+    run.verify()
+    run.cutover(backup=BACKUP, key_quiesced=quiet)
+    assert (run.directory / 'previous-profile.json').read_bytes() == original
+    await run.rollback(key_quiesced=quiet)
+    assert path.read_bytes() == original
+
+
+async def test_failed_profile_switch_restores_verbatim_live_profile(tmp_path):
+    store = setup(tmp_path)
+    path = tmp_path / 'search-profile.json'
+    original = b' \n' + path.read_bytes() + b'\n\n'
+    path.write_bytes(original)
+    run = rebuild(store, tmp_path)
+    await run.stage(Embedder(NEW), source())
+    run.verify()
+    def fail(*args):
+        raise OSError('synthetic write interruption')
+    with pytest.raises(RebuildError, match='previous vectors and profile were restored'):
+        run.cutover(backup=BACKUP, key_quiesced=quiet, write_profile=fail)
+    assert path.read_bytes() == original
+    assert store.live == {o: vector(int(o.split('-')[1])) for o in OBJECTS}
+
+
+async def test_same_weights_with_new_encoding_contract_can_cut_over_and_restore_exact_old_profile(tmp_path):
+    from aikey.encoding_identity import CLIP_ENCODING
+    store = setup(tmp_path)
+    profile_path = tmp_path / 'search-profile.json'
+    old = json.loads(profile_path.read_text())
+    old.pop('fingerprint')
+    old.update(CLIP_ENCODING, preprocessing='fictional-prior-preprocessing-v0')
+    profile_path.write_text(json.dumps(_with_fingerprint(old)))
+    before = profile_path.read_bytes(), dict(store.live)
+    def generation():
+        return Rebuild(store, tmp_path, target_revision=OLD, target_source=old['source'],
+                       generation='123456abcdef')
+    run = generation()
+    await run.stage(Embedder(OLD), source())
+    run.verify()
+    run.cutover(backup=BACKUP, key_quiesced=quiet)
+    assert generation().state == 'cut_over'
+    assert json.loads(profile_path.read_text())['preprocessing'] == CLIP_ENCODING['preprocessing']
+    await generation().rollback(key_quiesced=quiet)
+    assert (profile_path.read_bytes(), store.live) == before
+
+
+def test_tampered_profile_fingerprint_refuses_without_any_stage(tmp_path):
+    store = setup(tmp_path)
+    path = tmp_path / 'search-profile.json'
+    profile = json.loads(path.read_text())
+    profile['fingerprint'] = '0'*64
+    path.write_text(json.dumps(profile))
+    with pytest.raises(RebuildError, match='fingerprint is invalid'):
+        rebuild(store, tmp_path)
+    assert not (tmp_path / 'index-rebuild').exists()
+
+
+async def test_first_failed_quality_attempt_freezes_targets_before_model_work(tmp_path):
+    from aikey.index_readback import NativeReadbackPlan, ReadbackError
+    from test_index_readback import specification
+    store = setup(tmp_path)
+    run = rebuild(store,tmp_path)
+    await run.stage(Embedder(NEW),source())
+    run.verify()
+    run._save(source_archive_sha256='c'*64,source_identity=store.source_identity())
+    store.staged_identity = lambda tag: 'd'*64
+    class FailedTarget(Embedder):
+        async def embed_text(self,text):
+            self.calls.append('quality')
+            raise RuntimeError('Fictional failed target query')
+    encoder = FailedTarget(NEW)
+    plan = NativeReadbackPlan(specification())
+    before = dict(store.live),run.live_profile.read_bytes()
+    with pytest.raises(RuntimeError,match='Fictional failed target query'):
+        await run.qualify(encoder,plan)
+    assert json.loads((run.directory/'readback-plan.json').read_text()) == plan.value
+    assert rebuild(store,tmp_path).journal['quality']['passed'] is False
+    changed = plan.value
+    changed['queries'][0]['text'] = 'A changed fictional target'
+    with pytest.raises(ReadbackError,match='targets are frozen'):
+        await run.qualify(encoder,NativeReadbackPlan(changed))
+    assert encoder.calls == ['quality']
+    assert (store.live,run.live_profile.read_bytes()) == before

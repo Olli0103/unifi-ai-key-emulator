@@ -386,7 +386,8 @@ async def test_the_clip_server_returns_normalized_vectors_and_counts_only():
         form.add_field("image", b"GIF89a", filename="f.gif", content_type="image/gif")
         assert (await client.post("/v1/image", data=form)).status == 400
         health = await (await client.get("/healthz")).json()
-        assert health == {"status": "ok", "model": clip.MODEL, "dim": 768, "text_requests": 3,
+        assert health == {"status": "ok", "model": clip.MODEL, "dim": 768,
+                          "encoding": clip.CLIP_ENCODING, "text_requests": 3,
                           "image_requests": 2, "texts": 1, "regions": 2, "rejected": 3, "failed": 0}
 
 
@@ -1406,3 +1407,24 @@ async def test_a_reverification_thumbnail_at_the_export_end_is_judged_on_the_las
     [posted] = controller.reverifications
     verdicts = {r["trackerID"]: (r["thumbnailMs"], r["detectedAs"]) for r in posted["result"]["verificationResults"]}
     assert verdicts == {1: (START + 1500, "person"), 2: (END, "person")}
+
+
+def test_migrated_clip_contract_is_required_by_both_query_and_document_clients(tmp_path):
+    from aikey.embedding_profile import _with_fingerprint
+    from aikey.config import defaults
+    config = defaults(tmp_path / "config.json", "020000000001")
+    config["runtime"]["mode"] = "lab"
+    config["controller_origins"] = ["http://127.0.0.1:9"]
+    config["inference"] = {"provider":"ollama","model":"fictional-model","base_url":"http://127.0.0.1:9"}
+    config['search'] = {'enabled':True,'profile':clip.PROFILE}
+    config['find_anything'] = {'clip_server':'http://127.0.0.1:8180','index_camera_ids':[CAMERA]}
+    profile = {'profile':clip.PROFILE,'model':clip.MODEL,'dimensions':768,
+        'backend':'local-clip-onnx','source':'http://127.0.0.1:8180','revision':'a'*64,
+        'encoding_required':True,**clip.CLIP_ENCODING}
+    (tmp_path/'search-profile.json').write_text(json.dumps(_with_fingerprint(profile)))
+    query = SearchService(config,tmp_path)
+    query._check_profile()
+    assert query.clip.require_encoding is True
+    assert query.status['encoder_profile_fingerprint'] == _with_fingerprint(profile)['fingerprint']
+    worker = JobProcessor(config,tmp_path)
+    assert worker._clip_client().require_encoding is True

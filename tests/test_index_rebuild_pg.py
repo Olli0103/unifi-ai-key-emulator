@@ -36,7 +36,10 @@ def store(tmp_path):
             pytest.fail("scratch fixture refuses pre-existing rebuild state")
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         conn.execute('CREATE TABLE public."ramDetections" (id varchar PRIMARY KEY, '
-                     '"smartDetectObjectId" varchar NOT NULL UNIQUE, embedding vector NOT NULL)')
+                     '"smartDetectObjectId" varchar NOT NULL UNIQUE, embedding vector NOT NULL, '
+                     '"eventId" varchar NOT NULL DEFAULT \'event-fixture\', '
+                     '"cameraId" varchar NOT NULL DEFAULT \'camera-fixture\', '
+                     'start bigint NOT NULL DEFAULT 0)')
         for i, object_id in enumerate(OBJECTS):
             conn.execute('INSERT INTO public."ramDetections" VALUES (%s, %s, %s::vector)',
                          (f"row-{i}", object_id, json.dumps(vector(i))))

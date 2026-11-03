@@ -138,6 +138,7 @@ class ControlSite:
                  search_state_dir: Path | None = None,
                  search_backups_dir: Path | None = None,
                  search_live_rows: Callable[[], Awaitable[int]] | None = None,
+                 search_session_live_rows: Callable[[], Awaitable[int]] | None = None,
                  aikey_state_dir: Path | None = None,
                  audit_log: Path | None = None,
                  runtime_health_urls: dict[str, str] | None = None,
@@ -179,6 +180,7 @@ class ControlSite:
         self.search_state_dir = search_state_dir
         self.search_backups_dir = search_backups_dir
         self.search_live_rows = search_live_rows
+        self.search_session_live_rows = search_session_live_rows
         # The Key's host state sits next to its config unless given (#12).
         self.aikey_state_dir = aikey_state_dir or self.aikey.path.parent
         from .admin_runtime import RuntimeObserver
@@ -445,13 +447,19 @@ class ControlSite:
             raise web.HTTPSeeOther("/login")
         if self.search_state_dir is None:
             raise web.HTTPNotFound()
+        if (set(request.query) - {'space'} or len(request.query.getall('space', [])) > 1
+                or request.query.get('space', 'clip-basic-v1') not in ('clip-basic-v1', 'e5-session-v1')):
+            raise web.HTTPBadRequest(text="Invalid index space")
+        space = request.query.get('space', 'clip-basic-v1')
+        selected = self.search_state_dir / 'session-search' if space == 'e5-session-v1' else self.search_state_dir
+        loader = self.search_session_live_rows if space == 'e5-session-v1' else self.search_live_rows
         live_rows = None
-        if self.search_live_rows is not None:
+        if loader is not None:
             try:
-                live_rows = await self.search_live_rows()
+                live_rows = await loader()
             except Exception:            # counts are optional; the plan says so
                 live_rows = None
-        plan = await asyncio.to_thread(migration_plan, self.search_state_dir,
+        plan = await asyncio.to_thread(migration_plan, selected,
                                        backups_dir=self.search_backups_dir, live_rows=live_rows)
         if self._session(request) is None:
             raise web.HTTPSeeOther("/login")
@@ -464,26 +472,34 @@ class ControlSite:
             if choice.get("available") and csrf is not None:
                 form = ("<form method='post' action='/index-migration/cancel'>"
                         f"<input type='hidden' name='csrf' value='{_safe(csrf)}'>"
+                        f"<input type='hidden' name='space' value='{space}'>"
                         f"<input type='hidden' name='generation' value='{_safe(g['generation'])}'>"
                         f"<input type='hidden' name='journal_revision' value='{_safe(choice['journal_revision'])}'>"
                         f"<input type='hidden' name='profile_revision' value='{_safe(choice['profile_revision'])}'>"
                         "<label><input type='checkbox' name='confirm' value='cancel' required>"
                         f"Cancel staged migration {_safe(g['generation'])}; keep the active index and staged data</label>"
                         "<button type='submit'>Cancel staged migration</button></form>")
+            qualification = g.get("qualification", {})
+            recorded = (f"source export {'recorded' if qualification.get('source_recorded') else 'not recorded'}; "
+                        f"staged quality {'recorded' if qualification.get('quality_recorded') else 'not recorded'}; "
+                        f"native verification {'recorded' if qualification.get('native_verified_recorded') else 'pending'}")
             rows.append("<tr>" + "".join(f"<td>{_safe(cell)}</td>" for cell in (
                 g["generation"], g.get("state"), g.get("from", "—"), g.get("to", "—"),
                 "—" if "coverage" not in g else
                 f"{g['coverage']['embedded']} embedded, {g['coverage']['no_source']} without source"
                 + (f", {g['coverage']['percent']}% of {g['coverage']['live_rows']}"
                    if g["coverage"].get("percent") is not None else ""),
-                "; ".join(g["problems"]) or "—")) + "<td>" + form + "</td></tr>")
-        rows = "".join(rows) or "<tr><td colspan='7'>No staged generation</td></tr>"
+                "; ".join(g["problems"]) or "—", recorded)) + "<td>" + form + "</td></tr>")
+        rows = "".join(rows) or "<tr><td colspan='8'>No staged generation</td></tr>"
         steps = "".join(f"<li><strong>{_safe(s['status'])}</strong> · {_safe(s['step'])}"
                         + (f"<br><span class='muted'>{_safe(s['detail'])}</span>" if s["detail"] else "")
                         + "</li>" for s in plan["steps"])
         reasons = "".join(f"<li>{_safe(reason)}</li>" for reason in plan["apply"]["reasons"])
         body = ("<h1>Search index migration</h1><p><a href='/'>Settings</a> · "
-                "<a href='/index-migration'>Refresh</a></p>"
+                f"<a href='/index-migration?space={space}'>Refresh</a></p>"
+                "<nav aria-label='Index space'><a href='/index-migration?space=clip-basic-v1'>Visual CLIP index</a> · "
+                "<a href='/index-migration?space=e5-session-v1'>Session text E5 index</a></nav>"
+                f"<p>Selected index: <strong>{space}</strong></p>"
                 "<p class='muted'>Viewing this plan changes nothing. No index is staged, cut over, "
                 "rolled back or restarted here. The separate cancellation form only retires an "
                 "idle staged migration. A running writer must finish or be stopped separately.</p>"
@@ -494,7 +510,7 @@ class ControlSite:
                 "aria-label='Index migration generations' tabindex='0'><table><tr>"
                 "<th scope='col'>Generation</th><th scope='col'>State</th><th scope='col'>From</th>"
                 "<th scope='col'>To</th><th scope='col'>Coverage</th><th scope='col'>Problems</th>"
-                "<th scope='col'>Cancel staging</th></tr>" + rows + "</table></div>"
+                "<th scope='col'>Recorded qualification</th><th scope='col'>Cancel staging</th></tr>" + rows + "</table></div>"
                 "<h2>Backup and rollback</h2><ul>"
                 f"<li>Latest backup: {_safe(backup['latest'] or 'none')}"
                 + (f" · {_safe(backup.get('rows'))} rows · scratch restore recorded {'yes' if backup['verified'] else 'no'}"
@@ -505,7 +521,10 @@ class ControlSite:
                 + (f" — {_safe(rollback['reason'])}" if rollback["reason"] else "")
                 + f"<br><span class='muted'>{_safe(rollback['note'])}</span></li></ul>"
                 "<h2>Dry-run plan</h2><ol>" + steps + "</ol>"
-                "<h2>Apply is unavailable</h2><ul>" + reasons + "</ul>"
+                "<p>Export, staging, quality checks and host-coordinated swaps are available through "
+                "the separate migration tool. Recorded qualification is historical, not a fresh "
+                "source rehash or live quality check. This page never stops the Key or edits its encoder route.</p>"
+                "<h2>Apply is unavailable here</h2><ul>" + reasons + "</ul>"
                 + ("<p>No migration exists: this plan is a no-op.</p>" if plan["no_op"] else ""))
         return _page("Search index migration", body)
 
@@ -517,12 +536,16 @@ class ControlSite:
         if self.search_state_dir is None:
             raise web.HTTPNotFound()
         expected = {"csrf", "generation", "journal_revision", "profile_revision", "confirm"}
-        if (set(fields) != expected or any(len(fields.getall(k)) != 1 for k in expected)
+        if (set(fields) not in (expected, expected | {"space"})
+                or any(len(fields.getall(k)) != 1 for k in fields)
+                or fields.get("space", "clip-basic-v1") not in ("clip-basic-v1", "e5-session-v1")
                 or fields["confirm"] != "cancel"):
             self._audit("index_cancel", "invalid")
             raise web.HTTPBadRequest(text="Invalid migration cancellation")
+        space = fields.get("space", "clip-basic-v1")
+        selected = self.search_state_dir / 'session-search' if space == 'e5-session-v1' else self.search_state_dir
         try:
-            await asyncio.to_thread(cancel_generation, self.search_state_dir, fields["generation"],
+            await asyncio.to_thread(cancel_generation, selected, fields["generation"],
                                     expected_journal=fields["journal_revision"],
                                     expected_profile=fields["profile_revision"])
         except RebuildOutcomeUncertain:
@@ -536,7 +559,7 @@ class ControlSite:
                          "<p>Refresh the plan. Active, changed or completed migrations cannot be "
                          "cancelled from this view.</p>", status=409)
         self._audit("index_cancel", "cancelled")
-        raise web.HTTPSeeOther("/index-migration")
+        raise web.HTTPSeeOther("/index-migration" + ("?space=e5-session-v1" if space == "e5-session-v1" else ""))
 
     async def rollout_page(self, request: web.Request) -> web.Response:
         cookie = self._session(request)
@@ -1908,13 +1931,16 @@ def _listener_arguments(command):
     command.add_argument("--tls-private-key", type=Path, help="Private owned unencrypted PEM key file")
 
 
-def _live_rows(container: str) -> Callable[[], Awaitable[int]]:
+def _live_rows(container: str, *, session: bool = False) -> Callable[[], Awaitable[int]]:
     import subprocess
     from .search_backup import counts
 
     async def read() -> int:
         value = await asyncio.to_thread(counts, subprocess.run, container)
-        return int(value["tables"]["ramDetections"])
+        count = value.get('session_embeddings') if session else value["tables"]["ramDetections"]
+        if type(count) is not int or count < 0:
+            raise ValueError("Index row count unavailable")
+        return count
     return read
 
 
@@ -2083,6 +2109,8 @@ def main(argv: list[str] | None = None) -> int:
                            bind=args.bind, origin=args.origin,
                            tls_certificate=args.tls_certificate, tls_private_key=args.tls_private_key,
                            audit_log=state / "admin-audit.jsonl",
+                           search_session_live_rows=_live_rows(args.search_container, session=True)
+                           if args.search_container else None,
                            search_live_rows=_live_rows(args.search_container)
                            if args.search_container else None)
         site.aikey.snapshot()

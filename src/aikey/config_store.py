@@ -1202,15 +1202,18 @@ class ConfigurationStore:
         if not profile.exists():
             return
         try:
-            content = self._read_regular_bytes(profile, 16384)
-            stored = json.loads(content)
-            if not isinstance(stored, dict):
-                raise ValueError
-            fingerprint = stored.pop("fingerprint", None)
-            encoded = json.dumps(stored, allow_nan=False, sort_keys=True, separators=(",", ":"))
-            if not isinstance(fingerprint, str) or not hmac.compare_digest(
-                    fingerprint, hashlib.sha256(encoded.encode()).hexdigest()):
-                raise ValueError
+            def read_identity(path):
+                from .protocol import _json_object
+                content = self._read_regular_bytes(path, 16384)
+                stored = _json_object(content)
+                fingerprint = stored.pop("fingerprint", None)
+                encoded = json.dumps(stored, allow_nan=False, sort_keys=True, separators=(",", ":"))
+                if not isinstance(fingerprint, str) or not hmac.compare_digest(
+                        fingerprint, hashlib.sha256(encoded.encode()).hexdigest()):
+                    raise ValueError
+                return stored
+            stored = read_identity(profile)
+            from .encoding_identity import CLIP_ENCODING, UPGRADABLE_ENCODING
             from . import clip
             from .search import EmbeddingService
             embedding_identity = EmbeddingService(candidate["embeddings"]).identity
@@ -1232,8 +1235,24 @@ class ConfigurationStore:
                     if not isinstance(revision, str) or not _REVISION.fullmatch(revision):
                         raise ValueError
                     expected["revision"] = revision
+                expected.update({k:v for k,v in CLIP_ENCODING.items() if k in stored})
+                if "encoding_required" in stored:
+                    if stored["encoding_required"] is not True:
+                        raise ValueError
+                    expected["encoding_required"] = True
             else:
-                expected = embedding_identity
+                # Older otherwise-identical profiles can omit newly recorded metadata;
+                # administration never upgrades or rewrites them as a side effect.
+                expected = {k:v for k,v in embedding_identity.items()
+                            if k not in UPGRADABLE_ENCODING or k in stored}
+            session_profile = profile.parent / 'session-search' / 'search-profile.json'
+            if session_profile.exists():
+                session = read_identity(session_profile)
+                session_expected = {k:v for k,v in embedding_identity.items()
+                                    if k not in UPGRADABLE_ENCODING or k in session}
+                if session != session_expected:
+                    raise UnsafeConfigurationChange(
+                        "Session embedding profile changes require an explicit search-index migration")
         except (OSError, ValueError, TypeError) as exc:
             raise UnsafeConfigurationChange(
                 "Existing search profile is invalid; inspect it before changing configuration"

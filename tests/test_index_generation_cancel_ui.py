@@ -167,3 +167,51 @@ async def test_post_commit_failure_is_uncertain_and_does_not_retry_or_restore(tm
         assert calls == ["committed"] and store.live == before
         assert (site.search_state_dir / "search-profile.json").read_bytes() == profile
         assert migration_plan(site.search_state_dir)["generations"][0]["state"] == "cancelled"
+
+
+async def test_text_space_count_and_cancellation_never_touch_visual_generation(tmp_path):
+    async with site_fixture(tmp_path) as (site, client, store, visual_fields):
+        import shutil
+        from aikey.embedding_profile import _with_fingerprint
+        child = site.search_state_dir / 'session-search'
+        shutil.copytree(site.search_state_dir / 'index-rebuild', child / 'index-rebuild')
+        profile = json.loads((site.search_state_dir / 'search-profile.json').read_text())
+        profile.update(profile='e5-session-v1', model='multilingual-e5-small', dimensions=384)
+        profile.pop('fingerprint', None)
+        profile = _with_fingerprint(profile)
+        (child / 'search-profile.json').write_text(json.dumps(profile))
+        # Cancellation needs exact bytes, not an encoder/database invocation.
+        journal = child / 'index-rebuild' / NEW[:12] / 'journal.json'
+        value = json.loads(journal.read_text())
+        value['profile'] = 'e5-session-v1'
+        journal.write_text(json.dumps(value))
+        async def text_count():
+            return 17
+        async def visual_count():
+            return 99
+        site.search_session_live_rows, site.search_live_rows = text_count, visual_count
+        before = rebuild(store, site.search_state_dir).journal_path.read_bytes()
+        response = await client.get('/index-migration?space=e5-session-v1')
+        page = await response.text()
+        assert response.status == 200 and 'rows 17' in page and 'rows 99' not in page
+        assert 'Selected index: <strong>e5-session-v1</strong>' in page
+        inputs = Inputs()
+        inputs.feed(page)
+        assert inputs.fields['space'] == 'e5-session-v1'
+        response = await client.post('/index-migration/cancel', data=inputs.fields,
+            headers={'Origin': site.origin}, allow_redirects=False)
+        assert response.status == 303
+        assert response.headers['Location'] == '/index-migration?space=e5-session-v1'
+        assert json.loads(journal.read_text())['state'] == 'cancelled'
+        assert rebuild(store, site.search_state_dir).journal_path.read_bytes() == before
+
+
+@pytest.mark.parametrize('query', ['space=../other', 'space=e5-session-v1&space=clip-basic-v1', 'path=other'])
+async def test_bad_index_space_cannot_select_a_filesystem_path(tmp_path, query):
+    async with site_fixture(tmp_path) as (site, client, store, fields):
+        before = rebuild(store, site.search_state_dir).journal_path.read_bytes()
+        assert (await client.get('/index-migration?' + query)).status == 400
+        fields = dict(fields, space='../other')
+        assert (await client.post('/index-migration/cancel', data=fields,
+            headers={'Origin': site.origin}, allow_redirects=False)).status == 400
+        assert rebuild(store, site.search_state_dir).journal_path.read_bytes() == before

@@ -87,7 +87,7 @@ That command makes a TLS handshake to the configured controller, sends no HTTP c
 | Discovery | Read-only v1 queries, exact controller allowlist, optional Linux multicast and macOS host companion; native candidate and address observed | Other network layouts and NAS discovery |
 | Descriptions | Bounded queue, explicit provider/model, image/MP4 input; dated native caption persistence on selected versions/cameras | All-camera endurance, ground-truth quality and complete restart/recovery acceptance |
 | Search | E5 and separate CLIP/basic paths; dated native session/image-query observations, explicit profile/model guards | Labeled relevance/negative-query quality, fresh Deep processing and complete migration acceptance |
-| Search database | Private NAS PostgreSQL/hybrid-search deployment, source upgrade and offline component restore documented | Full controller/host recovery and supported model/index migration qualification |
+| Search database | Private NAS PostgreSQL/hybrid-search deployment, source upgrade and offline component restore documented | [Host-operated CLIP/E5 migration](docs/index-migration.md) fixture-qualified; native rollout and full controller/host recovery remain |
 
 Unsupported capabilities default to disabled. The inspected controller couples
 VLM and deep-mode flags, so the build does not automatically advertise full

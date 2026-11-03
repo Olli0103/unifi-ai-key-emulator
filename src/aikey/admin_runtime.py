@@ -260,8 +260,8 @@ class RuntimeObserver:
         return {"observation": "unavailable", "runtime": None,
                 "runtime_configuration_revision": None}
 
-    async def _fetch(self, profile):
-        kind, directory = self.profiles[profile]
+    async def _request(self, profile):
+        _, directory = self.profiles[profile]
         context, fingerprint = await asyncio.to_thread(_trust, directory)
         connector = VerifiedConnector(ssl_context=context, expected_fingerprint=fingerprint)
         async with aiohttp.ClientSession(connector=connector, trust_env=False,
@@ -277,7 +277,11 @@ class RuntimeObserver:
                     raw.extend(chunk)
                     if len(raw) > _MAX_BYTES:
                         raise ValueError("Runtime reply exceeds byte limit")
-        value = _json_object(bytes(raw))
+        return _json_object(bytes(raw))
+
+    async def _fetch(self, profile):
+        kind, _ = self.profiles[profile]
+        value = await self._request(profile)
         runtime = _normalize(kind, value)
         from .startup_configuration import revision, SCOPE
         loaded = revision(value.get("startup_configuration"))
@@ -285,6 +289,56 @@ class RuntimeObserver:
                 "observed_at": datetime.now(timezone.utc).isoformat(),
                 "tls_ca_and_leaf_pin_verified": True, "runtime_configuration_revision": loaded,
                 "runtime_configuration_revision_scope": SCOPE if loaded is not None else None}
+
+    async def read_session_identity(self, profile):
+        """Fresh pinned E5 component identity, including hybrid CLIP+E5 Keys."""
+        import re
+        if (profile not in self.profiles or self.profiles[profile][0] != "aikey"
+                or profile not in self.targets):
+            raise ValueError("A configured Key runtime target is required")
+        try:
+            async with asyncio.timeout(4):
+                async with self.locks[profile]:
+                    async with self.connections:
+                        value = await self._request(profile)
+            search = _object(value, "search")
+            revision = search.get("session_encoder_revision")
+            if (type(search.get("connected")) is not bool
+                    or search.get("profile") not in {"clip-basic-v1", "e5-session-v1"}
+                    or not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision)):
+                raise ValueError("The running session search identity is unavailable")
+            result = {"connected": search["connected"], "profile": "e5-session-v1", "revision": revision}
+            fingerprint = search.get("session_encoder_profile_fingerprint")
+            if isinstance(fingerprint, str) and re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+                result["profile_fingerprint"] = fingerprint
+            return result
+        except (aiohttp.ClientError, OSError, ValueError, ConfigurationStoreError, asyncio.TimeoutError):
+            raise ValueError("The pinned current session-encoder identity is unavailable") from None
+
+    async def read_search_identity(self, profile):
+        """Fresh pinned query-encoder observation; never the two-second view cache."""
+        import re
+        if (profile not in self.profiles or self.profiles[profile][0] != "aikey"
+                or profile not in self.targets):
+            raise ValueError("A configured Key runtime target is required")
+        try:
+            async with asyncio.timeout(4):
+                async with self.locks[profile]:
+                    async with self.connections:
+                        value = await self._request(profile)
+            search = _object(value, "search")
+            revision = search.get("encoder_revision", search.get("revision"))
+            if (type(search.get("connected")) is not bool
+                    or search.get("profile") != "clip-basic-v1"
+                    or not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision)):
+                raise ValueError("The running search identity is unavailable")
+            result = {"connected": search["connected"], "profile": search["profile"], "revision": revision}
+            fingerprint = search.get("encoder_profile_fingerprint")
+            if isinstance(fingerprint, str) and re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+                result["profile_fingerprint"] = fingerprint
+            return result
+        except (aiohttp.ClientError, OSError, ValueError, ConfigurationStoreError, asyncio.TimeoutError):
+            raise ValueError("The pinned current query-encoder identity is unavailable") from None
 
     async def read(self, profile):
         if profile not in self.profiles:

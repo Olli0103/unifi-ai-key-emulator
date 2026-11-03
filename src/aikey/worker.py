@@ -952,13 +952,14 @@ class JobProcessor:
             if self._session is not None:
                 return
             if self.options.get("description_embeddings", False):
-                from aikey.embedding_profile import EmbeddingProfileError, ensure_embedding_profile
+                from aikey.embedding_profile import EmbeddingProfileError, ensure_session_embedding_profile
                 from aikey.search import EmbeddingService
                 self._embedding_service = EmbeddingService(self.config.get("embeddings", {}))
                 if self._embedding_service.backend not in {"http", "sentence-transformers"}:
                     raise WorkerError("Description embeddings require a real embedding backend")
                 try:
-                    ensure_embedding_profile(self.state_dir.parent, self._embedding_service.identity)
+                    ensure_session_embedding_profile(self.state_dir.parent, self._embedding_service.identity,
+                        legacy_root=self.config.get("search", {}).get("profile") != clip.PROFILE)
                 except EmbeddingProfileError as exc:
                     raise WorkerError(str(exc)) from exc
             timeout = aiohttp.ClientTimeout(total=self.timeout_s, connect=10)
@@ -2569,6 +2570,7 @@ class JobProcessor:
         if self._clip is None:
             self._clip = clip.ClipClient(self.find_anything, timeout_s=60)
         self._clip.expected_revision = pinned_value(self.state_dir.parent, "revision")
+        self._clip.require_encoding = pinned_value(self.state_dir.parent, "encoding_required") is True
         return self._clip
 
     async def _execute_reverification(self, job):
@@ -2862,6 +2864,8 @@ class JobProcessor:
         if self._embedding_service is None:
             from aikey.search import EmbeddingService
             self._embedding_service = EmbeddingService(self.config.get("embeddings", {}))
+        from .embedding_profile import ensure_session_embedding_profile
+        ensure_session_embedding_profile(self.state_dir.parent, self._embedding_service.identity)
         vectors = await self._embedding_service.encode_documents([description])
         if len(vectors) != 1:
             raise WorkerError("Embedding service returned wrong result count")
@@ -3020,6 +3024,9 @@ class JobProcessor:
                 if self._embedding_service is None:
                     from aikey.search import EmbeddingService
                     self._embedding_service = EmbeddingService(self.config.get("embeddings", {}))
+                from .embedding_profile import ensure_session_embedding_profile
+                ensure_session_embedding_profile(self.state_dir.parent, self._embedding_service.identity,
+                    legacy_root=self.config.get("search", {}).get("profile") != clip.PROFILE)
                 vectors = await self._embedding_service.encode_documents([description])
                 if len(vectors) != 1:
                     raise WorkerError("Embedding service returned wrong result count")
