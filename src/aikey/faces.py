@@ -127,8 +127,16 @@ class FaceStore:
                 return
             self._directory_info(root, private=False)
             if writer:
-                lock = os.open(".face-store.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
-                               | os.O_NONBLOCK, 0o600, dir_fd=root)
+                flags=os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK
+                try:
+                    lock = os.open(".face-store.lock",flags | os.O_CREAT,0o600,dir_fd=root)
+                except FileNotFoundError:
+                    # Darwin can return ENOENT when two O_CREAT lookups race.
+                    # Observe the other creator's existing lock exactly once;
+                    # never retry creation or relax the metadata checks below.
+                    if not self._bound(root,None):
+                        raise FaceStoreError('face_store_unavailable') from None
+                    lock = os.open('.face-store.lock',flags,dir_fd=root)
                 meta = os.fstat(lock)
                 if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != os.geteuid()
                         or meta.st_mode & 0o077 or meta.st_nlink != 1):

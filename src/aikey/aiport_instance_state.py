@@ -88,7 +88,11 @@ def _verify_existing(state_dir: Path, expected: dict, pem: bytes) -> None:
         # running plan and identity verification. Runtime startup checks it.
         config = load_config(state_dir / "config.json", check_decoder_executable=False)
         identity = json.loads(_private_file(state_dir / "identity.json", 4096))
-        saved_ca = _private_file(state_dir / "controller-ca.pem", 16384)
+        from .controller_trust import selected
+        trust=selected(config,kind='aiport',state_dir=state_dir)
+        saved_ca = (trust.certificate_pem.encode() if trust is not None else
+                    _private_file(state_dir / "controller-ca.pem", 16384))
+        reviewed_pem = pem.replace(b"\r\n", b"\n") if trust is not None else pem
         saved_cert = _private_file(state_dir / "device.crt", 16384)
         _private_file(state_dir / "device.key", 16384)
         cert = x509.load_pem_x509_certificate(saved_cert)
@@ -100,7 +104,7 @@ def _verify_existing(state_dir: Path, expected: dict, pem: bytes) -> None:
     if (not _BASE_KEYS <= set(config) or not isinstance(identity, dict)
             or identity.get("mac") != config["mac"]
             or any(config.get(name) != value for name, value in expected.items())
-            or not hmac.compare_digest(saved_ca, pem)
+            or not hmac.compare_digest(saved_ca, reviewed_pem)
             or not cert.not_valid_before_utc <= datetime.now(timezone.utc)
             <= cert.not_valid_after_utc
             or (identity.get("certificate_sha256") is not None

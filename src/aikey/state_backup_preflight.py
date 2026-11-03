@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import stat
@@ -54,6 +55,9 @@ def _host(reference, directory: Path, runtime: str | None) -> Path | None:
 def _profile_spec(kind: str, directory: Path) -> dict:
     """Required files, secret references and journals for one profile."""
     config = _json(directory / "config.json")
+    from .device_workflow_fence import check as check_device_intent, path as device_journal, read as read_device_journal
+    journal=device_journal(directory/'config.json')
+    check_device_intent(directory/'config.json',durable=False)
     if kind == "aikey":
         runtime = (config.get("runtime") or {}).get("state_dir")
         controller = config.get("controller") or {}
@@ -90,13 +94,67 @@ def _profile_spec(kind: str, directory: Path) -> dict:
         journals = {"config_history": directory / ".aiport-config-history"}
         sensitive = {}
         identity = _mac(config.get("mac"))
+    from .controller_trust import DIRECTORY, selected, _root as trust_root, _read as trust_read
+    retained = {}
+    if kind=='aiport' and config.get('face_model_space_ref'):
+        from .port_feature_models import load_face_space
+        load_face_space(directory,config['face_model_space_ref'],_mac(config.get('mac')),config.get('live_face'))
+        required['port_face_model_space']=directory/config['face_model_space_ref']
+    from .port_feature_models import valid_space_ref
+    for path in directory.glob('port-face-space.*'):
+        if not valid_space_ref(path.name):
+            raise ValueError('invalid retained face model-space resource')
+        from .device_workflow import _private
+        retained[path.relative_to(directory).as_posix()]=hashlib.sha256(_private(path,8192)).hexdigest()
+    if kind=='aiport' and config.get('onvif_catalog_ref'):
+        from .onvif_catalog import load as load_onvif
+        catalog=load_onvif(directory,config['onvif_catalog_ref'],_mac(config.get('mac')))
+        required['onvif_metadata_catalog']=directory/config['onvif_catalog_ref']
+        for index,row in enumerate(catalog['entries']):
+            for role in ('username','password'):
+                secrets['onvif_'+role+'_'+str(index)]=directory/row[role+'_ref']
+    from .onvif_catalog import valid_reference as onvif_reference, _SECRET as onvif_secret
+    from .device_workflow import _private
+    for path in directory.glob('onvif-*'):
+        if not (onvif_reference(path.name) or onvif_secret.fullmatch(path.name)):
+            raise ValueError('invalid retained ONVIF resource')
+        raw=_private(path,8192)
+        retained[path.relative_to(directory).as_posix()]=hashlib.sha256(raw).hexdigest()
+    for channel in (('control','search') if kind=='aikey' else ('control',)):
+        trust=selected(config,kind=kind,state_dir=directory,channel=channel)
+        if trust is not None:
+            required[channel+'_trust_object']=directory/DIRECTORY/trust.reference
+    if (directory/DIRECTORY).exists() or (directory/DIRECTORY).is_symlink():
+        journals['controller_trust_history']=directory/DIRECTORY
+        descriptor=trust_root(directory/DIRECTORY)
+        try:
+            names=os.listdir(descriptor)
+            if len(names)>4096:
+                raise ValueError('retained trust inspection limit')
+            for name in names:
+                # Historical certificates may be expired. Preserve their exact
+                # private digest-bound objects without authorizing their use.
+                retained[(Path(DIRECTORY)/name).as_posix()]=hashlib.sha256(trust_read(descriptor,name)).hexdigest()
+        finally:
+            os.close(descriptor)
+    if journal.exists():
+        required['device_workflow_journal']=journal
+        record=read_device_journal(directory/'config.json',durable=False)
+        if record['state']=='saved':
+            history=directory/('.aikey-config-history' if kind=='aikey' else '.aiport-config-history')
+            archived=history/(record['before']+'.json')
+            if hashlib.sha256(_private(archived,_MAX)).hexdigest()!=record['before']:
+                raise ValueError('device rollback archive mismatch')
+            required['device_rollback_revision']=archived
+        retained[journal.relative_to(directory).as_posix()]=_sha256(journal)
     from .model_work_fence import FILENAME
     fence = directory / FILENAME
     enrolled = fence.exists() or fence.is_symlink()
     if enrolled:
         required["model_work_fence"] = fence
     return {"config": config, "required": required, "secrets": secrets, "journals": journals,
-            "sensitive": sensitive, "identity": identity, "model_work_fence": enrolled}
+            "sensitive": sensitive, "identity": identity, "model_work_fence": enrolled,
+            "retained_device_state": retained}
 
 
 def _present(path: Path | None) -> str:
@@ -214,7 +272,16 @@ def validate(backup: Path, profiles: dict[str, tuple[str, Path]]) -> dict:
                           if value and value["identity"] == identity and other != label]
                 codes.append("cross_slot_contamination" if others else "identity_mismatch")
         current = live.get(label)
+        if current is None:
+            codes.append('live_profile_unreadable')
         if current:
+            # A complete manifest of an incomplete copy is not sufficient.
+            # Include all live retained trust versions and its last Undo intent.
+            for name, digest in current['retained_device_state'].items():
+                if name not in files or name not in spec['retained_device_state']:
+                    codes.append('retained_device_state_missing')
+                elif files[name]!=digest or spec['retained_device_state'][name]!=digest:
+                    codes.append('retained_device_state_changed')
             live_digest = _sha256(Path(profiles[label][1]) / "config.json")
             backup_digest = _sha256(root / "config.json")
             if backup_digest != live_digest:

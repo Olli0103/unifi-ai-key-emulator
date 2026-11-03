@@ -43,10 +43,16 @@ def _trust(kind, directory, config):
     if path is None:
         return {**result, "observation": "not_configured"}
     try:
-        cert = _certificate(path)
+        from .controller_trust import selected
+        trust=selected(config,kind=kind,state_dir=directory)
+        if trust is not None:
+            parsed=x509.load_pem_x509_certificate(trust.certificate_pem.encode())
+            cert={'sha256':trust.fingerprint,'valid_now':True,'expires_at':parsed.not_valid_after_utc.isoformat()}
+        else:
+            cert = _certificate(path)
         pin = _parse_pin(controller.get("expected_fingerprint" if kind == "aikey" else "controller_pin"))
         result.update(certificate_valid_now=cert["valid_now"], expires_at=cert["expires_at"],
-                      observation="saved_certificate")
+                      observation="saved_immutable_trust" if trust is not None else "saved_certificate")
         if pin is not None:
             result["pin_matches_saved_certificate"] = hmac.compare_digest(bytes.fromhex(cert["sha256"]), pin)
     except (ConfigurationStoreError, OSError, ValueError, TypeError):

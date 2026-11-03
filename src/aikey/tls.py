@@ -58,15 +58,21 @@ def server_context(state_dir: Path) -> ssl.SSLContext:
     return context
 
 
-def client_context(config: dict, *, ca_file: str | None = None) -> ssl.SSLContext:
+def client_context(config: dict, *, ca_file: str | None = None, channel: str = 'control') -> ssl.SSLContext:
     controller = config["controller"]
-    context = ssl.create_default_context(cafile=ca_file or controller["ca_file"])
+    from .controller_trust import context as trusted_context, selected
+    state = Path(config["runtime"]["state_dir"])
+    trust=(selected(config,kind='aikey',state_dir=state,channel=channel)
+           if ca_file is None or channel=='search' else None)
+    if trust is None and channel=='search' and ca_file is None:
+        trust=selected(config,kind='aikey',state_dir=state)
+    context = (trusted_context(trust,check_hostname=controller.get('verify_hostname',True))
+               if trust is not None else ssl.create_default_context(cafile=ca_file or controller["ca_file"]))
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     # A directly trusted console certificate can have a hostname that differs from its LAN IP.
     context.check_hostname = controller.get("verify_hostname", True)
     context.verify_mode = ssl.CERT_REQUIRED
     context.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
-    state = Path(config["runtime"]["state_dir"])
     context.load_cert_chain(state / "device.crt", state / "device.key")
     return context
 

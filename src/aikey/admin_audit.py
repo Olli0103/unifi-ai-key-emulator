@@ -22,9 +22,10 @@ ACTIONS = frozenset({"login", "logout", "provider_save", "provider_rollback", "r
                      "config_preview", "config_apply", "config_rollback", "maintenance_submit", "index_cancel",
                      "ocr_provider", "camera_threshold", "plate_permissions", "speech_enroll", "speech_camera_add",
                      "caption_policy", "caption_scope", "caption_setup", "caption_enrollment", "worker_limits",
-                     "face_identity_delete", "key_face_scope", "face_identity_enroll", "face_route"})
+                     "face_identity_delete", "key_face_scope", "face_identity_enroll", "face_route",
+                     "device_configuration", "controller_probe"})
 _RESULT = re.compile(r"[a-z][a-z0-9_]{0,39}\Z")
-_PROFILE = re.compile(r"(aikey|aiport|aiport:[a-z0-9-]{1,32})\Z")
+_PROFILE = re.compile(r"(aikey|aiport|aiport:[a-z][a-z0-9_-]{0,31})\Z")
 _MAX_BYTES = 256 * 1024
 _MAX_LINE = 512
 

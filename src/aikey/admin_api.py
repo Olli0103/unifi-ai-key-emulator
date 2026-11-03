@@ -79,6 +79,29 @@ class AdminAPI:
         from .processing_status import ProcessingStatus
         self.processing_status = ProcessingStatus(self)
         self.processing_status.register(app)
+        if self.site.aikey is not None:
+            self._register_key_controls(app)
+        from .diagnostic_export import DiagnosticExport
+        self.diagnostic_export = DiagnosticExport(self)
+        self.diagnostic_export.register(app)
+        from .device_controls import DeviceControls
+        self.device_controls = DeviceControls(self)
+        self.device_controls.register(app)
+        from .camera_pool_controls import CameraPoolControls
+        self.camera_pool_controls = CameraPoolControls(self)
+        self.camera_pool_controls.register(app)
+        from .onvif_controls import OnvifControls
+        self.onvif_controls = OnvifControls(self)
+        self.onvif_controls.register(app)
+        if self.site.aikey is not None:
+            from .key_service_controls import KeyServiceControls
+            self.key_service_controls = KeyServiceControls(self)
+            self.key_service_controls.register(app)
+        from .port_feature_controls import PortFeatureControls
+        self.port_feature_controls = PortFeatureControls(self)
+        self.port_feature_controls.register(app)
+
+    def _register_key_controls(self,app):
         from .speech_enrollment import SpeechEnrollment
         self.speech_enrollment = SpeechEnrollment(self.site)
         self.speech_enrollment.register(app)
@@ -100,9 +123,6 @@ class AdminAPI:
         from .worker_limits_control import WorkerLimitsControl
         self.worker_limits_control = WorkerLimitsControl(self.site)
         self.worker_limits_control.register(app)
-        from .diagnostic_export import DiagnosticExport
-        self.diagnostic_export = DiagnosticExport(self)
-        self.diagnostic_export.register(app)
         from .face_identity_control import FaceIdentityControl
         self.face_identity_control = FaceIdentityControl(self)
         self.face_identity_control.register(app)
@@ -231,7 +251,7 @@ class AdminAPI:
     async def profiles(self, request):
         if not self.authenticated(request):
             return error("authentication_required", 401)
-        rows = [{"id": "aikey", "kind": "aikey", "configuration_edit": True}]
+        rows = [{"id": "aikey", "kind": "aikey", "configuration_edit": True}] if self.site.aikey is not None else []
         rows.extend({"id": name, "kind": "aiport", "configuration_edit": True}
                     for name in self.site.aiports)
         return reply({"profiles": rows, "activation": "saved_not_active_runtime"})

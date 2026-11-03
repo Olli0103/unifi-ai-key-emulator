@@ -82,6 +82,40 @@ admission records `uncertain`; no success/rollback/retry is inferred from it.
 
 ## Optional runtime observations
 
+### Dedicated typed device workflows
+
+Generic patches still cannot rotate identities, controller trust, native
+pairings or host paths. Dedicated `/device-workflows` routes instead operate on
+already attached server-owned profiles; [operator semantics](device-workflows.md)
+and [fixture boundaries](evidence/device-workflows-20261104.md) apply.
+
+| Route below `/api/admin/v1` | Typed operation |
+| --- | --- |
+| `GET /device-workflows` | Saved controller/transaction status, no credential hydration. |
+| `POST /device-workflows/controller-preview` | `{profile, revision, selection}`; reviewed host/public PEM/pin, optional Key hostname and separate search certificate. This preview accepts at most 64 KiB; other listener limits are unchanged. |
+| `POST /device-workflows/probe` | Exactly `{profile,review_token}`; one explicit anonymous TLS test, no save acknowledgement. Returns a new token for the same review without extending its original expiry. |
+| `GET /camera-pools`, `POST /device-workflows/camera-pool-preview` | Opaque fresh camera choices and optional initial independent API provider settings/key; native pairing remains separate. |
+| `GET /onvif-cameras`, `POST /device-workflows/onvif-preview` | Typed registration/upsert/remove/clear metadata with write-only credentials; no ingest. |
+| `GET /key-services`, `POST /device-workflows/key-service-preview` | Initial/change/disable fixed Key local roles, named recognition choices and explicit broad controller-job scope for enhancement/deep. Key-less listener does not register these. |
+| `GET /port-features`, `POST /device-workflows/port-feature-preview` | `{profile,revision,feature,mode}`; configure adds opaque `choices`, face/sound `model_choice`, speech/sound `event_limit`, sound `types`. Never model/secret paths. |
+| `POST /device-workflows/rollback-preview` | `{profile,revision}`; only last current completed device transaction. Initial face Undo retains vector-space guard explicitly. |
+| `POST /device-workflows/reconcile-preview` | `{profile,revision}`; explicit saved-byte settlement of unresolved intent, not a rewrite/retry. |
+| `POST /device-workflows/apply` | Exactly `{profile,review_token,acknowledgements}` matching the fresh server-private review; no caller candidate bytes. |
+
+Preview responses contain the public typed `review`, opaque `review_token`,
+`expires_in_seconds:600`, sanitized `details` and optional probe result. Camera
+IDs, credentials, private candidate bytes, model/credential paths and draft PEM
+are not copied into confirmation hidden fields or these dedicated status views.
+All writes share existing cookie/Origin/CSRF/Host/quota admission and the same
+OS mutex. A configured durable audit is required for dedicated commits. Tokens
+are session/profile/operation/epoch-bound and one-use; stale identity/revision,
+changed choices, expired authority or uncertain outcome require a new decision.
+The resulting `activation` is always `saved_not_active_runtime`.
+
+Native HTML forms on `/devices`, `/camera-pairing`, `/onvif-cameras`,
+`/local-feature-services` and `/port-features` use the same stores and contracts.
+No JSON editor or arbitrary HTTP-selected file/command is introduced.
+
 Configure each intended target on the server with repeated
 `--runtime-health PROFILE=HTTPS_URL`. Profiles must already exist; the target
 must be one literal private/loopback/VPN IP, HTTPS and exactly `/healthz`, with

@@ -183,7 +183,7 @@ def parse_config(raw: bytes, *, state_dir: Path, check_decoder_executable: bool 
     except (ValueError, UnicodeError) as exc:
         raise CandidateError("Invalid candidate configuration JSON") from exc
     required = {"controller_ip", "device_ip", "mac", "controller_pin", "firmware_version"}
-    allowed = required | {"paired_stream", "paired_streams", "diagnostic_hello_until",
+    allowed = required | {"paired_stream", "paired_streams", "controller_trust_ref", "onvif_catalog_ref", "face_model_space_ref", "diagnostic_hello_until",
                           "diagnostic_stream", "live_detector", "live_pool_detector",
                           "live_speech_cameras", "live_speech_max_events_per_hour",
                           "live_face", "live_sound",
@@ -199,6 +199,18 @@ def parse_config(raw: bytes, *, state_dir: Path, check_decoder_executable: bool 
                           "diagnostic_function_fingerprints_until"}
     if not isinstance(value, dict) or not required <= set(value) or not set(value) <= allowed:
         raise CandidateError("Candidate configuration fields do not match the isolated profile")
+    if 'controller_trust_ref' in value:
+        from .controller_trust import valid_reference
+        if not valid_reference(value['controller_trust_ref']):
+            raise CandidateError('Invalid reviewed controller trust reference')
+    if 'onvif_catalog_ref' in value:
+        from .onvif_catalog import valid_reference
+        if not valid_reference(value['onvif_catalog_ref']):
+            raise CandidateError('Invalid ONVIF metadata catalog reference')
+    if 'face_model_space_ref' in value:
+        from .port_feature_models import valid_space_ref
+        if not valid_space_ref(value['face_model_space_ref']):
+            raise CandidateError('Invalid retained face model-space reference')
     if "paired_stream" in value:
         stream = value["paired_stream"]
         if (not isinstance(stream, dict) or set(stream) != {
@@ -700,8 +712,26 @@ def _strict_json_object(raw: bytes) -> dict:
 class CandidateService:
     @classmethod
     def from_configuration_file(cls, path: Path):
-        raw = _private_file(path, 4096)
-        config = parse_config(raw, state_dir=path.parent)
+        from .device_workflow_fence import DeviceIntentError, check
+        try:
+            check(path,durable=False)
+            raw = _private_file(path, 4096)
+            config = parse_config(raw, state_dir=path.parent)
+            check(path,durable=False)
+        except DeviceIntentError:
+            raise CandidateError('Unfinished device configuration needs reconciliation before startup') from None
+        if config.get('onvif_catalog_ref'):
+            from .onvif_catalog import load
+            try:
+                load(path.parent,config['onvif_catalog_ref'],config['mac'])
+            except (OSError,ValueError):
+                raise CandidateError('ONVIF metadata references are unavailable; ingest remains unsupported') from None
+        if config.get('face_model_space_ref'):
+            from .port_feature_models import load_face_space
+            try:
+                load_face_space(path.parent,config['face_model_space_ref'],config['mac'],config.get('live_face'))
+            except (OSError,ValueError):
+                raise CandidateError('Retained face model space is unavailable or incompatible') from None
         return cls(config, path.parent, startup_revision=hashlib.sha256(raw).hexdigest())
 
     def __init__(self, config: dict, state_dir: Path, *, control_port: int = 7442,
@@ -2536,7 +2566,10 @@ class CandidateService:
             return valid
 
     def _client_context(self) -> ssl.SSLContext:
-        context = ssl.create_default_context(cafile=str(self.state_dir / "controller-ca.pem"))
+        from .controller_trust import context as trusted_context, selected
+        trust=selected(self.config,kind='aiport',state_dir=self.state_dir)
+        context = (trusted_context(trust,check_hostname=False) if trust is not None else
+                   ssl.create_default_context(cafile=str(self.state_dir / "controller-ca.pem")))
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.check_hostname = False
         context.load_cert_chain(str(self.state_dir / "device.crt"), str(self.state_dir / "device.key"))
