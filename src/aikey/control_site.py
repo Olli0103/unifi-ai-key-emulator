@@ -82,6 +82,8 @@ th, td { padding: .65rem; text-align: left; border-bottom: 1px solid #d9e2eb; }
 .maintenance fieldset { min-width: 0; margin: 1rem 0; border: 1px solid #65788b; }
 .maintenance code { overflow-wrap: anywhere; }
 .face-identity, .face-confirmation { overflow-wrap: anywhere; }
+.device-workflow { overflow-wrap: anywhere; }
+.device-workflow fieldset { min-width: 0; }
 """
 
 
@@ -127,7 +129,7 @@ def _private_directory(path: Path) -> None:
 
 
 class ControlSite:
-    def __init__(self, aikey_config: Path, aiport_config: Path | None = None, *,
+    def __init__(self, aikey_config: Path | None = None, aiport_config: Path | None = None, *,
                  signing_key: bytes, password_record: str, port: int,
                  aiport_runtime_state_dir: Path | None = None,
                  aiport_instances: dict[str, Path] | None = None,
@@ -140,6 +142,8 @@ class ControlSite:
                  search_live_rows: Callable[[], Awaitable[int]] | None = None,
                  search_session_live_rows: Callable[[], Awaitable[int]] | None = None,
                  aikey_state_dir: Path | None = None,
+                 camera_pool_decoders: dict[str, str] | None = None,
+                 port_model_catalogs: dict[str, list[Path]] | None = None,
                  audit_log: Path | None = None,
                  runtime_health_urls: dict[str, str] | None = None,
                  maintenance_bridge: Path | None = None,
@@ -152,7 +156,7 @@ class ControlSite:
         self.origin = self.security.allowed_origin
         self.listener = configure_listener(port, bind, self.origin, tls_certificate, tls_private_key)
         self.password_record = password_record
-        self.aikey = ConfigurationStore(aikey_config)
+        self.aikey = ConfigurationStore(aikey_config) if aikey_config is not None else None
         self.aiport = (AiPortConfigurationStore(
             aiport_config, runtime_state_dir=aiport_runtime_state_dir)
             if aiport_config is not None else None)
@@ -168,6 +172,8 @@ class ControlSite:
                 raise ValueError("Duplicate AI Port configuration")
             paths.add(store.path)
             self.aiports[f"aiport:{name}"] = store
+        if self.aikey is None and not self.aiports:
+            raise ValueError('At least one independently configured device profile is required')
         self.inventory_loader = inventory_loader
         self.caption_setup_binding = caption_setup_binding
         self.native_status_loader = native_status_loader
@@ -181,8 +187,30 @@ class ControlSite:
         self.search_backups_dir = search_backups_dir
         self.search_live_rows = search_live_rows
         self.search_session_live_rows = search_session_live_rows
+        if self.aikey is None and any(value is not None for value in (
+                search_state_dir,search_backups_dir,search_live_rows,search_session_live_rows,caption_setup_binding)):
+            raise ValueError('Search and caption administration require an attached AI Key profile')
         # The Key's host state sits next to its config unless given (#12).
-        self.aikey_state_dir = aikey_state_dir or self.aikey.path.parent
+        if self.aikey is None and aikey_state_dir is not None:
+            raise ValueError('AI Key state requires an attached AI Key profile')
+        self.aikey_state_dir = (aikey_state_dir or self.aikey.path.parent) if self.aikey is not None else None
+        self.camera_pool_decoders = dict(camera_pool_decoders or {})
+        from .aiport_candidate import _offline_decoder_path
+        if set(self.camera_pool_decoders) - set(self.aiports):
+            raise ValueError('Decoder binding requires an attached AI Port')
+        for value in self.camera_pool_decoders.values():
+            _offline_decoder_path(value)
+        if (port_model_catalogs is not None and (not isinstance(port_model_catalogs,dict)
+                or any(not isinstance(paths,list) for paths in port_model_catalogs.values()))):
+            raise ValueError('Port model bindings require a profile-to-list mapping')
+        self.port_model_catalogs={profile:list(paths) for profile,paths in (port_model_catalogs or {}).items()}
+        if (set(self.port_model_catalogs)-set(self.aiports)
+                or any(not 1<=len(paths)<=16 for paths in self.port_model_catalogs.values())):
+            raise ValueError('Port model bindings require an attached profile and a bounded catalog')
+        from .port_feature_models import load as load_model_binding
+        for paths in self.port_model_catalogs.values():
+            for path in paths:
+                load_model_binding(path)
         from .admin_runtime import RuntimeObserver
         self.runtime_observer = RuntimeObserver(self._backup_profiles(), runtime_health_urls or {})
         self.audit = AuditLog(audit_log) if audit_log is not None else None
@@ -205,11 +233,13 @@ class ControlSite:
         app.router.add_get("/aiport-rollout", self.rollout_page)
         app.router.add_post("/aiport-rollout", self.rollout_apply)
         # Apply remains unavailable. Cancellation only retires an idle staged generation.
-        app.router.add_get("/index-migration", self.index_migration)
-        app.router.add_post("/index-migration/cancel", self.cancel_index_migration)
+        if self.aikey is not None:
+            app.router.add_get("/index-migration", self.index_migration)
+            app.router.add_post("/index-migration/cancel", self.cancel_index_migration)
         app.router.add_get("/data-retention", self.data_retention)
         app.router.add_get("/audit", self.audit_page)
-        app.router.add_get("/caption-preflight", self.caption_preflight_page)
+        if self.aikey is not None:
+            app.router.add_get("/caption-preflight", self.caption_preflight_page)
         app.router.add_get("/state-backup-preflight", self.state_backup_page)
         app.router.add_get("/model-registry", self.model_registry_page)
         app.router.add_get("/login", self.login_page)
@@ -218,9 +248,10 @@ class ControlSite:
         app.router.add_post("/provider/rollback", self.rollback_provider)
         app.router.add_post("/role-model", self.save_role_model)
         app.router.add_post("/role-model-preview", self.preview_role_model)
-        app.router.add_post("/speech-provider", self.save_speech_provider)
-        app.router.add_get("/speech-permissions", self.speech_permissions)
-        app.router.add_post("/speech-permissions", self.restrict_speech_permissions)
+        if self.aikey is not None:
+            app.router.add_post("/speech-provider", self.save_speech_provider)
+            app.router.add_get("/speech-permissions", self.speech_permissions)
+            app.router.add_post("/speech-permissions", self.restrict_speech_permissions)
         app.router.add_get("/aiport-permissions", self.aiport_permissions)
         app.router.add_post("/aiport-permissions", self.restrict_aiport_permissions)
         app.router.add_post("/model-catalog", self.model_catalog)
@@ -242,7 +273,7 @@ class ControlSite:
         if self._session(request) is None:
             raise web.HTTPSeeOther("/login")
         rows = []
-        stores = [("AI Key", self.aikey)] + [
+        stores = ([("AI Key", self.aikey)] if self.aikey is not None else []) + [
             ("this AI Port" if profile == "aiport" else "AI Port " + profile.partition(":")[2], store)
             for profile, store in self.aiports.items()]
         policies = {"role_model_preview": "Model preview and revision-checked save",
@@ -408,7 +439,7 @@ class ControlSite:
         return _page("Caption preflight", body)
 
     def _backup_profiles(self) -> dict:
-        profiles = {"aikey": ("aikey", self.aikey_state_dir)}
+        profiles = {"aikey": ("aikey", self.aikey_state_dir)} if self.aikey is not None else {}
         for profile, store in self.aiports.items():
             profiles[profile] = ("aiport", store.path.parent)
         return profiles
@@ -769,6 +800,8 @@ class ControlSite:
         fetched = datetime.fromtimestamp(report["fetched_at"], timezone.utc).strftime(
             "%Y-%m-%d %H:%M UTC")
         body = ("<h1>Protect cameras</h1><p><a href='/'>Settings</a> · "
+                "<a href='/camera-pairing'>Pairing and local capture</a> · "
+                "<a href='/onvif-cameras'>Configured ONVIF references</a> · "
                 "<a href='/cameras'>Refresh</a></p>"
                 f"<p>Protect {_safe(report['protect_version'])} · Fetched {_safe(fetched)}</p>"
                 f"<p>{len(rows)} cameras · {target_count} connected legacy / G3–G5 targets · "
@@ -850,6 +883,27 @@ class ControlSite:
                             max_age=self.security.session_ttl)
         raise response
 
+    def _navigation(self):
+        links=[('/data-retention','Data flow and retention (read-only)'),('/audit','Audit log')]
+        if self.aikey is not None:
+            links += [('/caption-preflight','Caption preflight'),('/caption-policy','Caption cost policy'),
+                ('/caption-cameras','Caption cameras'),('/caption-camera-enrollment','Add caption cameras'),
+                ('/caption-setup','Set up automatic captions')]
+        links += [('/state-backup-preflight','Backup preflight'),('/maintenance','Maintenance operations'),
+            ('/devices','Device configuration'),('/runtime-status','Runtime configuration'),
+            ('/processing','Processing and budgets')]
+        if self.aikey is not None:
+            links += [('/worker-limits','Key processing limits'),('/face-identities','Local face identities'),
+                ('/key-face-cameras','Saved Key face cameras'),('/face-route','Local face service'),
+                ('/local-feature-services','Local feature services')]
+        links += [('/diagnostics','Redacted diagnostics'),('/camera-status','Native camera status'),
+            ('/model-registry','Saved model role registry')]
+        if self.aiports:
+            links += [('/camera-pairing','Camera pairing and capture'),('/onvif-cameras','Configured ONVIF references'),
+                ('/port-features','AI Port feature permissions')]
+        return "<nav aria-label='Configuration areas'><p>"+' · '.join(
+            f"<a href='{url}'>{_safe(label)}</a>" for url,label in links)+'</p></nav>'
+
     async def index(self, request: web.Request) -> web.Response:
         cookie = self._session(request)
         if cookie is None:
@@ -858,13 +912,13 @@ class ControlSite:
         if csrf is None:
             raise web.HTTPSeeOther("/login")
         try:
-            key = self.aikey.snapshot()
+            key = self.aikey.snapshot() if self.aikey is not None else None
             ports = {profile: store.snapshot()
                      for profile, store in self.aiports.items()}
         except (ConfigurationStoreError, AiPortConfigurationError):
             return _page("Configuration unavailable", "<h1>Configuration unavailable</h1>"
                          "<p class='error'>Check the private profile config files.</p>")
-        inference = key.configuration["inference"]
+        inference = key.configuration["inference"] if key is not None else {}
         key_configured = bool(inference.get("api_key_file", {}).get("configured"))
         notice = ("<p class='notice'>Settings saved. Restart the affected service to apply them.</p>"
                   if request.query.get("saved") == "1" else
@@ -872,7 +926,7 @@ class ControlSite:
                   "profile. Restart the affected service to apply them. The site changes only "
                   "the configuration files mounted or supplied to it.</p>"
                   if request.query.get("rolledback") == "1" else "")
-        undo_form = self._undo_form("aikey", "AI Key", self.aikey.provider_rollback_status(), csrf)
+        undo_form = self._undo_form("aikey", "AI Key", self.aikey.provider_rollback_status(), csrf) if key is not None else ''
         body = ("<div class='row'><div><h1>Local AI processor</h1>"
                 "<p class='muted'>Provider and model settings for configured Protect profiles.</p>"
                 "</div><form method='post' action='/logout'>"
@@ -884,33 +938,21 @@ class ControlSite:
                    if self.inventory_loader is not None else "")
                 + ("<p><a href='/index-migration'>Search index migration (read-only)</a></p>"
                    if self.search_state_dir is not None else "")
-                + "<p><a href='/data-retention'>Data flow and retention (read-only)</a> · "
-                  "<a href='/audit'>Audit log</a> · "
-                  "<a href='/caption-preflight'>Caption preflight</a> · "
-                  "<a href='/caption-policy'>Caption cost policy</a> · "
-                  "<a href='/caption-cameras'>Caption cameras</a> · "
-                  "<a href='/caption-camera-enrollment'>Add caption cameras</a> · "
-                  "<a href='/caption-setup'>Set up automatic captions</a> · "
-                  "<a href='/state-backup-preflight'>Backup preflight</a> · "
-                  "<a href='/maintenance'>Maintenance operations</a> · "
-                  "<a href='/runtime-status'>Runtime configuration</a> · "
-                  "<a href='/processing'>Processing and budgets</a> · "
-                  "<a href='/worker-limits'>Key processing limits</a> · "
-                  "<a href='/face-identities'>Local face identities</a> · "
-                  "<a href='/key-face-cameras'>Saved Key face cameras</a> · "
-                "<a href='/face-route'>Local face service</a> · "
-                  "<a href='/diagnostics'>Redacted diagnostics</a> · "
-                  "<a href='/camera-status'>Native camera status</a> · "
-                  "<a href='/model-registry'>Saved model role registry</a></p>"
+                + self._navigation()
                 + ("<p><a href='/aiport-permissions'>Remove saved AI Port face, sound or speech permissions</a></p>"
                    if ports else "")
                 + ("<p><a href='/plate-cameras'>Plate camera permissions</a></p>" if ports else "")
                 + ("<p><a href='/camera-thresholds'>Camera score thresholds</a></p>" if ports else "")
                 + ("<p><a href='/ocr-provider'>Configure separate plate OCR provider</a></p>" if ports else "")
-                + undo_form + self._role_models_section(csrf) + self._speech_form(key, csrf)
+                + undo_form + self._role_models_section(csrf) + (self._speech_form(key, csrf) if key is not None else '')
                 + "<div class='grid'>")
-        body += self._provider_form("AI Key", "aikey", key.revision, inference,
-                                    key_configured, csrf)
+        if key is not None:
+            body += self._provider_form("AI Key", "aikey", key.revision, inference,
+                                        key_configured, csrf)
+        else:
+            body += ("<section><h2>AI Port-only configuration</h2><p>No AI Key profile, credential "
+                     "or adoption identity is attached or created. <a href='/devices'>Configure "
+                     "the attached AI Port</a> and <a href='/camera-pairing'>its local capture cameras</a>.</p></section>")
         for profile, port in ports.items():
             title = ("AI Port" if profile == "aiport" else
                      "AI Port " + profile.partition(":")[2])
@@ -1026,7 +1068,7 @@ class ControlSite:
             self._audit("provider_save", "forbidden")
             raise web.HTTPForbidden()
         profile = fields.get("profile")
-        if profile != "aikey" and profile not in self.aiports:
+        if profile == 'aikey' and self.aikey is None or profile != "aikey" and profile not in self.aiports:
             self._audit("provider_save", "unknown_profile")
             raise web.HTTPBadRequest(text="Unknown profile")
         is_port = profile != "aikey"
@@ -1525,7 +1567,7 @@ class ControlSite:
     def _role_models_section(self, csrf: str) -> str:
         """Per-role models, one revision-checked form per editable role (#17)."""
         rows = []
-        stores = [("aikey", "AI Key", self.aikey)] + [
+        stores = ([("aikey", "AI Key", self.aikey)] if self.aikey is not None else []) + [
             (profile, "this AI Port" if profile == "aiport" else "AI Port " + profile.partition(":")[2],
              store) for profile, store in self.aiports.items()]
         for profile, title, store in stores:
@@ -1861,6 +1903,9 @@ class ControlSite:
         enrollment = getattr(getattr(self, "admin_api", None), "face_enrollment_control", None)
         if enrollment is not None:
             enrollment.revoke_session(cookie)
+        devices = getattr(getattr(self, 'admin_api', None), 'device_controls', None)
+        if devices is not None:
+            devices.revoke_session(cookie)
         self._audit("logout", "signed_out")
         response = web.HTTPSeeOther("/login")
         response.del_cookie(self.cookie_name, path="/", httponly=True,
@@ -1888,13 +1933,17 @@ def _cli() -> argparse.ArgumentParser:
     _listener_arguments(setup_port)
     run = commands.add_parser("run", help="Serve settings on loopback or explicit direct HTTPS")
     run.add_argument("--state-dir", required=True, type=Path)
-    run.add_argument("--aikey-config", required=True, type=Path)
+    run.add_argument("--aikey-config", type=Path, help="Optional existing AI Key configuration; omit for AI Port only")
     run.add_argument("--aiport-config", type=Path,
                      help="Optional existing default AI Port configuration; omit for AI Key only")
     run.add_argument("--aiport-runtime-state-dir", type=Path,
                      help="AI Port state path inside its processor container")
     run.add_argument("--aiport-instance", action="append", default=[], metavar="NAME=CONFIG",
                      help="Add another AI Port instance with a private host config path")
+    run.add_argument("--camera-pool-decoder", action="append", default=[], metavar="PROFILE=PATH",
+                     help="Host-approved runtime decoder for new capture cameras; never accepted from HTTP")
+    run.add_argument('--port-model-binding',action='append',default=[],metavar='PROFILE=FILE',
+                     help='Private host-published face/sound model binding; no HTTP filesystem paths')
     run.add_argument("--runtime-health", action="append", default=[], metavar="PROFILE=HTTPS_URL",
                      help="Explicit own-runtime private HTTPS healthz target; pinned to that profile certificate")
     run.add_argument("--maintenance-bridge", type=Path,
@@ -2093,10 +2142,24 @@ def main(argv: list[str] | None = None) -> int:
             if not separator or not profile or not url or profile in runtime_health:
                 raise ValueError("Invalid runtime health target assignment")
             runtime_health[profile] = url
+        pool_decoders = {}
+        for assignment in args.camera_pool_decoder:
+            profile, separator, decoder = assignment.partition('=')
+            if not separator or not profile or not decoder or profile in pool_decoders:
+                raise ValueError('Invalid camera pool decoder assignment')
+            pool_decoders[profile] = decoder
+        port_models={}
+        for assignment in args.port_model_binding:
+            profile,separator,path=assignment.partition('=')
+            if not separator or not profile or not path:
+                raise ValueError('Invalid Port model binding assignment')
+            port_models.setdefault(profile,[]).append(Path(path))
         site = ControlSite(args.aikey_config, args.aiport_config,
                            signing_key=signing_key, password_record=record, port=args.port,
                            aiport_runtime_state_dir=args.aiport_runtime_state_dir,
                            aiport_instances=instances,
+                           camera_pool_decoders=pool_decoders,
+                           port_model_catalogs=port_models,
                            runtime_health_urls=runtime_health,
                            maintenance_bridge=args.maintenance_bridge,
                            inventory_loader=inventory_loader,
@@ -2113,7 +2176,8 @@ def main(argv: list[str] | None = None) -> int:
                            if args.search_container else None,
                            search_live_rows=_live_rows(args.search_container)
                            if args.search_container else None)
-        site.aikey.snapshot()
+        if site.aikey is not None:
+            site.aikey.snapshot()
         for port_store in site.aiports.values():
             port_store.snapshot()
         print(json.dumps({"control_site": site.origin,

@@ -47,6 +47,8 @@ _IMMUTABLE_PATHS = {
     ("device", "management_username"),
     ("device", "management_password_file"),
     ("controller", "ca_file"),
+    ("controller", "trust_ref"),
+    ("controller", "search_trust_ref"),
     ("database", "password_file"),
 }
 
@@ -1188,6 +1190,12 @@ class ConfigurationStore:
                     and any(previous.get(k) != candidate.get(k) for k in route_fields)):
                 raise UnsafeConfigurationChange(
                     "Credential destination changes require a role-specific write-only operation")
+        previous,candidate=before.get('controller') or {},after.get('controller') or {}
+        for reference,fields in (('trust_ref',('host','expected_fingerprint')),
+                                 ('search_trust_ref',('host','search_expected_fingerprint'))):
+            if (previous.get(reference) and previous.get(reference)==candidate.get(reference)
+                    and any(previous.get(k)!=candidate.get(k) for k in fields)):
+                raise UnsafeConfigurationChange('Reviewed controller destination changes require the device workflow')
 
     def _assert_immutable(self, before: dict[str, Any], after: dict[str, Any]) -> None:
         changed = [".".join(path) for path in sorted(_IMMUTABLE_PATHS)
@@ -1309,7 +1317,7 @@ class ConfigurationStore:
             raise ConfigurationStoreError("Cannot persist configuration history") from exc
 
     @contextmanager
-    def _locked(self) -> Iterator[None]:
+    def _locked(self, *, allow_device_pending: bool = False) -> Iterator[None]:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         flags = os.O_CREAT | os.O_RDWR
         if hasattr(os, "O_NOFOLLOW"):
@@ -1330,6 +1338,13 @@ class ConfigurationStore:
                 acquire_file_lock(lock.fileno())
             except OSError as exc:
                 raise ConfigurationStoreError("Cannot acquire the configuration update lock") from exc
+            if not allow_device_pending:
+                from .device_workflow_fence import DeviceIntentError, check
+                try:
+                    check(self.path)
+                except DeviceIntentError:
+                    raise UnsafeConfigurationChange(
+                        'An unfinished device configuration save needs reconciliation before another change') from None
             yield
 
     def _replace(self, content: bytes) -> None:

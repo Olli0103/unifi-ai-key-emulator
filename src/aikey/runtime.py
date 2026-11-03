@@ -36,8 +36,11 @@ class Application:
                                     credential_handler=self.credential_handler,
                                     camera_registry=self.camera_registry)
         search_ca = config["controller"].get("search_ca_file")
+        search_trust = config["controller"].get("search_trust_ref")
+        search_context=(client_context(config,ca_file=search_ca,channel='search') if search_trust else
+                        client_context(config,ca_file=search_ca) if search_ca else outbound)
         self.search = SearchService(config, self.state_dir,
-                                    ssl_context=client_context(config, ca_file=search_ca) if search_ca else outbound,
+                                    ssl_context=search_context,
                                     media_ssl_context=outbound)
         self.discovery = DiscoveryService(config, info_provider=self.device.get_info,
                                            adopted_provider=lambda: self.device.status["adopted"])

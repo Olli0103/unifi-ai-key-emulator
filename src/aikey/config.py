@@ -137,9 +137,12 @@ def load_config(path: Path) -> dict:
 def load_startup_config(path: Path) -> tuple[dict, str]:
     """Validate and fingerprint the very same bounded startup file snapshot."""
     from .startup_configuration import read_snapshot
+    from .device_workflow_fence import check as check_device_intent
     try:
+        check_device_intent(path,durable=False)
         raw, revision = read_snapshot(path, limit=1024 * 1024)
         config = json.loads(raw)
+        check_device_intent(path,durable=False)
     except (OSError, ValueError, UnicodeError) as exc:
         raise ConfigError("Cannot read valid startup configuration") from exc
     return validate_config(config, base=path.resolve().parent), revision
@@ -286,8 +289,18 @@ def validate_config(value: dict, *, base: Path | None = None) -> dict:
             raise ConfigError("Disabling hostname checks requires an explicit controller SHA-256 pin")
     # Protect serves its search WebSocket port with its own certificate (7.3.x:
     # CN=unifi.local on 7443, CN=localhost on 7442), so it may carry its own trust.
-    if ("search_ca_file" in controller) != ("search_expected_fingerprint" in controller):
-        raise ConfigError("controller.search_ca_file and search_expected_fingerprint go together")
+    from .controller_trust import valid_reference
+    for field in ('trust_ref','search_trust_ref'):
+        if field in controller and not valid_reference(controller[field]):
+            raise ConfigError('Controller trust reference must identify an immutable reviewed object')
+    if 'trust_ref' in controller:
+        pin=controller.get('expected_fingerprint')
+        if not isinstance(pin,str) or not re.fullmatch(r'[0-9a-fA-F]{64}',pin.replace(':','')):
+            raise ConfigError('A selected controller trust object requires an explicit SHA-256 pin')
+    if any(field in controller for field in ('search_ca_file','search_expected_fingerprint','search_trust_ref')):
+        if ('search_expected_fingerprint' not in controller
+                or not any(field in controller for field in ('search_ca_file','search_trust_ref'))):
+            raise ConfigError("controller search trust and search_expected_fingerprint go together")
     if "search_expected_fingerprint" in controller:
         pin = controller["search_expected_fingerprint"]
         if not isinstance(pin, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", pin.replace(":", "")):
@@ -433,6 +446,15 @@ def readiness(config: dict) -> dict:
         "management_credential_file": Path(config["device"]["management_password_file"]).is_file(),
         "vision_model_configured": bool(config["inference"].get("model")),
     }
+    if any(config['controller'].get(field) for field in ('trust_ref','search_trust_ref')):
+        from .controller_trust import selected
+        try:
+            for channel in ('control','search'):
+                selected(config,kind='aikey',state_dir=state,channel=channel)
+            if config['controller'].get('trust_ref'):
+                checks['controller_trust_file']=True
+        except ValueError:
+            checks['controller_trust_file']=False
     provider = config["inference"].get("provider", "openai-compatible")
     if provider in {"openai", "anthropic"}:
         checks["vision_api_key_file"] = Path(config["inference"].get("api_key_file", "")).is_file()

@@ -4,7 +4,26 @@ For a credentials-free, read-only preview with invented data, use the separate
 [synthetic demo](synthetic-demo.md). It is not an administration or device server
 and cannot read deployment state or send a provider request.
 
-The control site is a separate loopback HTTP service for the AI Key and optional AI Port configuration files. It has administrator sign-in, a signed session, CSRF protection, revision-checked saves and write-only API-key replacement. It manages the vision provider, model and endpoint for AI Key descriptions and AI Port object detections. OpenAI, Claude/Anthropic, Ollama and an OpenAI-compatible endpoint are selectable. Each AI Port form also manages classes, score threshold and an optional API-request cost cap (empty means no cap) for that instance only. Object events have no per-camera cap, and a save keeps the local fallback, plate cameras, held-package mode, existing per-camera score gates and existing local score-server routing. Provider/model edits preserve unrelated raw camera spellings and omitted defaults; these forms do not add or retarget per-camera gates or a score server. A configured AI Key speech role has its own provider form, described below. Initial AI Key audio opt-in is available through the separate explicit speech setup below. The site does not manage embeddings, face model installation, adoption, camera pairing or service restarts yet. Those controls remain open work under [issue #17](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17).
+The control site is a separate loopback service for an AI Key, AI Ports, or both.
+It has administrator sign-in, signed sessions, CSRF protection, revision-checked
+saves and write-only key replacement. No placeholder identity or shared
+credential is required for the other profile kind. Explicitly supplied missing
+or invalid profiles still refuse startup. Direct private HTTPS is optional.
+
+Follow the [complete operator workflow](device-workflows.md) for independent
+first-run preparation, controller trust, camera capture, ONVIF secret references,
+local feature/model selections, review, save, Undo and uncertain-write
+reconciliation. Provider pages cover OpenAI, Anthropic, Ollama and compatible
+endpoints. Each Port keeps its own classes, score gates and optional API-request
+cost cap; object events have no per-camera cap. Provider edits preserve other
+roles, omitted defaults and raw unrelated camera spellings.
+
+Native adoption, native camera pairing and zone editing remain in Protect's
+graphical editor, with guidance and separately labeled observations here. They
+are not relabeled local configuration writes. Model installation, ONVIF ingest,
+PTZ and recording control are not implemented by these forms. Host-approved
+maintenance and index migration retain their separate authority and verification
+boundaries. Saved configuration is never proof of running or native behavior.
 
 For a new AI Key, the separate [authenticated first-run mode](first-run.md#authenticated-browser-preparation)
 prepares only a new directory and pinned public trust, without network access,
@@ -134,8 +153,9 @@ widgets, forced colors, zoom/reflow, real mobile browsers and keyboard/screen
 reader use still require direct acceptance. No browser test is claimed from
 these source/HTML checks.
 
-English remains the implemented page language. Further localization and the
-complete first-run/feature-control workflow remain open.
+English remains the implemented page language. Further localization is not
+provided. The complete first-run/feature-control source workflow and its
+isolated browser boundary are documented in [device workflows](device-workflows.md).
 
 ## Search index and backup status
 

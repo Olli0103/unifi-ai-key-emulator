@@ -137,6 +137,18 @@ class AiPortConfigurationStore:
 
     @staticmethod
     def _assert_role_routes(before: dict, after: dict) -> None:
+        # A generic patch/provider Undo must not bypass a compatibility guard
+        # established by typed face enrollment. Disabling retains the guard;
+        # any later re-enable still has to use the same vector space.
+        if before.get('face_model_space_ref') and after.get('live_face'):
+            from .port_feature_models import face_space
+            from .aiport_ingest import normalize_mac
+            try:
+                same=face_space(after['live_face'],normalize_mac(after['mac']))[0]==before['face_model_space_ref']
+            except (KeyError,TypeError,ValueError):
+                same=False
+            if not same:
+                raise AiPortUnsafePolicyChange('port_face_model_space_migration_required')
         old = before.get("live_pool_detector") or {}
         new = after.get("live_pool_detector") or {}
         for path in (("provider_config",), ("ocr_provider_config",), ("fallback", "provider_config")):
@@ -864,7 +876,7 @@ class AiPortConfigurationStore:
         atomic_private(archived, content)
 
     @contextmanager
-    def _locked(self) -> Iterator[None]:
+    def _locked(self, *, allow_device_pending: bool = False) -> Iterator[None]:
         descriptor = -1
         try:
             descriptor = os.open(self.lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
@@ -876,6 +888,13 @@ class AiPortConfigurationStore:
             with os.fdopen(descriptor, "rb") as lock:
                 descriptor = -1
                 acquire_file_lock(lock.fileno())
+                if not allow_device_pending:
+                    from .device_workflow_fence import DeviceIntentError, check
+                    try:
+                        check(self.path)
+                    except DeviceIntentError:
+                        raise AiPortUnsafePolicyChange(
+                            'An unfinished device configuration save needs reconciliation before another change') from None
                 yield
         except OSError as exc:
             raise AiPortConfigurationError("aiport_config_lock_unavailable") from exc
