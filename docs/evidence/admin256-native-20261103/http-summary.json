@@ -1,0 +1,31 @@
+{
+  "schema": "aikey-native-admin-http-proof/1",
+  "source": "6ca654452430211cfc75bb24d3c368a27d019dec",
+  "runtime_profiles": 5,
+  "active_streams": 9,
+  "runtime_camera_rows": 9,
+  "camera_controls": 27,
+  "scope_panels": 12,
+  "inventory_rows": 11,
+  "saved_bindings": 9,
+  "all_runtime_tls_verified": true,
+  "all_saved_revisions_match_startup": true,
+  "running_caption_policy_contract": {
+    "mode": "unmetered",
+    "scope": "continuous_captions_not_speech_port_or_all_paid_calls",
+    "budget": null
+  },
+  "local_face_empty_metadata_read": true,
+  "live_face_worker_asserted_by_metadata": false,
+  "real_face_record_reads": 0,
+  "face_deletions": 0,
+  "processing_camera_name_observations": {
+    "runtime_order_and_inventory": 9
+  },
+  "processing_camera_sections": 9,
+  "reported_zone_and_stream_fields_present": true,
+  "settings_or_model_or_maintenance_applies": 0,
+  "default_ca_and_sni_verified": true,
+  "native_pairing_or_zone_enforcement_proof": false,
+  "real_browser_or_mobile_acceptance": false
+}
