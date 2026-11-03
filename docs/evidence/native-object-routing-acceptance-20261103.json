@@ -1,0 +1,89 @@
+{
+  "schema": "native-object-routing-acceptance/1",
+  "observed_date": "2026-11-03",
+  "protect_version": "7.3.74",
+  "source_review_base": "f6f86ba08e5033129720b198397a6a75fb8ed6a5",
+  "routing": {
+    "retained_wire_fingerprints": 21,
+    "native_snapshot_matches": 21,
+    "distinct_native_events": 17,
+    "original_cameras": 5,
+    "source_ports": 4,
+    "complete_native_query_rows": 119,
+    "native_query_cap": 500,
+    "window_minutes": 30,
+    "duplicate_event_mappings": 0,
+    "cross_camera_signature_copies": 0,
+    "caption_states_by_distinct_event": {
+      "failed": 3,
+      "done": 13,
+      "not_reported": 1
+    },
+    "initial_narrow_window_matches": 18,
+    "initial_narrow_window_not_an_absence_claim": true,
+    "all_retained_sends_matched_after_window_expansion": true,
+    "native_ui_checked": true,
+    "native_ui_cards_matched_by_event_id": 5,
+    "decoded_images_verified_across_scroll_positions": 5,
+    "actual_screenshots_viewed": 2
+  },
+  "reverification": {
+    "completed_jobs": 3,
+    "exact_camera_event_matches": 3,
+    "callback_http_200": 3,
+    "native_confirmed": 1,
+    "native_retyped": 2,
+    "native_before_after": [
+      [
+        "animal",
+        72,
+        "animal",
+        99
+      ],
+      [
+        "person",
+        70,
+        "animal",
+        99
+      ],
+      [
+        "person",
+        76,
+        "animal",
+        99
+      ]
+    ],
+    "separate_exact_reads": 2,
+    "persistence_read_interval_seconds": 73.914,
+    "native_ui_cards_matched_by_event_id": 3,
+    "decoded_images_verified": 3,
+    "coordinator_viewed_actual_screenshot": true
+  },
+  "source_checks": {
+    "focused_passed": 194,
+    "optional_real_clip_skip": 1,
+    "initial_without_ffmpeg_passed": 138,
+    "initial_without_ffmpeg_skipped": 57,
+    "existing_main_ci_run": 41620328973,
+    "actual_successful_workflow_jobs": 5,
+    "calibration_thresholds_synthetic_not_measured_field_accuracy": true,
+    "documentation_checks_passed": 477
+  },
+  "preservation": {
+    "adopted_processors": 5,
+    "original_pairings": 9,
+    "cameras_recording": 11,
+    "original_alarm_rules_unchanged": 32,
+    "old_events_replayed": 0,
+    "processor_restarts_during_observation": 0,
+    "automatic_reconciler_enabled": false
+  },
+  "claims": {
+    "general_no_duplicates": false,
+    "recognition_quality_pass": false,
+    "query_alarm_acceptance": false,
+    "zone_negative_acceptance": false,
+    "hardware_parity": false,
+    "public_release_clearance": false
+  }
+}
