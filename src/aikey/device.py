@@ -123,6 +123,9 @@ _WORKER_REJECTION_REASONS = {
     "Worker queue is full": "queue_full",
     "Worker journal is full; archive reviewed entries": "journal_full",
     "Worker has stopped": "worker_stopped",
+    "Worker admission timed out": "admission_expired",
+    "Worker maintenance admission is unavailable": "maintenance_unavailable",
+    "Worker maintenance admission binding changed": "maintenance_binding_changed",
     "Region metadata must list at most 256 entries": "region_metadata",
     "Region metadata entries need a tracker, ts and 0-1000 xywh coord": "region_metadata",
     "recognizeKeyFrames has no indexable objects": "index_empty",
@@ -172,6 +175,9 @@ _REQUEST_AI_REJECTION_REASONS = {
     "media URL is outside configured controller origins": "media_origin",
     "callback URL is outside configured controller origins": "callback_origin",
     "Worker queue is full": "queue_full", "Worker has stopped": "worker_stopped",
+    "Worker admission timed out": "admission_expired",
+    "Worker maintenance admission is unavailable": "maintenance_unavailable",
+    "Worker maintenance admission binding changed": "maintenance_binding_changed",
     "Task identity reused with different input": "job_identity_conflict",
     "Unsupported reverification payload": "reverify_shape",
     "Unsupported reverification fields": "reverify_shape",
@@ -216,7 +222,8 @@ _REQUEST_AI_TARGET_CLASSES = {
 _SPEECH_SHARED_REASONS = ("command_size_or_shape", "invalid_json", "job_failed", "callback_url",
                           "media_url", "http_origin", "callback_origin", "media_origin",
                           "job_identity_conflict", "callback_uncertain", "queue_full",
-                          "journal_full", "worker_stopped")
+                          "journal_full", "worker_stopped", "admission_expired",
+                          "maintenance_unavailable", "maintenance_binding_changed")
 
 
 def _speech_rejection_reason(message: str) -> str:
