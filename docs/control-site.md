@@ -650,8 +650,15 @@ whether the new value is inherited. Scores are not calibrated accuracy claims.
 Saving requires the normal login, CSRF/Origin checks, shared mutation limit and
 an explicit preview confirmation. Server-private, ten-minute signatures bind
 the login, profile, exact camera identity/name selection, old/resulting config
-revisions and every value. Replaced/renamed cameras, stale settings and expired
-sessions refuse. Browser fields carry opaque camera choices, not MACs or IDs.
+revisions and every value. Each review also needs a bounded, server-held,
+one-use grant with a monotonic ten-minute deadline, rechecked after validation.
+Admission consumes all older reviews for that profile, including on a no-op or
+uncertain save; Undo invalidates its pending reviews as well. Restoring identical
+config bytes cannot revive an old confirmation. At most 32 unexpired reviews
+are retained; a full pool refuses a new preview without evicting live reviews.
+Replaced/renamed cameras, stale settings and expired sessions refuse. A server
+restart loses all pending authority. Browser fields carry opaque camera
+choices, not MACs or IDs.
 
 Only `live_pool_detector.camera_thresholds` changes. Empty mappings remove that
 optional field; a semantic no-op preserves exact prior bytes, including raw MAC
@@ -671,7 +678,8 @@ acknowledgement failure is uncertain, not a confirmed rollback: reload and
 reconcile; no automatic retry, restart or rollback is attempted.
 
 The maintained fictional desktop/mobile browser check covers preview, required
-acknowledgement, Space/Tab/Enter confirmation, saved result and exact undo.
+acknowledgement, Space/Tab/Enter confirmation, saved result, exact undo and
+refusal of the old confirmation after Undo.
 This is not live camera tuning, native Flur acceptance or full #17 completion.
 
 ## Plate-crop camera permission

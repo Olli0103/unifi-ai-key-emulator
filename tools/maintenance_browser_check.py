@@ -271,6 +271,8 @@ async def scenario(output, name, viewport, executable):
             await gate_ack.focus()
             await page.keyboard.press("Space")
             await expect(gate_ack).to_be_checked()
+            reviewed_gates = await page.locator("form[action='/camera-thresholds/apply']").evaluate(
+                "form => Object.fromEntries(new FormData(form))")
             await page.keyboard.press("Tab")
             await expect(gate_button).to_be_focused()
             assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
@@ -285,6 +287,10 @@ async def scenario(output, name, viewport, executable):
             await gate_undo.get_by_role("checkbox").check()
             await gate_undo.get_by_role("button", name="Undo camera thresholds", exact=True).click()
             await expect(page.get_by_text("Prior camera thresholds restored; running service unchanged.", exact=True)).to_be_visible()
+            assert port_config.read_bytes() == port_bytes and not fixture_requests
+            replay = await context.request.post(origin + "/camera-thresholds/apply",
+                form=reviewed_gates, headers={"Origin": origin}, max_redirects=0)
+            assert replay.status == 409
             assert port_config.read_bytes() == port_bytes and not fixture_requests
             await page.goto(origin + "/plate-cameras")
             plates = page.locator("form[action='/plate-cameras/preview']")
@@ -402,6 +408,7 @@ async def scenario(output, name, viewport, executable):
                 "separate_ocr_preview_key_confirmation_and_exact_rollback": True,
                 "ocr_administration_provider_calls": 0,
                 "camera_threshold_preview_keyboard_save_and_exact_undo": True,
+                "camera_threshold_old_confirmation_refused_after_undo": True,
                 "camera_threshold_provider_calls": 0,
                 "plate_camera_revoke_and_explicit_new_grant": True,
                 "plate_camera_keyboard_cost_destination_confirmation": True,
