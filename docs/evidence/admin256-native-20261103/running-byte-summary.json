@@ -1,0 +1,14 @@
+{
+  "schema": "aikey-native-admin-proof/1",
+  "source": "6ca654452430211cfc75bb24d3c368a27d019dec",
+  "image": "sha256:118d860383e90b4e674d6a7dcb26346bb7b2bc7554d22d6e7508229b18095496",
+  "module_count": 133,
+  "actual_running_module_bytes_equal": true,
+  "actual_running_license_equal": true,
+  "nine_non_admin_processes_exact": true,
+  "healthy_zero_restarts": true,
+  "certificate_binding_matches": true,
+  "real_face_record_reads": 0,
+  "face_deletions": 0,
+  "independent_human_review": false
+}

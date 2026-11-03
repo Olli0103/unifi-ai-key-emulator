@@ -1,0 +1,14 @@
+{
+  "schema": "aikey-native-admin-public-manifest/1",
+  "source": "6ca654452430211cfc75bb24d3c368a27d019dec",
+  "image": "sha256:118d860383e90b4e674d6a7dcb26346bb7b2bc7554d22d6e7508229b18095496",
+  "wheel_bytes": 628494,
+  "wheel_sha256": "ffb27f0dd56b2ba4c3c69b0a72edb69932919d11f246d06db56e102bac1a8106",
+  "files": {
+    "running-byte-summary.json": "fe7d1626fff8ad4d607229cf77898d576fd805da98763dbf7096ce485cccaced",
+    "http-summary.json": "9b69c2b3bf6204b939b3d5f7d2177c6248fd3896f4eb820751aa713e185bae6c",
+    "preservation-summary.json": "65943e75a7cc0d6a3673c04b2d0d81805cc69930d9fd39fbd050833d52f865ab"
+  },
+  "provenance": "redacted same-agent summaries of separately executed checks; private receipt hashes are not public authentication",
+  "public_binary_release": false
+}

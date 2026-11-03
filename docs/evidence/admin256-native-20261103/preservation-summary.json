@@ -1,0 +1,21 @@
+{
+  "schema": "aikey-native-admin-preservation/1",
+  "source": "6ca654452430211cfc75bb24d3c368a27d019dec",
+  "one_controlled_activation": true,
+  "activation_observed_seconds": 14.497,
+  "nine_non_admin_processes_exact": true,
+  "five_profiles_authority_tls_unchanged": true,
+  "only_admin_image_and_certificate_image_source_binding_changed": true,
+  "six_static_backup_members": 6,
+  "all_backup_member_bytes_read_back": true,
+  "backup_archive_bytes": 20480,
+  "backup_scope": "static_admin_authority_tls_compose_not_cold_application_data_or_restore_drill",
+  "same_boot_and_home_mount": true,
+  "all_six_loaded_unit_states_match_fresh_baseline": true,
+  "old_admin_image_retained": true,
+  "certificate_issuer_calls": 0,
+  "certificate_hup_signals": 0,
+  "processor_restarts": 0,
+  "real_camera_or_provider_permission_applies": 0,
+  "native_schedulers_changed": false
+}

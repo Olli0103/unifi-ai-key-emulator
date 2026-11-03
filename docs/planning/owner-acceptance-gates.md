@@ -7,14 +7,14 @@ profile, current backup contract and intended native test before any new action.
 An old backup filename or a previously enabled feature is not fresh authority to
 restore state, change a policy or repeat a completed experiment.
 
-## Current evidence index — 2 November 2026
+## Current evidence index — 3 November 2026
 
 These are dated receipts, not continuous health monitoring or a general parity
 PASS. Later source work does not automatically activate on installed devices.
 
 | Boundary | Current recorded evidence | What it does not prove |
 |---|---|---|
-| Existing Admin | [#243 runtime readback](../evidence/admin243-native-20261102.md), retained authority/profiles and synthetic candidate checks | New permission/configuration apply, owner GUI, whole-system recovery |
+| Existing Admin | [#256 runtime readback](../evidence/admin256-native-20261103.md), 133 running modules verified, retained authority/profiles, nine bound processing names and empty local face metadata | Real identity deletion, new permission/configuration apply, owner GUI, whole-system recovery |
 | Four existing Ports | [Serial #243 image update](../evidence/ports243-native-20261102.md), original identities/nine pairings retained, decoded streams resumed | New ONVIF device, controlled native ground truth, host/power-loss recovery |
 | Local model pilot | [Twelve public person/none cases](../evidence/public-person-structured-30s-20261102.md): eleven usable/correct, one whole-case normalization error | Held-out/general/private-camera quality, a calibration PASS or zero cost |
 | Fresh source setup | [Passive Port browser preparation](../first-run-aiport.md) with authentication and private new files | Deployment, adoption, pairing or a fresh independent native installation |
