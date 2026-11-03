@@ -1832,7 +1832,11 @@ class ControlSite:
             self._audit("logout", "forbidden")
             raise web.HTTPForbidden()
         self.security.revoke(cookie)
-        self.admin_api.face_enrollment_control.revoke_session(cookie)
+        # The first-run sites reuse this handler without an administration API
+        # or any enrollment grants. Revocation itself is unconditional.
+        enrollment = getattr(getattr(self, "admin_api", None), "face_enrollment_control", None)
+        if enrollment is not None:
+            enrollment.revoke_session(cookie)
         self._audit("logout", "signed_out")
         response = web.HTTPSeeOther("/login")
         response.del_cookie(self.cookie_name, path="/", httponly=True,

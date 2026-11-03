@@ -101,6 +101,17 @@ All existing FaceStore and ConfigurationStore methods are AST-identical; new
 preflight/serialized enrollment methods are additive. Existing deletion commit,
 model worker/fence/upload modules and dependency bytes remain unchanged.
 
+The first Linux browser job exposed a new shared-handler regression: first-run
+sites reuse logout but do not construct the administration API. Session revocation
+is now unconditional and pending-template cleanup conditional on that component
+existing. The original failed CI is retained. Two added Key/Port first-run logout
+cases complement the existing Port preparation/logout test and ordinary enrollment
+logout case. The first Key regression fixture assumed an unavailable page form;
+it now posts its actual session CSRF token directly. Both the Port first-run and
+enrollment sandboxed desktop/mobile runners pass on corrected source, with all
+eight inspected enrollment images byte-identical. No authentication, consent or
+audit guard was disabled to accept the first-run sites.
+
 ## Rollout boundary
 
 The currently installed Admin258, old Key and old Face image are not upgraded by

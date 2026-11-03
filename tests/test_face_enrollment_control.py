@@ -514,3 +514,25 @@ async def test_stalled_upload_releases_admission_without_any_model_or_store_acti
         response = await upload(site, client)
         assert response.status == 503 and calls == []
         assert not control.busy and not control.grants and not control.store.path.exists()
+
+
+@pytest.mark.parametrize('kind', ['key', 'port'])
+async def test_shared_logout_without_admin_api_still_revokes_first_run_sessions(tmp_path, kind):
+    from yarl import URL
+    from test_first_run_site import site_for as key_site
+    from test_first_run_port_site import site_for as port_site
+    factory = key_site if kind == 'key' else port_site
+    site, server, client, *_ = await factory(tmp_path)
+    try:
+        assert not hasattr(site, 'admin_api')
+        cookie = client.session.cookie_jar.filter_cookies(URL(site.origin))[site.cookie_name].value
+        fields = {'csrf': site.security.csrf_token(cookie)}
+        response = await client.post('/logout', data=fields,
+            headers={'Origin': site.origin}, allow_redirects=False)
+        assert response.status == 303 and response.headers['Location'] == '/login'
+        assert not site.security.authorize('GET', site.origin, cookie).allowed
+        assert (await client.get('/', allow_redirects=False)).status == 303
+        assert not site.directory.exists()
+    finally:
+        await client.close()
+        await server.close()
