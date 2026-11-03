@@ -158,6 +158,7 @@ async def test_valid_query_and_image_keep_the_same_embedding_space_and_bytes(kin
             "model": clip_server.MODEL,
             "dim": 768,
             "revision": "f" * 64,
+            "encoding": clip_server.CLIP_ENCODING,
             "embeddings": [VECTOR],
         }
         assert calls == (
@@ -239,6 +240,7 @@ async def test_fixed_encoder_errors_preserve_shared_lock_recovery(failure, statu
         assert health["rejected" if status == 400 else "failed"] == 1 and health["regions"] == 1
         assert set(health) == {
             "status",
+            "encoding",
             "model",
             "dim",
             "text_requests",

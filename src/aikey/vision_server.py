@@ -36,6 +36,7 @@ import asyncio
 import io
 import json
 from pathlib import Path
+from .encoding_identity import TEXT_ENCODING, artifact_revision
 from typing import Any, Callable
 
 from aiohttp import web
@@ -319,6 +320,7 @@ class Models:
             core.set_property({"CACHE_DIR": cache_dir})
         self.devices: dict[str, str] = {}
         self.tagger = self.enhancer = self.reid = self.face_detector = self.detector = None
+        self.embedding_revision = None
         self.encoders: dict[int, Any] = {}
         self.rerankers: dict[int, Any] = {}
         if tags_dir:
@@ -347,6 +349,7 @@ class Models:
             model.reshape({model.inputs[0].any_name: [1, 3, _REID_SIZE[1], _REID_SIZE[0]]})
             self.reid, self.devices["reid"] = _compile(core, model, devices)
         if text_dir:
+            self.embedding_revision = artifact_revision(text_dir, ('e5.xml', 'e5.bin', 'tokenizer.json'))
             from tokenizers import Tokenizer
             self.tokenizer = Tokenizer.from_file(str(Path(text_dir) / "tokenizer.json"))
             self.tokenizer.no_padding()
@@ -520,6 +523,8 @@ def build_app(models: Models) -> web.Application:
             return error
         counters["texts"] += len(texts)
         return web.json_response({"object": "list", "model": TEXT_MODEL,
+                                  **({"revision": models.embedding_revision, "encoding": dict(TEXT_ENCODING)}
+                                     if getattr(models, "embedding_revision", None) else {}),
                                   "data": [{"object": "embedding", "index": i, "embedding": v}
                                            for i, v in enumerate(vectors)]})
 
@@ -559,6 +564,9 @@ def build_app(models: Models) -> web.Application:
 
     async def health(_request: web.Request) -> web.Response:
         return web.json_response({"status": "ok", "devices": models.devices,
+                                  **({"embedding_revision": models.embedding_revision,
+                                      "embedding_encoding": dict(TEXT_ENCODING)}
+                                     if getattr(models, "embedding_revision", None) else {}),
                                   "models": {"tags": TAG_MODEL if models.tagger else None,
                                              "enhance": FACE_MODEL if models.enhancer else None,
                                              "embeddings": TEXT_MODEL if models.encoders else None,

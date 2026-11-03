@@ -28,6 +28,7 @@ from .provider_network import ProviderAddressError, ProviderConnector, validate_
 from .protocol import ContractError, decode_message, encode_message
 from .device import VerifiedConnector
 from .embedding_profile import EmbeddingProfileError, ensure_embedding_profile, pinned_value
+from .encoding_identity import CLIP_ENCODING, TEXT_ENCODING, UPGRADABLE_ENCODING
 from .secret_files import SecretFileError, read_secret
 
 
@@ -80,7 +81,13 @@ class EmbeddingService:
     loads only an existing checkpoint and never downloads models implicitly.
     """
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, config: dict[str, Any], *, expected_encoding=None):
+        self.encoding_identity = dict(TEXT_ENCODING if expected_encoding is None else expected_encoding)
+        if (set(self.encoding_identity) != set(TEXT_ENCODING)
+                or self.encoding_identity.get('modality') != 'text'
+                or self.encoding_identity.get('distance_metric') != 'cosine'
+                or any(not isinstance(v, str) or not 1 <= len(v) <= 128 for v in self.encoding_identity.values())):
+            raise EmbeddingError("The expected text encoding contract is invalid")
         validate_embedding_settings(config)
         self.config = dict(config)
         self.backend = self.config.get("backend", "disabled")
@@ -100,7 +107,7 @@ class EmbeddingService:
             "backend": self.backend,
             "source": self.config.get("model_path") if self.backend == "sentence-transformers"
             else self._endpoint() if self.backend == "http" else None,
-            "revision": self.config.get("revision"),
+            "revision": self.config.get("revision"), **self.encoding_identity,
         }
 
     async def encode_documents(self, texts: list[str]) -> list[list[float]]:
@@ -195,6 +202,12 @@ class EmbeddingService:
                     raise ValueError("Expected an embedding result object")
                 if result.get("model", self.model) not in (MODEL, f"intfloat/{MODEL}"):
                     raise EmbeddingError("Embedding API reported an incompatible model")
+                if result.get("encoding") is not None and result["encoding"] != self.encoding_identity:
+                    raise EmbeddingError("Embedding preprocessing or tokenizer contract differs")
+                expected_revision = self.config.get("revision")
+                if (isinstance(expected_revision, str) and re.fullmatch(r"[0-9a-f]{64}", expected_revision)
+                        and (result.get("revision") != expected_revision or result.get("encoding") != self.encoding_identity)):
+                    raise EmbeddingError("Embedding checkpoint identity differs from the pinned session index")
                 rows = result["data"]
                 if not isinstance(rows, list) or len(rows) != len(texts):
                     raise ValueError("Unexpected result count")
@@ -379,7 +392,8 @@ class SearchService:
         self.clip: clip.ClipClient | None = None
         if self.profile == clip.PROFILE and config.get("search", {}).get("enabled") is True:
             try:
-                self.clip = clip.ClipClient(config.get("find_anything"))
+                self.clip = clip.ClipClient(config.get("find_anything"),
+                    require_encoding=pinned_value(self.state_dir, "encoding_required") is True)
             except clip.ClipError as exc:
                 raise EmbeddingError(str(exc)) from exc
         self._task: asyncio.Task | None = None
@@ -475,7 +489,9 @@ class SearchService:
     def _identity(self, revision: str | None = None) -> dict[str, Any]:
         if self.clip is not None:
             identity = {"profile": clip.PROFILE, "model": clip.MODEL, "dimensions": clip.DIMENSIONS,
-                        "backend": "local-clip-onnx", "source": self.clip.base}
+                        "backend": "local-clip-onnx", "source": self.clip.base, **CLIP_ENCODING}
+            if pinned_value(self.state_dir, "encoding_required") is True:
+                identity["encoding_required"] = True
             revision = revision or pinned_value(self.state_dir, "revision")
             if revision:
                 identity["revision"] = revision
@@ -484,7 +500,18 @@ class SearchService:
 
     def _check_profile(self) -> None:
         try:
-            ensure_embedding_profile(self.state_dir, self._identity())
+            ensure_embedding_profile(self.state_dir, self._identity(), upgradable=UPGRADABLE_ENCODING)
+            from .embedding_profile import _with_fingerprint
+            self.status["encoder_profile_fingerprint"] = _with_fingerprint(self._identity())["fingerprint"]
+            if self.embeddings.backend in ("http", "sentence-transformers"):
+                from .embedding_profile import ensure_session_embedding_profile
+                ensure_session_embedding_profile(self.state_dir, self.embeddings.identity,
+                                                 legacy_root=self.clip is None)
+                self.status["session_encoder_revision"] = self.embeddings.identity.get("revision")
+                from .embedding_profile import _with_fingerprint
+                self.status["session_encoder_profile_fingerprint"] = _with_fingerprint(self.embeddings.identity)["fingerprint"]
+                if self.clip is None:
+                    self.status["encoder_revision"] = self.embeddings.identity.get("revision")
         except EmbeddingProfileError as exc:
             raise EmbeddingError(str(exc)) from exc
 
@@ -503,12 +530,16 @@ class SearchService:
             if served is None:
                 raise EmbeddingError("CLIP server does not report a weights revision")
             try:
-                ensure_embedding_profile(self.state_dir, self._identity(served), upgradable=("revision",))
+                ensure_embedding_profile(self.state_dir, self._identity(served),
+                                         upgradable=("revision", *UPGRADABLE_ENCODING))
             except EmbeddingProfileError as exc:
                 raise EmbeddingError(str(exc)) from exc
             pinned = served
         self.clip.expected_revision = pinned
         self.status["revision"] = pinned[:12]
+        self.status["encoder_revision"] = pinned
+        from .embedding_profile import _with_fingerprint
+        self.status["encoder_profile_fingerprint"] = _with_fingerprint(self._identity(pinned))["fingerprint"]
 
     def validate_configuration(self) -> None:
         """Validate the enabled query service before any controller connection."""
@@ -623,6 +654,11 @@ class SearchService:
                   and self.embeddings.backend in ("http", "sentence-transformers")):
                 # Deep-mode session search (7.3.70 encodeSessionSearchQuery)
                 # asks for a 384-value E5 query vector next to basic CLIP.
+                from .embedding_profile import ensure_session_embedding_profile
+                ensure_session_embedding_profile(self.state_dir, self.embeddings.identity)
+                self.status["session_encoder_revision"] = self.embeddings.identity.get("revision")
+                from .embedding_profile import _with_fingerprint
+                self.status["session_encoder_profile_fingerprint"] = _with_fingerprint(self.embeddings.identity)["fingerprint"]
                 vector = (await self.embeddings.encode_queries([body.get("querySentence")]))[0]
                 result = {"keyTags": [], "objectTypes": [], "txtEmbed": vector, "model": MODEL,
                           "dim": DIMENSIONS, "exact_match": False}

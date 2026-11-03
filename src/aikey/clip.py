@@ -31,6 +31,7 @@ from urllib.parse import urlsplit
 import aiohttp
 
 from .provider_network import ProviderConnector
+from .encoding_identity import CLIP_ENCODING
 
 
 MODEL = "clip-ViT-L-14"
@@ -103,13 +104,23 @@ def _local_server(server: Any) -> bool:
 class ClipClient:
     """Talks to the local CLIP server; one shared session, bounded replies."""
 
-    def __init__(self, config: dict, *, timeout_s: float = 30, expected_revision: str | None = None):
+    def __init__(self, config: dict, *, timeout_s: float = 30, expected_revision: str | None = None,
+                 require_encoding: bool = False, expected_encoding: dict | None = None):
+        if type(require_encoding) is not bool:
+            raise ClipError("The encoder contract requirement must be boolean")
         self.config = validate_find_anything_config(config)
         self.base = self.config["clip_server"]
         self.timeout_s = timeout_s
         # When the index pins encoder weights, replies from other weights are
         # refused, so an index never mixes vectors from two encoders (#18).
         self.expected_revision = expected_revision
+        self.require_encoding = require_encoding
+        self.expected_encoding = dict(CLIP_ENCODING if expected_encoding is None else expected_encoding)
+        if (set(self.expected_encoding) != set(CLIP_ENCODING)
+                or self.expected_encoding.get('modality') != 'image-text'
+                or self.expected_encoding.get('distance_metric') != 'cosine'
+                or any(not isinstance(v, str) or not 1 <= len(v) <= 128 for v in self.expected_encoding.values())):
+            raise ClipError("The expected paired encoder contract is invalid")
         self._session: aiohttp.ClientSession | None = None
 
     def _client(self) -> aiohttp.ClientSession:
@@ -133,6 +144,9 @@ class ClipClient:
                 raise ClipError("CLIP server reported an incompatible model")
             if self.expected_revision is not None and reply.get("revision") != self.expected_revision:
                 raise ClipError("CLIP server weights differ from the pinned index encoder")
+            encoding = reply.get("encoding")
+            if (encoding is not None or self.require_encoding) and encoding != self.expected_encoding:
+                raise ClipError("CLIP server preprocessing or tokenizer contract differs from the index")
             vectors = reply["embeddings"]
             if not isinstance(vectors, list) or len(vectors) != count:
                 raise ValueError("wrong count")
@@ -146,7 +160,15 @@ class ClipClient:
             async with self._client().get(self.base + "/healthz", allow_redirects=False) as response:
                 if response.status != 200:
                     raise ClipError(f"CLIP server returned HTTP {response.status}")
-                reply = json.loads((await response.content.read(65536)) or b"{}")
+                raw = bytearray()
+                async for chunk in response.content.iter_chunked(16384):
+                    raw.extend(chunk)
+                    if len(raw) > 65536:
+                        raise ClipError("CLIP health reply exceeds its size limit")
+                reply = json.loads(raw or b"{}")
+                if (not isinstance(reply, dict) or ((reply.get("encoding") is not None or self.require_encoding)
+                        and reply.get("encoding") != self.expected_encoding)):
+                    raise ClipError("CLIP server preprocessing or tokenizer contract differs from the index")
         except ClipError:
             raise
         except (aiohttp.ClientError, TimeoutError, OSError, ValueError) as exc:

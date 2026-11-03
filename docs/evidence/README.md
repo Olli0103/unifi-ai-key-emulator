@@ -45,3 +45,5 @@ The records identify package-relative paths and local analysis artifacts. Vendor
 - [3 November saved local face-service route](local-face-route-20261103.md): existing-role-only address preview/confirmation, unchanged scope/templates/runtime and explicit uncertain outcomes; fictional store/HTTP/browser source qualification, no deployment.
 
 - [3 November Key acceptance model-work fence](key-admission-fence-20261103.md): existing shared lease before acknowledgement and retained through accepted queue lifetime, with deadline/deduplication/stop checks; fictional source qualification, no native replacement or forced idle window.
+
+- [3 November CLIP/E5 index migration](index-migration-20261103.md): frozen authorized sources, complete identity, isolated SQL/TLS lifecycle and dual-space synthetic browser checks; no production migration or native quality claim.

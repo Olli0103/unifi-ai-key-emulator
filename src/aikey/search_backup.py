@@ -44,6 +44,9 @@ select json_build_object(
       from pg_class c join pg_namespace n on n.oid = c.relnamespace
       where c.relkind = 'r' and n.nspname = 'public' order by c.relname) t),
   'embeddings', (select count(*) from "ramDetections" where embedding is not null),
+  'session_embeddings', case when to_regclass('public."smartDetectSessionsSearch"') is null then null else
+    (xpath('/row/n/text()',query_to_xml('select count(*) as n from public."smartDetectSessionsSearch" '
+      'where "descEmbedding" is not null',false,true,'')))[1]::text::bigint end,
   'dimensions', (select coalesce(json_agg(distinct vector_dims(embedding)), '[]'::json)
                  from "ramDetections" where embedding is not null))
 """
@@ -120,6 +123,11 @@ def backup(run: Runner, container: str, out_dir: Path, profile_path: Path | None
                 "created": stamp, "counts": before}
     if profile_path is not None and Path(profile_path).is_file():
         manifest["profile"] = json.loads(Path(profile_path).read_text())
+        session_profile = Path(profile_path).parent/'session-search'/'search-profile.json'
+        if session_profile.exists():
+            from .startup_configuration import read_snapshot
+            raw, _ = read_snapshot(session_profile, limit=16384)
+            manifest["session_profile"] = json.loads(raw)
     path = out_dir / f"search-{stamp}.json"
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     os.chmod(path, 0o600)
