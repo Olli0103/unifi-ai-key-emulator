@@ -112,3 +112,8 @@ merge. No real cloud inference, private footage, enrollment, new camera grant,
 controller operation or deployment is performed by this contract. Native plate,
 face, Deep, enhancement, retrieval, quality and endurance acceptance stays in
 its feature issues; #8 is not a substitute for those results.
+
+The local Key face store now requires an explicit encoder/pipeline binding for
+enrollment and matching. Nonempty legacy templates are not automatically migrated;
+see [model-space and coordinated-upgrade procedure](evidence/face-model-space-20261103.md).
+This does not change the separate Port face model or native Protect grouping.

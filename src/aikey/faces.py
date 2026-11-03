@@ -6,6 +6,10 @@ separate backup and enrollment-server copies need their own policy. Every
 identity can be explicitly deleted, or all of them purged. Matching uses
 cosine similarity with OpenCV's recommended SFace threshold; a face below
 it stays unknown rather than being given the nearest name.
+
+New templates use schema 2, bound to an explicit encoder/pipeline digest.
+Nonempty unbound schema-1 stores are metadata/deletion-only until explicit
+removal and re-enrollment; no vector conversion or automatic relabelling.
 """
 
 from __future__ import annotations
@@ -36,6 +40,13 @@ _MAX_TEMPLATES = 20
 _MAX_EMBED_REPLY_BYTES = 256 * 1024
 _MAX_STORE_BYTES = 8 * 1024 * 1024
 _NAME = re.compile(r"[^\x00-\x1f\x7f]{1,64}\Z")
+
+
+def checked_embedding_space(value) -> str:
+    """Opaque encoder/pipeline digest, not a claim of recognition quality."""
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise FaceStoreError("face_embedding_space_invalid")
+    return value
 
 
 class FaceStoreError(ValueError):
@@ -244,7 +255,9 @@ class FaceStore:
     def names(self) -> list[str]:
         return sorted(self._load()["identities"])
 
-    def enroll(self, name: str, embedding, *, expected_revision: str | None = None) -> int:
+    def enroll(self, name: str, embedding, *, embedding_space=None,
+               expected_revision: str | None = None) -> int:
+        embedding_space = checked_embedding_space(embedding_space)
         if not isinstance(name, str) or not _NAME.fullmatch(name.strip()):
             raise FaceStoreError("invalid_name")
         name = name.strip()
@@ -252,6 +265,9 @@ class FaceStore:
         with self._access(writer=True, create=True) as directory:
             self._check_revision(directory, expected_revision)
             data = self._load(directory_fd=directory)
+            if data["schema"] == 1 and not data["identities"]:
+                data = {"schema": 2, "embedding_space": embedding_space, "identities": {}}
+            self._check_space(data, embedding_space)
             identities = data["identities"]
             if name not in identities and len(identities) >= _MAX_IDENTITIES:
                 raise FaceStoreError("too_many_identities")
@@ -285,11 +301,22 @@ class FaceStore:
                 except (OSError, FaceStoreError):
                     raise FaceStoreOutcomeUncertain("face_store_write_uncertain") from None
 
-    def match(self, embedding) -> tuple[str | None, list[tuple[str, float]]]:
+    @staticmethod
+    def _check_space(data, embedding_space):
+        if data["schema"] == 1:
+            if data["identities"]:
+                raise FaceStoreError("face_store_migration_required")
+        elif data["embedding_space"] != embedding_space:
+            raise FaceStoreError("face_embedding_space_mismatch")
+
+    def match(self, embedding, *, embedding_space=None) -> tuple[str | None, list[tuple[str, float]]]:
         """Best identity at or above the threshold, plus up to three candidates."""
+        embedding_space = checked_embedding_space(embedding_space)
         probe = _unit(embedding)
+        data = self._load()
+        self._check_space(data, embedding_space)
         scores = []
-        for name, entry in self._load()["identities"].items():
+        for name, entry in data["identities"].items():
             best = max((sum(a * b for a, b in zip(probe, template))
                         for template in entry["templates"]), default=-1.0)
             if best >= MATCH_THRESHOLD:
@@ -300,10 +327,14 @@ class FaceStore:
 
 def _validate_store(data):
     """Reject malformed saved state; never silently normalize/repair templates."""
-    if (set(data) != {"schema", "identities"} or type(data["schema"]) is not int
-            or data["schema"] != 1 or not isinstance(data["identities"], dict)
+    if (type(data.get("schema")) is not int or data["schema"] not in (1, 2)
+            or set(data) != ({"schema", "identities"} if data["schema"] == 1
+                             else {"schema", "embedding_space", "identities"})
+            or not isinstance(data["identities"], dict)
             or len(data["identities"]) > _MAX_IDENTITIES):
         raise FaceStoreError("face_store_invalid")
+    if data["schema"] == 2:
+        checked_embedding_space(data["embedding_space"])
     for name, entry in data["identities"].items():
         if (not isinstance(name, str) or name != name.strip() or not _NAME.fullmatch(name)
                 or not isinstance(entry, dict) or set(entry) != {"templates", "created"}
@@ -340,7 +371,7 @@ def _private_server(url: str) -> str:
     return url.rstrip("/") + "/v1/faces"
 
 
-def embed_single_face(image: bytes, server: str) -> list[float]:
+def embed_single_face(image: bytes, server: str) -> tuple[list[float], str]:
     """Exactly one face from an owner-supplied enrollment photo."""
     import urllib.request
     import uuid
@@ -362,7 +393,7 @@ def embed_single_face(image: bytes, server: str) -> list[float]:
         found = result.get('faces')
         if not isinstance(found, list) or len(found) != 1 or not isinstance(found[0], dict):
             raise FaceStoreError("enrollment_photo_needs_exactly_one_face")
-        return _unit(found[0].get('embedding'))
+        return _unit(found[0].get('embedding')), checked_embedding_space(result.get('embedding_space'))
     except FaceStoreError:
         raise
     except Exception:
@@ -386,7 +417,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "enroll":
             if not args.name or not args.image:
                 raise FaceStoreError("enroll needs --name and --image")
-            count = store.enroll(args.name, embed_single_face(args.image.read_bytes(), args.server))
+            template, space = embed_single_face(args.image.read_bytes(), args.server)
+            count = store.enroll(args.name, template, embedding_space=space)
             print(json.dumps({"templates": count}))
         elif args.command == "delete":
             print(json.dumps({"deleted": store.delete(args.name or "")}))

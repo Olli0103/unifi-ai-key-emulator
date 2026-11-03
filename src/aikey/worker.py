@@ -39,6 +39,7 @@ from .providers import ProviderError, validate_inference_config
 from .provider_network import ProviderConnector
 from .speech import SpeechError, validate_speech_config
 from .faces import FaceStore, FaceStoreError
+from .protocol import _json_object
 from . import clip, deep_mode
 
 
@@ -2321,10 +2322,13 @@ class JobProcessor:
                 raise WorkerError(f"Face server returned HTTP {response.status}")
             raw = await self._read_response(response, 1024 * 1024)
         try:
-            faces = json.loads(raw)["faces"]
+            from .faces import checked_embedding_space
+            reply = _json_object(raw)
+            space = checked_embedding_space(reply.get("embedding_space"))
+            faces = reply["faces"]
             if not isinstance(faces, list):
                 raise ValueError
-            return faces
+            return faces, space
         except (ValueError, KeyError, TypeError) as exc:
             raise WorkerError("Face server returned an invalid reply") from exc
 
@@ -2343,12 +2347,12 @@ class JobProcessor:
             pad_x, pad_y = w * 0.25, h * 0.25
             region = [round(v, 4) for v in (max(0.0, x - pad_x), max(0.0, y - pad_y),
                                             min(1.0, x + w + pad_x), min(1.0, y + h + pad_y))]
-            faces = await self._detect_faces(frame, region)
+            faces, space = await self._detect_faces(frame, region)
             if not faces:
                 continue
             best = max(faces, key=lambda face: face.get("score", 0))
             try:
-                name, top = self.faces["store"].match(best["embedding"])
+                name, top = self.faces["store"].match(best["embedding"], embedding_space=space)
                 x1, y1, x2, y2 = (float(v) for v in best["box"])
             except (FaceStoreError, KeyError, TypeError, ValueError) as exc:
                 raise WorkerError("Face server returned an invalid face") from exc

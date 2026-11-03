@@ -27,7 +27,7 @@ class Controller:
     def __init__(self):
         self.video = b""
         self.callbacks, self.face_requests, self.vision_requests = [], [], []
-        self.face_reply = {"faces": [{"box": [0.4, 0.3, 0.5, 0.45], "score": 0.97,
+        self.face_reply = {"embedding_space": "a" * 64, "faces": [{"box": [0.4, 0.3, 0.5, 0.45], "score": 0.97,
                                       "embedding": ALICE}]}
 
     async def export(self, request):
@@ -127,7 +127,7 @@ def task(camera=CAMERA, face_meta=True, ram_type="videoWithRecognition"):
 
 
 async def test_a_known_face_is_matched_locally_and_posted_as_a_native_face_part(controller, tmp_path):
-    FaceStore(tmp_path).enroll("Synthetic Alice", ALICE)
+    FaceStore(tmp_path).enroll("Synthetic Alice", ALICE, embedding_space='a' * 64)
     worker = JobProcessor(config(controller), tmp_path)
     try:
         result = await worker.handle(task())
@@ -152,7 +152,7 @@ async def test_a_known_face_is_matched_locally_and_posted_as_a_native_face_part(
 
 
 async def test_an_unknown_face_stays_unknown(controller, tmp_path):
-    FaceStore(tmp_path).enroll("Synthetic Alice", ALICE)
+    FaceStore(tmp_path).enroll("Synthetic Alice", ALICE, embedding_space='a' * 64)
     controller.face_reply["faces"][0]["embedding"] = STRANGER
     worker = JobProcessor(config(controller), tmp_path)
     try:
@@ -164,7 +164,7 @@ async def test_an_unknown_face_stays_unknown(controller, tmp_path):
 
 
 async def test_no_detected_face_completes_the_task_without_snapshots(controller, tmp_path):
-    controller.face_reply = {"faces": []}
+    controller.face_reply = {"embedding_space": "a" * 64, "faces": []}
     worker = JobProcessor(config(controller), tmp_path)
     try:
         result = await worker.handle(task())
@@ -188,7 +188,7 @@ async def test_other_recognition_tasks_never_reach_local_faces(controller, tmp_p
 
 
 async def test_a_broken_face_server_posts_nothing(controller, tmp_path):
-    controller.face_reply = {"faces": [{"box": "bad"}]}
+    controller.face_reply = {"embedding_space": "a" * 64, "faces": [{"box": "bad"}]}
     worker = JobProcessor(config(controller), tmp_path)
     try:
         with pytest.raises(WorkerError):
@@ -223,22 +223,22 @@ async def test_the_device_routes_face_camera_recognition_to_the_worker(tmp_path)
 
 def test_templates_are_private_matched_by_threshold_and_deletable(tmp_path):
     store = FaceStore(tmp_path)
-    assert store.enroll("Synthetic Alice", ALICE) == 1
+    assert store.enroll("Synthetic Alice", ALICE, embedding_space='a' * 64) == 1
     near = [0.9, 0.1] + [0.0] * 126
-    assert store.match(near)[0] == "Synthetic Alice"
+    assert store.match(near, embedding_space='a' * 64)[0] == "Synthetic Alice"
     far = [MATCH_THRESHOLD - 0.05, 1.0] + [0.0] * 126
-    assert store.match(far)[0] is None
+    assert store.match(far, embedding_space='a' * 64)[0] is None
     assert oct(store.path.stat().st_mode & 0o777) == "0o600"
     assert oct(store.directory.stat().st_mode & 0o777) == "0o700"
     assert store.delete("Synthetic Alice") and store.names() == []
-    store.enroll("Synthetic Bob", STRANGER)
+    store.enroll("Synthetic Bob", STRANGER, embedding_space='a' * 64)
     store.purge()
     assert store.names() == []
     for bad in ([1.0] * 3, [float("nan")] * 128, [0.0] * 128):
         with pytest.raises(FaceStoreError):
-            store.enroll("X", bad)
+            store.enroll("X", bad, embedding_space='a' * 64)
     with pytest.raises(FaceStoreError):
-        store.enroll("bad\nname", ALICE)
+        store.enroll("bad\nname", ALICE, embedding_space='a' * 64)
 
 
 def test_regions_are_validated():
@@ -269,7 +269,7 @@ async def test_the_face_server_returns_boxes_and_embeddings_only():
 async def test_without_face_regions_the_face_is_searched_in_person_regions_and_linked(
         controller, tmp_path):
     # Wohnzimmer, 26 Sep: recognition tasks carried personMeta but no faceMeta.
-    FaceStore(tmp_path).enroll("Synthetic Alice", ALICE)
+    FaceStore(tmp_path).enroll("Synthetic Alice", ALICE, embedding_space='a' * 64)
     command = task(face_meta=False)
     command["payload"]["personMeta"] = [
         {"roi": {"coord": [300, 100, 200, 800], "trackerId": 4,
@@ -290,7 +290,7 @@ async def test_without_face_regions_the_face_is_searched_in_person_regions_and_l
 
 async def test_live_list_shaped_person_regions_reach_local_faces(controller, tmp_path):
     # Live 7.3.68 (26 Sep): each personMeta entry's roi is a list of objects.
-    FaceStore(tmp_path).enroll("Synthetic Alice", ALICE)
+    FaceStore(tmp_path).enroll("Synthetic Alice", ALICE, embedding_space='a' * 64)
     command = task(face_meta=False)
     command["payload"]["personMeta"] = [
         {"ts": START + 1200, "roi": [{"coord": [300, 100, 200, 800], "trackerId": 4,

@@ -35,7 +35,7 @@ async def scenario(output, name, viewport, executable):
         long_name = 'Z' * 64
         vector = [1.0] + [0.0] * 127
         for label in (sibling, target, target, long_name):
-            store.enroll(label, vector)
+            store.enroll(label, vector, embedding_space='a' * 64)
         before = store.path.read_bytes()
         config_before = key.read_bytes()
         errors, posts, unowned = [], [], []
@@ -106,7 +106,7 @@ async def scenario(output, name, viewport, executable):
                         has=page.get_by_role('heading', name=long_name, exact=True))
                     await long_row.get_by_role('button', name='Review deletion').click()
                     assert await page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1')
-                    store.enroll('Fictional concurrently added identity', vector)
+                    store.enroll('Fictional concurrently added identity', vector, embedding_space='a' * 64)
                     await checkbox.check()
                     await page.get_by_role('button', name='Delete local identity', exact=True).click()
                     await expect(page.get_by_role('heading', name='Identity action not completed')).to_be_visible()
