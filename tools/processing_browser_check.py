@@ -18,6 +18,7 @@ from aiohttp import web  # noqa: E402
 from aiohttp.test_utils import TestServer  # noqa: E402
 from aikey.admin_runtime import RuntimeObserver  # noqa: E402
 from aikey.admin_security import AdminSecurity  # noqa: E402
+from aikey.camera_bindings import SCHEMA as BINDING_SCHEMA, binding_revision  # noqa: E402
 from aikey.config import initialize  # noqa: E402
 from aikey.control_site import ControlSite  # noqa: E402
 from aikey.tls import ensure_identity_certificate, server_context  # noqa: E402
@@ -59,12 +60,25 @@ async def scenario(output, name, viewport, executable):
                         "capacity": 1024, "current_process": {"written": 3, "already_recorded": 0,
                             "busy": 0, "capacity": 0, "unavailable": 1}}}},
             "aiport": {"service": "aiport-candidate", "adopted": True, "control_connected": True,
+                "pool_binding_schema": BINDING_SCHEMA,
+                "pool_binding_revision": binding_revision("02000000F0B2", ["02000000F0C3"]),
                 "active_streams": 1, "pool_inference": {"attempts": 12, "successes": 10,
                     "api_request_cap": None, "api_consecutive_provider_failures": 0,
                     "pending_cameras": 0},
                 "pool_cameras": [{"stream_active": True, "policy_enabled": True,
+                    "policy_enabled_types": ["person"], "policy_smart_zones": 2,
+                    "policy_exclude_zones": 0, "policy_secondary_lens_zones": None,
                     "attempts": 12, "successes": 10, "api_failures": 2,
                     "api_requests_remaining": 0, "api_request_budget_healthy": False}]}}
+        inventory = {"schema": "aikey-camera-preflight/1", "protect_version": "7.3.74",
+            "fetched_at": int(time.time()), "cameras": [{"id": "f" * 24, "mac": "02000000F0C3",
+                "name": "Fictional hall", "model": "Fictional camera", "state": "CONNECTED",
+                "smart_detect_types": ["person"], "audio_detect_types": []}]}
+        inventory_calls = []
+        async def load_inventory():
+            inventory_calls.append(True)
+            return inventory
+        site.inventory_loader = load_inventory
         calls, posts, errors, unowned = [], [], [], []
         peers, targets = [], {}
         for profile, directory in [("aikey", key.parent), ("aiport", port.parent)]:
@@ -137,12 +151,35 @@ async def scenario(output, name, viewport, executable):
                     summary = page.locator("summary", has_text="Processing details for AI Port")
                     await summary.focus()
                     await page.keyboard.press("Enter")
-                    await expect(page.get_by_text("Runtime camera 1", exact=True)).to_be_visible()
+                    await expect(page.get_by_text("Runtime camera 1 · Fictional hall", exact=True)).to_be_visible()
+                    camera_table = page.get_by_role("table", name="Runtime camera 1 · Fictional hall", exact=True)
+                    for label in ("Smart zones (reported) 2", "Exclusion zones (reported) 0",
+                                  "Secondary-lens zones (reported) Unknown", "Enabled types (reported) person"):
+                        await expect(camera_table.get_by_role("row", name=label, exact=True)).to_be_visible()
                     await expect(page.get_by_text("Not configured", exact=True)).to_be_visible()
                     assert await summary.evaluate("el => el.parentElement.open")
                     assert await page.locator("form,button").count() == 0
                     assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
                     await page.screenshot(path=str(output / (name + "-processing-details.png")), full_page=True)
+                    values["aiport"]["pool_binding_revision"] = "0" * 64
+                    site.runtime_observer.cache.clear()
+                    await page.get_by_role("link", name="Refresh", exact=True).click()
+                    await page.locator("summary", has_text="Processing details for AI Port").click()
+                    await expect(page.get_by_text("Name unavailable: saved camera order differs from the running processor.", exact=True)).to_be_visible()
+                    await expect(page.get_by_text("Runtime camera 1", exact=True)).to_be_visible()
+                    assert "Fictional hall" not in await page.content()
+                    assert "02000000F0C3" not in await page.content() and "f" * 24 not in await page.content()
+                    assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+                    await page.screenshot(path=str(output / (name + "-camera-mapping-unknown.png")), full_page=True)
+                    values["aiport"]["pool_binding_revision"] = binding_revision("02000000F0B2", ["02000000F0C3"])
+                    inventory["fetched_at"] = 1
+                    site._inventory_snapshot = None
+                    site.runtime_observer.cache.clear()
+                    await page.get_by_role("link", name="Refresh", exact=True).click()
+                    await page.locator("summary", has_text="Processing details for AI Port").click()
+                    await expect(page.get_by_text("Name unavailable: camera inventory is not configured, unavailable or stale.", exact=True)).to_be_visible()
+                    await expect(page.get_by_role("table", name="Runtime camera 1", exact=True).get_by_role("row", name="Attempts 12", exact=True)).to_be_visible()
+                    assert "Fictional hall" not in await page.content()
                     # A malformed peer must become unknown, not zero or the preceding good data.
                     values["aiport"]["pool_inference"]["attempts"] = "CANARY-PRIVATE-ERROR"
                     site.runtime_observer.cache.clear()
@@ -159,6 +196,10 @@ async def scenario(output, name, viewport, executable):
                     result = {"viewport": viewport, "browser_version": context.browser.version,
                         "zero_unknown_and_uncapped_distinct": True, "keyboard_region_and_details": True,
                         "metered_sample_and_explicit_unmetered_distinct": True,
+                        "camera_names_require_matching_runtime_order_and_inventory": True,
+                        "zone_counts_unknown_zero_and_enabled_types": True,
+                        "stale_inventory_preserves_counters_without_names": True,
+                        "camera_inventory_reads": len(inventory_calls),
                         "expired_session_refused": True, "settings_posts": 0, "health_reads": len(calls),
                         "real_controller_model_or_media_calls": 0, "unowned_requests": 0,
                         "fixture_config_bytes_unchanged": True, "body_horizontal_overflow": False,
