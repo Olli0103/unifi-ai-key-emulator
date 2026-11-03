@@ -15,6 +15,7 @@ removal and re-enrollment; no vector conversion or automatic relabelling.
 from __future__ import annotations
 
 import argparse
+import asyncio
 from contextlib import contextmanager
 import hashlib
 import json
@@ -31,6 +32,7 @@ from urllib.parse import urlsplit
 from .provider_http import provider_opener
 from .provider_network import ProviderAddressError, checked_addresses, validate_provider_host
 from .protocol import _json_object
+from .model_work_fence import ModelWorkFence, ModelWorkFenceError
 
 
 MATCH_THRESHOLD = 0.363          # OpenCV SFace cosine threshold
@@ -428,7 +430,18 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "enroll":
             if not args.name or not args.image:
                 raise FaceStoreError("enroll needs --name and --image")
-            template, space = embed_single_face(args.image.read_bytes(), args.server)
+            fence = ModelWorkFence.from_state(args.state_dir)
+            lease = None
+            try:
+                # Acquire asynchronously, then keep the synchronous request on
+                # this owning CLI thread. No cancelled executor waiter can drop
+                # exclusion while a detached enrollment request still runs.
+                lease = asyncio.run(fence.acquire(deadline=time.monotonic() + 10))
+                template, space = embed_single_face(args.image.read_bytes(), args.server)
+            finally:
+                if lease is not None:
+                    lease.close()
+                fence.close()
             count = store.enroll(args.name, template, embedding_space=space)
             print(json.dumps({"templates": count}))
         elif args.command == "delete":
@@ -436,7 +449,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             store.purge()
             print(json.dumps({"purged": True}))
-    except (FaceStoreError, OSError, ValueError, KeyError) as exc:
+    except (FaceStoreError, ModelWorkFenceError, OSError, ValueError, KeyError) as exc:
         print(f"local-aikey-faces: {exc.__class__.__name__}: {exc}", file=sys.stderr)
         return 2
     return 0
