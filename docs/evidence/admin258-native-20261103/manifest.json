@@ -1,0 +1,14 @@
+{
+  "record_type": "same_agent_allowlisted_summary",
+  "observed_date": "2026-11-03",
+  "source": "0d9ff32c7cb939fb394ad737c8bd6434bad7be67",
+  "not_independent_review": true,
+  "not_general_parity_acceptance": true,
+  "files": {
+    "running-byte-summary.json": "754c0b8a377a8922b00432d29cecdafbd4395dbfd5fb52adc593c6a5b2d814d1",
+    "http-summary.json": "721f9f0489807f5ead26fd044d837af9cb004a8781e15e46f595b7146151683a",
+    "preservation-summary.json": "e5c0d8327c530fdc85a14b53fe43390da921dd754f5bb28ba01b581b7c921af1"
+  },
+  "hashes_bind_public_summaries_not_private_receipt_authentication": true,
+  "private_names_identifiers_hosts_addresses_media_credentials_omitted": true
+}

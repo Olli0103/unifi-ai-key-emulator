@@ -1,0 +1,40 @@
+{
+  "record_type": "same_agent_allowlisted_summary",
+  "observed_date": "2026-11-03",
+  "source": "0d9ff32c7cb939fb394ad737c8bd6434bad7be67",
+  "not_independent_review": true,
+  "not_general_parity_acceptance": true,
+  "old_reader_ui_camera_control_count": 27,
+  "scope_panels": 12,
+  "saved_only_warning": true,
+  "restart_warning": true,
+  "inventory_rows": 11,
+  "saved_bindings": 9,
+  "processing_enabled_by_read": false,
+  "runtime_profiles": 5,
+  "active_streams": 9,
+  "runtime_camera_rows": 9,
+  "all_runtime_tls_verified": true,
+  "all_five_saved_revisions_match_startup": true,
+  "running_caption_policy_contract": {
+    "mode": "unmetered",
+    "scope": "continuous_captions_not_speech_port_or_all_paid_calls",
+    "budget": null
+  },
+  "redacted_caption_policy_mode": "unmetered",
+  "local_face_empty_metadata_read": true,
+  "real_face_record_reads": 0,
+  "face_deletions": 0,
+  "processing_camera_name_observations": {
+    "runtime_order_and_inventory": 9
+  },
+  "processing_camera_sections": 9,
+  "reported_zone_and_stream_fields_present": true,
+  "key_face_scope_read_only": true,
+  "key_face_scope_saved_count": 1,
+  "key_face_scope_named_choices": 1,
+  "real_key_face_scope_applies": 0,
+  "settings_or_model_or_maintenance_applies": 0,
+  "default_ca_and_sni_verified": true,
+  "session_logged_out": true
+}

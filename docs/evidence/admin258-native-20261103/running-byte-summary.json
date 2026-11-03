@@ -1,0 +1,21 @@
+{
+  "record_type": "same_agent_allowlisted_summary",
+  "observed_date": "2026-11-03",
+  "source": "0d9ff32c7cb939fb394ad737c8bd6434bad7be67",
+  "not_independent_review": true,
+  "not_general_parity_acceptance": true,
+  "image": "sha256:19df9f77f96a4b154b51a608f01afbf91c19310396630f2eca71a1226f436022",
+  "module_count": 134,
+  "actual_running_module_bytes_equal": true,
+  "actual_running_license_equal": true,
+  "nine_non_admin_processes_exact": true,
+  "healthy_zero_restarts": true,
+  "certificate_binding_matches": true,
+  "six_loaded_unit_states_exact": true,
+  "old_admin_image_retained": true,
+  "same_boot_and_home_mount": true,
+  "real_face_record_reads": 0,
+  "face_deletions": 0,
+  "real_key_face_scope_applies": 0,
+  "no_processor_or_permission_change": true
+}

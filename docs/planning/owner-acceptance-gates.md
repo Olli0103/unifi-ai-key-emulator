@@ -14,7 +14,7 @@ PASS. Later source work does not automatically activate on installed devices.
 
 | Boundary | Current recorded evidence | What it does not prove |
 |---|---|---|
-| Existing Admin | [#256 runtime readback](../evidence/admin256-native-20261103.md), 133 running modules verified, retained authority/profiles, nine bound processing names and empty local face metadata | Real identity deletion, new permission/configuration apply, owner GUI, whole-system recovery |
+| Existing Admin | [#258 runtime readback](../evidence/admin258-native-20261103.md), 134 running modules verified, one existing named Key face choice, retained authority/profiles and nine other processes | Actual scope restriction/restart enforcement, real identity deletion, owner GUI, whole-system recovery |
 | Four existing Ports | [Serial #243 image update](../evidence/ports243-native-20261102.md), original identities/nine pairings retained, decoded streams resumed | New ONVIF device, controlled native ground truth, host/power-loss recovery |
 | Local model pilot | [Twelve public person/none cases](../evidence/public-person-structured-30s-20261102.md): eleven usable/correct, one whole-case normalization error | Held-out/general/private-camera quality, a calibration PASS or zero cost |
 | Fresh source setup | [Passive Port browser preparation](../first-run-aiport.md) with authentication and private new files | Deployment, adoption, pairing or a fresh independent native installation |
