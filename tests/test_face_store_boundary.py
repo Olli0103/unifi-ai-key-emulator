@@ -175,10 +175,12 @@ def test_growth_after_fstat_is_bounded_and_not_repaired(tmp_path, monkeypatch):
     original = store.path.read_bytes()
     monkeypatch.setattr(faces, "_MAX_STORE_BYTES", len(original) + 2)
     actual = os.fstat
+    target = store.path.stat()
     def grow_after_stat(fd):
         info = actual(fd)
-        with store.path.open("ab") as destination:
-            destination.write(b" " * 32)
+        if (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino):
+            with store.path.open("ab") as destination:
+                destination.write(b" " * 32)
         return info
     monkeypatch.setattr(faces.os, "fstat", grow_after_stat)
     with pytest.raises(FaceStoreError, match="^face_store_invalid$"):
