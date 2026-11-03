@@ -17,12 +17,15 @@ import json
 from pathlib import Path
 from typing import Callable
 
-from aiohttp import web
+from aiohttp import BodyPartReader, web
+from aiohttp.http_exceptions import BadHttpMessage
 
 from .clip import DIMENSIONS, MODEL, ClipError, normalize
+from .multipart_input import read_part
 
 
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
+_MAX_REGION_BYTES = 65536
 _MAX_TEXTS = 8
 _MAX_TEXT_CHARS = 1024
 _MAX_REGIONS = 16
@@ -137,6 +140,7 @@ def onnx_encoders(model_dir: str, *, threads: int = 4) -> tuple[TextEncoder, Ima
 def build_app(encode_text: TextEncoder, encode_image: ImageEncoder, *,
               revision: str | None = None) -> web.Application:
     lock = asyncio.Lock()
+    operations = set()
     counters = {"text_requests": 0, "image_requests": 0, "texts": 0, "regions": 0,
                 "rejected": 0, "failed": 0}
 
@@ -146,8 +150,10 @@ def build_app(encode_text: TextEncoder, encode_image: ImageEncoder, *,
                                   "embeddings": [[round(v, 7) for v in normalize(vector)]
                                                  for vector in vectors]})
 
-    async def run(function, *args):
+    async def run_owned(request, function, args):
         async with lock:
+            if request.transport is None or request.transport.is_closing():
+                return None, web.Response(status=499)
             try:
                 return await asyncio.to_thread(function, *args), None
             except InputError:
@@ -156,6 +162,23 @@ def build_app(encode_text: TextEncoder, encode_image: ImageEncoder, *,
             except (ClipError, Exception):
                 counters["failed"] += 1
                 return None, web.json_response({"error": "embedding_failed"}, status=500)
+
+    def completed(work):
+        operations.discard(work)
+        if not work.cancelled():
+            work.exception()
+
+    async def run(request, function, *args):
+        # One shared text/image model lock belongs to the actual operation,
+        # never the cancellable HTTP waiter around its non-cancellable thread.
+        work = asyncio.create_task(run_owned(request, function, args))
+        operations.add(work)
+        work.add_done_callback(completed)
+        return await asyncio.shield(work)
+
+    async def drain(_app):
+        if operations:
+            await asyncio.shield(asyncio.gather(*tuple(operations), return_exceptions=True))
 
     async def text(request: web.Request) -> web.Response:
         counters["text_requests"] += 1
@@ -169,7 +192,7 @@ def build_app(encode_text: TextEncoder, encode_image: ImageEncoder, *,
         except (InputError, ValueError):
             counters["rejected"] += 1
             return web.json_response({"error": "invalid_request"}, status=400)
-        vectors, error = await run(encode_text, [t.strip() for t in texts])
+        vectors, error = await run(request, encode_text, [t.strip() for t in texts])
         if error is not None:
             return error
         counters["texts"] += len(texts)
@@ -182,19 +205,22 @@ def build_app(encode_text: TextEncoder, encode_image: ImageEncoder, *,
             if request.content_type != "multipart/form-data":
                 raise InputError("multipart required")
             reader = await request.multipart()
+            seen = set()
             while (part := await reader.next()) is not None:
+                if (not isinstance(part, BodyPartReader)
+                        or part.name not in {"image", "regions"} or part.name in seen):
+                    raise InputError("Unexpected or repeated part")
+                seen.add(part.name)
                 if part.name == "image":
-                    jpeg = await part.read(decode=False)
-                    if len(jpeg) > _MAX_IMAGE_BYTES:
-                        raise InputError("Image too large")
+                    jpeg = await read_part(part, _MAX_IMAGE_BYTES)
                 elif part.name == "regions":
-                    regions = parse_regions((await part.read(decode=False))[:65536].decode())
+                    regions = parse_regions((await read_part(part, _MAX_REGION_BYTES)).decode())
             if jpeg is None or not jpeg.startswith(b"\xff\xd8\xff"):
                 raise InputError("JPEG required")
-        except (InputError, UnicodeDecodeError):
+        except (ValueError, AssertionError, BadHttpMessage, RuntimeError):
             counters["rejected"] += 1
             return web.json_response({"error": "invalid_request"}, status=400)
-        vectors, error = await run(encode_image, jpeg, regions)
+        vectors, error = await run(request, encode_image, jpeg, regions)
         if error is not None:
             return error
         counters["regions"] += len(vectors)
@@ -208,6 +234,7 @@ def build_app(encode_text: TextEncoder, encode_image: ImageEncoder, *,
     app.router.add_post("/v1/text", text)
     app.router.add_post("/v1/image", image)
     app.router.add_get("/healthz", health)
+    app.on_cleanup.append(drain)
     return app
 
 

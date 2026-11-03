@@ -20,6 +20,8 @@ from typing import Callable
 from aiohttp import BodyPartReader, web
 from aiohttp.http_exceptions import BadHttpMessage
 
+from .multipart_input import read_part as _read_part
+
 
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
 _MAX_REGION_BYTES = 65536
@@ -86,21 +88,6 @@ def opencv_analyzer(detector_path: str, recognizer_path: str, *,
                     found.append((box, float(face[-1]), embedding))
         return found[:_MAX_FACES]
     return analyze
-
-
-async def _read_part(part: BodyPartReader, limit: int) -> bytes:
-    # Request.client_max_size does not account for streamed multipart reads.
-    # Keep the existing wire bytes; never truncate, decode or re-encode an image.
-    if (part.headers.get("Content-Transfer-Encoding", "binary").lower()
-            not in {"binary", "8bit"}
-            or part.headers.get("Content-Encoding", "identity").lower() != "identity"):
-        raise ImageError("Encoded parts unsupported")
-    value = bytearray()
-    while chunk := await part.read_chunk(8192):
-        if len(value) + len(chunk) > limit:
-            raise ImageError("Part too large")
-        value.extend(chunk)
-    return bytes(value)
 
 
 def build_app(analyze: Analyzer) -> web.Application:
