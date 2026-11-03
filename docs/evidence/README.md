@@ -39,3 +39,5 @@ The records identify package-relative paths and local analysis artifacts. Vendor
 - [3 November CLI enrollment model-work fence](face-cli-model-fence-20261103.md): CLI enrollment joins an already enrolled shared guard before the synchronous local request; fictional exclusion/error/cleanup checks, no native maintenance or universal remote-idle claim.
 
 - [3 November coordinated model-bound candidates](model-bound-candidates-20261103.md): Face/Key/Admin each match all 136 modules and pass isolated fictional/model-space qualification; all ten production processes unchanged, no installation or native feature acceptance.
+
+- [3 November model catalog wire JSON](catalog-json-20261103.md): existing strict decoder rejects duplicate/non-finite/non-UTF-8 replies before pagination; fictional HTTP source qualification only, no live provider or service change.
