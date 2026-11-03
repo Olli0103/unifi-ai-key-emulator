@@ -37,3 +37,5 @@ The records identify package-relative paths and local analysis artifacts. Vendor
 - [3 November explicit local face enrollment](face-enrollment-control-20261103.md): owner-supplied image, local model-space-bound preview, separate save consent and transient-template lifecycle; source/fictional browser qualification only, no real enrollment or installation.
 
 - [3 November CLI enrollment model-work fence](face-cli-model-fence-20261103.md): CLI enrollment joins an already enrolled shared guard before the synchronous local request; fictional exclusion/error/cleanup checks, no native maintenance or universal remote-idle claim.
+
+- [3 November coordinated model-bound candidates](model-bound-candidates-20261103.md): Face/Key/Admin each match all 136 modules and pass isolated fictional/model-space qualification; all ten production processes unchanged, no installation or native feature acceptance.
