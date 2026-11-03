@@ -874,6 +874,7 @@ class ControlSite:
                   "<a href='/processing'>Processing and budgets</a> · "
                   "<a href='/worker-limits'>Key processing limits</a> · "
                   "<a href='/face-identities'>Local face identities</a> · "
+                  "<a href='/key-face-cameras'>Saved Key face cameras</a> · "
                   "<a href='/diagnostics'>Redacted diagnostics</a> · "
                   "<a href='/camera-status'>Native camera status</a> · "
                   "<a href='/model-registry'>Saved model role registry</a></p>"

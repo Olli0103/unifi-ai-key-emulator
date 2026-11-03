@@ -232,6 +232,79 @@ class ConfigurationStore:
         return {"revision": _revision(content), "configured": isinstance(continuous, dict),
                 "camera_ids": tuple(cameras) if isinstance(cameras, list) else None}
 
+    def face_scope_status(self):
+        """Private saved-only input; HTTP must omit raw camera identifiers/server."""
+        from .protocol import _json_object
+        content, _ = self._read(self.path)
+        try:
+            raw = _json_object(content)
+        except ValueError as exc:
+            raise UnsafeConfigurationChange("Face scope source is ambiguous") from exc
+        policy = raw.get("face_recognition")
+        return {"revision": _revision(content), "configured": isinstance(policy, dict),
+                "camera_ids": tuple(policy["camera_ids"]) if isinstance(policy, dict) else None}
+
+    def _prepare_face_restriction(self, content, current, expected_revision, retained):
+        from .protocol import _json_object
+        revision = _revision(content)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(revision, expected_revision)):
+            raise RevisionConflict("Configuration changed since it was read")
+        if (not isinstance(retained, list) or len(retained) > 8
+                or any(not isinstance(camera, str) for camera in retained)
+                or len(set(retained)) != len(retained)):
+            raise UnsafeConfigurationChange("Select distinct existing face cameras")
+        try:
+            raw = _json_object(content)
+        except ValueError as exc:
+            raise UnsafeConfigurationChange("Face scope source is ambiguous") from exc
+        policy = raw.get("face_recognition")
+        if not isinstance(policy, dict):
+            raise UnsafeConfigurationChange("Existing face recognition policy required")
+        existing = policy["camera_ids"]
+        if not set(retained) <= set(existing):
+            raise UnsafeConfigurationChange("Face scope can only remove saved cameras")
+        candidate = deepcopy(raw)
+        if retained:
+            candidate["face_recognition"]["camera_ids"] = [c for c in existing if c in retained]
+            allowed = ("face_recognition.camera_ids",)
+        else:
+            del candidate["face_recognition"]
+            allowed = ("face_recognition",)
+        checked = self._validate(candidate)
+        self._assert_immutable(current, checked)
+        self._assert_search_profile(checked, current)
+        self._assert_credential_routes(current, checked)
+        changes = tuple(_changed(raw, candidate))
+        if changes not in ((), allowed):
+            raise UnsafeConfigurationChange("Face restriction must not change other settings")
+        encoded = self._encode(candidate)
+        if len(encoded) > _MAX_CONFIG_BYTES:
+            raise UnsafeConfigurationChange("Face restriction configuration is too large")
+        return ConfigurationPreview(revision, _revision(encoded) if changes else revision,
+            _public(checked), changes, bool(changes)), encoded
+
+    def preview_face_restriction(self, expected_revision, retained):
+        content, current = self._read(self.path)
+        return self._prepare_face_restriction(content, current, expected_revision, retained)[0]
+
+    def restrict_faces(self, expected_revision, retained):
+        """Remove saved scope only; preserve templates/history and running jobs."""
+        with self._locked():
+            content, current = self._read(self.path)
+            preview, encoded = self._prepare_face_restriction(content, current, expected_revision, retained)
+            if not preview.changed_fields:
+                return ConfigurationSnapshot(preview.current_revision, _public(current))
+            self._archive(content)
+            try:
+                self._replace(encoded)
+                persisted, checked = self._read(self.path)
+                if _revision(persisted) != preview.resulting_revision:
+                    raise ConfigurationStoreError("Face restriction read-back differs")
+            except (OSError, ValueError, ConfigurationStoreError) as exc:
+                raise ConfigurationStoreError("Face restriction replacement outcome is uncertain") from exc
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
+
     def caption_setup_status(self, binding):
         from .caption_setup import prerequisites
         from .providers import DEFAULT_BASE_URLS

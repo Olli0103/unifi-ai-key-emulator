@@ -145,6 +145,21 @@ refused. The same runtime-order binding gate applies before joining camera MACs.
 Requested geometry is not actual decode fidelity, a controller channel index,
 playback continuity or PTZ/recording control.
 
+## Saved AI Key face camera scope
+
+`GET /api/admin/v1/key-face-cameras` returns `scope: aikey_face_recognition`,
+`observation: saved_policy_not_running_authority`, `read_only: true` and
+`face_scope` with `configured`, `revision` and `explicit_camera_count`. It reuses
+the authenticated private listener and returns no raw camera IDs, names, server
+address, templates or media. An absent saved policy is known empty, not proof
+of live-worker state; unavailable/ambiguous state returns HTTP 503 without a
+fabricated count. Query parameters and arbitrary profiles/paths are refused.
+
+The separate [saved Key face-camera forms](control-site.md#saved-ai-key-face-camera-restriction)
+provide remove-only preview/explicit consent. There is no JSON apply shortcut,
+new recognition enrollment, template deletion, live restart or model request in
+this view. Source/fixture qualification is recorded [separately](evidence/key-face-scope-20261103.md).
+
 ## Private local face identity metadata
 
 `GET /api/admin/v1/face-identities` uses the existing authenticated listener and
