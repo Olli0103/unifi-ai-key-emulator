@@ -103,6 +103,9 @@ class AdminAPI:
         from .diagnostic_export import DiagnosticExport
         self.diagnostic_export = DiagnosticExport(self)
         self.diagnostic_export.register(app)
+        from .face_identity_control import FaceIdentityControl
+        self.face_identity_control = FaceIdentityControl(self)
+        self.face_identity_control.register(app)
 
     async def maintenance_history(self, request):
         if not self.authenticated(request):

@@ -145,6 +145,21 @@ refused. The same runtime-order binding gate applies before joining camera MACs.
 Requested geometry is not actual decode fidelity, a controller channel index,
 playback continuity or PTZ/recording control.
 
+## Private local face identity metadata
+
+`GET /api/admin/v1/face-identities` uses the existing authenticated listener and
+returns the exact saved record revision, local identity labels and per-identity
+template counts. It declares `scope: local_aikey_sface128` and
+`live_worker_state: not_asserted`. There are no photos, vectors, created times,
+paths, native Protect groups or AI Port templates. These labels are private
+operator data, never a public diagnostic/export. Missing read-only state is an
+empty list without file creation; an unsafe/unavailable record is HTTP 503, not
+a fabricated empty list. Query options and arbitrary roots are refused.
+
+Deletion uses the separate signed-in [local identity forms](control-site.md#local-face-identity-metadata-and-deletion)
+with revision-bound, expiring, one-use explicit confirmation. There is no JSON
+write shortcut, enrollment route or provider/model request in this addition.
+
 ## Saved identity and controller trust
 
 The separate identity view is private operator data, not public diagnostics.
