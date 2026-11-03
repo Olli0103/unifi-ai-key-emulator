@@ -10,6 +10,54 @@ completed all twelve cases: eleven usable correct and one normalization error.
 Its valid-only report has eleven cases; it is not a general quality or hardware
 acceptance, and earlier partial runs remain unchanged.
 
+The [3 November isolated CPU cartoon matrix](evidence/synthetic-person-cpu-20261103.md)
+completed 24/24 valid, correct binary person-presence cases, with prospectively
+frozen same-corpus regression targets. These related drawings are not field,
+night/IR, weather, audio, native-alarm or hardware-equivalence acceptance. The
+earlier GPU timeout and refused CPU admissions remain separate failures.
+
+### Owned synthetic evaluation helpers
+
+`tools/benchmark_fixture_corpus.py` creates a **new** private output directory
+with 24 deterministic cartoon PNGs, unlabelled `inputs.json`, separate
+`gold.json`, an ID-labelled contact sheet and two negative PCM audio inputs.
+It refuses an existing output directory. No camera, provider or model is read.
+
+```sh
+python tools/benchmark_fixture_corpus.py /private/evaluation/corpus
+```
+
+The drawings need independent visual label review before inference. Freeze the
+exact encoded inputs, reviewed gold, application source, adapter/report bytes,
+model/runtime/device, schedule, warm-up, timeouts and stop/target policies first.
+Keep gold and the contact sheet outside the model's unlabelled input bundle.
+PNG byte reproducibility across different Pillow/zlib environments is not
+promised: retain and compare the actual frozen input bytes, never silently
+substitute freshly encoded images into an existing corpus binding.
+
+`tools/benchmark_person_adapter.py` executes exactly one explicitly selected
+case from such a prepared bundle. It records a start marker, any received body,
+raw response and terminal outcome using exclusive writes. It checks the exact
+returned model, strict JSON and every detection sibling; it does not rescue a
+valid sibling from a malformed case. It has no automatic retry or fallback.
+This deliberately local-only low-level helper does **not** provision a server,
+acquire production admission, select or download weights, pause cameras or
+attest the controller's manifest. Use an isolated admitted evaluation route or
+the existing enforced shared-model protocol, never an unguarded live endpoint.
+
+`tools/benchmark_person_report.py` retains all 24 planned slots, including
+errors and unrun cases, and separately reports valid-only binary calibration.
+Its target function must be frozen before the initial predictions; targets
+are emitted only for a complete matrix and apply to future identical-corpus
+regression, not production promotion. It performs no inference:
+
+```sh
+python tools/benchmark_person_report.py /private/evaluation/corpus/gold.json /private/evaluation/results --manifest /private/evaluation/bundle/execution-manifest.json
+```
+
+Only the image person-presence task was evaluated in the dated CPU receipt.
+Generated silence/noise inputs are **not** a speech/audio-model evaluation.
+
 ## Input-bound comparison (`aikey-benchmark-cases/2`)
 
 Use schema `aikey-benchmark-cases/2` for new detection evaluations. It has the

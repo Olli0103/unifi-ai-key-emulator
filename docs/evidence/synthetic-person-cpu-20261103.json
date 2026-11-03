@@ -1,0 +1,94 @@
+{
+  "schema": "synthetic-person-report/1",
+  "planned": 24,
+  "terminal": 24,
+  "valid": 24,
+  "errors": 0,
+  "unrun": 0,
+  "complete": true,
+  "confusion": {
+    "person": {
+      "person": 8,
+      "none": 0,
+      "__error__": 0,
+      "__unrun__": 0
+    },
+    "none": {
+      "person": 0,
+      "none": 16,
+      "__error__": 0,
+      "__unrun__": 0
+    }
+  },
+  "all_slot_accuracy": 1.0,
+  "always_none_accuracy": 0.6666666666666666,
+  "valid_coverage": 1.0,
+  "person_precision": 1.0,
+  "all_slot_person_recall": 1.0,
+  "all_slot_none_recall": 1.0,
+  "negative_false_positive_fraction": 0.0,
+  "error_fraction": 0.0,
+  "calibration": {
+    "scope": "person score as binary probability, not a calibrated posterior",
+    "valid_cases": 24,
+    "ece_valid_only": 0.01708333333333334,
+    "brier_valid_only": 0.0010458333333333342,
+    "brier_all_slots_invalid_loss_one": 0.0010458333333333342,
+    "bins": [
+      {
+        "range": [
+          0.0,
+          0.1
+        ],
+        "count": 16,
+        "mean_person_score": 0.0,
+        "observed_person_fraction": 0.0
+      },
+      {
+        "range": [
+          0.9,
+          1.0
+        ],
+        "count": 8,
+        "mean_person_score": 0.94875,
+        "observed_person_fraction": 1.0
+      }
+    ]
+  },
+  "api_receipt_and_parse_ms": {
+    "terminal_cases": 24,
+    "p50": 10106,
+    "p95": 11897,
+    "p99": 15812
+  },
+  "provider_charge_usd": null,
+  "camera_day_exposure": null,
+  "event_to_alert_ms": null,
+  "hardware_reference": null,
+  "scope": "related synthetic cartoons, not field quality, native event latency or hardware parity",
+  "run": {
+    "model": "qwen3-vl-8b",
+    "provider": "openai-compatible-local-ovms",
+    "profile": "ai-port-primary-fraction-adapter",
+    "code_revision": "d08301ffbc0e75c756a0865eb9a9b0e046d88eb9",
+    "camera_classes": [
+      "synthetic-outdoor"
+    ],
+    "model_revision": "8640be5dd2a92ddfe6ea1620c794d20a54ce3d51"
+  },
+  "execution_manifest_sha256": "c533be0ecc50fbbaf6e2c0b8f2eec78edb993a3eb911bebb9570ba457baed85e",
+  "gold_sha256": "b47fd92fcd9b7f47b5c882f3267fe9c259fecdfa340d609a565c5af6eb958382",
+  "prospective_targets": {
+    "scope": "future identical-corpus adapter regression gate only; no production promotion",
+    "minimum_valid_coverage": 1.0,
+    "minimum_person_recall": 1.0,
+    "minimum_person_precision": 1.0,
+    "maximum_negative_false_positive_fraction": 0.0,
+    "maximum_error_fraction": 0.0,
+    "maximum_ece_valid_only": 0.03708333333333334,
+    "maximum_brier_all_slots": 0.021045833333333333,
+    "maximum_api_receipt_parse_p95_ms": 13087,
+    "require_all_planned_slots_terminal": true,
+    "unmeasured_modalities_and_field_metrics": "needs_evidence; cannot pass by null or fixture-only scores"
+  }
+}

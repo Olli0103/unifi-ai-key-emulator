@@ -1,0 +1,214 @@
+{
+  "by_camera_class": {
+    "synthetic-outdoor": {
+      "cases": 24,
+      "false_alarm_rate": 0.0,
+      "false_alarms": 0,
+      "labels": {
+        "person": {
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 8
+        }
+      },
+      "misclassified": 0,
+      "missed": 0,
+      "negatives": 16,
+      "positives": 8
+    }
+  },
+  "by_condition": {
+    "day": {
+      "cases": 7,
+      "false_alarm_rate": 0.0,
+      "false_alarms": 0,
+      "labels": {
+        "person": {
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 2
+        }
+      },
+      "misclassified": 0,
+      "missed": 0,
+      "negatives": 5,
+      "positives": 2
+    },
+    "false_motion": {
+      "cases": 1,
+      "false_alarm_rate": 0.0,
+      "false_alarms": 0,
+      "labels": {},
+      "misclassified": 0,
+      "missed": 0,
+      "negatives": 1,
+      "positives": 0
+    },
+    "glare": {
+      "cases": 3,
+      "false_alarm_rate": 0.0,
+      "false_alarms": 0,
+      "labels": {
+        "person": {
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 1
+        }
+      },
+      "misclassified": 0,
+      "missed": 0,
+      "negatives": 2,
+      "positives": 1
+    },
+    "motion_blur": {
+      "cases": 2,
+      "false_alarm_rate": 0.0,
+      "false_alarms": 0,
+      "labels": {
+        "person": {
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 1
+        }
+      },
+      "misclassified": 0,
+      "missed": 0,
+      "negatives": 1,
+      "positives": 1
+    },
+    "multi_object": {
+      "cases": 2,
+      "false_alarm_rate": 0.0,
+      "false_alarms": 0,
+      "labels": {
+        "person": {
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 1
+        }
+      },
+      "misclassified": 0,
+      "missed": 0,
+      "negatives": 1,
+      "positives": 1
+    },
+    "night": {
+      "cases": 5,
+      "false_alarm_rate": 0.0,
+      "false_alarms": 0,
+      "labels": {
+        "person": {
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 1
+        }
+      },
+      "misclassified": 0,
+      "missed": 0,
+      "negatives": 4,
+      "positives": 1
+    },
+    "occlusion": {
+      "cases": 2,
+      "false_alarm_rate": 0.0,
+      "false_alarms": 0,
+      "labels": {
+        "person": {
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 1
+        }
+      },
+      "misclassified": 0,
+      "missed": 0,
+      "negatives": 1,
+      "positives": 1
+    },
+    "pets": {
+      "cases": 4,
+      "false_alarm_rate": 0.0,
+      "false_alarms": 0,
+      "labels": {},
+      "misclassified": 0,
+      "missed": 0,
+      "negatives": 4,
+      "positives": 0
+    },
+    "rain": {
+      "cases": 2,
+      "false_alarm_rate": 0.0,
+      "false_alarms": 0,
+      "labels": {
+        "person": {
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 1
+        }
+      },
+      "misclassified": 0,
+      "missed": 0,
+      "negatives": 1,
+      "positives": 1
+    }
+  },
+  "calibration": {
+    "answered": 8,
+    "bins": [
+      {
+        "accuracy": 1.0,
+        "count": 8,
+        "mean_confidence": 0.94875,
+        "range": [
+          0.9,
+          1.0
+        ]
+      }
+    ],
+    "brier": 0.003138,
+    "ece": 0.05125
+  },
+  "claims": "Producer-declared input hashes and labels, not independently verified media, native acceptance or hardware-quality evidence.",
+  "corpus_binding": "producer_declared_exact_input_sha256",
+  "corpus_sha256": "1c35438babcffa174f2f3fb16a4bcafb977491d35ab586dd71f50401d716e787",
+  "overall": {
+    "cases": 24,
+    "false_alarm_rate": 0.0,
+    "false_alarms": 0,
+    "labels": {
+      "person": {
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tp": 8
+      }
+    },
+    "misclassified": 0,
+    "missed": 0,
+    "negatives": 16,
+    "positives": 8
+  },
+  "run": {
+    "code_revision": "d08301ffbc0e75c756a0865eb9a9b0e046d88eb9",
+    "model": "qwen3-vl-8b",
+    "profile": "ai-port-primary-fraction-adapter",
+    "provider": "openai-compatible-local-ovms"
+  },
+  "schema": "aikey-benchmark-report/2"
+}
