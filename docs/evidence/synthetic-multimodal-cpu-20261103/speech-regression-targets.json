@@ -1,0 +1,35 @@
+{
+  "schema": "aikey-multimodal-regression-targets/1",
+  "corpus_sha256": "80cddc8a4ecf1c496e69dffcd495ae14e77c71b2447b533596607e2baa24366b",
+  "baseline_plan_sha256": "6c19296473ac3f1d2dce1068f913b7c5c680184eec0bee344135d69f7841ce3f",
+  "baseline_attempts_sha256": "e3b8e5316accf5a67032d729f18ee894c26188cfa647a9735b63c4caa5428b45",
+  "targets": {
+    "speech": {
+      "run": {
+        "code_revision": "e6ee47ecde49c6fa50d9eb0380a7ef69cd52190f",
+        "model": "large-v3-turbo-int8",
+        "profile": "speech-synthetic-v1",
+        "provider": "openvino-local-cpu"
+      },
+      "model": {
+        "checkpoint_sha256": "bda1d8db4345ead87114912ab9b53d2d8a1fe7160f2159e84f4e7d06acf2c0b5",
+        "runtime_sha256": "0c614db98e9809684d119ff04506ff75ccbe11122386f2fc0c24fdf36d26116a"
+      },
+      "timing_scope": {
+        "cpu": "owned_process_group",
+        "latency": "adapter_start_to_terminal"
+      },
+      "numeric_thresholds": {
+        "minimum_valid_coverage": 1,
+        "minimum_positive_hit_fraction": 1.0,
+        "minimum_correct_negative_rejection": 0.0,
+        "minimum_all_slot_exact_accuracy": 0.75,
+        "maximum_cer": 0.073276,
+        "maximum_wer": 0.069767,
+        "maximum_latency_ms_p95": 2859,
+        "maximum_cpu_ms_p95": 11348
+      }
+    }
+  },
+  "claims": "Prospective identical-corpus no-regression thresholds only; freeze before tuning. Failed initial quality targets are not waived. Timing needs the same externally verified resource/host envelope. Unknown thresholds remain needs_evidence, never zero. No field or hardware parity claim."
+}

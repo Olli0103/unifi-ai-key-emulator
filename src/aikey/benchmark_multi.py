@@ -176,7 +176,7 @@ def _operation(cases):
             "latency_ms": {f"p{p}": latencies[math.ceil(p / 100 * len(latencies)) - 1]
                            if latencies else None for p in (50, 95, 99)},
             "cost_known_samples": len(costs), "cost_unknown_samples": len(cases) - len(costs),
-            "known_provider_charge_usd": round(sum(costs), 8),
+            "known_provider_charge_usd": round(sum(costs), 8) if costs else None,
             "total_provider_charge_usd": round(sum(costs), 8) if len(costs) == len(cases) else None}
 
 

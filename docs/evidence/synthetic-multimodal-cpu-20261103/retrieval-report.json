@@ -1,0 +1,146 @@
+{
+  "schema": "aikey-multimodal-attempt-report/1",
+  "plan_sha256": "0e7209d2ba9cca04ba9b4ab023b374bd7d2a0344f02f473049863ec04dd699a9",
+  "corpus_sha256": "b496542becd14d83c644e1d520b4bde930fd1db44891745cbbe9916d782e66fc",
+  "complete": true,
+  "metrics": {
+    "retrieval": {
+      "run": {
+        "code_revision": "e6ee47ecde49c6fa50d9eb0380a7ef69cd52190f",
+        "model": "clip-ViT-L-14",
+        "profile": "retrieval-synthetic-v1",
+        "provider": "onnxruntime-cpu"
+      },
+      "model": {
+        "checkpoint_sha256": "77bc153b1b2808d41863a795a4b8558586694029ae6804af65964e170e484343",
+        "runtime_sha256": "515943bdcc65f01be8e6833b653de3a764b37a7d0de666abd1b8f9e4d1e486f1"
+      },
+      "timing_scope": {
+        "cpu": "owned_process_group",
+        "latency": "adapter_start_to_terminal"
+      },
+      "overall": {
+        "planned": 10,
+        "terminal": 10,
+        "valid": 10,
+        "errors": 0,
+        "unrun": 0,
+        "valid_coverage": 1.0,
+        "valid_only_metrics": {
+          "cases": 10,
+          "positive_queries": 6,
+          "negative_queries": 4,
+          "recall_at_k": 0.166667,
+          "mrr_at_k": 0.166667,
+          "ndcg_at_k": 0.166667,
+          "negative_queries_with_results": 0,
+          "negative_result_rate": 0.0
+        },
+        "latency_ms_terminal_only": {
+          "p50": 12.604119,
+          "p95": 56.300546,
+          "p99": 56.300546
+        },
+        "cpu_ms_terminal_only": {
+          "p50": 83.617006,
+          "p95": 108.557849,
+          "p99": 108.557849
+        },
+        "latency_unknown_slots": 0,
+        "cpu_unknown_slots": 0,
+        "charge_unknown_slots": 10,
+        "cpu_ms_measured_sum": 898.432923,
+        "cpu_ms_total": 898.432923,
+        "known_provider_charge_usd": null,
+        "total_provider_charge_usd": null,
+        "planned_positives": 6,
+        "planned_negatives": 4,
+        "all_slot_positive_hit_fraction": 0.166667,
+        "all_slot_correct_negative_rejection": 1.0
+      },
+      "by_camera_class": {
+        "synthetic-outdoor": {
+          "planned": 10,
+          "terminal": 10,
+          "valid": 10,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 10,
+            "positive_queries": 6,
+            "negative_queries": 4,
+            "recall_at_k": 0.166667,
+            "mrr_at_k": 0.166667,
+            "ndcg_at_k": 0.166667,
+            "negative_queries_with_results": 0,
+            "negative_result_rate": 0.0
+          },
+          "latency_ms_terminal_only": {
+            "p50": 12.604119,
+            "p95": 56.300546,
+            "p99": 56.300546
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 83.617006,
+            "p95": 108.557849,
+            "p99": 108.557849
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 10,
+          "cpu_ms_measured_sum": 898.432923,
+          "cpu_ms_total": 898.432923,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 6,
+          "planned_negatives": 4,
+          "all_slot_positive_hit_fraction": 0.166667,
+          "all_slot_correct_negative_rejection": 1.0
+        }
+      },
+      "by_condition": {
+        "query": {
+          "planned": 10,
+          "terminal": 10,
+          "valid": 10,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 10,
+            "positive_queries": 6,
+            "negative_queries": 4,
+            "recall_at_k": 0.166667,
+            "mrr_at_k": 0.166667,
+            "ndcg_at_k": 0.166667,
+            "negative_queries_with_results": 0,
+            "negative_result_rate": 0.0
+          },
+          "latency_ms_terminal_only": {
+            "p50": 12.604119,
+            "p95": 56.300546,
+            "p99": 56.300546
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 83.617006,
+            "p95": 108.557849,
+            "p99": 108.557849
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 10,
+          "cpu_ms_measured_sum": 898.432923,
+          "cpu_ms_total": 898.432923,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 6,
+          "planned_negatives": 4,
+          "all_slot_positive_hit_fraction": 0.166667,
+          "all_slot_correct_negative_rejection": 1.0
+        }
+      }
+    }
+  },
+  "claims": "Supplied measurements, not independent attestation or native acceptance. Failed/unrun slots are not correct negatives. Valid-only error/rank metrics exclude invalid attempts; all-slot coverage and success stay explicit. CPU time is not provider-reported monetary charge; unknown is not zero."
+}

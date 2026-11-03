@@ -1,0 +1,491 @@
+{
+  "schema": "aikey-multimodal-attempt-report/1",
+  "plan_sha256": "dd7cc0ce3408d3061a37215144a03bcd01c671b742b81df82a9ab4e60d2e8e8a",
+  "corpus_sha256": "08961c71ea81daa52104a7c9fc1b86d806b3da7c1aafe8ca336d56b477c23419",
+  "complete": true,
+  "metrics": {
+    "plate": {
+      "run": {
+        "code_revision": "e6ee47ecde49c6fa50d9eb0380a7ef69cd52190f",
+        "model": "qwen3-vl-8b",
+        "profile": "plate-synthetic-v1",
+        "provider": "openvino-local-cpu"
+      },
+      "model": {
+        "checkpoint_sha256": "701bd0c33ed693cc084cf2ad6ea3dcc13f4d7d2080b0b8ceac19a089de680261",
+        "runtime_sha256": "6348136997e05a7ee2c2b08e47bb15deb6e5096c62ab3fb821907ded7e2afd7c"
+      },
+      "timing_scope": {
+        "cpu": "owned_server_cgroup",
+        "latency": "adapter_start_to_terminal"
+      },
+      "overall": {
+        "planned": 12,
+        "terminal": 12,
+        "valid": 12,
+        "errors": 0,
+        "unrun": 0,
+        "valid_coverage": 1.0,
+        "valid_only_metrics": {
+          "cases": 12,
+          "positives": 8,
+          "negatives": 4,
+          "exact_matches": 10,
+          "positive_exact_accuracy": 0.75,
+          "false_positive_negatives": 0,
+          "negative_false_positive_rate": 0.0,
+          "character_errors": 2,
+          "reference_characters": 64,
+          "cer": 0.03125
+        },
+        "latency_ms_terminal_only": {
+          "p50": 6990.935,
+          "p95": 7314.535,
+          "p99": 7314.535
+        },
+        "cpu_ms_terminal_only": {
+          "p50": 28122.948,
+          "p95": 29502.528,
+          "p99": 29502.528
+        },
+        "latency_unknown_slots": 0,
+        "cpu_unknown_slots": 0,
+        "charge_unknown_slots": 12,
+        "cpu_ms_measured_sum": 333292.769,
+        "cpu_ms_total": 333292.769,
+        "known_provider_charge_usd": null,
+        "total_provider_charge_usd": null,
+        "planned_positives": 8,
+        "planned_negatives": 4,
+        "all_slot_positive_hit_fraction": 0.75,
+        "all_slot_correct_negative_rejection": 1.0,
+        "all_slot_exact_accuracy": 0.833333
+      },
+      "by_camera_class": {
+        "synthetic-640x320": {
+          "planned": 12,
+          "terminal": 12,
+          "valid": 12,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 12,
+            "positives": 8,
+            "negatives": 4,
+            "exact_matches": 10,
+            "positive_exact_accuracy": 0.75,
+            "false_positive_negatives": 0,
+            "negative_false_positive_rate": 0.0,
+            "character_errors": 2,
+            "reference_characters": 64,
+            "cer": 0.03125
+          },
+          "latency_ms_terminal_only": {
+            "p50": 6990.935,
+            "p95": 7314.535,
+            "p99": 7314.535
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 28122.948,
+            "p95": 29502.528,
+            "p99": 29502.528
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 12,
+          "cpu_ms_measured_sum": 333292.769,
+          "cpu_ms_total": 333292.769,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 8,
+          "planned_negatives": 4,
+          "all_slot_positive_hit_fraction": 0.75,
+          "all_slot_correct_negative_rejection": 1.0,
+          "all_slot_exact_accuracy": 0.833333
+        }
+      },
+      "by_condition": {
+        "day": {
+          "planned": 2,
+          "terminal": 2,
+          "valid": 2,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 2,
+            "positives": 1,
+            "negatives": 1,
+            "exact_matches": 2,
+            "positive_exact_accuracy": 1.0,
+            "false_positive_negatives": 0,
+            "negative_false_positive_rate": 0.0,
+            "character_errors": 0,
+            "reference_characters": 8,
+            "cer": 0.0
+          },
+          "latency_ms_terminal_only": {
+            "p50": 6487.824,
+            "p95": 7069.542,
+            "p99": 7069.542
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 26099.828,
+            "p95": 28293.406,
+            "p99": 28293.406
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 2,
+          "cpu_ms_measured_sum": 54393.234,
+          "cpu_ms_total": 54393.234,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 1,
+          "planned_negatives": 1,
+          "all_slot_positive_hit_fraction": 1.0,
+          "all_slot_correct_negative_rejection": 1.0,
+          "all_slot_exact_accuracy": 1.0
+        },
+        "glare": {
+          "planned": 2,
+          "terminal": 2,
+          "valid": 2,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 2,
+            "positives": 1,
+            "negatives": 1,
+            "exact_matches": 1,
+            "positive_exact_accuracy": 0.0,
+            "false_positive_negatives": 0,
+            "negative_false_positive_rate": 0.0,
+            "character_errors": 1,
+            "reference_characters": 8,
+            "cer": 0.125
+          },
+          "latency_ms_terminal_only": {
+            "p50": 6595.349,
+            "p95": 7229.01,
+            "p99": 7229.01
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 26395.007,
+            "p95": 29101.775,
+            "p99": 29101.775
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 2,
+          "cpu_ms_measured_sum": 55496.78200000001,
+          "cpu_ms_total": 55496.78200000001,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 1,
+          "planned_negatives": 1,
+          "all_slot_positive_hit_fraction": 0.0,
+          "all_slot_correct_negative_rejection": 1.0,
+          "all_slot_exact_accuracy": 0.5
+        },
+        "motion_blur": {
+          "planned": 1,
+          "terminal": 1,
+          "valid": 1,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 1,
+            "positives": 1,
+            "negatives": 0,
+            "exact_matches": 1,
+            "positive_exact_accuracy": 1.0,
+            "false_positive_negatives": 0,
+            "negative_false_positive_rate": null,
+            "character_errors": 0,
+            "reference_characters": 8,
+            "cer": 0.0
+          },
+          "latency_ms_terminal_only": {
+            "p50": 6901.958,
+            "p95": 6901.958,
+            "p99": 6901.958
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 27756.466,
+            "p95": 27756.466,
+            "p99": 27756.466
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 1,
+          "cpu_ms_measured_sum": 27756.466,
+          "cpu_ms_total": 27756.466,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 1,
+          "planned_negatives": 0,
+          "all_slot_positive_hit_fraction": 1.0,
+          "all_slot_correct_negative_rejection": null,
+          "all_slot_exact_accuracy": 1.0
+        },
+        "multi_object": {
+          "planned": 1,
+          "terminal": 1,
+          "valid": 1,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 1,
+            "positives": 1,
+            "negatives": 0,
+            "exact_matches": 1,
+            "positive_exact_accuracy": 1.0,
+            "false_positive_negatives": 0,
+            "negative_false_positive_rate": null,
+            "character_errors": 0,
+            "reference_characters": 8,
+            "cer": 0.0
+          },
+          "latency_ms_terminal_only": {
+            "p50": 6990.935,
+            "p95": 6990.935,
+            "p99": 6990.935
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 28122.948,
+            "p95": 28122.948,
+            "p99": 28122.948
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 1,
+          "cpu_ms_measured_sum": 28122.948,
+          "cpu_ms_total": 28122.948,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 1,
+          "planned_negatives": 0,
+          "all_slot_positive_hit_fraction": 1.0,
+          "all_slot_correct_negative_rejection": null,
+          "all_slot_exact_accuracy": 1.0
+        },
+        "night": {
+          "planned": 2,
+          "terminal": 2,
+          "valid": 2,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 2,
+            "positives": 1,
+            "negatives": 1,
+            "exact_matches": 2,
+            "positive_exact_accuracy": 1.0,
+            "false_positive_negatives": 0,
+            "negative_false_positive_rate": 0.0,
+            "character_errors": 0,
+            "reference_characters": 8,
+            "cer": 0.0
+          },
+          "latency_ms_terminal_only": {
+            "p50": 6592.741,
+            "p95": 7098.553,
+            "p99": 7098.553
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 26529.019,
+            "p95": 28367.404,
+            "p99": 28367.404
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 2,
+          "cpu_ms_measured_sum": 54896.422999999995,
+          "cpu_ms_total": 54896.422999999995,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 1,
+          "planned_negatives": 1,
+          "all_slot_positive_hit_fraction": 1.0,
+          "all_slot_correct_negative_rejection": 1.0,
+          "all_slot_exact_accuracy": 1.0
+        },
+        "no_plate_text": {
+          "planned": 4,
+          "terminal": 4,
+          "valid": 4,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 4,
+            "positives": 0,
+            "negatives": 4,
+            "exact_matches": 4,
+            "positive_exact_accuracy": null,
+            "false_positive_negatives": 0,
+            "negative_false_positive_rate": 0.0,
+            "character_errors": 0,
+            "reference_characters": 0,
+            "cer": null
+          },
+          "latency_ms_terminal_only": {
+            "p50": 6592.741,
+            "p95": 6690.6,
+            "p99": 6690.6
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 26395.007,
+            "p95": 26614.835,
+            "p99": 26614.835
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 4,
+          "cpu_ms_measured_sum": 105638.689,
+          "cpu_ms_total": 105638.689,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 0,
+          "planned_negatives": 4,
+          "all_slot_positive_hit_fraction": null,
+          "all_slot_correct_negative_rejection": 1.0,
+          "all_slot_exact_accuracy": 1.0
+        },
+        "occlusion": {
+          "planned": 1,
+          "terminal": 1,
+          "valid": 1,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 1,
+            "positives": 1,
+            "negatives": 0,
+            "exact_matches": 0,
+            "positive_exact_accuracy": 0.0,
+            "false_positive_negatives": 0,
+            "negative_false_positive_rate": null,
+            "character_errors": 1,
+            "reference_characters": 8,
+            "cer": 0.125
+          },
+          "latency_ms_terminal_only": {
+            "p50": 7314.535,
+            "p95": 7314.535,
+            "p99": 7314.535
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 29502.528,
+            "p95": 29502.528,
+            "p99": 29502.528
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 1,
+          "cpu_ms_measured_sum": 29502.528,
+          "cpu_ms_total": 29502.528,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 1,
+          "planned_negatives": 0,
+          "all_slot_positive_hit_fraction": 0.0,
+          "all_slot_correct_negative_rejection": null,
+          "all_slot_exact_accuracy": 0.0
+        },
+        "rain": {
+          "planned": 2,
+          "terminal": 2,
+          "valid": 2,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 2,
+            "positives": 1,
+            "negatives": 1,
+            "exact_matches": 2,
+            "positive_exact_accuracy": 1.0,
+            "false_positive_negatives": 0,
+            "negative_false_positive_rate": 0.0,
+            "character_errors": 0,
+            "reference_characters": 8,
+            "cer": 0.0
+          },
+          "latency_ms_terminal_only": {
+            "p50": 6690.6,
+            "p95": 7076.198,
+            "p99": 7076.198
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 26614.835,
+            "p95": 28380.132,
+            "p99": 28380.132
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 2,
+          "cpu_ms_measured_sum": 54994.967000000004,
+          "cpu_ms_total": 54994.967000000004,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 1,
+          "planned_negatives": 1,
+          "all_slot_positive_hit_fraction": 1.0,
+          "all_slot_correct_negative_rejection": 1.0,
+          "all_slot_exact_accuracy": 1.0
+        },
+        "skew": {
+          "planned": 1,
+          "terminal": 1,
+          "valid": 1,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 1,
+            "positives": 1,
+            "negatives": 0,
+            "exact_matches": 1,
+            "positive_exact_accuracy": 1.0,
+            "false_positive_negatives": 0,
+            "negative_false_positive_rate": null,
+            "character_errors": 0,
+            "reference_characters": 8,
+            "cer": 0.0
+          },
+          "latency_ms_terminal_only": {
+            "p50": 6998.81,
+            "p95": 6998.81,
+            "p99": 6998.81
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 28129.421,
+            "p95": 28129.421,
+            "p99": 28129.421
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 1,
+          "cpu_ms_measured_sum": 28129.421,
+          "cpu_ms_total": 28129.421,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 1,
+          "planned_negatives": 0,
+          "all_slot_positive_hit_fraction": 1.0,
+          "all_slot_correct_negative_rejection": null,
+          "all_slot_exact_accuracy": 1.0
+        }
+      }
+    }
+  },
+  "claims": "Supplied measurements, not independent attestation or native acceptance. Failed/unrun slots are not correct negatives. Valid-only error/rank metrics exclude invalid attempts; all-slot coverage and success stay explicit. CPU time is not provider-reported monetary charge; unknown is not zero."
+}

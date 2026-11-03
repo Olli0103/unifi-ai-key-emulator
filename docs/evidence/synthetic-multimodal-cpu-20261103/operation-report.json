@@ -1,0 +1,311 @@
+{
+  "schema": "aikey-multimodal-attempt-report/1",
+  "plan_sha256": "7370b1b28a43481c6cf614d3579b140980248319c49078e5c287df95a62ac8cd",
+  "corpus_sha256": "6781f86a8656abde0c9f837b9dbe32eceafbed5def3f4f6b2dac20ca5a5a4a06",
+  "complete": true,
+  "metrics": {
+    "operation": {
+      "run": {
+        "code_revision": "e6ee47ecde49c6fa50d9eb0380a7ef69cd52190f",
+        "model": "qwen3-vl-8b",
+        "profile": "held-static-scene-owned-sink-v1",
+        "provider": "openvino-local-cpu"
+      },
+      "model": {
+        "checkpoint_sha256": "701bd0c33ed693cc084cf2ad6ea3dcc13f4d7d2080b0b8ceac19a089de680261",
+        "runtime_sha256": "6348136997e05a7ee2c2b08e47bb15deb6e5096c62ab3fb821907ded7e2afd7c"
+      },
+      "timing_scope": {
+        "cpu": "owned_server_cgroup",
+        "latency": "frame_to_owned_alert_sink"
+      },
+      "overall": {
+        "planned": 4,
+        "terminal": 4,
+        "valid": 4,
+        "errors": 0,
+        "unrun": 0,
+        "valid_coverage": 1.0,
+        "valid_only_metrics": {
+          "cases": 4,
+          "camera_days": 0.0008522458638773148,
+          "false_alarms": 0,
+          "false_alarms_per_camera_day": 0.0,
+          "critical_events": 2,
+          "missed_critical": 0,
+          "latency_samples": 2,
+          "latency_unknown": 2,
+          "latency_ms": {
+            "p50": 17587.91591,
+            "p95": 17653.27061,
+            "p99": 17653.27061
+          },
+          "cost_known_samples": 0,
+          "cost_unknown_samples": 4,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null
+        },
+        "latency_ms_terminal_only": {
+          "p50": 17587.91591,
+          "p95": 17653.27061,
+          "p99": 17653.27061
+        },
+        "cpu_ms_terminal_only": {
+          "p50": 70354.434,
+          "p95": 83116.846,
+          "p99": 83116.846
+        },
+        "latency_unknown_slots": 2,
+        "cpu_unknown_slots": 0,
+        "charge_unknown_slots": 4,
+        "cpu_ms_measured_sum": 294205.989,
+        "cpu_ms_total": 294205.989,
+        "known_provider_charge_usd": null,
+        "total_provider_charge_usd": null,
+        "planned_camera_days": 0.013888888888888888,
+        "measured_camera_days": 0.0008522458638773148,
+        "unmeasured_windows": 0
+      },
+      "by_camera_class": {
+        "synthetic-held-scene": {
+          "planned": 4,
+          "terminal": 4,
+          "valid": 4,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 4,
+            "camera_days": 0.0008522458638773148,
+            "false_alarms": 0,
+            "false_alarms_per_camera_day": 0.0,
+            "critical_events": 2,
+            "missed_critical": 0,
+            "latency_samples": 2,
+            "latency_unknown": 2,
+            "latency_ms": {
+              "p50": 17587.91591,
+              "p95": 17653.27061,
+              "p99": 17653.27061
+            },
+            "cost_known_samples": 0,
+            "cost_unknown_samples": 4,
+            "known_provider_charge_usd": null,
+            "total_provider_charge_usd": null
+          },
+          "latency_ms_terminal_only": {
+            "p50": 17587.91591,
+            "p95": 17653.27061,
+            "p99": 17653.27061
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 70354.434,
+            "p95": 83116.846,
+            "p99": 83116.846
+          },
+          "latency_unknown_slots": 2,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 4,
+          "cpu_ms_measured_sum": 294205.989,
+          "cpu_ms_total": 294205.989,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_camera_days": 0.013888888888888888,
+          "measured_camera_days": 0.0008522458638773148,
+          "unmeasured_windows": 0
+        }
+      },
+      "by_condition": {
+        "day": {
+          "planned": 2,
+          "terminal": 2,
+          "valid": 2,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 2,
+            "camera_days": 0.0004075787973611111,
+            "false_alarms": 0,
+            "false_alarms_per_camera_day": 0.0,
+            "critical_events": 1,
+            "missed_critical": 0,
+            "latency_samples": 1,
+            "latency_unknown": 1,
+            "latency_ms": {
+              "p50": 17587.91591,
+              "p95": 17587.91591,
+              "p99": 17587.91591
+            },
+            "cost_known_samples": 0,
+            "cost_unknown_samples": 2,
+            "known_provider_charge_usd": null,
+            "total_provider_charge_usd": null
+          },
+          "latency_ms_terminal_only": {
+            "p50": 17587.91591,
+            "p95": 17587.91591,
+            "p99": 17587.91591
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 70344.717,
+            "p95": 70354.434,
+            "p99": 70354.434
+          },
+          "latency_unknown_slots": 1,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 2,
+          "cpu_ms_measured_sum": 140699.151,
+          "cpu_ms_total": 140699.151,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_camera_days": 0.006944444444444444,
+          "measured_camera_days": 0.0004075787973611111,
+          "unmeasured_windows": 0
+        },
+        "motion_blur": {
+          "planned": 1,
+          "terminal": 1,
+          "valid": 1,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 1,
+            "camera_days": 0.0002403450915162037,
+            "false_alarms": 0,
+            "false_alarms_per_camera_day": 0.0,
+            "critical_events": 0,
+            "missed_critical": 0,
+            "latency_samples": 0,
+            "latency_unknown": 1,
+            "latency_ms": {
+              "p50": null,
+              "p95": null,
+              "p99": null
+            },
+            "cost_known_samples": 0,
+            "cost_unknown_samples": 1,
+            "known_provider_charge_usd": null,
+            "total_provider_charge_usd": null
+          },
+          "latency_ms_terminal_only": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 83116.846,
+            "p95": 83116.846,
+            "p99": 83116.846
+          },
+          "latency_unknown_slots": 1,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 1,
+          "cpu_ms_measured_sum": 83116.846,
+          "cpu_ms_total": 83116.846,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_camera_days": 0.003472222222222222,
+          "measured_camera_days": 0.0002403450915162037,
+          "unmeasured_windows": 0
+        },
+        "night": {
+          "planned": 1,
+          "terminal": 1,
+          "valid": 1,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 1,
+            "camera_days": 0.00020432197500000002,
+            "false_alarms": 0,
+            "false_alarms_per_camera_day": 0.0,
+            "critical_events": 1,
+            "missed_critical": 0,
+            "latency_samples": 1,
+            "latency_unknown": 0,
+            "latency_ms": {
+              "p50": 17653.27061,
+              "p95": 17653.27061,
+              "p99": 17653.27061
+            },
+            "cost_known_samples": 0,
+            "cost_unknown_samples": 1,
+            "known_provider_charge_usd": null,
+            "total_provider_charge_usd": null
+          },
+          "latency_ms_terminal_only": {
+            "p50": 17653.27061,
+            "p95": 17653.27061,
+            "p99": 17653.27061
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 70389.992,
+            "p95": 70389.992,
+            "p99": 70389.992
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 1,
+          "cpu_ms_measured_sum": 70389.992,
+          "cpu_ms_total": 70389.992,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_camera_days": 0.003472222222222222,
+          "measured_camera_days": 0.00020432197500000002,
+          "unmeasured_windows": 0
+        },
+        "pets": {
+          "planned": 1,
+          "terminal": 1,
+          "valid": 1,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 1,
+            "camera_days": 0.00020401326657407405,
+            "false_alarms": 0,
+            "false_alarms_per_camera_day": 0.0,
+            "critical_events": 0,
+            "missed_critical": 0,
+            "latency_samples": 0,
+            "latency_unknown": 1,
+            "latency_ms": {
+              "p50": null,
+              "p95": null,
+              "p99": null
+            },
+            "cost_known_samples": 0,
+            "cost_unknown_samples": 1,
+            "known_provider_charge_usd": null,
+            "total_provider_charge_usd": null
+          },
+          "latency_ms_terminal_only": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 70354.434,
+            "p95": 70354.434,
+            "p99": 70354.434
+          },
+          "latency_unknown_slots": 1,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 1,
+          "cpu_ms_measured_sum": 70354.434,
+          "cpu_ms_total": 70354.434,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_camera_days": 0.003472222222222222,
+          "measured_camera_days": 0.00020401326657407405,
+          "unmeasured_windows": 0
+        }
+      }
+    }
+  },
+  "claims": "Supplied measurements, not independent attestation or native acceptance. Failed/unrun slots are not correct negatives. Valid-only error/rank metrics exclude invalid attempts; all-slot coverage and success stay explicit. CPU time is not provider-reported monetary charge; unknown is not zero."
+}

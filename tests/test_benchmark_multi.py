@@ -61,6 +61,22 @@ def test_exposure_latency_and_unknown_cost_are_reported_separately():
     assert o["total_provider_charge_usd"] is None
 
 
+def test_no_reported_charges_are_unknown_not_a_measured_zero_bill():
+    value=document()
+    for row in value['cases']:
+        if row['kind']=='operation':
+            row['provider_charge_usd']=None
+    metrics=score(value)['metrics']['operation']['overall']
+    assert metrics['cost_known_samples']==0 and metrics['cost_unknown_samples']==3
+    assert metrics['known_provider_charge_usd'] is None
+    for row in value['cases']:
+        if row['kind']=='operation':
+            row['provider_charge_usd']=0
+    metrics=score(value)['metrics']['operation']['overall']
+    assert metrics['cost_known_samples']==3 and metrics['known_provider_charge_usd']==0
+    assert metrics['total_provider_charge_usd']==0
+
+
 def test_determinism_slices_and_report_redaction():
     d = document()
     before = deepcopy(d)
