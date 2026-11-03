@@ -56,9 +56,18 @@ participants and actual kernel-lock behavior are verified.
 
 ## Ownership and failure ordering
 
-- Each Key job gets its own shared-lock open description inside its original
-  deadline, before media/model processing, and holds it through its existing
-  completion/error handling. It does not extend a budget or authorize replay.
+- Each new Key job gets its own shared-lock open description inside its original
+  deadline **before acceptance**, caption reservation or queue insertion. Waiting
+  for maintenance spends that same deadline but creates no accepted job. After
+  waiting, current camera, duplicate, ledger, queue, drain and stop state are
+  checked again. An accepted job retains its lease while queued, while waiting
+  for its caption lane and through existing completion/error handling. A cached
+  completed duplicate may still return without admitting new work. Rejection,
+  cancelled admission and stopped queued work release their borrowed leases.
+  A queued job revalidates the same marker binding and idle record before
+  execution. Lease counters therefore include accepted queued jobs, not just
+  active inference. This does not extend a budget or authorize replay. See the
+  [source/fixture admission record](evidence/key-admission-fence-20261103.md).
 - Each live-pool detector load/call also gets an independent shared lease.
   Cancelling the async waiter does not release protection around a still-running
   model thread: that actual thread's completion releases its lease.

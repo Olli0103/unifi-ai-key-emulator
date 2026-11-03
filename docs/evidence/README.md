@@ -43,3 +43,5 @@ The records identify package-relative paths and local analysis artifacts. Vendor
 - [3 November model catalog wire JSON](catalog-json-20261103.md): existing strict decoder rejects duplicate/non-finite/non-UTF-8 replies before pagination; fictional HTTP source qualification only, no live provider or service change.
 
 - [3 November saved local face-service route](local-face-route-20261103.md): existing-role-only address preview/confirmation, unchanged scope/templates/runtime and explicit uncertain outcomes; fictional store/HTTP/browser source qualification, no deployment.
+
+- [3 November Key acceptance model-work fence](key-admission-fence-20261103.md): existing shared lease before acknowledgement and retained through accepted queue lifetime, with deadline/deduplication/stop checks; fictional source qualification, no native replacement or forced idle window.

@@ -32,7 +32,8 @@ import aiohttp
 from .worker_archive import valid_tombstone
 from .worker_failure_notes import (FailureNotes, OUTCOMES as FAILURE_NOTE_OUTCOMES,
                                    CAPACITY as FAILURE_NOTE_CAPACITY)
-from .model_work_fence import ModelWorkFence, ModelWorkFenceError
+from .model_work_fence import (ModelWorkFence, ModelWorkFenceError,
+                               _read as read_model_work_fence)
 from .caption_budget import (CaptionBudget, CaptionBudgetDeferred, CaptionBudgetError,
                              CaptionBudgetExhausted)
 from .providers import ProviderError, validate_inference_config
@@ -662,6 +663,7 @@ class JobProcessor:
         self._inference_session = None
         self._embedding_service = None
         self._pending: dict[str, _Job] = {}
+        self._admission_leases = {}
         self._history = {}
         # Retroactive backfill progress; counts only, no identifiers (#21).
         self.retroactive = {"tasks": 0, "crops_indexed": 0, "completed": 0, "failed": 0,
@@ -1893,13 +1895,8 @@ class JobProcessor:
         query = "&".join(replace.get(part, part) for part in components)
         return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, ""))
 
-    async def _admit(self, command):
-        normalized = self._normalize(command)
-        await self.start()
+    def _existing_job(self, normalized):
         job_id, fingerprint, operation, body, callback, kind, media, budget = normalized
-        if (self.continuous and operation not in _LOCAL_OPERATIONS
-                and not self.camera_registry.allows(body.get("camera", body.get("cameraId")))):
-            raise WorkerError("Camera inventory changed before admission")
         if job_id in self._pending:
             job = self._pending[job_id]
             if fingerprint != job.fingerprint:
@@ -1924,17 +1921,29 @@ class JobProcessor:
                 else:
                     future.set_result(previous["result"])
                 return _Job(job_id, fingerprint, operation, body, callback, kind, media, 0, future), True
+        return None
+
+    def _admit_current(self, normalized, deadline):
+        job_id, fingerprint, operation, body, callback, kind, media, budget = normalized
+        if (self.continuous and operation not in _LOCAL_OPERATIONS
+                and not self.camera_registry.allows(body.get("camera", body.get("cameraId")))):
+            raise WorkerError("Camera inventory changed before admission")
+        previous = self._existing_job(normalized)
+        if previous is not None:
+            return previous
         self._rollover_history()
         if job_id not in self._history and len(self._history.keys() | self._pending.keys()) >= self.max_jobs:
             raise WorkerError("Worker journal is full; archive reviewed entries")
-        if self._draining:
+        if self._draining or self._stopping:
             raise WorkerError("Worker has stopped")
         if self._queue.full() or self._queue.qsize() + len(self._caption_waiting) >= self._queue.maxsize:
             raise WorkerError("Worker queue is full")
+        if time.monotonic() >= deadline:
+            raise WorkerError("Worker admission timed out")
         future = asyncio.get_running_loop().create_future()
         future.add_done_callback(lambda value: value.exception() if not value.cancelled() else None)
         job = _Job(job_id, fingerprint, operation, body, callback, kind, media,
-                   time.monotonic() + budget, future, admitted=time.monotonic())
+                   deadline, future, admitted=time.monotonic())
         try:
             self._reserve_test_scope(job)
             if self.caption_budget is not None and operation not in _LOCAL_OPERATIONS:
@@ -1962,6 +1971,44 @@ class JobProcessor:
             raise
         self._pending[job_id] = job
         return job, False
+
+    async def _admit(self, command):
+        normalized = self._normalize(command)
+        await self.start()
+        job_id, fingerprint, operation, body, callback, kind, media, budget = normalized
+        if (self.continuous and operation not in _LOCAL_OPERATIONS
+                and not self.camera_registry.allows(body.get("camera", body.get("cameraId")))):
+            raise WorkerError("Camera inventory changed before admission")
+        previous = self._existing_job(normalized)
+        if previous is not None:
+            return previous
+        if self._draining or self._stopping:
+            raise WorkerError("Worker has stopped")
+        # The original budget includes waiting for maintenance. No accepted
+        # job, caption reservation or queue slot exists while this waits.
+        deadline = time.monotonic() + budget
+        lease = None
+        try:
+            try:
+                lease = await self._model_work_fence.acquire(deadline=deadline)
+            except TimeoutError:
+                raise WorkerError("Worker admission timed out") from None
+            except ModelWorkFenceError as exc:
+                if str(exc) == "model_work_fence_binding_changed":
+                    raise WorkerError("Worker maintenance admission binding changed") from None
+                raise WorkerError("Worker maintenance admission is unavailable") from None
+            except OSError:
+                raise WorkerError("Worker maintenance admission is unavailable") from None
+            # Awaiting exclusion can outlive another save/admission. Recheck
+            # all current policy, duplicate, ledger, queue and drain state.
+            job, duplicate = self._admit_current(normalized, deadline)
+            if not duplicate:
+                self._admission_leases[job.job_id] = lease
+                lease = None  # Accepted job owns it through terminal cleanup.
+            return job, duplicate
+        finally:
+            if lease is not None:
+                lease.close()
 
     async def submit(self, command_payload):
         job, duplicate = await self._admit(command_payload)
@@ -2043,7 +2090,7 @@ class JobProcessor:
                 self._caption_active -= 1
 
     async def _run_job(self, job):
-        lease = None
+        lease = self._admission_leases.get(job.job_id)
         # An already expired admission deadline is a directly observed fact,
         # not a guess based on the exception text or a later reproduction.
         expired_on_entry = job.deadline <= time.monotonic()
@@ -2054,7 +2101,17 @@ class JobProcessor:
                 self._describe_stage(job, "fetch", job.admitted)
             async with asyncio.timeout(max(0, job.deadline - time.monotonic())):
                 with _failure_boundary(self, "model_work_fence"):
-                    lease = await self._model_work_fence.acquire(deadline=job.deadline)
+                    if lease is None:
+                        lease = await self._model_work_fence.acquire(deadline=job.deadline)
+                    elif self._model_work_fence.enabled:
+                        # A queued lease protects the old inode. Retargeted or
+                        # malformed enrollment must still fail before execution.
+                        fd = self._model_work_fence._open()
+                        try:
+                            if lease.fd < 0 or read_model_work_fence(fd)["phase"] != "idle":
+                                raise ModelWorkFenceError("model_work_fence_unresolved")
+                        finally:
+                            os.close(fd)
                 with _failure_boundary(self, "execution"):
                     result = await self._execute(job)
             self._record(job, "completed", result=result)
@@ -2100,6 +2157,7 @@ class JobProcessor:
             if not job.future.done():
                 job.future.set_exception(WorkerError("Job interrupted before durable completion"))
             self._pending.pop(job.job_id, None)
+            self._admission_leases.pop(job.job_id, None)
             if lease is not None:
                 lease.close()
 
@@ -3047,12 +3105,18 @@ class JobProcessor:
             if not job.future.done():
                 job.future.set_exception(WorkerError("Worker stopped before job admission completed"))
             self._pending.pop(job.job_id, None)
+            lease = self._admission_leases.pop(job.job_id, None)
+            if lease is not None:
+                lease.close()
             self._queue.task_done()
         while self._caption_waiting:
             *_, job = heapq.heappop(self._caption_waiting)
             if not job.future.done():
                 job.future.set_exception(WorkerError("Worker stopped before job admission completed"))
             self._pending.pop(job.job_id, None)
+            lease = self._admission_leases.pop(job.job_id, None)
+            if lease is not None:
+                lease.close()
         if self._embedding_service is not None:
             await self._embedding_service.close()
         if self._clip is not None:
@@ -3061,4 +3125,7 @@ class JobProcessor:
             await self._session.close()
         if self._inference_session is not None:
             await self._inference_session.close()
+        for lease in self._admission_leases.values():
+            lease.close()
+        self._admission_leases.clear()
         self._model_work_fence.close()
