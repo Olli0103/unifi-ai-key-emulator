@@ -119,6 +119,7 @@ jobs:
           python tools/caption_setup_browser_check.py --browser-executable "${browser}" --output caption-setup-browser-results
           python tools/worker_limits_browser_check.py --executable "${browser}" --output worker-limits-browser-results
           python tools/diagnostic_browser_check.py --browser-executable "${browser}" --output diagnostic-browser-results
+          python tools/face_identity_browser_check.py --browser-executable "${browser}" --output face-identity-browser-results
       - name: Retain only fictional screenshots and source-bound results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -152,6 +153,8 @@ jobs:
             worker-limits-browser-results/result.json
             diagnostic-browser-results/*.png
             diagnostic-browser-results/*.json
+            face-identity-browser-results/*.png
+            face-identity-browser-results/result.json
           if-no-files-found: error
           retention-days: 14
 

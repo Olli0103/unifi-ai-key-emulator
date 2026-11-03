@@ -10,6 +10,30 @@ For a new AI Key, the separate [authenticated first-run mode](first-run.md#authe
 prepares only a new directory and pinned public trust, without network access,
 device startup or adoption. It does not reopen an existing profile for setup.
 
+## Local face identity metadata and deletion
+
+**Local face identities** lists saved labels and template counts from the fixed
+AI Key state root. This is the existing local 128-value SFace store, not native
+Protect groups or the separate 512-value AI Port model space. No photo, vector,
+created timestamp or arbitrary file path is exposed. Enrollment still uses the
+separate local face tool; this page does not enable recognition or prove a live
+worker uses the displayed state.
+
+Each **Review deletion** opens an exact-revision preview for one identity. An
+initially unchecked acknowledgement and separate POST delete all of that
+identity's saved templates, preserving the others and all configuration. The
+one-use session-bound confirmation expires after ten monotonic minutes; changed
+state requires a fresh preview. No automatic undo copy, retry or restoration is
+created. An uncertain result requires read-only reconciliation before a new
+decision. Configured audit failure before admission refuses the deletion.
+
+Deletion does not erase recordings, historical Protect events, native groups,
+backups or enrollment-server copies. A match that already read templates may
+still finish. No model request, permission change, process activation or service
+restart occurs. The [source and fictional browser qualification](evidence/face-identity-control-20261103.md)
+does not qualify native grouping/search, biometric quality or broader lifecycle
+acceptance.
+
 ## Optional primary detection schema
 
 The AI Port provider form has a separate **Require a JSON schema for primary

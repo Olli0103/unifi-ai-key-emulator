@@ -81,6 +81,7 @@ th, td { padding: .65rem; text-align: left; border-bottom: 1px solid #d9e2eb; }
 .skip-link:focus { transform: none; }
 .maintenance fieldset { min-width: 0; margin: 1rem 0; border: 1px solid #65788b; }
 .maintenance code { overflow-wrap: anywhere; }
+.face-identity, .face-confirmation { overflow-wrap: anywhere; }
 """
 
 
@@ -872,6 +873,7 @@ class ControlSite:
                   "<a href='/runtime-status'>Runtime configuration</a> · "
                   "<a href='/processing'>Processing and budgets</a> · "
                   "<a href='/worker-limits'>Key processing limits</a> · "
+                  "<a href='/face-identities'>Local face identities</a> · "
                   "<a href='/diagnostics'>Redacted diagnostics</a> · "
                   "<a href='/camera-status'>Native camera status</a> · "
                   "<a href='/model-registry'>Saved model role registry</a></p>"
