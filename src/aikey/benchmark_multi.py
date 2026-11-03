@@ -1,4 +1,4 @@
-"""Score labelled plate, speech, retrieval and operational records without media.
+"""Score labelled plate, speech, retrieval, identity and operational records without media.
 
 Raw text and identities remain in the owner's input file, never in reports.
 JiWER supplies the maintained edit-distance scorer; no inference is performed.
@@ -16,6 +16,7 @@ CASES_SCHEMA = "aikey-multimodal-cases/1"
 REPORT_SCHEMA = "aikey-multimodal-report/1"
 COMMON = {"id", "camera_class", "conditions", "input_sha256", "kind"}
 FIELDS = {"plate": {"expected", "predicted"}, "speech": {"expected", "predicted"},
+          "identity": {"expected", "predicted"},
           "retrieval": {"relevant", "ranked", "k"},
           "operation": {"camera_days", "false_alarms", "critical_events", "missed_critical",
                         "latency_ms", "provider_charge_usd"}}
@@ -74,6 +75,10 @@ def validate(document):
                 # Explicit, identical whitespace policy; never infer punctuation,
                 # case or uncertain plate characters from a neighbouring reading.
                 copy[key] = " ".join(text.split())
+        elif kind == "identity":
+            for key in ("expected", "predicted"):
+                if row[key] is not None:
+                    _text(row[key], "identity label")
         elif kind == "retrieval":
             for key in ("relevant", "ranked"):
                 values = row[key]
@@ -97,7 +102,7 @@ def validate(document):
             number(row["latency_ms"], nullable=True)
             number(row["provider_charge_usd"], nullable=True)
         checked.append(copy)
-    for kind in ("plate", "speech", "retrieval"):
+    for kind in ("plate", "speech", "retrieval", "identity"):
         group = [c for c in checked if c["kind"] == kind]
         if group:
             truth = "relevant" if kind == "retrieval" else "expected"
@@ -175,9 +180,32 @@ def _operation(cases):
             "total_provider_charge_usd": round(sum(costs), 8) if len(costs) == len(cases) else None}
 
 
+def _identity(cases):
+    known = [c for c in cases if c["expected"] is not None]
+    unknown = [c for c in cases if c["expected"] is None]
+    correct = sum(c["expected"] == c["predicted"] for c in known)
+    wrong = sum(c["predicted"] is not None and c["predicted"] != c["expected"] for c in known)
+    rejected = sum(c["predicted"] is None for c in known)
+    false_accept = sum(c["predicted"] is not None for c in unknown)
+    true_reject = len(unknown) - false_accept
+    return {"cases": len(cases), "known_trials": len(known), "unknown_trials": len(unknown),
+            "correctly_identified": correct, "misidentified_known": wrong,
+            "rejected_known": rejected, "falsely_identified_unknown": false_accept,
+            "correctly_rejected_unknown": true_reject,
+            "known_identification_accuracy": ratio(correct, len(known)),
+            "known_misidentification_rate": ratio(wrong, len(known)),
+            "known_rejection_rate": ratio(rejected, len(known)),
+            "unknown_false_accept_rate": ratio(false_accept, len(unknown)),
+            "unknown_rejection_rate": ratio(true_reject, len(unknown)),
+            "identified_precision": ratio(correct, correct + wrong + false_accept),
+            "overall_accuracy": ratio(correct + true_reject, len(cases))}
+
+
 def metrics(cases, kind):
     if kind in ("plate", "speech"):
         return _text_metrics(cases, kind)
+    if kind == "identity":
+        return _identity(cases)
     return _retrieval(cases) if kind == "retrieval" else _operation(cases)
 
 
@@ -186,7 +214,7 @@ def score(document):
     truth = []
     for c in cases:
         row = {k: c[k] for k in sorted(COMMON)}
-        for key in ({"expected"} if c["kind"] in ("plate", "speech") else
+        for key in ({"expected"} if c["kind"] in ("plate", "speech", "identity") else
                     {"relevant", "k"} if c["kind"] == "retrieval" else
                     {"camera_days", "critical_events"}):
             row[key] = c[key]
@@ -202,7 +230,9 @@ def score(document):
                          "by_condition": {tag: metrics([c for c in rows if tag in c["conditions"]], kind)
                                           for tag in sorted({t for c in rows for t in c["conditions"]})}}
     return {"schema": REPORT_SCHEMA, "run": run, "corpus_sha256": digest, "metrics": results,
-            "normalization": "whitespace-only; case and punctuation preserved",
+            "normalization": "whitespace-only; case and punctuation preserved"
+                             + ("; identity labels are exact opaque IDs; null means unknown"
+                                if any(c["kind"] == "identity" for c in cases) else ""),
             "claims": "Labelled records only, not native acceptance or an AI Key quality claim. "
                       "Provider-reported charges only; unknown is not zero. No theoretical API estimate is inferred."}
 
