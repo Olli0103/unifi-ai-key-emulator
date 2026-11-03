@@ -79,7 +79,7 @@ state. Routing success does not relabel those captions successful.
 | #14 | Feature flags remain honest during partial implementation | Existing `test_find_anything.py::test_capability_flags_follow_the_served_features`, opt-in verification refusal and compatibility-manifest evidence. No flag or declared support was expanded for this observation; unresolved quality and profile-specific contracts stay explicit. |
 | #79 | Synthetic isolation, fair bounded scheduling and unrelated-camera error isolation | Existing merged camera-engine, pool, tracker and candidate fixtures; the native record does not replace them with a model-demo claim. |
 | #79 | Native events on correct original-camera timelines, without duplicate/cross-camera routing | All twenty-one retained sends matched, all four Ports/five original cameras represented, exact native identities and the camera-free signature negative control above. |
-| #79 | Gate persistent pairing / later automatic reconciliation through #45 on routing proof | The routing prerequisite is now demonstrated. Existing four-Port/nine-pairing continuity is retained. Automatic reconciliation was **not enabled**; implementing/qualifying #45 remains its own subsequent task, not silently part of this routing issue. |
+| #79 | Gate persistent pairing / later automatic reconciliation through #45 on routing proof | The routing prerequisite is now demonstrated. Existing four-Port/nine-pairing continuity is retained. This observation did not enable or change automatic reconciliation; implementing/qualifying #45 remains its own subsequent task, not silently part of this routing issue. |
 
 ## Checks and preservation
 

@@ -76,7 +76,7 @@
     "original_alarm_rules_unchanged": 32,
     "old_events_replayed": 0,
     "processor_restarts_during_observation": 0,
-    "automatic_reconciler_enabled": false
+    "automatic_reconciliation_changed_by_observation": false
   },
   "claims": {
     "general_no_duplicates": false,
