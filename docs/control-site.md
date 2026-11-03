@@ -34,6 +34,28 @@ restart occurs. The [source and fictional browser qualification](evidence/face-i
 does not qualify native grouping/search, biometric quality or broader lifecycle
 acceptance.
 
+## Saved AI Key face camera restriction
+
+**Saved Key face cameras** (`/key-face-cameras`) can reduce an existing explicit
+AI Key face-recognition list, or remove the entire saved `face_recognition`
+policy. It cannot add cameras, create recognition consent or change a model,
+server, face limit or native-camera behavior on a retained policy. Individual
+editing needs fresh, unambiguous inventory names; an explicit whole-policy
+disable is still available without that inventory.
+
+Every save has a revision-bound preview and separate initially unchecked consent.
+The one-use session confirmation expires in ten monotonic minutes. Changed
+configuration or named inventory requires a fresh preview. There is no automatic
+Undo, process restart or provider request. **A separate Key restart is required**;
+running jobs/in-flight matches and Protect camera permissions do not change when
+the form is saved. Other feature policies and AI Ports remain separate.
+
+Templates, footage, native groups/events, model/server copies and backups are
+not read or deleted. Earlier policies remain in private configuration history;
+[local identity deletion](#local-face-identity-metadata-and-deletion) is a separate
+explicit action. The [source and fictional browser qualification](evidence/key-face-scope-20261103.md)
+does not prove native revocation, restart enforcement or biometric quality.
+
 ## Optional primary detection schema
 
 The AI Port provider form has a separate **Require a JSON schema for primary

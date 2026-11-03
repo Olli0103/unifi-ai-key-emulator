@@ -106,6 +106,9 @@ class AdminAPI:
         from .face_identity_control import FaceIdentityControl
         self.face_identity_control = FaceIdentityControl(self)
         self.face_identity_control.register(app)
+        from .key_face_scope_control import KeyFaceScopeControl
+        self.key_face_scope_control = KeyFaceScopeControl(self)
+        self.key_face_scope_control.register(app)
 
     async def maintenance_history(self, request):
         if not self.authenticated(request):
