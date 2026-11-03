@@ -24,9 +24,9 @@ async def fixture(root, *, seed=True):
     site.audit = AuditLog(root / 'fictional-audit.jsonl')
     control = site.admin_api.face_identity_control
     if seed:
-        control.store.enroll(SIBLING, TEMPLATE)
-        control.store.enroll(TARGET, TEMPLATE)
-        control.store.enroll(TARGET, TEMPLATE)
+        control.store.enroll(SIBLING, TEMPLATE, embedding_space='a' * 64)
+        control.store.enroll(TARGET, TEMPLATE, embedding_space='a' * 64)
+        control.store.enroll(TARGET, TEMPLATE, embedding_space='a' * 64)
     try:
         yield site, client, cookie, control, key
     finally:
@@ -117,7 +117,7 @@ async def test_invalid_confirmations_do_not_delete(tmp_path, fault):
         elif fault == 'expired_session':
             site.security.revoke(cookie)
         elif fault == 'stale':
-            control.store.enroll('Fictional later identity', TEMPLATE)
+            control.store.enroll('Fictional later identity', TEMPLATE, embedding_space='a' * 64)
         elif fault == 'expired_grant':
             control.clock = lambda: float('inf')
         elif fault == 'query':
@@ -147,7 +147,7 @@ async def test_invalid_previews_mint_no_authority(tmp_path, fault):
         elif fault == 'query':
             path += '?profile=aiport'
         else:
-            control.store.enroll('Fictional later identity', TEMPLATE)
+            control.store.enroll('Fictional later identity', TEMPLATE, embedding_space='a' * 64)
         before = control.store.path.read_bytes()
         response = await client.post(path, data=fields, headers={'Origin': site.origin})
         assert response.status in {403, 409} and not control.grants
@@ -287,7 +287,7 @@ async def test_concurrent_external_enrollment_is_checked_inside_write_lock(tmp_p
         fields = await preview(site, client)
         original = control._commit
         async def raced(grant):
-            FaceStore(site.aikey_state_dir).enroll('Fictional concurrent identity', TEMPLATE)
+            FaceStore(site.aikey_state_dir).enroll('Fictional concurrent identity', TEMPLATE, embedding_space='a' * 64)
             return await original(grant)
         monkeypatch.setattr(control, '_commit', raced)
         assert (await apply(site, client, fields)).status == 409

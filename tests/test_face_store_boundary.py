@@ -17,7 +17,7 @@ TEMPLATE = [1.0] + [0.0] * 127
 
 
 def record():
-    return {"schema": 1, "identities": {"Synthetic test identity": {
+    return {"schema": 2, "embedding_space": "a" * 64, "identities": {"Synthetic test identity": {
         "templates": [list(TEMPLATE)], "created": 1}}}
 
 
@@ -56,7 +56,7 @@ def test_invalid_stored_templates_are_refused_without_repair_or_disclosure(tmp_p
     elif variant == "bad_root":
         data = []
     elif variant == "bad_schema":
-        data["schema"] = 2
+        data["schema"] = 3
     elif variant == "boolean_schema":
         data["schema"] = True
     elif variant == "extra_root":
@@ -85,7 +85,7 @@ def test_invalid_stored_templates_are_refused_without_repair_or_disclosure(tmp_p
     store = write_store(tmp_path, data)
     before = store.path.read_bytes()
     with pytest.raises(FaceStoreError) as caught:
-        store.match(TEMPLATE)
+        store.match(TEMPLATE, embedding_space='a' * 64)
     assert str(caught.value) in {"face_store_invalid", "face_store_not_private", "face_store_unavailable"}
     assert "PRIVATE-CANARY" not in str(caught.value)
     assert store.path.read_bytes() == before
@@ -97,9 +97,9 @@ def test_correct_private_records_still_match_delete_and_keep_device_state(tmp_pa
     state.write_bytes(b'{"fictional-identity":"retained"}')
     store = write_store(tmp_path, record())
     assert store.names() == ["Synthetic test identity"]
-    assert store.match(TEMPLATE)[0] == "Synthetic test identity"
+    assert store.match(TEMPLATE, embedding_space='a' * 64)[0] == "Synthetic test identity"
     assert store.delete("Synthetic test identity")
-    assert store.names() == [] and store.match(TEMPLATE) == (None, [])
+    assert store.names() == [] and store.match(TEMPLATE, embedding_space='a' * 64) == (None, [])
     assert state.read_bytes() == b'{"fictional-identity":"retained"}'
 
 
@@ -144,7 +144,7 @@ raise SystemExit(3)
 
 def test_missing_store_is_empty_without_creating_anything(tmp_path):
     store = FaceStore(tmp_path)
-    assert store.names() == [] and store.match(TEMPLATE) == (None, [])
+    assert store.names() == [] and store.match(TEMPLATE, embedding_space='a' * 64) == (None, [])
     assert list(tmp_path.iterdir()) == []
 
 

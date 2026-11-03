@@ -214,8 +214,8 @@ def test_identity_delete_is_durable_but_does_not_purge_a_separate_backup(tmp_pat
     atomic_private(state / "identity.json", json.dumps({"mac": "020000000099"}))
     store = FaceStore(state)
     first, other = [1.0] + [0.0] * 127, [0.0, 1.0] + [0.0] * 126
-    store.enroll("Fictional Removed", first)
-    store.enroll("Fictional Retained", other)
+    store.enroll("Fictional Removed", first, embedding_space='a' * 64)
+    store.enroll("Fictional Retained", other, embedding_space='a' * 64)
     backup = tmp_path / "operator-backup.json"
     atomic_private(backup, store.path.read_bytes())
     original_backup = backup.read_bytes()
@@ -223,9 +223,9 @@ def test_identity_delete_is_durable_but_does_not_purge_a_separate_backup(tmp_pat
     assert store.delete("Fictional Removed") is True
     assert store.delete("Fictional Removed") is False
     fresh = FaceStore(state)
-    assert fresh.match(first) == (None, [])
+    assert fresh.match(first, embedding_space='a' * 64) == (None, [])
     assert fresh.names() == ["Fictional Retained"]
-    assert fresh.match(other)[0] == "Fictional Retained"
+    assert fresh.match(other, embedding_space='a' * 64)[0] == "Fictional Retained"
     assert b"Fictional Removed" not in fresh.path.read_bytes()
     assert immutable_files(state) == immutable
     fresh.purge()
@@ -237,4 +237,4 @@ def test_identity_delete_is_durable_but_does_not_purge_a_separate_backup(tmp_pat
     face_copy = FaceStore(restored)
     face_copy.directory.mkdir(mode=0o700)
     atomic_private(face_copy.path, original_backup)
-    assert face_copy.match(first)[0] == "Fictional Removed"
+    assert face_copy.match(first, embedding_space='a' * 64)[0] == "Fictional Removed"

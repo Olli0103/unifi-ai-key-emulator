@@ -26,9 +26,9 @@ def test_concurrent_enrollments_cannot_silently_erase_another_identity(tmp_path,
     monkeypatch.setattr(first, '_load', paused)
     monkeypatch.setattr(second, '_load', observed)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        a = pool.submit(first.enroll, 'Fictional first identity', TEMPLATE)
+        a = pool.submit(first.enroll, 'Fictional first identity', TEMPLATE, embedding_space='a'*64)
         assert entered.wait(3)
-        b = pool.submit(second.enroll, 'Fictional second identity', TEMPLATE)
+        b = pool.submit(second.enroll, 'Fictional second identity', TEMPLATE, embedding_space='a'*64)
         # Old unguarded second reader sees empty state while the first is paused.
         # A serialized reader instead waits until the first commits.
         second_loaded.wait(.2)
@@ -52,7 +52,7 @@ def test_symlinked_faces_directory_never_reads_writes_or_purges_outside_state(tm
         if operation == 'read':
             store.names()
         elif operation == 'enroll':
-            store.enroll('Fictional added identity', TEMPLATE)
+            store.enroll('Fictional added identity', TEMPLATE, embedding_space='a' * 64)
         else:
             store.purge()
     assert canary.read_bytes() == before and outside.stat().st_mode & 0o777 == 0o700
@@ -63,13 +63,13 @@ def test_symlinked_faces_directory_never_reads_writes_or_purges_outside_state(tm
 def test_optional_revision_prevents_stale_identity_mutation(tmp_path, operation):
     from aikey.faces import FaceStoreRevisionConflict
     store = FaceStore(tmp_path)
-    store.enroll('Fictional existing identity', TEMPLATE)
+    store.enroll('Fictional existing identity', TEMPLATE, embedding_space='a' * 64)
     revision = store.snapshot()['revision']
-    store.enroll('Fictional concurrent identity', TEMPLATE)
+    store.enroll('Fictional concurrent identity', TEMPLATE, embedding_space='a' * 64)
     before = store.path.read_bytes()
     with pytest.raises(FaceStoreRevisionConflict, match='^face_store_changed$'):
         if operation == 'enroll':
-            store.enroll('Fictional stale identity', TEMPLATE, expected_revision=revision)
+            store.enroll('Fictional stale identity', TEMPLATE, expected_revision=revision, embedding_space='a' * 64)
         elif operation == 'delete':
             store.delete('Fictional existing identity', expected_revision=revision)
         else:
@@ -82,7 +82,7 @@ def test_snapshot_uses_exact_bytes_and_has_metadata_not_vectors(tmp_path, capsys
     store = FaceStore(tmp_path)
     missing = store.snapshot()
     assert missing['identities'] == [] and list(tmp_path.iterdir()) == []
-    assert store.enroll('Fictional identity', TEMPLATE, expected_revision=missing['revision']) == 1
+    assert store.enroll('Fictional identity', TEMPLATE, expected_revision=missing['revision'], embedding_space='a' * 64) == 1
     status = store.snapshot()
     assert status['revision'] == hashlib.sha256(store.path.read_bytes()).hexdigest()
     assert status['identities'][0]['name'] == 'Fictional identity'
@@ -100,7 +100,7 @@ def test_snapshot_uses_exact_bytes_and_has_metadata_not_vectors(tmp_path, capsys
 def test_unsafe_authority_is_not_repaired_or_used(tmp_path, fault):
     import os
     store = FaceStore(tmp_path)
-    store.enroll('Fictional retained identity', TEMPLATE)
+    store.enroll('Fictional retained identity', TEMPLATE, embedding_space='a' * 64)
     before = store.path.read_bytes()
     if fault == 'faces_mode':
         store.directory.chmod(0o755)
@@ -122,7 +122,7 @@ def test_unsafe_authority_is_not_repaired_or_used(tmp_path, fault):
             lock.chmod(0o644)
     try:
         with pytest.raises(FaceStoreError):
-            store.enroll('Fictional refused identity', TEMPLATE)
+            store.enroll('Fictional refused identity', TEMPLATE, embedding_space='a' * 64)
         assert store.path.read_bytes() == before
         if fault == 'faces_mode':
             assert store.directory.stat().st_mode & 0o777 == 0o755
@@ -141,7 +141,7 @@ def test_write_uncertainty_keeps_committed_or_prior_bytes_without_retry(tmp_path
     from aikey.faces import FaceStoreOutcomeUncertain
     from aikey import faces
     store = FaceStore(tmp_path)
-    store.enroll('Fictional original identity', TEMPLATE)
+    store.enroll('Fictional original identity', TEMPLATE, embedding_space='a' * 64)
     before = store.path.read_bytes()
     actual = os.fsync
     failures = []
@@ -153,7 +153,7 @@ def test_write_uncertainty_keeps_committed_or_prior_bytes_without_retry(tmp_path
         return actual(fd)
     monkeypatch.setattr(faces.os, 'fsync', fail)
     with pytest.raises(FaceStoreOutcomeUncertain, match='^face_store_write_uncertain$'):
-        store.enroll('Fictional new identity', TEMPLATE)
+        store.enroll('Fictional new identity', TEMPLATE, embedding_space='a' * 64)
     assert failures == [True]
     assert (store.path.read_bytes() == before) is (at == 'file_fsync')
     assert not list(store.directory.glob('.faces-*'))
@@ -172,7 +172,7 @@ def test_directory_swap_cannot_redirect_a_write_to_external_canary(tmp_path, mon
     canary.write_bytes(b'fictional external canary')
     canary.chmod(0o600)
     store = FaceStore(root)
-    store.enroll('Fictional retained identity', TEMPLATE)
+    store.enroll('Fictional retained identity', TEMPLATE, embedding_space='a' * 64)
     actual = os.replace
     retained = root / 'retained-faces'
     def exchange(*args, **kwargs):
@@ -181,7 +181,7 @@ def test_directory_swap_cannot_redirect_a_write_to_external_canary(tmp_path, mon
         return actual(*args, **kwargs)
     monkeypatch.setattr(faces.os, 'replace', exchange)
     with pytest.raises(FaceStoreOutcomeUncertain, match='^face_store_write_uncertain$'):
-        store.enroll('Fictional added identity', TEMPLATE)
+        store.enroll('Fictional added identity', TEMPLATE, embedding_space='a' * 64)
     assert canary.read_bytes() == b'fictional external canary'
     # The original descriptor may already have committed. Preserve and report it.
     data = json.loads((retained / 'identities.json').read_bytes())
@@ -192,13 +192,13 @@ def test_existing_unowned_temporary_is_not_removed_on_name_collision(tmp_path, m
     from aikey import faces
     from aikey.faces import FaceStoreOutcomeUncertain
     store = FaceStore(tmp_path)
-    store.enroll('Fictional retained identity', TEMPLATE)
+    store.enroll('Fictional retained identity', TEMPLATE, embedding_space='a' * 64)
     before = store.path.read_bytes()
     canary = store.directory / '.faces-collision'
     canary.write_bytes(b'fictional temporary canary')
     monkeypatch.setattr(faces.secrets, 'token_hex', lambda _: 'collision')
     with pytest.raises(FaceStoreOutcomeUncertain):
-        store.enroll('Fictional refused identity', TEMPLATE)
+        store.enroll('Fictional refused identity', TEMPLATE, embedding_space='a' * 64)
     assert store.path.read_bytes() == before and canary.read_bytes() == b'fictional temporary canary'
 
 
@@ -219,7 +219,7 @@ while not go.exists():
     if time.monotonic()>deadline: raise SystemExit(7)
     time.sleep(.01)
 store=FaceStore(root)
-for _ in range(5): store.enroll('Fictional shared identity',[1.0]+[0.0]*127)
+for _ in range(5): store.enroll('Fictional shared identity',[1.0]+[0.0]*127, embedding_space='a'*64)
 '''
     env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src')}
     children = []
@@ -236,7 +236,7 @@ for _ in range(5): store.enroll('Fictional shared identity',[1.0]+[0.0]*127)
         go.write_text('go')
         for child in children:
             stdout, stderr = child.communicate(timeout=8)
-            assert child.returncode == 0 and stdout == stderr == b''
+            assert child.returncode == 0 and stdout == stderr == b'', stderr.decode(errors='replace')
         assert FaceStore(tmp_path).snapshot()['identities'][0]['templates'] == 10
         assert len(FaceStore(tmp_path).names()) == 1
     finally:
@@ -251,7 +251,7 @@ def test_busy_writer_has_a_real_bound_and_keeps_the_lock_inode(tmp_path):
     import os
     import time
     store = FaceStore(tmp_path)
-    store.enroll('Fictional retained identity', TEMPLATE)
+    store.enroll('Fictional retained identity', TEMPLATE, embedding_space='a' * 64)
     before = store.path.read_bytes()
     lock = tmp_path / '.face-store.lock'
     inode = lock.stat().st_ino
@@ -273,13 +273,13 @@ def test_missing_state_root_is_not_silently_created_for_enrollment(tmp_path):
     store = FaceStore(missing)
     assert store.snapshot()['identities'] == [] and not missing.exists()
     with pytest.raises(FaceStoreError, match='^face_store_state_root_missing$'):
-        store.enroll('Fictional refused identity', TEMPLATE)
+        store.enroll('Fictional refused identity', TEMPLATE, embedding_space='a' * 64)
     assert not missing.exists()
 
 
 def test_explicit_purge_can_remove_corrupt_owned_record_but_not_an_alias(tmp_path):
     store = FaceStore(tmp_path)
-    store.enroll('Fictional retained identity', TEMPLATE)
+    store.enroll('Fictional retained identity', TEMPLATE, embedding_space='a' * 64)
     store.path.write_bytes(b'fictional corrupt JSON')
     with pytest.raises(FaceStoreError):
         store.snapshot()
@@ -292,7 +292,7 @@ def test_success_acknowledgement_requires_exact_store_readback(tmp_path, monkeyp
     from aikey import faces
     from aikey.faces import FaceStoreOutcomeUncertain
     store = FaceStore(tmp_path)
-    store.enroll('Fictional original identity', TEMPLATE)
+    store.enroll('Fictional original identity', TEMPLATE, embedding_space='a' * 64)
     actual = os.replace
     calls = []
     def changed(*args, **kwargs):
@@ -302,7 +302,7 @@ def test_success_acknowledgement_requires_exact_store_readback(tmp_path, monkeyp
         return result
     monkeypatch.setattr(faces.os, 'replace', changed)
     with pytest.raises(FaceStoreOutcomeUncertain, match='^face_store_write_uncertain$'):
-        store.enroll('Fictional new identity', TEMPLATE)
+        store.enroll('Fictional new identity', TEMPLATE, embedding_space='a' * 64)
     assert calls == [True] and store.path.read_bytes() == b'fictional changed record'
 
 
@@ -310,7 +310,7 @@ def test_purge_does_not_claim_success_when_unlink_has_no_persisted_effect(tmp_pa
     from aikey import faces
     from aikey.faces import FaceStoreOutcomeUncertain
     store = FaceStore(tmp_path)
-    store.enroll('Fictional retained identity', TEMPLATE)
+    store.enroll('Fictional retained identity', TEMPLATE, embedding_space='a' * 64)
     before = store.path.read_bytes()
     calls = []
     def unacknowledged(*args, **kwargs):

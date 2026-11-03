@@ -19,6 +19,12 @@ created timestamp or arbitrary file path is exposed. Enrollment still uses the
 separate local face tool; this page does not enable recognition or prove a live
 worker uses the displayed state.
 
+The source now reads both legacy and model-bound local records. Model binding
+and the coordinated-upgrade/re-enrollment boundary are documented in
+[local face model-space migration](evidence/face-model-space-20261103.md). This
+page does not migrate or relabel templates; old installed readers must be upgraded
+before any new schema-2 enrollment.
+
 Each **Review deletion** opens an exact-revision preview for one identity. An
 initially unchecked acknowledgement and separate POST delete all of that
 identity's saved templates, preserving the others and all configuration. The

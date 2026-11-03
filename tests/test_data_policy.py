@@ -92,11 +92,11 @@ def test_worker_archive_claims_no_expiry_and_has_no_delete_path(tmp_path):
 def test_face_identities_never_expire_by_time_and_only_delete_or_purge_removes_them(tmp_path, monkeypatch):
     store = FaceStore(tmp_path)
     embedding = [1.0] + [0.0] * 127
-    store.enroll("Synthetic Person", embedding)
+    store.enroll("Synthetic Person", embedding, embedding_space='a' * 64)
     monkeypatch.setattr(time, "time", lambda: 4_000_000_000.0)   # far in the future
-    assert FaceStore(tmp_path).match(embedding)[0] == "Synthetic Person"
+    assert FaceStore(tmp_path).match(embedding, embedding_space='a' * 64)[0] == "Synthetic Person"
     assert store.delete("Synthetic Person") is True and store.names() == []
-    store.enroll("Other Synthetic", embedding)
+    store.enroll("Other Synthetic", embedding, embedding_space='a' * 64)
     store.purge()
     assert store.names() == [] and ROW["face_store"]["expiry"] == "none"
 
@@ -124,7 +124,7 @@ def test_a_false_claim_is_caught(monkeypatch):
 def test_live_status_is_counts_only(tmp_path):
     root = tmp_path / "state"
     root.mkdir(mode=0o700)
-    FaceStore(root).enroll("Private Name", [1.0] + [0.0] * 127)
+    FaceStore(root).enroll("Private Name", [1.0] + [0.0] * 127, embedding_space='a' * 64)
     (root / "worker-jobs").mkdir(mode=0o700)
     (root / "worker-jobs" / f"{AUDIO_TEMP_PREFIX}crash1").mkdir()
     (root / "worker-jobs" / "aikey-video-crash2").mkdir()
@@ -150,7 +150,7 @@ async def test_the_page_shows_categories_and_counts_never_values_or_paths(tmp_pa
     key_config, port_config = fixture(tmp_path)
     root = tmp_path / "aikey-state"
     root.mkdir(mode=0o700)
-    FaceStore(root).enroll("Private Name", [1.0] + [0.0] * 127)
+    FaceStore(root).enroll("Private Name", [1.0] + [0.0] * 127, embedding_space='a' * 64)
     password = "synthetic-admin-passphrase"
     site = ControlSite(key_config, port_config, signing_key=b"s" * 32,
                        password_record=AdminSecurity.create_password_record(password), port=8765,

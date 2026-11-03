@@ -72,8 +72,8 @@ def test_stored_identity_normalization_never_silently_zeroes_finite_vectors(tmp_
     store = faces.FaceStore(tmp_path)
     vector = faces._unit([magnitude] * 128)
     assert math.hypot(*vector) == pytest.approx(1)
-    store.enroll('Synthetic Identity', [magnitude] * 128)
-    assert store.match([1.0] * 128)[0] == 'Synthetic Identity'
+    store.enroll('Synthetic Identity', [magnitude] * 128, embedding_space='a' * 64)
+    assert store.match([1.0] * 128, embedding_space='a' * 64)[0] == 'Synthetic Identity'
 
 
 def test_unrepresentable_identity_scalar_has_a_fixed_failure():
@@ -103,12 +103,12 @@ async def test_one_valid_enrollment_reply_retains_exact_normalized_identity():
     uploads = []
     async def endpoint(request):
         uploads.append(await request.read())
-        return web.json_response({'faces': [{'embedding': VECTOR}]})
+        return web.json_response({'embedding_space': 'a' * 64, 'faces': [{'embedding': VECTOR}]})
     app = web.Application()
     app.router.add_post('/v1/faces', endpoint)
     async with TestServer(app) as server:
         assert await asyncio.to_thread(faces.embed_single_face, b'SYNTHETIC-PHOTO',
-                                      str(server.make_url('')).rstrip('/')) == VECTOR
+                                      str(server.make_url('')).rstrip('/')) == (VECTOR, 'a' * 64)
     assert len(uploads) == 1 and b'SYNTHETIC-PHOTO' in uploads[0]
 
 
@@ -116,7 +116,7 @@ def test_failed_enrollment_keeps_existing_identity_bytes_and_redacts_cli_error(
         tmp_path, monkeypatch, capsys):
     from urllib.error import URLError
     store = faces.FaceStore(tmp_path)
-    store.enroll('Existing Synthetic Identity', VECTOR)
+    store.enroll('Existing Synthetic Identity', VECTOR, embedding_space='a' * 64)
     before = store.path.read_bytes()
     image = tmp_path / 'synthetic.jpg'
     image.write_bytes(b'SYNTHETIC-PHOTO')

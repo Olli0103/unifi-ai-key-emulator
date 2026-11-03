@@ -29,3 +29,5 @@ Synthetic protocol fixtures live in `tests/fixtures/compatibility/`. They contai
 Public source packages were AI Key 2.2.8 and Protect 7.2.105 with its matching services. Live trials covered selected behaviors on Protect 7.3.56 and 7.3.60. Three public metadata queries for 7.3.56 returned empty results on 22 September 2026. Do not treat the inspected package as either live-tested version.
 
 The records identify package-relative paths and local analysis artifacts. Vendor binaries and extracted source are not included in the distribution. Before any further investigation, establish authorized access, necessity, scope and applicable terms. A public download link and a matching hash do not establish those rights.
+
+- [3 November local Key face model-space binding](face-model-space-20261103.md): explicit encoder identity, no silent legacy relabelling, fictional migration/refusal checks; no native rollout or quality claim.

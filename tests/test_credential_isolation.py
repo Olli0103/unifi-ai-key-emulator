@@ -64,7 +64,7 @@ async def doubles():
                          cookie="vision-gateway-cookie"),
         "speech": Double("speech", {"text": "hi", "segments": [
             {"start": 0, "end": 1, "text": "hi", "no_speech_prob": 0.0}]}),
-        "faces": Double("faces", {"faces": []}),
+        "faces": Double("faces", {"embedding_space": "a" * 64, "faces": []}),
         "evil": Double("evil", {}),
     }
     runners = [await serve(d) for d in made.values()]

@@ -13,14 +13,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import math
+from pathlib import Path
 from typing import Callable
 
 from aiohttp import BodyPartReader, web
 from aiohttp.http_exceptions import BadHttpMessage
 
 from .multipart_input import read_part as _read_part
+from .faces import checked_embedding_space
 
 
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -35,6 +38,25 @@ Analyzer = Callable[[bytes, list | None],
 
 class ImageError(ValueError):
     """The upload is not a bounded JPEG or the regions are malformed."""
+
+
+def _model_digest(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def embedding_space(detector_digest, recognizer_digest, opencv_version):
+    """Bind both graph bytes, implementation revision and OpenCV version."""
+    checked_embedding_space(detector_digest)
+    checked_embedding_space(recognizer_digest)
+    if not isinstance(opencv_version, str) or not 1 <= len(opencv_version) <= 64:
+        raise ImageError("Invalid face encoder version")
+    manifest = ["local-aikey/yunet-sface-align-crop/1", 128,
+                detector_digest, recognizer_digest, opencv_version]
+    return hashlib.sha256(json.dumps(manifest, separators=(",", ":")).encode()).hexdigest()
 
 
 def parse_regions(raw: str | None) -> list[tuple[float, float, float, float]] | None:
@@ -62,9 +84,18 @@ def opencv_analyzer(detector_path: str, recognizer_path: str, *,
                     score_threshold: float = 0.8) -> Analyzer:
     import cv2
     import numpy
+    detector_digest = _model_digest(detector_path)
+    recognizer_digest = _model_digest(recognizer_path)
+    space = embedding_space(detector_digest, recognizer_digest, cv2.__version__)
     recognizer = cv2.FaceRecognizerSF.create(recognizer_path, "")
+    if _model_digest(recognizer_path) != recognizer_digest:
+        raise ImageError("Face model changed during loading")
 
     def analyze(jpeg, regions):
+        # YuNet is opened per region; never label a replaced graph with the
+        # startup space. Immutable model mounts remain an operator prerequisite.
+        if _model_digest(detector_path) != detector_digest:
+            raise ImageError("Face model changed after loading")
         image = cv2.imdecode(numpy.frombuffer(jpeg, dtype=numpy.uint8), cv2.IMREAD_COLOR)
         if image is None or image.ndim != 3:
             raise ImageError("Unreadable JPEG")
@@ -86,11 +117,16 @@ def opencv_analyzer(detector_path: str, recognizer_path: str, *,
                        min(1.0, (left + fx + fw) / width), min(1.0, (top + fy + fh) / height))
                 if box[0] < box[2] and box[1] < box[3]:
                     found.append((box, float(face[-1]), embedding))
+        if _model_digest(detector_path) != detector_digest:
+            raise ImageError("Face model changed during analysis")
         return found[:_MAX_FACES]
+    analyze.embedding_space = space
     return analyze
 
 
-def build_app(analyze: Analyzer) -> web.Application:
+def build_app(analyze: Analyzer, *, embedding_space: str | None = None) -> web.Application:
+    if embedding_space is not None:
+        checked_embedding_space(embedding_space)
     lock = asyncio.Lock()
     operations = set()
     counters = {"requests": 0, "analyzed": 0, "faces": 0, "rejected": 0, "failed": 0}
@@ -112,7 +148,8 @@ def build_app(analyze: Analyzer) -> web.Application:
                 return web.json_response({"error": "analysis_failed"}, status=500)
         counters["analyzed"] += 1
         counters["faces"] += len(result)
-        return web.json_response({"faces": [
+        return web.json_response({**({"embedding_space": embedding_space}
+                                    if embedding_space is not None else {}), "faces": [
             {"box": [round(v, 5) for v in box], "score": round(score, 4), "embedding": embedding}
             for box, score, embedding in result]})
 
@@ -170,8 +207,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=8179)
     parser.add_argument("--score-threshold", type=float, default=0.8)
     args = parser.parse_args(argv)
-    app = build_app(opencv_analyzer(args.detector, args.recognizer,
-                                    score_threshold=args.score_threshold))
+    analyze = opencv_analyzer(args.detector, args.recognizer, score_threshold=args.score_threshold)
+    app = build_app(analyze, embedding_space=analyze.embedding_space)
     web.run_app(app, host=args.host, port=args.port, access_log=None, print=None)
     return 0
 
