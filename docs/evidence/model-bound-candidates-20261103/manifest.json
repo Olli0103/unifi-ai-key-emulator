@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "source": "7320b5c1dbd6251bfc25d3dcdad7bd6b2fc2531e",
+  "files": {
+    "summary.json": "4422c932ce15cb102067f48a9c8be1b3abbf3ead2e8110ebc5deab43e09a6876"
+  },
+  "not_a_release_or_native_feature_acceptance": true,
+  "private_raw_receipts_included": false
+}

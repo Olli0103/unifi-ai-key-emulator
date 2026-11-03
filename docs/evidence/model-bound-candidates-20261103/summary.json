@@ -1,0 +1,163 @@
+{
+  "candidate_source": "7320b5c1dbd6251bfc25d3dcdad7bd6b2fc2531e",
+  "module_count_each": 136,
+  "observation_date": "2026-11-03",
+  "preserved_preparation_failures": [
+    "staging_refused_before_root_creation_for_world_writable_parent",
+    "first_face_build_registry_resolution_failed_no_candidate_image_created",
+    "first_qualification_absence_prefix_guard_refused_before_container_creation"
+  ],
+  "recovery": {
+    "existing_local_base_tags_bound_to_exact_images": true,
+    "existing_permissions_changed": false,
+    "face_candidate_built_once_successfully_not_rebuilt": true,
+    "final_build_legacy_no_pull_network_none": true,
+    "known_exact_absence_prefixes_only_exit1": true,
+    "original_failed_records_preserved": true,
+    "versioned_build_receipts_and_contexts": true
+  },
+  "roles": {
+    "admin": {
+      "build": {
+        "all_ten_processes_unchanged": true,
+        "base_image": "sha256:19df9f77f96a4b154b51a608f01afbf91c19310396630f2eca71a1226f436022",
+        "deployed": false,
+        "image": "sha256:7c8e6326f82382e35423aca1f29183591aa98cda35dd2e78ea67b3b08eb66a6a",
+        "inherited_user_entrypoint_command_environment_exact": true,
+        "role": "admin",
+        "service_actions": 0,
+        "source": "7320b5c1dbd6251bfc25d3dcdad7bd6b2fc2531e"
+      },
+      "qualification": {
+        "actual_installed_modules_equal": true,
+        "all_ten_processes_unchanged": true,
+        "biometric_record_reads": 0,
+        "deployed": false,
+        "fictional_admin_consent_preview_save_discard_mismatch": true,
+        "fictional_cli_shared_lease_and_model_binding": true,
+        "fictional_local_http_calls": 3,
+        "fixture_configuration_bytes_unchanged": true,
+        "image": "sha256:7c8e6326f82382e35423aca1f29183591aa98cda35dd2e78ea67b3b08eb66a6a",
+        "license_equal": true,
+        "model_inference_calls": 0,
+        "module_count": 136,
+        "owned_container_absent": true,
+        "owned_fictional_resources_collected": true,
+        "real_model_requests": 0,
+        "real_profile_mounts": 0,
+        "role": "admin",
+        "service_actions": 0,
+        "source": "7320b5c1dbd6251bfc25d3dcdad7bd6b2fc2531e",
+        "versions": {
+          "aiohttp": "3.14.5",
+          "cryptography": "50.0.1",
+          "numpy": null,
+          "onnxruntime": null,
+          "opencv-python-headless": null,
+          "pillow": "13.0.0",
+          "sentence-transformers": null
+        }
+      }
+    },
+    "face": {
+      "build": {
+        "all_ten_processes_unchanged": true,
+        "base_image": "sha256:6c67d7d036293347523f181f4410a3374e19823a8baf060514dae62f683102e6",
+        "deployed": false,
+        "image": "sha256:94edf1521d6686bb20e95b47302442780d82f50436494b6f63aa45665cdad93b",
+        "inherited_user_entrypoint_command_environment_exact": true,
+        "role": "face",
+        "service_actions": 0,
+        "source": "7320b5c1dbd6251bfc25d3dcdad7bd6b2fc2531e"
+      },
+      "qualification": {
+        "actual_installed_modules_equal": true,
+        "all_ten_processes_unchanged": true,
+        "biometric_record_reads": 0,
+        "deployed": false,
+        "existing_graphs_loaded_without_inference": true,
+        "fictional_cli_shared_lease_and_model_binding": true,
+        "fictional_face_http_namespace_and_refusal": true,
+        "image": "sha256:94edf1521d6686bb20e95b47302442780d82f50436494b6f63aa45665cdad93b",
+        "license_equal": true,
+        "model_inference_calls": 0,
+        "module_count": 136,
+        "owned_container_absent": true,
+        "owned_fictional_resources_collected": true,
+        "real_model_requests": 0,
+        "real_profile_mounts": 0,
+        "role": "face",
+        "service_actions": 0,
+        "source": "7320b5c1dbd6251bfc25d3dcdad7bd6b2fc2531e",
+        "versions": {
+          "aiohttp": "3.14.5",
+          "cryptography": "50.0.1",
+          "numpy": "2.5.3",
+          "onnxruntime": null,
+          "opencv-python-headless": "5.0.0.93",
+          "pillow": "13.0.0",
+          "sentence-transformers": null
+        }
+      }
+    },
+    "key": {
+      "build": {
+        "all_ten_processes_unchanged": true,
+        "base_image": "sha256:0e1322484d5c082cbeebe64fee54d3f0dc3d50e095924683775bbe3311a980be",
+        "deployed": false,
+        "image": "sha256:8485094e3860a03de682af8bf9ff0e7d1e2848c8645c418c030570be8cadd105",
+        "inherited_user_entrypoint_command_environment_exact": true,
+        "role": "key",
+        "service_actions": 0,
+        "source": "7320b5c1dbd6251bfc25d3dcdad7bd6b2fc2531e"
+      },
+      "qualification": {
+        "actual_installed_modules_equal": true,
+        "all_ten_processes_unchanged": true,
+        "biometric_record_reads": 0,
+        "deployed": false,
+        "fictional_cli_shared_lease_and_model_binding": true,
+        "fictional_local_http_calls": 2,
+        "fictional_worker_response_binding_callback_and_mismatch": true,
+        "image": "sha256:8485094e3860a03de682af8bf9ff0e7d1e2848c8645c418c030570be8cadd105",
+        "license_equal": true,
+        "model_inference_calls": 0,
+        "module_count": 136,
+        "owned_container_absent": true,
+        "owned_fictional_resources_collected": true,
+        "real_model_requests": 0,
+        "real_profile_mounts": 0,
+        "role": "key",
+        "service_actions": 0,
+        "source": "7320b5c1dbd6251bfc25d3dcdad7bd6b2fc2531e",
+        "versions": {
+          "aiohttp": "3.14.5",
+          "cryptography": "50.0.1",
+          "numpy": null,
+          "onnxruntime": null,
+          "opencv-python-headless": null,
+          "pillow": "13.0.0",
+          "sentence-transformers": null
+        }
+      }
+    }
+  },
+  "schema": 1,
+  "scope": "coordinated_existing_installation_candidates_not_deployed",
+  "terminal": {
+    "all_ten_original_processes_exact": true,
+    "biometric_record_reads": 0,
+    "existing_model_bytes_unchanged": true,
+    "independent_review": false,
+    "local_identity_store_absent_metadata_only": true,
+    "native_feature_acceptance": false,
+    "old_completed_activation_roots_replayed": false,
+    "owned_qualification_containers_absent": true,
+    "production_activation_attempted": false,
+    "real_model_inference_calls": 0,
+    "real_profile_mounts": 0,
+    "same_embedding_space": true,
+    "service_replacements": 0,
+    "status": "three_candidates_qualified_not_installed"
+  }
+}
