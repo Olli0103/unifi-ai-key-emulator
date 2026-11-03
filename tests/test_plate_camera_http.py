@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import threading
+import time
 
 from multidict import MultiDict
 import pytest
@@ -214,6 +215,74 @@ async def test_plate_permission_does_not_silently_enable_vehicle_class(tmp_path)
         before = store.path.read_bytes()
         body = await (await client.get("/plate-cameras")).text()
         assert "Vehicle detection is not enabled" in body and store.path.read_bytes() == before
+    finally:
+        await client.close()
+        await server.close()
+
+
+@pytest.mark.parametrize('during_validation', [False, True])
+async def test_monotonic_plate_deadline_cannot_be_extended_by_wall_time(tmp_path, monkeypatch, during_validation):
+    site, server, client, _, key, _ = await ready(tmp_path)
+    control = site.admin_api.plate_camera_control
+    elapsed = [20.0]
+    monkeypatch.setattr(control, 'clock', lambda: elapsed[0])
+    try:
+        store = site.aiports['aiport']
+        fields = await preview(site, client, selected=False)
+        before, key_before = store.path.read_bytes(), key.read_bytes()
+        original = store.preview_plate_cameras
+        calls = []
+        def validate(*args):
+            calls.append(True)
+            result = original(*args)
+            if during_validation:
+                elapsed[0] += 600
+            return result
+        monkeypatch.setattr(store, 'preview_plate_cameras', validate)
+        if not during_validation:
+            elapsed[0] += 600
+        response = await client.post('/plate-cameras/apply', data=fields,
+                                    headers={'Origin': site.origin}, allow_redirects=False)
+        assert response.status == 409
+        assert calls == ([True] if during_validation else [])
+        assert store.path.read_bytes() == before and key.read_bytes() == key_before
+        assert not store.history_dir.exists()
+        # Expired reviews do not prevent a fresh operator review.
+        monkeypatch.setattr(store, 'preview_plate_cameras', original)
+        fresh = await preview(site, client, selected=False)
+        response = await client.post('/plate-cameras/apply', data=fresh,
+                                    headers={'Origin': site.origin}, allow_redirects=False)
+        assert response.status == 303
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_full_plate_review_pool_refuses_without_evicting_a_live_confirmation(tmp_path, monkeypatch):
+    site, server, client, _, _, _ = await ready(tmp_path)
+    elapsed = [time.monotonic()]
+    monkeypatch.setattr(site, '_mutation_clock', lambda: elapsed[0])
+    monkeypatch.setattr(site.admin_api.plate_camera_control, 'clock', lambda: elapsed[0])
+    try:
+        store = site.aiports['aiport']
+        before = store.path.read_bytes()
+        reviews = []
+        for i in range(256):
+            # Honor the unchanged 60/minute shared limiter. 256 reviews can fit
+            # within ten minutes; do not disable or clear admission guards.
+            if i and i % 50 == 0:
+                elapsed[0] += 61
+            reviews.append(await preview(site, client))
+        assert len({x['signature'] for x in reviews}) == 256
+        body = await (await client.get('/plate-cameras')).text()
+        fields = form(body, '/plate-cameras/preview')
+        response = await client.post('/plate-cameras/preview', data=fields,
+                                    headers={'Origin': site.origin})
+        assert response.status == 409
+        assert store.path.read_bytes() == before and not store.history_dir.exists()
+        response = await client.post('/plate-cameras/apply', data=reviews[0],
+                                    headers={'Origin': site.origin}, allow_redirects=False)
+        assert response.status == 303 and store.path.read_bytes() == before
     finally:
         await client.close()
         await server.close()

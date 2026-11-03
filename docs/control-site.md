@@ -696,10 +696,13 @@ key and plate-specific confirmation protocol. Every save requires explicit
 plate-data/destination/cost/restart consent. Confirmation binds the login,
 profile, raw configuration revision, current camera ID/name selection, full
 selection and resulting revision. Each random draft is usable once for ten
-minutes; admitting a change also invalidates older open drafts for that profile.
+monotonic minutes, checked before and after awaited validation; wall-clock
+adjustments cannot extend that lifetime. Admitting a change also invalidates
+older open drafts for that profile.
 This prevents an old grant from replaying after exact-byte revocation. Pending
-authority is bounded to 256 unexpired drafts and is lost on Admin restart;
-expired/evicted/restarted forms must be previewed again.
+authority is bounded to 256 unexpired drafts and is lost on Admin restart.
+A full pool refuses a new review without evicting a live one; expired or
+restarted forms must be previewed again.
 
 The typed store changes only `live_pool_detector.plate_cameras`. If no camera
 remains, it also removes a separate `ocr_provider_config`, because the runtime

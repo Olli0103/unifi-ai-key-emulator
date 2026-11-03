@@ -116,14 +116,14 @@ class PlateCameraControl(CameraThresholdControl):
             return self._refused()
         if self.site._session(request) is None:
             raise web.HTTPForbidden()
+        self.pending = {k: v for k, v in self.pending.items() if v[2] > self.clock()}
+        if len(self.pending) >= 256:
+            return self._refused()
         hidden = dict(fields)
         hidden.update(draft=secrets.token_hex(16), expires=str(int(time.time()) + 600),
                       resulting_revision=preview.resulting_revision)
         hidden["signature"] = self._signature(cookie, hidden)
-        self.pending = {k: v for k, v in self.pending.items() if v[2] >= time.time()}
-        if len(self.pending) >= 256:
-            self.pending.pop(next(iter(self.pending)))
-        self.pending[hidden["signature"]] = (cookie, fields["profile"], int(hidden["expires"]),
+        self.pending[hidden["signature"]] = (cookie, fields["profile"], self.clock() + 600,
                                               preview.resulting_revision)
         rows = ""
         for row in choices.values():
@@ -163,6 +163,9 @@ class PlateCameraControl(CameraThresholdControl):
                     or not _HEX.fullmatch(fields["signature"])
                     or not hmac.compare_digest(self._signature(cookie, fields), fields["signature"])):
                 raise ValueError
+            grant = self.pending.get(fields["signature"])
+            if grant is None or self.clock() >= grant[2]:
+                raise ValueError
             store, _, _, selected, preview = await self._parse(cookie, fields, True)
             if preview.resulting_revision != fields["resulting_revision"]:
                 raise ValueError
@@ -170,8 +173,9 @@ class PlateCameraControl(CameraThresholdControl):
             return self._refused()
         if self.site._session(request) is None:
             raise web.HTTPForbidden()
-        expected = (cookie, fields["profile"], int(fields["expires"]), preview.resulting_revision)
-        if self.pending.pop(fields["signature"], None) != expected:
+        expected = (cookie, fields["profile"], grant[2], preview.resulting_revision)
+        if (self.clock() >= grant[2]
+                or self.pending.pop(fields["signature"], None) != expected):
             return self._refused()
         # No await between consuming authority and invalidating older same-profile
         # intents. A used grant cannot be replayed after an exact-byte revocation.
