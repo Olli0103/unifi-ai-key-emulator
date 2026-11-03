@@ -58,6 +58,24 @@ only invented settings. Runner checks do not constitute visual review, an
 independent human review, actual NAS/VPN-client acceptance or a full accessibility
 certification. Qualification counts and exact-head CI are recorded in the PR.
 
+## Retained qualification failure and narrow correction
+
+The first full Mac run had **5,939 passed, one failed, 14 skipped** (56 subtests).
+The existing real two-process FaceStore writer test failed with the fixed
+`face_store_unavailable` error; its original errno was not retained. A bounded
+instrumented eight-trial reproduction separately observed two `ENOENT` failures
+in concurrent `O_CREAT` lock lookups on macOS, not lost templates or a provider
+failure. This later trace does not retroactively supply the original errno.
+
+The store now makes exactly one existing-only, no-follow/nonblocking lock open
+after that specific creation failure and confirms the state root binding.
+It never repeats creation or relaxes private owner/mode/regular-file/link-count
+checks, the bounded advisory lock or directory-swap guards. A deterministic
+regression failed on the old source and passes with the correction; missing,
+public, symlink and FIFO locks still refuse. The combined relevant face and new
+role group passed 87 cases. The failed full run remains a failure, not a PASS;
+final full-suite and exact-head CI results belong in the PR.
+
 ## Not claimed
 
 No production Admin update, processor restart, real pairing/zone/credential

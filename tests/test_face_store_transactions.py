@@ -246,6 +246,49 @@ for _ in range(5): store.enroll('Fictional shared identity',[1.0]+[0.0]*127, emb
                 child.communicate(timeout=3)
 
 
+@pytest.mark.parametrize('published',['private','missing','symlink','fifo','public'])
+def test_concurrent_lock_publication_enoent_opens_only_an_existing_safe_lock(tmp_path,monkeypatch,published):
+    import errno
+    import os
+    from aikey import faces
+    actual=os.open
+    calls=[]
+    lock=tmp_path/'.face-store.lock'
+    def publication_race(name,flags,*args,**kwargs):
+        if name=='.face-store.lock':
+            calls.append(flags)
+            if flags&os.O_CREAT:
+                # One other creator publishes just as Darwin returns ENOENT
+                # to our concurrent O_CREAT lookup. Never repeat creation.
+                if published=='symlink':
+                    target=tmp_path/'outside-lock-canary'
+                    target.write_bytes(b'fictional untouched canary')
+                    lock.symlink_to(target)
+                elif published=='fifo':
+                    os.mkfifo(lock,0o600)
+                elif published!='missing':
+                    fd=actual(name,flags,*args,**kwargs)
+                    os.close(fd)
+                    if published=='public':
+                        lock.chmod(0o644)
+                raise FileNotFoundError(errno.ENOENT,'synthetic concurrent lock publication')
+        return actual(name,flags,*args,**kwargs)
+    monkeypatch.setattr(faces.os,'open',publication_race)
+    store=FaceStore(tmp_path)
+    if published=='private':
+        store.enroll('Fictional identity',TEMPLATE,embedding_space='a'*64)
+        assert store.names()==['Fictional identity']
+        assert len(calls)==2 and not calls[1]&os.O_CREAT
+    else:
+        with pytest.raises(FaceStoreError):
+            store.enroll('Fictional refused identity',TEMPLATE,embedding_space='a'*64)
+        assert not store.path.exists()
+        if published=='symlink':
+            assert (tmp_path/'outside-lock-canary').read_bytes()==b'fictional untouched canary'
+        if published=='missing':
+            assert not lock.exists()
+
+
 def test_busy_writer_has_a_real_bound_and_keeps_the_lock_inode(tmp_path):
     import fcntl
     import os
