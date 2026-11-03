@@ -106,6 +106,9 @@ class AdminAPI:
         from .face_identity_control import FaceIdentityControl
         self.face_identity_control = FaceIdentityControl(self)
         self.face_identity_control.register(app)
+        from .face_enrollment_control import FaceEnrollmentControl
+        self.face_enrollment_control = FaceEnrollmentControl(self)
+        self.face_enrollment_control.register(app)
         from .key_face_scope_control import KeyFaceScopeControl
         self.key_face_scope_control = KeyFaceScopeControl(self)
         self.key_face_scope_control.register(app)

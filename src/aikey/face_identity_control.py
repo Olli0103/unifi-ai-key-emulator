@@ -21,7 +21,7 @@ from .faces import FaceStore, FaceStoreError, FaceStoreOutcomeUncertain, FaceSto
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
 _SCOPE = ("This is the local AI Key SFace identity store, not AI Port 512-dimensional "
           "recognition or native Protect face groups. No photos or embedding vectors are shown. "
-          "Enrollment still uses the existing local face enrollment tool.")
+          "Enrollment uses a separately confirmed, explicitly supplied photo or the local face tool.")
 _DELETION = ("Deletion removes every saved local template for this one identity. It does not "
              "erase original footage, historical Protect events, native face groups, backups "
              "or enrollment-server copies. An in-flight match that already read the templates "
@@ -117,7 +117,8 @@ class FaceIdentityControl:
         if csrf is None or self.site._session(request) != cookie:
             raise web.HTTPSeeOther("/login")
         body = ("<h1>Local face identities</h1><p><a href='/'>Settings</a></p>"
-                f"<p>{_SCOPE}</p><p>{_DELETION}</p>")
+                f"<p>{_SCOPE}</p><p>{_DELETION}</p>"
+                "<p><a href='/face-identities/enroll'>Enroll a local face identity</a></p>")
         if snapshot is None:
             body += ("<p class='notice'>Identity store unavailable. No identity count, "
                      "live worker state or deletion is asserted.</p>")
@@ -229,6 +230,7 @@ class FaceIdentityControl:
         # No await between final authority checks, all sibling consumption and
         # admission. An exact-byte restoration must not revive old previews.
         self.grants.clear()
+        self.api.face_enrollment_control.invalidate()
         return await self.api.file_operation(self._commit, grant)
 
     async def _commit(self, grant):

@@ -222,6 +222,17 @@ class FaceStore:
                 or expected != self._revision(self._bytes(directory))):
             raise FaceStoreRevisionConflict("face_store_changed")
 
+    def enrollment_status(self):
+        """Private enrollment preflight; no image or vector leaves the store."""
+        with self._access() as directory:
+            raw = self._bytes(directory)
+            data = self._parse(raw)
+            return {"revision": self._revision(raw),
+                    "embedding_space": data.get("embedding_space"),
+                    "migration_required": data["schema"] == 1 and bool(data["identities"]),
+                    "identities": {name: len(entry["templates"])
+                                   for name, entry in data["identities"].items()}}
+
     def _save(self, data: dict, *, directory_fd) -> None:
         _validate_store(data)
         encoded = json.dumps(data, separators=(",", ":")).encode("utf-8")

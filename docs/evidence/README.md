@@ -33,3 +33,5 @@ The records identify package-relative paths and local analysis artifacts. Vendor
 - [3 November local Key face model-space binding](face-model-space-20261103.md): explicit encoder identity, no silent legacy relabelling, fictional migration/refusal checks; no native rollout or quality claim.
 
 - [3 November Face262 candidate and terminal refusal](face262-candidate-20261103.md): 135 candidate modules qualified, actual switch refused for waiting consumers before intent/effect, all ten processes independently reconciled unchanged; no deployment, rollback or native feature acceptance.
+
+- [3 November explicit local face enrollment](face-enrollment-control-20261103.md): owner-supplied image, local model-space-bound preview, separate save consent and transient-template lifecycle; source/fictional browser qualification only, no real enrollment or installation.

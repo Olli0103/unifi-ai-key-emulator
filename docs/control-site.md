@@ -4,7 +4,7 @@ For a credentials-free, read-only preview with invented data, use the separate
 [synthetic demo](synthetic-demo.md). It is not an administration or device server
 and cannot read deployment state or send a provider request.
 
-The control site is a separate loopback HTTP service for the AI Key and optional AI Port configuration files. It has administrator sign-in, a signed session, CSRF protection, revision-checked saves and write-only API-key replacement. It manages the vision provider, model and endpoint for AI Key descriptions and AI Port object detections. OpenAI, Claude/Anthropic, Ollama and an OpenAI-compatible endpoint are selectable. Each AI Port form also manages classes, score threshold and an optional API-request cost cap (empty means no cap) for that instance only. Object events have no per-camera cap, and a save keeps the local fallback, plate cameras, held-package mode, existing per-camera score gates and existing local score-server routing. Provider/model edits preserve unrelated raw camera spellings and omitted defaults; these forms do not add or retarget per-camera gates or a score server. A configured AI Key speech role has its own provider form, described below. Initial AI Key audio opt-in is available through the separate explicit speech setup below. The site does not manage embeddings, face model enrollment, adoption, camera pairing or service restarts yet. Those controls remain open work under [issue #17](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17).
+The control site is a separate loopback HTTP service for the AI Key and optional AI Port configuration files. It has administrator sign-in, a signed session, CSRF protection, revision-checked saves and write-only API-key replacement. It manages the vision provider, model and endpoint for AI Key descriptions and AI Port object detections. OpenAI, Claude/Anthropic, Ollama and an OpenAI-compatible endpoint are selectable. Each AI Port form also manages classes, score threshold and an optional API-request cost cap (empty means no cap) for that instance only. Object events have no per-camera cap, and a save keeps the local fallback, plate cameras, held-package mode, existing per-camera score gates and existing local score-server routing. Provider/model edits preserve unrelated raw camera spellings and omitted defaults; these forms do not add or retarget per-camera gates or a score server. A configured AI Key speech role has its own provider form, described below. Initial AI Key audio opt-in is available through the separate explicit speech setup below. The site does not manage embeddings, face model installation, adoption, camera pairing or service restarts yet. Those controls remain open work under [issue #17](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17).
 
 For a new AI Key, the separate [authenticated first-run mode](first-run.md#authenticated-browser-preparation)
 prepares only a new directory and pinned public trust, without network access,
@@ -15,8 +15,8 @@ device startup or adoption. It does not reopen an existing profile for setup.
 **Local face identities** lists saved labels and template counts from the fixed
 AI Key state root. This is the existing local 128-value SFace store, not native
 Protect groups or the separate 512-value AI Port model space. No photo, vector,
-created timestamp or arbitrary file path is exposed. Enrollment still uses the
-separate local face tool; this page does not enable recognition or prove a live
+created timestamp or arbitrary file path is exposed. Enrollment uses the separate explicit-photo flow described below or the local
+face tool. The metadata/deletion page does not enable recognition or prove a live
 worker uses the displayed state.
 
 The source now reads both legacy and model-bound local records. Model binding
@@ -1136,3 +1136,38 @@ restart, budget reset/refund, credential replacement or index operation.
 Metadata eligibility is not native event-delivery or quality proof. Interrupted
 admitted writes are owned/drained; uncertain acknowledgements require current
 saved-state reconciliation, not automatic retry or reversal.
+
+## Explicit local face enrollment
+
+From **Local face identities**, **Enroll a local face identity** uses an already
+configured local Key face role only. It does not configure a model/server, enable
+recognition, add cameras, access recordings or name a native Protect group. All
+local face readers must support the [model-bound format and coordinated upgrade](evidence/face-model-space-20261103.md)
+before real enrollment; old installed Key/Admin tools cannot read new templates.
+
+Supply one JPEG (at most 10 MiB) and a private label, then explicitly consent to
+local processing. The image is sent once to the existing private face service;
+no cloud provider or camera fetch is used. Exactly one face and a compatible
+encoder identity are required. A separate preview needs another initially
+unchecked acknowledgement before **Save local template**. Existing templates are
+preserved. A different saved model space or nonempty unbound legacy store is
+refused, not automatically relabelled or migrated.
+
+The administration flow does not save the image or display/export a vector. At
+most eight pending templates are held in RAM, with one analysis admitted at a
+time. Confirmations expire after two minutes; discard, logout and service cleanup
+clear their pending vectors. Managed memory cleanup is not physical erasure, and
+the original photo/server/backup copies have separate retention. A stalled upload
+is bounded; cancelling an HTTP waiter does not release an already-running model
+call or admitted store write early. Existing enrolled model-work fences are
+respected, never created, bypassed or reset by this flow.
+
+Both saved configuration and store revisions are checked again on save, with
+configuration and face-writer locks serialized in that order. Changed state or
+session requires a new review; possible committed writes or post-save audit
+failures report an uncertain outcome and never automatically repeat analysis or
+save. Reload the list and reconcile the saved count. No automatic undo image or
+template copy is made. This is local template administration, not proof of native
+matching/grouping/search, quality or a currently running worker using this state.
+
+[Source, fictional/browser qualification and remaining limits](evidence/face-enrollment-control-20261103.md).
