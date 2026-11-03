@@ -17,7 +17,7 @@ from .config_store import ConfigurationStoreError
 from .control_site import _page, _safe
 
 _BASE = {"csrf", "profile", "revision"}
-_CONFIRM = {"expires", "signature", "resulting_revision", "confirm"}
+_CONFIRM = {"draft", "expires", "signature", "resulting_revision", "confirm"}
 _FRESH = object()
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -26,6 +26,16 @@ class CameraThresholdControl:
     def __init__(self, site):
         self.site = site
         self.signing_key = secrets.token_bytes(32)
+        self.grants = {}
+        self.clock = time.monotonic
+
+    def _expire_grants(self):
+        for token, grant in list(self.grants.items()):
+            if self.clock() >= grant["deadline"]:
+                del self.grants[token]
+
+    def _invalidate_profile(self, profile):
+        self.grants = {k: v for k, v in self.grants.items() if v["profile"] != profile}
 
     def register(self, app):
         app.router.add_get("/camera-thresholds", self.page)
@@ -168,9 +178,15 @@ class CameraThresholdControl:
             return self._refused()
         if self.site._session(request) is None:
             raise web.HTTPForbidden()
+        self._expire_grants()
+        if len(self.grants) >= 32:
+            return self._refused()
         hidden = dict(fields)
-        hidden.update(expires=str(int(time.time()) + 600), resulting_revision=preview.resulting_revision)
+        hidden.update(draft=secrets.token_hex(16), expires=str(int(time.time()) + 600),
+                      resulting_revision=preview.resulting_revision)
         hidden["signature"] = self._signature(cookie, hidden)
+        self.grants[hidden["signature"]] = {
+            "profile": fields["profile"], "deadline": self.clock() + 600}
         rows = ""
         for row in choices.values():
             old = status["thresholds"].get(row["mac"], status["global_threshold"])
@@ -196,18 +212,28 @@ class CameraThresholdControl:
             raise web.HTTPForbidden()
         try:
             self._base(fields, _BASE | _CONFIRM)
-            if (fields["confirm"] != "yes" or not re.fullmatch(r"[0-9]{1,12}", fields["expires"])
+            if (fields["confirm"] != "yes" or not re.fullmatch(r"[0-9a-f]{32}", fields["draft"])
+                    or not re.fullmatch(r"[0-9]{1,12}", fields["expires"])
                     or not time.time() <= int(fields["expires"]) <= time.time() + 600
                     or not _HEX.fullmatch(fields["signature"])
                     or not hmac.compare_digest(self._signature(cookie, fields), fields["signature"])):
                 raise ValueError
+            self._expire_grants()
+            grant = self.grants.get(fields["signature"])
+            if grant is None:
+                raise ValueError
             store, _, _, thresholds, preview = await self._parse(cookie, fields, True)
-            if preview.resulting_revision != fields["resulting_revision"]:
+            if (preview.resulting_revision != fields["resulting_revision"]
+                    or self.clock() >= grant["deadline"]
+                    or self.grants.get(fields["signature"]) is not grant):
                 raise ValueError
         except (ValueError, KeyError, OSError, InventoryError):
             return self._refused()
         if self.site._session(request) is None:
             raise web.HTTPForbidden()
+        # No await between final authority checks, consumption and admission.
+        # Invalidate sibling previews too: an exact-byte Undo must not revive them.
+        self._invalidate_profile(fields["profile"])
         return await self.site.admin_api.file_operation(self._commit, store, fields["profile"],
                         fields["revision"], thresholds, False)
 
@@ -221,6 +247,7 @@ class CameraThresholdControl:
                 raise ValueError
         except ValueError:
             return self._refused()
+        self._invalidate_profile(fields["profile"])
         return await self.site.admin_api.file_operation(self._commit, store, fields["profile"],
                         fields["revision"], {}, True)
 
