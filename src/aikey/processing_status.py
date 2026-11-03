@@ -20,7 +20,9 @@ _PORT = ("adopted", "control_connected", "active_streams", "streams_with_decoded
          "detector_frames_attempted", "detector_frames_succeeded", "snapshot_uploads", "inference")
 _CAMERA = ("ordinal", "stream_active", "policy_received", "enabled_types", "disabled", "pending",
            "attempts", "successes", "api_failures", "api_requests_remaining", "api_request_budget_healthy",
-           "policy_smart_zones", "policy_exclude_zones", "policy_secondary_lens_zones")
+           "policy_smart_zones", "policy_exclude_zones", "policy_secondary_lens_zones",
+           "stream_geometry", "stream_points", "stream_restart_attempts", "stream_restart_successes",
+           "stream_deferred_starts", "stream_full_frames")
 
 
 def _value(value):
@@ -295,7 +297,12 @@ class ProcessingStatus:
                  "inventory has an unambiguous name; this is not proof of native pairing.</p>"
                  "<p>Zone counts and types below are reported running policy state, not geometry, "
                  "proof of enforcement or recognition quality, and not an inside/outside-zone test. "
-                 "Zone configuration belongs in Protect; this page cannot change it.</p>")
+                 "Zone configuration belongs in Protect; this page cannot change it.</p>"
+                 "<p>Open a camera for its counters. Stream size and frame rate are what Protect "
+                 "requested, not measured camera throughput. Reserved capacity includes a stalled "
+                 "decoder; recovery counters belong to this processor run and do not prove "
+                 "recording playback or successful native detections. Full-frame samples belong "
+                 "to the current decoder session and can reset on reconnect.</p>")
         reasons = {
             "runtime_order_and_inventory": "Name from the camera inventory; running order matches saved cameras.",
             "runtime_order_mismatch": "Name unavailable: saved camera order differs from the running processor.",
@@ -309,10 +316,23 @@ class ProcessingStatus:
             title = "Runtime camera " + str(camera["ordinal"])
             if camera.get("camera_name") is not None:
                 title += " · " + camera["camera_name"]
+            body += ("<details class='processing-camera'><summary>" + escape(title)
+                     + "<span class='muted'> — Stream " + _value(camera.get("stream_active"))
+                     + " · Policy received " + _value(camera.get("policy_received"))
+                     + " · Pending " + _value(camera.get("pending")) + "</span></summary>")
             body += "<p>" + reasons[camera["camera_name_observation"]] + "</p>"
+            geometry = camera.get("stream_geometry")
+            body += _table("Stream diagnostics · " + title, [
+                ("Requested stream size", f"{geometry['width']} × {geometry['height']} px" if geometry else None),
+                ("Requested frame rate", geometry["fps"] if geometry else None),
+                ("Reserved capacity points", camera.get("stream_points")),
+                ("Decoder restart attempts", camera.get("stream_restart_attempts")),
+                ("Decoder restart successes", camera.get("stream_restart_successes")),
+                ("Deferred starts", camera.get("stream_deferred_starts")),
+                ("Full-frame samples (current decoder)", camera.get("stream_full_frames"))])
             types = camera.get("enabled_types")
             body += _table(title, [(label, camera.get(key)) for label, key in (
-                ("Stream active", "stream_active"), ("Policy enabled", "policy_received"),
+                ("Stream active", "stream_active"), ("Policy received", "policy_received"),
                 ("Smart zones (reported)", "policy_smart_zones"),
                 ("Exclusion zones (reported)", "policy_exclude_zones"),
                 ("Secondary-lens zones (reported)", "policy_secondary_lens_zones"),
@@ -321,4 +341,5 @@ class ProcessingStatus:
                 ("API budget healthy", "api_request_budget_healthy"),
                 ("API attempts remaining", "api_requests_remaining"))]
                 + [("Enabled types (reported)", None if types is None else ", ".join(types) or "None")])
+            body += "</details>"
         return body

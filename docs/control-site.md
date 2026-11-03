@@ -796,6 +796,22 @@ actual enforcement, model quality or native inside/outside-zone acceptance.
 Both endpoints remain authenticated, read-only and option-free; names are
 escaped text, not markup, and never create frontend storage or action forms.
 
+Each camera now has a native, initially collapsed details section. Its summary
+shows its runtime number/name plus stream, received-policy and pending-work
+flags, including Unknown. Keyboard Enter/Space opens it without JavaScript.
+This keeps many-camera profiles compact. A received policy is not a guarantee
+that every detection class is enabled or that inference is succeeding.
+
+Inside, stream diagnostics show the Protect-requested width/height/frame rate,
+reserved capacity points, decoder restart attempts/successes, deferred starts
+and available full-frame count. Requested values are not measured FPS or
+throughput. Reserved capacity can include a stalled decoder. Restart counters
+belong to the current processor run; full-frame samples belong only to the
+current decoder session and may reset on reconnect. None is recording-playback,
+native-event or model-quality proof. Omitted measurements stay Unknown, not
+zero; raw stream aliases, addresses and failure payloads are still excluded.
+
+
 Interpret the counters separately:
 
 - Key caption `admitted`, `exhausted` and `deferred_fair_share` are current-process

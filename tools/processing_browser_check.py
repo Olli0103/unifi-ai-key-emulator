@@ -68,6 +68,9 @@ async def scenario(output, name, viewport, executable):
                 "pool_cameras": [{"stream_active": True, "policy_enabled": True,
                     "policy_enabled_types": ["person"], "policy_smart_zones": 2,
                     "policy_exclude_zones": 0, "policy_secondary_lens_zones": None,
+                    "stream_geometry": {"width": 1920, "height": 1080, "fps": 30}, "stream_points": 2,
+                    "stream_restart_attempts": 3, "stream_restart_successes": 2,
+                    "stream_deferred_starts": 1, "stream_full_frames": 0,
                     "attempts": 12, "successes": 10, "api_failures": 2,
                     "api_requests_remaining": 0, "api_request_budget_healthy": False}]}}
         inventory = {"schema": "aikey-camera-preflight/1", "protect_version": "7.3.74",
@@ -151,11 +154,27 @@ async def scenario(output, name, viewport, executable):
                     summary = page.locator("summary", has_text="Processing details for AI Port")
                     await summary.focus()
                     await page.keyboard.press("Enter")
+                    camera_summary = page.locator("details.processing-camera > summary")
+                    await expect(camera_summary).to_contain_text("Runtime camera 1 · Fictional hall")
+                    await expect(camera_summary).to_contain_text("Stream Yes · Policy received Yes · Pending Unknown")
+                    assert not await camera_summary.evaluate("el => el.parentElement.open")
+                    assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+                    await page.screenshot(path=str(output / (name + "-camera-collapsed.png")), full_page=True)
+                    await page.locator("details.processing-camera").screenshot(path=str(output / (name + "-camera-summary.png")))
+                    await camera_summary.focus()
+                    await page.keyboard.press("Enter")
+                    assert await camera_summary.evaluate("el => el.parentElement.open")
                     await expect(page.get_by_text("Runtime camera 1 · Fictional hall", exact=True)).to_be_visible()
                     camera_table = page.get_by_role("table", name="Runtime camera 1 · Fictional hall", exact=True)
                     for label in ("Smart zones (reported) 2", "Exclusion zones (reported) 0",
                                   "Secondary-lens zones (reported) Unknown", "Enabled types (reported) person"):
                         await expect(camera_table.get_by_role("row", name=label, exact=True)).to_be_visible()
+                    stream_table = page.get_by_role("table", name="Stream diagnostics · Runtime camera 1 · Fictional hall", exact=True)
+                    for label in ("Requested stream size 1920 × 1080 px", "Requested frame rate 30",
+                                  "Reserved capacity points 2", "Decoder restart attempts 3",
+                                  "Decoder restart successes 2", "Deferred starts 1", "Full-frame samples (current decoder) 0"):
+                        await expect(stream_table.get_by_role("row", name=label, exact=True)).to_be_visible()
+                    await page.locator("details.processing-camera").screenshot(path=str(output / (name + "-camera-stream-detail.png")))
                     await expect(page.get_by_text("Not configured", exact=True)).to_be_visible()
                     assert await summary.evaluate("el => el.parentElement.open")
                     assert await page.locator("form,button").count() == 0
@@ -165,6 +184,7 @@ async def scenario(output, name, viewport, executable):
                     site.runtime_observer.cache.clear()
                     await page.get_by_role("link", name="Refresh", exact=True).click()
                     await page.locator("summary", has_text="Processing details for AI Port").click()
+                    await page.locator("details.processing-camera > summary").click()
                     await expect(page.get_by_text("Name unavailable: saved camera order differs from the running processor.", exact=True)).to_be_visible()
                     await expect(page.get_by_text("Runtime camera 1", exact=True)).to_be_visible()
                     assert "Fictional hall" not in await page.content()
@@ -177,6 +197,7 @@ async def scenario(output, name, viewport, executable):
                     site.runtime_observer.cache.clear()
                     await page.get_by_role("link", name="Refresh", exact=True).click()
                     await page.locator("summary", has_text="Processing details for AI Port").click()
+                    await page.locator("details.processing-camera > summary").click()
                     await expect(page.get_by_text("Name unavailable: camera inventory is not configured, unavailable or stale.", exact=True)).to_be_visible()
                     await expect(page.get_by_role("table", name="Runtime camera 1", exact=True).get_by_role("row", name="Attempts 12", exact=True)).to_be_visible()
                     assert "Fictional hall" not in await page.content()
@@ -199,6 +220,8 @@ async def scenario(output, name, viewport, executable):
                         "camera_names_require_matching_runtime_order_and_inventory": True,
                         "zone_counts_unknown_zero_and_enabled_types": True,
                         "stale_inventory_preserves_counters_without_names": True,
+                        "native_collapsed_camera_sections_with_keyboard_expansion": True,
+                        "requested_geometry_and_recovery_observations": True,
                         "camera_inventory_reads": len(inventory_calls),
                         "expired_session_refused": True, "settings_posts": 0, "health_reads": len(calls),
                         "real_controller_model_or_media_calls": 0, "unowned_requests": 0,
