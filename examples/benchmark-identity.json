@@ -1,0 +1,77 @@
+{
+  "schema": "aikey-multimodal-cases/1",
+  "run": {
+    "model": "synthetic-identity-decisions",
+    "provider": "none",
+    "profile": "fictional",
+    "code_revision": "example-only"
+  },
+  "cases": [
+    {
+      "id": "fictional-known-correct-a",
+      "camera_class": "synthetic-camera",
+      "conditions": [
+        "synthetic"
+      ],
+      "input_sha256": "a4758767fbdc0b9f3c967ae9ae9d745d7f2d2594ac8432558712399a115fd133",
+      "kind": "identity",
+      "expected": "Synthetic-A",
+      "predicted": "Synthetic-A"
+    },
+    {
+      "id": "fictional-known-wrong",
+      "camera_class": "synthetic-camera",
+      "conditions": [
+        "synthetic"
+      ],
+      "input_sha256": "e2dc691a092ccadabfbac17cc22750b4f6de6055f44826ab041aa40c46b9b4a2",
+      "kind": "identity",
+      "expected": "Synthetic-A",
+      "predicted": "Synthetic-B"
+    },
+    {
+      "id": "fictional-known-rejected",
+      "camera_class": "synthetic-camera",
+      "conditions": [
+        "synthetic"
+      ],
+      "input_sha256": "b0ef6cb35cfbff67e1e462edc5c722ad4445f861d3826008d805ce405da30022",
+      "kind": "identity",
+      "expected": "Synthetic-B",
+      "predicted": null
+    },
+    {
+      "id": "fictional-known-correct-b",
+      "camera_class": "synthetic-camera",
+      "conditions": [
+        "synthetic"
+      ],
+      "input_sha256": "6cb9942c1e6de3f867b31b8bfee603ac7be2b7871f5aea175c75f8bcd1d3efdc",
+      "kind": "identity",
+      "expected": "Synthetic-B",
+      "predicted": "Synthetic-B"
+    },
+    {
+      "id": "fictional-unknown-false-accept",
+      "camera_class": "synthetic-camera",
+      "conditions": [
+        "synthetic"
+      ],
+      "input_sha256": "80c6fe060225f65dcc7c6d96d340cc8e018ee93b7816f2171bc47454d52bcc19",
+      "kind": "identity",
+      "expected": null,
+      "predicted": "Synthetic-A"
+    },
+    {
+      "id": "fictional-unknown-rejected",
+      "camera_class": "synthetic-camera",
+      "conditions": [
+        "synthetic"
+      ],
+      "input_sha256": "0f002835476c801af0b47a5c128579b732d4a5a9f1f3a6d442fae1aeca2ce2e1",
+      "kind": "identity",
+      "expected": null,
+      "predicted": null
+    }
+  ]
+}

@@ -120,15 +120,77 @@ profile and code revision, as above. Every case carries a unique `id`,
 | `plate` | `expected`, `predicted` strings; empty expected means no plate | Positive exact accuracy, character errors/CER, false reads on negative cases |
 | `speech` | `expected`, `predicted` strings; empty expected means silence | Word errors/WER, character errors/CER, hallucinations on silence |
 | `retrieval` | Unique `relevant` and ordered `ranked` ID lists, `k` (1–100) | Macro recall@k, MRR@k, binary nDCG@k, negative-query result rate |
+| `identity` | `expected`, `predicted`: exact opaque IDs or JSON `null` for unknown/rejected | Known correct/misidentified/rejected decisions, unknown false accepts/correct rejections, identification precision and denominator-specific rates |
 | `operation` | `camera_days`, `false_alarms`, `critical_events`, `missed_critical`, nullable `latency_ms` and `provider_charge_usd` | False alarms/camera-day, critical misses, nearest-rank latency p50/p95/p99, known/unknown provider-charge accounting |
 
 Recognition/retrieval kinds require both positive and negative cases. All kinds
-are optional; an absent kind is not claimed as evaluated. Labels and predictions
+are optional; an absent kind is not claimed as evaluated. Plate/speech labels and predictions
 normalize whitespace only: case, punctuation and uncertain plate characters are
 preserved. `?` is not a correct character. Empty predictions remain misses; empty
 references remain negative controls. Text errors are micro-aggregated (total edit
 operations / total reference units), so silence insertions cannot disappear in an
 average over only nonempty references. A zero denominator is `null`, not success.
+
+### Identity decisions, not a face-recognition experiment
+
+The optional `identity` kind scores **supplied decisions**, not photographs,
+embeddings, pairwise verification scores, face grouping or cross-event tracking.
+The existing CLI accepts the [fictional example](../examples/benchmark-identity.json):
+
+```sh
+python -m aikey.benchmark multi-score examples/benchmark-identity.json > identity-report.json
+```
+
+Its six labels/predictions and non-media input strings/digests are invented only
+to exercise arithmetic. No model produced them. They are not a real false-match
+measurement, enrollment/deletion/restart test, migration or native-quality PASS.
+No inference package, edit-distance library or checkpoint is needed for an
+identity-only file. Other kinds retain their existing dependency requirements.
+
+Identity labels are exact opaque ASCII tokens (1–64 characters: letters,
+digits, `_ . : -`). Only JSON `null` means unknown in ground truth, or a rejected
+prediction. Empty strings/Booleans/whitespace are invalid; literal `unknown` is
+an ordinary identity ID, not an alias for `null`. No case-folding, fuzzy matching,
+silent aliasing or name inference. Use locally assigned tokens, not personal
+names. Images, vectors, confidence and threshold fields are not part of this
+decision-only schema. Preserve model/space/decision-policy provenance in the
+existing run/profile identity and local source notes; do not mix SFace/Port
+spaces or infer threshold equivalence from a comparison.
+
+Every identity dataset needs at least one known and one unknown truth trial.
+For each overall/camera/condition group, the report separates:
+
+| Measure | Numerator / denominator |
+| --- | --- |
+| Known identification accuracy | Correct identity / known trials |
+| Known misidentification rate | Non-null wrong identity / known trials |
+| Known rejection rate | Null prediction / known trials |
+| Unknown false-accept rate | Non-null prediction / unknown trials |
+| Unknown rejection rate | Null prediction / unknown trials |
+| Identified precision | Correct known identity / all non-null predictions |
+| Overall accuracy | Correct known identities plus correctly rejected unknowns / all trials |
+
+Counts accompany these rates. A single-class slice or no non-null predictions
+can have a missing denominator: `null`, never a fabricated zero/perfect score.
+Overall accuracy can hide class imbalance; read the known/unknown counts and
+separate error rates. These are open-set **identification-decision** metrics,
+not pairwise-verification FAR/FRR, detection recall or confidence calibration.
+
+Expected IDs and exact input digests are bound into corpus identity; predicted
+IDs are not, allowing like-for-like model comparisons on the same source/truth.
+Reports and comparison deltas omit raw expected/predicted IDs, individual case
+IDs, images and vectors. The corpus digest is a binding, **not anonymization or
+independent authentication of low-entropy/private labels or source files**.
+Reports still include operator-supplied run/camera/condition metadata. Keep
+private inputs and sensitive slice labels local. Real quality requires a
+consented, representative source corpus and actual independently checked
+predictions; this scorer supplies neither and sets no acceptance target.
+
+This is an additive optional kind under the existing version-1 multimodal
+schema. Files/reports without it keep their existing behavior; older releases
+that do not recognize the kind refuse it rather than silently score it as
+another modality. [Source qualification and limits](evidence/identity-decision-benchmark-20261103.md)
+are separate from future real recognition measurements.
 
 Operational inputs are **supplied measurements**, not automatically collected
 telemetry. Use nonoverlapping, labelled exposure windows; `camera_days` is their
