@@ -1,0 +1,23 @@
+{
+  "record_type": "same_agent_allowlisted_summary",
+  "observed_date": "2026-11-03",
+  "source": "0d9ff32c7cb939fb394ad737c8bd6434bad7be67",
+  "not_independent_review": true,
+  "not_general_parity_acceptance": true,
+  "five_profiles_authority_tls_unchanged": true,
+  "nine_non_admin_processes_exact": true,
+  "six_loaded_unit_states_exact": true,
+  "same_boot_and_home_mount": true,
+  "readiness_timer_active_preserved": true,
+  "certificate_timer_prior_inactive_preserved": true,
+  "model_watchdog_timer_inactive_preserved": true,
+  "old_admin_image_retained": true,
+  "certificate_issuer_calls": 0,
+  "certificate_hup_signals": 0,
+  "native_permission_or_provider_applies": 0,
+  "backup_members": 6,
+  "backup_archive_bytes": 20480,
+  "backup_all_member_bytes_read_back": true,
+  "backup_scope": "static_current_admin_authority_tls_compose_not_cold_application_backup_or_restore_drill",
+  "activation_observed_seconds": 11.4
+}
