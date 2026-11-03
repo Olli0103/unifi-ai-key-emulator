@@ -244,6 +244,23 @@ class ConfigurationStore:
         return {"revision": _revision(content), "configured": isinstance(policy, dict),
                 "camera_ids": tuple(policy["camera_ids"]) if isinstance(policy, dict) else None}
 
+    def enroll_local_face(self, expected_revision, store, name, template, space, store_revision):
+        """Keep the saved policy current through the separate face-store commit.
+
+        Lock order is configuration then face store. No configuration/history,
+        permission, device state, server endpoint or process is changed here.
+        """
+        from .face_policy import recognition_policy
+        with self._locked():
+            content, current = self._read(self.path)
+            if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                    or not hmac.compare_digest(_revision(content), expected_revision)):
+                raise RevisionConflict("Face enrollment configuration changed")
+            if recognition_policy(current.get("face_recognition")) is None:
+                raise UnsafeConfigurationChange("Local face enrollment unavailable")
+            return store.enroll(name, template, embedding_space=space,
+                                expected_revision=store_revision)
+
     def _prepare_face_restriction(self, content, current, expected_revision, retained):
         from .protocol import _json_object
         revision = _revision(content)
