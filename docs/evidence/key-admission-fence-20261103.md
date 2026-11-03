@@ -21,7 +21,8 @@ production restart overlapped a job or lost a callback.
 
 The worker acquires its maintained opt-in `ModelWorkFence` lease before a new
 job can reserve a caption/test permit, enter the queue or return acceptance.
-The original job deadline includes this cancellable wait. Current camera
+The original job deadline includes this cancellable wait, with an outer timeout
+as well as the fence's own deadline. Current camera
 eligibility, deduplication, journal capacity, queue capacity, drain and stop state
 are checked again after the await, without another await before enqueueing.
 Completed cached duplicates do not start new work and remain available.
@@ -50,13 +51,29 @@ it now refuses acceptance rather than leaving an orphaned queue item.
   rejected reservations, cached completion, terminal release, caption-wait stop,
   stop/cleanup races, marker retarget/corruption, fixed/redacted diagnostics and
   absent-marker legacy behavior.
-- The expanded worker/device/speech/failure-note/inference/fence/watchdog group
-  records **327 passed and 86 skipped** locally. Unavailable optional media/model
+- The corrected expanded worker/device/speech/failure-note/phase/inference/fence/
+  watchdog group records **356 passed and 86 skipped** locally. Unavailable optional media/model
   prerequisites are not counted as covered; complete Linux CI is a separate
   exact-head gate.
 - No UI or browser flow changes. The fence implementation, writer fairness,
   watchdog actor, provider transports, models, identity store, configuration,
   dependencies and capability manifest are unchanged.
+
+The initial whole local run is retained, not a PASS: it was interrupted after
+5,274 passes, 118 skips and eleven failures when an existing failure-phase fixture
+substituted an indefinitely waiting `acquire`. The moved admission needed its own
+outer original-deadline timeout. That fixture now correctly asserts no accepted
+job, journal row or invented failure note for an admission timeout. A separate
+queue-expiry failure showed that entering `asyncio.timeout(0)` could reach a media
+request before cancellation; an already expired queued job now raises immediately
+before execution, retaining the existing `queue_expired` diagnostic.
+
+Nine other failures were credential fixtures invoking unavailable SHA-512-crypt
+support in the host's LibreSSL CLI. Another fictional decoder-start fixture had
+no session; its separate narrow rerun passed, but its initial cause is not
+established. No unrelated credential/ingress implementation or test is changed.
+The first exact-head CI run was cancelled for this correction; a later successful
+run must qualify the corrected head, not relabel the interrupted run.
 
 An absent marker still creates no file or physical lock. This is cooperative
 enrollment, not universal client admission, a new maintenance controller or a

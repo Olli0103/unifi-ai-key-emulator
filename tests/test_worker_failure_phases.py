@@ -203,7 +203,7 @@ def test_recovered_implicit_context_is_not_a_cause():
         _FAILURE_JOB.reset(token)
 
 
-async def test_fence_timeout_never_claims_a_provider_request(services, tmp_path, monkeypatch):
+async def test_unaccepted_fence_timeout_never_claims_a_provider_request_or_job(services, tmp_path, monkeypatch):
     processor = JobProcessor(configuration(services), tmp_path)
     block = asyncio.Event()
     async def acquire(*, deadline):
@@ -214,9 +214,11 @@ async def test_fence_timeout_never_claims_a_provider_request(services, tmp_path,
     try:
         with pytest.raises(WorkerError, match='timed out'):
             await processor.handle(request)
-        value = next(iter(processor._history.values()))
-        note = processor._failure_notes.lookup(value['jobId'], value['fingerprint'])['record']
-        assert (note['category'], note['phase']) == ('timeout', 'model_work_fence')
+        # Maintenance now gates acceptance itself. A timed-out waiter has no
+        # accepted job or durable failure note to which a phase could belong.
+        assert not processor._pending and not processor._history
+        assert not processor._admission_leases
+        assert not list(processor._failure_notes.root.glob('*.json'))
         assert services.media_requests == services.requests == services.callbacks == []
         assert _FAILURE_JOB.get() is None
     finally:

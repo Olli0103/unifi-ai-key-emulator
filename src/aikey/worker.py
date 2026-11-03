@@ -1990,7 +1990,8 @@ class JobProcessor:
         lease = None
         try:
             try:
-                lease = await self._model_work_fence.acquire(deadline=deadline)
+                async with asyncio.timeout(max(0, deadline - time.monotonic())):
+                    lease = await self._model_work_fence.acquire(deadline=deadline)
             except TimeoutError:
                 raise WorkerError("Worker admission timed out") from None
             except ModelWorkFenceError as exc:
@@ -2097,6 +2098,8 @@ class JobProcessor:
         diagnostic = _FailureObservation(self)
         diagnostic_token = _FAILURE_JOB.set(diagnostic)
         try:
+            if expired_on_entry:
+                raise TimeoutError
             if job.operation == "sessionDescribe":
                 self._describe_stage(job, "fetch", job.admitted)
             async with asyncio.timeout(max(0, job.deadline - time.monotonic())):
