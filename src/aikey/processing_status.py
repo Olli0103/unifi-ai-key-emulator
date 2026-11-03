@@ -1,10 +1,15 @@
 """Read-only operating counters, never native acceptance or billing evidence."""
 
 import asyncio
+from collections import Counter
 from datetime import datetime, timezone
 from html import escape
+import re
 
-from aiohttp import web
+from aiohttp import ClientError, web
+
+from .admin_inventory import inventory_view
+from .camera_inventory import InventoryError
 
 
 SCHEMA = "aikey-processing-status/1"
@@ -14,7 +19,8 @@ _KEY = ("adopted", "connected", "search_connected", "queued", "active", "pending
 _PORT = ("adopted", "control_connected", "active_streams", "streams_with_decoded_frames",
          "detector_frames_attempted", "detector_frames_succeeded", "snapshot_uploads", "inference")
 _CAMERA = ("ordinal", "stream_active", "policy_received", "enabled_types", "disabled", "pending",
-           "attempts", "successes", "api_failures", "api_requests_remaining", "api_request_budget_healthy")
+           "attempts", "successes", "api_failures", "api_requests_remaining", "api_request_budget_healthy",
+           "policy_smart_zones", "policy_exclude_zones", "policy_secondary_lens_zones")
 
 
 def _value(value):
@@ -42,10 +48,40 @@ class ProcessingStatus:
         app.router.add_get("/processing", self.page)
         app.router.add_get("/api/admin/v1/processing", self.json)
 
+    @staticmethod
+    def _names(report):
+        rows = inventory_view(report, {})["cameras"]
+        if len({row["mac"] for row in rows}) != len(rows):
+            raise InventoryError("Ambiguous camera inventory")
+        counts = Counter((row["name"] or "").strip().casefold() for row in rows)
+        names = {}
+        for row in rows:
+            name = (row["name"] or "").strip()
+            compact = re.sub(r"[:.\-\s]", "", name).casefold()
+            if not name or row["mac"].casefold() in compact or row["id"].casefold() in name.casefold():
+                names[row["mac"]] = (None, "name_unavailable")
+            elif counts[name.casefold()] != 1:
+                names[row["mac"]] = (None, "name_ambiguous")
+            else:
+                names[row["mac"]] = (name, "runtime_order_and_inventory")
+        return names
+
     async def view(self):
         profiles = self.site._backup_profiles()
         observations = await asyncio.gather(*(
-            self.site.runtime_observer.read(profile) for profile in profiles))
+            self.api.runtime_view(profile) if kind == "aiport" else self.site.runtime_observer.read(profile)
+            for profile, (kind, _) in profiles.items()))
+        names, fetched_at = None, None
+        if any(o.get("saved_order_matches_reported_runtime_order") is True
+               and (o.get("runtime") or {}).get("cameras") for o in observations):
+            try:
+                # Include waiting for the shared observation lock in the bound.
+                async with asyncio.timeout(12):
+                    report = await self.site.inventory_snapshot()
+                names = self._names(report)
+                fetched_at = report["fetched_at"]
+            except (InventoryError, ClientError, OSError, ValueError, TimeoutError):
+                pass  # Names are optional; healthy runtime counters remain useful.
         rows = []
         for (profile, (kind, _)), observation in zip(profiles.items(), observations, strict=True):
             runtime = observation.get("runtime")
@@ -56,10 +92,23 @@ class ProcessingStatus:
                     cameras = runtime.get("cameras")
                     selected["cameras"] = ([{key: camera.get(key) for key in _CAMERA}
                                             for camera in cameras] if cameras is not None else None)
+                    matches = observation.get("saved_order_matches_reported_runtime_order")
+                    for camera, published in zip(cameras or [], selected["cameras"] or [], strict=True):
+                        if matches is not True:
+                            name, status = None, ("runtime_order_mismatch" if matches is False
+                                                  else "runtime_order_unavailable")
+                        elif names is None:
+                            name, status = None, "inventory_unavailable"
+                        else:
+                            name, status = names.get(camera.get("saved_camera_mac"),
+                                                     (None, "camera_not_in_inventory"))
+                        published.update(camera_name=name, camera_name_observation=status)
             rows.append({"profile": profile, "kind": kind, "observation": observation["observation"],
                          "observed_at": observation.get("observed_at"), "runtime": selected})
         return {"processing_schema": SCHEMA, "read_only": True,
                 "counter_scope": "current_process_not_event_or_charge_counts",
+                "camera_name_scope": "runtime_declared_saved_order_and_inventory_not_native_pairing_proof",
+                "camera_inventory_fetched_at": fetched_at,
                 "runtime_cache_seconds": 2, "profiles": rows}
 
     async def json(self, request):
@@ -93,7 +142,8 @@ class ProcessingStatus:
                 "Unknown is not zero, offline or disabled. Counters reset with the processor process. "
                 "Attempts and successes are not event, object, paid-request or quality counts: "
                 "a successful attempt can return no detection.</p>"
-                "<p>This page sends no model, media or controller request, changes no settings "
+                "<p>This page may read the configured camera inventory for names. It sends no model "
+                "or media request, makes no controller changes, changes no settings "
                 "and does not restart a service. Historical failures do not prove a current outage. "
                 "A connected stream does not prove native recording, event delivery or recognition.</p></details>"
                 "<style>.processing-overview{margin:1rem 0}"
@@ -126,6 +176,9 @@ class ProcessingStatus:
                      + "</td><td data-label='Work'>" + work
                      + "</td><td data-label='Consecutive provider failures'>" + failures + "</td></tr>")
         body += "</tbody></table></div>"
+        if result["camera_inventory_fetched_at"] is not None:
+            observed = datetime.fromtimestamp(result["camera_inventory_fetched_at"], timezone.utc).isoformat()
+            body += "<p>Camera names observed (UTC): " + _value(observed) + ".</p>"
         for row in result["profiles"]:
             title = "AI Key" if row["kind"] == "aikey" else "AI Port" + (
                 " · " + row["profile"][7:] if row["profile"].startswith("aiport:") else "")
@@ -237,12 +290,35 @@ class ProcessingStatus:
         if not r["cameras"]:
             return body + "<p>No per-camera rows reported by this runtime.</p>"
         body += ("<p>Camera numbers below are positions in this runtime's current stream order, "
-                 "not saved inventory names or stable camera identities.</p>")
+                 "not saved inventory names or stable camera identities. Names are added only "
+                 "when the running order agrees with saved camera settings and the current "
+                 "inventory has an unambiguous name; this is not proof of native pairing.</p>"
+                 "<p>Zone counts and types below are reported running policy state, not geometry, "
+                 "proof of enforcement or recognition quality, and not an inside/outside-zone test. "
+                 "Zone configuration belongs in Protect; this page cannot change it.</p>")
+        reasons = {
+            "runtime_order_and_inventory": "Name from the camera inventory; running order matches saved cameras.",
+            "runtime_order_mismatch": "Name unavailable: saved camera order differs from the running processor.",
+            "runtime_order_unavailable": "Name unavailable: this running processor does not provide a verified camera order.",
+            "inventory_unavailable": "Name unavailable: camera inventory is not configured, unavailable or stale.",
+            "camera_not_in_inventory": "Name unavailable: this saved camera is absent from the current inventory.",
+            "name_unavailable": "Name unavailable: the inventory does not provide a usable camera name.",
+            "name_ambiguous": "Name unavailable: the inventory contains duplicate camera names.",
+        }
         for camera in r["cameras"]:
-            body += _table("Runtime camera " + str(camera["ordinal"]), [(label, camera.get(key)) for label, key in (
+            title = "Runtime camera " + str(camera["ordinal"])
+            if camera.get("camera_name") is not None:
+                title += " · " + camera["camera_name"]
+            body += "<p>" + reasons[camera["camera_name_observation"]] + "</p>"
+            types = camera.get("enabled_types")
+            body += _table(title, [(label, camera.get(key)) for label, key in (
                 ("Stream active", "stream_active"), ("Policy enabled", "policy_received"),
+                ("Smart zones (reported)", "policy_smart_zones"),
+                ("Exclusion zones (reported)", "policy_exclude_zones"),
+                ("Secondary-lens zones (reported)", "policy_secondary_lens_zones"),
                 ("Inference disabled", "disabled"), ("Pending inference", "pending"),
                 ("Attempts", "attempts"), ("Successes", "successes"), ("API failures", "api_failures"),
                 ("API budget healthy", "api_request_budget_healthy"),
-                ("API attempts remaining", "api_requests_remaining"))])
+                ("API attempts remaining", "api_requests_remaining"))]
+                + [("Enabled types (reported)", None if types is None else ", ".join(types) or "None")])
         return body

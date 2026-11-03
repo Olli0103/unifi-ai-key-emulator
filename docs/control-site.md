@@ -728,7 +728,7 @@ and the broader #17 workflow remain outstanding.
 
 ## Bounded camera inventory observations
 
-Score-gate and plate-camera GET pages share a validated server-side inventory
+Score-gate, plate-camera and named-processing GET pages share a validated server-side inventory
 observation with the private camera API for at most two seconds. Each complete
 page uses a single observation for all its profiles. Parallel readers coalesce;
 source failure briefly suppresses repeated reads, never substitutes expired
@@ -756,18 +756,45 @@ Neither route accepts options or implements a POST/action.
 
 This uses the existing explicitly configured, CA-verified and leaf-pinned HTTPS
 health peers, byte/deadline bounds, concurrency limit and two-second cache. It
-does not discover peers, use native Protect credentials, fetch media, call a
+does not discover peers, import browser sessions, fetch media, call a
 provider, read a state journal, apply configuration, replay jobs or restart a
-service. No new dependency, listener or authentication authority is added.
+service. When runtime camera order can be verified, the optional existing
+camera-inventory loader may perform its configured read-only Protect metadata
+request for names; no new credential or native-session authority is created.
+No new dependency, listener or authentication authority is added.
 Authentication is checked before and after awaited observations. A missing,
 invalid or unavailable peer stays unknown, independently of healthy peers.
 
-Only declared boolean flags and nonnegative integer counters are returned.
-Camera rows use **positions in the observed runtime's stream order**, not
-inventory names or stable camera identities. Native IDs, correlation hashes,
-endpoints, private error messages, model replies and frame/observation content
-are not part of this view. Missing groups/counters remain null/Unknown; an
-explicit zero is not replaced by an empty or unknown value.
+Only allowlisted flags, counters, enabled classes and optional camera names
+are returned. Camera rows always retain **positions in the observed runtime's
+stream order**. A name is joined only through the existing versioned declaration
+that binds the processor identity and ordered camera MACs to the freshly read
+saved configuration, with equal row counts and a validated inventory no older
+than five minutes. Sorting inventory differently cannot relabel runtime rows.
+This is the processor's declaration, not native pairing or event-issuer proof.
+A changed saved detector setting alone does not mean its live policy changed.
+
+`camera_name` is null when order is missing/mismatched, saved settings cannot be
+read, inventory is missing/stale/invalid, the camera is absent, or its name is
+empty/ambiguous/an identifier. `camera_name_observation` gives the fixed reason;
+there is no MAC/ID fallback or guessed positional inventory join. Valid other
+names and all usable runtime counters survive optional naming failures. One
+shared inventory snapshot serves all matching Port profiles; parallel readers
+reuse its two-second cache and normal failure suppression. The full naming read,
+including waiting for that shared lock, is bounded to twelve seconds. No
+inventory request is made solely for unverified runtime orders. Names have their
+own `camera_inventory_fetched_at` timestamp, separate from each processor's
+health observation. A server-configured inventory read is not a camera/model
+permission grant.
+
+The page now displays reported smart-zone, exclusion-zone and secondary-lens
+zone counts plus enabled detection types. Null remains Unknown and zero remains
+zero. No zone polygons, exclusion geometry, camera IDs/MACs, correlation hashes,
+endpoints, private error messages, model replies or frame content are exposed by
+this view. Zone configuration belongs in Protect. Counts alone do not establish
+actual enforcement, model quality or native inside/outside-zone acceptance.
+Both endpoints remain authenticated, read-only and option-free; names are
+escaped text, not markup, and never create frontend storage or action forms.
 
 Interpret the counters separately:
 
