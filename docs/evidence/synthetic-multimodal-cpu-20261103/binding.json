@@ -1,0 +1,39 @@
+{
+  "schema": "owned-multimodal-evidence-binding/1",
+  "source_base_commit": "e6ee47ecde49c6fa50d9eb0380a7ef69cd52190f",
+  "source_status": "sealed source-base modules plus then-uncommitted benchmark helpers, not the final PR commit or a production deployment",
+  "cases": 34,
+  "terminal": 34,
+  "valid": 34,
+  "automatic_retries": 0,
+  "upstream_request_count": "not independently counted; explicit client sample schedule retained",
+  "excluded_warmup_samples": {
+    "plate": 1,
+    "speech": 1,
+    "retrieval": 1,
+    "operation": 2
+  },
+  "retrieval_index_image_requests": 24,
+  "operation_measured_seconds": 73.634042639,
+  "scorer_modules": {
+    "benchmark.py": "174961a6dbe4304513126f2166429617844c73acf39e7a331eeda8420f5ffa01",
+    "benchmark_multi.py": "779227312f094b4b3c89bd45a0a3cf4a663be58e45dd67d7bb6c103b9d8f52d0",
+    "benchmark_attempts.py": "f61c5474140ccacda09ec01e43cca61e9ef7627453ff831c0573bcf671a479f5"
+  },
+  "report_files": {
+    "initial-target-status.json": "ca923969dd7906fb586ab2ec1a5c7840346d915c4f41cd1558d73bfb4de30415",
+    "operation-regression-targets.json": "2c1912bc4642cfc75fe30a7879f1fe42dda8a4f28f76d2eddd949e0172f4dd40",
+    "operation-report.json": "1cf7c9ccf5a76cc00cccec48150ceb4ad49eae23564da65899b4b00da231ad2d",
+    "plate-regression-targets.json": "bd1f7995f7a77a425ac3d506dc5fabf4a5a4b7bba7bd7a8a91c83df49fd9dce6",
+    "plate-report.json": "bf8d1ed8b14bdb04ca186d1dac17ef185e5d52ca01bd193398a6e386c03d867a",
+    "retrieval-regression-targets.json": "98b4fec8f5810440a63c19ccfe999391ca20ce6f6e430eb8d6fb91197590598a",
+    "retrieval-report.json": "ef6cb5144b85b32f8b770923de5508e314ec566e708be0ff3421723d3e10a555",
+    "speech-regression-targets.json": "7646b0fa355d68b7f497414ac9925203fb9f30f87c9e55a0479c2cd170ff529a",
+    "speech-report.json": "7859a74b76e658c5a0ce51555389250ae4861151801985f49f231c9a649d4c0d"
+  },
+  "field_exposure": null,
+  "native_notification_latency": null,
+  "real_ai_key_reference": null,
+  "provider_reported_charge_usd": null,
+  "review": "same-agent visual/decoder checks and separate arithmetic code; not independent human review"
+}

@@ -521,6 +521,10 @@ def main(argv: list[str] | None = None) -> int:
     multi_compare = sub.add_parser("multi-compare")
     multi_compare.add_argument("report", type=Path)
     multi_compare.add_argument("reference", type=Path)
+    attempts = sub.add_parser("multi-attempt-score", help="Keep failed/unrun multimodal slots visible")
+    attempts.add_argument("cases", type=Path)
+    attempt_targets = sub.add_parser("multi-attempt-targets", help="Freeze baseline-derived no-regression targets before tuning")
+    attempt_targets.add_argument("cases", type=Path)
     args = parser.parse_args(argv)
     from .protocol import _json_object
 
@@ -532,6 +536,10 @@ def main(argv: list[str] | None = None) -> int:
             output = score(read(args.cases))
         elif args.command == "compare":
             output = compare(read(args.report), read(args.reference))
+        elif args.command in {"multi-attempt-score", "multi-attempt-targets"}:
+            from . import benchmark_attempts
+            function = benchmark_attempts.score if args.command == "multi-attempt-score" else benchmark_attempts.targets
+            output = function(read(args.cases))
         else:
             from . import benchmark_multi
 

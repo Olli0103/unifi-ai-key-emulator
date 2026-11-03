@@ -1,0 +1,34 @@
+{
+  "schema": "aikey-multimodal-regression-targets/1",
+  "corpus_sha256": "08961c71ea81daa52104a7c9fc1b86d806b3da7c1aafe8ca336d56b477c23419",
+  "baseline_plan_sha256": "dd7cc0ce3408d3061a37215144a03bcd01c671b742b81df82a9ab4e60d2e8e8a",
+  "baseline_attempts_sha256": "5100eee84fd12314e26ad960b5226c3f9fc7fbc17b2ee060c8be7f8cc9fad6a7",
+  "targets": {
+    "plate": {
+      "run": {
+        "code_revision": "e6ee47ecde49c6fa50d9eb0380a7ef69cd52190f",
+        "model": "qwen3-vl-8b",
+        "profile": "plate-synthetic-v1",
+        "provider": "openvino-local-cpu"
+      },
+      "model": {
+        "checkpoint_sha256": "701bd0c33ed693cc084cf2ad6ea3dcc13f4d7d2080b0b8ceac19a089de680261",
+        "runtime_sha256": "6348136997e05a7ee2c2b08e47bb15deb6e5096c62ab3fb821907ded7e2afd7c"
+      },
+      "timing_scope": {
+        "cpu": "owned_server_cgroup",
+        "latency": "adapter_start_to_terminal"
+      },
+      "numeric_thresholds": {
+        "minimum_valid_coverage": 1,
+        "minimum_positive_hit_fraction": 0.75,
+        "minimum_correct_negative_rejection": 1.0,
+        "minimum_all_slot_exact_accuracy": 0.833333,
+        "maximum_cer": 0.03125,
+        "maximum_latency_ms_p95": 8046,
+        "maximum_cpu_ms_p95": 32453
+      }
+    }
+  },
+  "claims": "Prospective identical-corpus no-regression thresholds only; freeze before tuning. Failed initial quality targets are not waived. Timing needs the same externally verified resource/host envelope. Unknown thresholds remain needs_evidence, never zero. No field or hardware parity claim."
+}

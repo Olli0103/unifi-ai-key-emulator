@@ -1,0 +1,434 @@
+{
+  "schema": "aikey-multimodal-attempt-report/1",
+  "plan_sha256": "6c19296473ac3f1d2dce1068f913b7c5c680184eec0bee344135d69f7841ce3f",
+  "corpus_sha256": "80cddc8a4ecf1c496e69dffcd495ae14e77c71b2447b533596607e2baa24366b",
+  "complete": true,
+  "metrics": {
+    "speech": {
+      "run": {
+        "code_revision": "e6ee47ecde49c6fa50d9eb0380a7ef69cd52190f",
+        "model": "large-v3-turbo-int8",
+        "profile": "speech-synthetic-v1",
+        "provider": "openvino-local-cpu"
+      },
+      "model": {
+        "checkpoint_sha256": "bda1d8db4345ead87114912ab9b53d2d8a1fe7160f2159e84f4e7d06acf2c0b5",
+        "runtime_sha256": "0c614db98e9809684d119ff04506ff75ccbe11122386f2fc0c24fdf36d26116a"
+      },
+      "timing_scope": {
+        "cpu": "owned_process_group",
+        "latency": "adapter_start_to_terminal"
+      },
+      "overall": {
+        "planned": 8,
+        "terminal": 8,
+        "valid": 8,
+        "errors": 0,
+        "unrun": 0,
+        "valid_coverage": 1.0,
+        "valid_only_metrics": {
+          "cases": 8,
+          "positives": 6,
+          "negatives": 2,
+          "exact_matches": 6,
+          "positive_exact_accuracy": 1.0,
+          "false_positive_negatives": 2,
+          "negative_false_positive_rate": 1.0,
+          "character_errors": 17,
+          "reference_characters": 232,
+          "cer": 0.073276,
+          "word_errors": 3,
+          "reference_words": 43,
+          "wer": 0.069767
+        },
+        "latency_ms_terminal_only": {
+          "p50": 2560.709124,
+          "p95": 2598.599757,
+          "p99": 2598.599757
+        },
+        "cpu_ms_terminal_only": {
+          "p50": 10284.563216,
+          "p95": 10315.66114,
+          "p99": 10315.66114
+        },
+        "latency_unknown_slots": 0,
+        "cpu_unknown_slots": 0,
+        "charge_unknown_slots": 8,
+        "cpu_ms_measured_sum": 81965.258283,
+        "cpu_ms_total": 81965.258283,
+        "known_provider_charge_usd": null,
+        "total_provider_charge_usd": null,
+        "planned_positives": 6,
+        "planned_negatives": 2,
+        "all_slot_positive_hit_fraction": 1.0,
+        "all_slot_correct_negative_rejection": 0.0,
+        "all_slot_exact_accuracy": 0.75
+      },
+      "by_camera_class": {
+        "synthetic-pcm16k": {
+          "planned": 8,
+          "terminal": 8,
+          "valid": 8,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 8,
+            "positives": 6,
+            "negatives": 2,
+            "exact_matches": 6,
+            "positive_exact_accuracy": 1.0,
+            "false_positive_negatives": 2,
+            "negative_false_positive_rate": 1.0,
+            "character_errors": 17,
+            "reference_characters": 232,
+            "cer": 0.073276,
+            "word_errors": 3,
+            "reference_words": 43,
+            "wer": 0.069767
+          },
+          "latency_ms_terminal_only": {
+            "p50": 2560.709124,
+            "p95": 2598.599757,
+            "p99": 2598.599757
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 10284.563216,
+            "p95": 10315.66114,
+            "p99": 10315.66114
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 8,
+          "cpu_ms_measured_sum": 81965.258283,
+          "cpu_ms_total": 81965.258283,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 6,
+          "planned_negatives": 2,
+          "all_slot_positive_hit_fraction": 1.0,
+          "all_slot_correct_negative_rejection": 0.0,
+          "all_slot_exact_accuracy": 0.75
+        }
+      },
+      "by_condition": {
+        "clear": {
+          "planned": 4,
+          "terminal": 4,
+          "valid": 4,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 4,
+            "positives": 4,
+            "negatives": 0,
+            "exact_matches": 4,
+            "positive_exact_accuracy": 1.0,
+            "false_positive_negatives": 0,
+            "negative_false_positive_rate": null,
+            "character_errors": 0,
+            "reference_characters": 152,
+            "cer": 0.0,
+            "word_errors": 0,
+            "reference_words": 28,
+            "wer": 0.0
+          },
+          "latency_ms_terminal_only": {
+            "p50": 2543.868744,
+            "p95": 2598.599757,
+            "p99": 2598.599757
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 10191.170667,
+            "p95": 10306.589414,
+            "p99": 10306.589414
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 4,
+          "cpu_ms_measured_sum": 40967.153205,
+          "cpu_ms_total": 40967.153205,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 4,
+          "planned_negatives": 0,
+          "all_slot_positive_hit_fraction": 1.0,
+          "all_slot_correct_negative_rejection": null,
+          "all_slot_exact_accuracy": 1.0
+        },
+        "fast": {
+          "planned": 1,
+          "terminal": 1,
+          "valid": 1,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 1,
+            "positives": 1,
+            "negatives": 0,
+            "exact_matches": 1,
+            "positive_exact_accuracy": 1.0,
+            "false_positive_negatives": 0,
+            "negative_false_positive_rate": null,
+            "character_errors": 0,
+            "reference_characters": 39,
+            "cer": 0.0,
+            "word_errors": 0,
+            "reference_words": 8,
+            "wer": 0.0
+          },
+          "latency_ms_terminal_only": {
+            "p50": 2580.843368,
+            "p95": 2580.843368,
+            "p99": 2580.843368
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 10300.523409,
+            "p95": 10300.523409,
+            "p99": 10300.523409
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 1,
+          "cpu_ms_measured_sum": 10300.523409,
+          "cpu_ms_total": 10300.523409,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 1,
+          "planned_negatives": 0,
+          "all_slot_positive_hit_fraction": 1.0,
+          "all_slot_correct_negative_rejection": null,
+          "all_slot_exact_accuracy": 1.0
+        },
+        "german": {
+          "planned": 6,
+          "terminal": 6,
+          "valid": 6,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 6,
+            "positives": 6,
+            "negatives": 0,
+            "exact_matches": 6,
+            "positive_exact_accuracy": 1.0,
+            "false_positive_negatives": 0,
+            "negative_false_positive_rate": null,
+            "character_errors": 0,
+            "reference_characters": 232,
+            "cer": 0.0,
+            "word_errors": 0,
+            "reference_words": 43,
+            "wer": 0.0
+          },
+          "latency_ms_terminal_only": {
+            "p50": 2560.709124,
+            "p95": 2598.599757,
+            "p99": 2598.599757
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 10284.563216,
+            "p95": 10315.66114,
+            "p99": 10315.66114
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 6,
+          "cpu_ms_measured_sum": 61583.337754,
+          "cpu_ms_total": 61583.337754,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 6,
+          "planned_negatives": 0,
+          "all_slot_positive_hit_fraction": 1.0,
+          "all_slot_correct_negative_rejection": null,
+          "all_slot_exact_accuracy": 1.0
+        },
+        "noise": {
+          "planned": 1,
+          "terminal": 1,
+          "valid": 1,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 1,
+            "positives": 0,
+            "negatives": 1,
+            "exact_matches": 0,
+            "positive_exact_accuracy": null,
+            "false_positive_negatives": 1,
+            "negative_false_positive_rate": 1.0,
+            "character_errors": 5,
+            "reference_characters": 0,
+            "cer": null,
+            "word_errors": 1,
+            "reference_words": 0,
+            "wer": null
+          },
+          "latency_ms_terminal_only": {
+            "p50": 2580.20884,
+            "p95": 2580.20884,
+            "p99": 2580.20884
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 10297.186376,
+            "p95": 10297.186376,
+            "p99": 10297.186376
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 1,
+          "cpu_ms_measured_sum": 10297.186376,
+          "cpu_ms_total": 10297.186376,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 0,
+          "planned_negatives": 1,
+          "all_slot_positive_hit_fraction": null,
+          "all_slot_correct_negative_rejection": 0.0,
+          "all_slot_exact_accuracy": 0.0
+        },
+        "noise_snr18db": {
+          "planned": 1,
+          "terminal": 1,
+          "valid": 1,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 1,
+            "positives": 1,
+            "negatives": 0,
+            "exact_matches": 1,
+            "positive_exact_accuracy": 1.0,
+            "false_positive_negatives": 0,
+            "negative_false_positive_rate": null,
+            "character_errors": 0,
+            "reference_characters": 41,
+            "cer": 0.0,
+            "word_errors": 0,
+            "reference_words": 7,
+            "wer": 0.0
+          },
+          "latency_ms_terminal_only": {
+            "p50": 2592.379186,
+            "p95": 2592.379186,
+            "p99": 2592.379186
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 10315.66114,
+            "p95": 10315.66114,
+            "p99": 10315.66114
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 1,
+          "cpu_ms_measured_sum": 10315.66114,
+          "cpu_ms_total": 10315.66114,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 1,
+          "planned_negatives": 0,
+          "all_slot_positive_hit_fraction": 1.0,
+          "all_slot_correct_negative_rejection": null,
+          "all_slot_exact_accuracy": 1.0
+        },
+        "silence": {
+          "planned": 1,
+          "terminal": 1,
+          "valid": 1,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 1,
+            "positives": 0,
+            "negatives": 1,
+            "exact_matches": 0,
+            "positive_exact_accuracy": null,
+            "false_positive_negatives": 1,
+            "negative_false_positive_rate": 1.0,
+            "character_errors": 12,
+            "reference_characters": 0,
+            "cer": null,
+            "word_errors": 2,
+            "reference_words": 0,
+            "wer": null
+          },
+          "latency_ms_terminal_only": {
+            "p50": 2510.748487,
+            "p95": 2510.748487,
+            "p99": 2510.748487
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 10084.734153,
+            "p95": 10084.734153,
+            "p99": 10084.734153
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 1,
+          "cpu_ms_measured_sum": 10084.734153,
+          "cpu_ms_total": 10084.734153,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 0,
+          "planned_negatives": 1,
+          "all_slot_positive_hit_fraction": null,
+          "all_slot_correct_negative_rejection": 0.0,
+          "all_slot_exact_accuracy": 0.0
+        },
+        "tts": {
+          "planned": 6,
+          "terminal": 6,
+          "valid": 6,
+          "errors": 0,
+          "unrun": 0,
+          "valid_coverage": 1.0,
+          "valid_only_metrics": {
+            "cases": 6,
+            "positives": 6,
+            "negatives": 0,
+            "exact_matches": 6,
+            "positive_exact_accuracy": 1.0,
+            "false_positive_negatives": 0,
+            "negative_false_positive_rate": null,
+            "character_errors": 0,
+            "reference_characters": 232,
+            "cer": 0.0,
+            "word_errors": 0,
+            "reference_words": 43,
+            "wer": 0.0
+          },
+          "latency_ms_terminal_only": {
+            "p50": 2560.709124,
+            "p95": 2598.599757,
+            "p99": 2598.599757
+          },
+          "cpu_ms_terminal_only": {
+            "p50": 10284.563216,
+            "p95": 10315.66114,
+            "p99": 10315.66114
+          },
+          "latency_unknown_slots": 0,
+          "cpu_unknown_slots": 0,
+          "charge_unknown_slots": 6,
+          "cpu_ms_measured_sum": 61583.337754,
+          "cpu_ms_total": 61583.337754,
+          "known_provider_charge_usd": null,
+          "total_provider_charge_usd": null,
+          "planned_positives": 6,
+          "planned_negatives": 0,
+          "all_slot_positive_hit_fraction": 1.0,
+          "all_slot_correct_negative_rejection": null,
+          "all_slot_exact_accuracy": 1.0
+        }
+      }
+    }
+  },
+  "claims": "Supplied measurements, not independent attestation or native acceptance. Failed/unrun slots are not correct negatives. Valid-only error/rank metrics exclude invalid attempts; all-slot coverage and success stay explicit. CPU time is not provider-reported monetary charge; unknown is not zero."
+}

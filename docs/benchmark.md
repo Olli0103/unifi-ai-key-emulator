@@ -16,6 +16,11 @@ frozen same-corpus regression targets. These related drawings are not field,
 night/IR, weather, audio, native-alarm or hardware-equivalence acceptance. The
 earlier GPU timeout and refused CPU admissions remain separate failures.
 
+The [complete synthetic multimodal baseline](evidence/synthetic-multimodal-cpu-20261103.md)
+adds actual OCR, Whisper, CLIP ranking and model-to-owned-HTTP-sink measurements.
+Speech negatives and positive retrieval **fail** their initial engineering
+targets. A completed benchmark is not a quality promotion or native acceptance.
+
 ### Owned synthetic evaluation helpers
 
 `tools/benchmark_fixture_corpus.py` creates a **new** private output directory
@@ -139,9 +144,84 @@ identity or numerical metrics.
 
 ## What still needs evaluation material
 
-- Producing predictions from footage: an owner-local step. The multimodal scorer below closes the metric-computation gap, not this input gap.
-- Numeric targets. Those are set from a first baseline on the owner's consented corpus, before any tuning.
+- Field-quality predictions from consented footage remain owner-local. The dated
+  synthetic baseline above supplies actual synthetic-model measurements, not
+  representative camera footage or a field false-alarm rate.
+- New corpus/profile targets come from its first measured baseline before
+  tuning. The dated synthetic corpus has frozen numeric targets; they do not
+  automatically transfer to another installation, corpus or model.
 - An independently measured real AI Key reference on the identical corpus before a hardware-equivalence claim.
+
+## Complete attempt matrices (`aikey-multimodal-attempts/1`)
+
+Use this wrapper for new measured plate/speech/retrieval/operational trials.
+It adds a frozen plan with exact input/truth, model/runtime SHA-256s, per-kind
+model/provider/profile/source identity, prospective policy digest and explicit
+latency/CPU scopes to the canonical multimodal metrics below. Reports include
+overall, camera-class and condition slices without per-case text or identities.
+
+Every planned slot is either `valid`, `error` or unrun. An error has a fixed
+error code, **not** an empty prediction; it cannot earn correct-negative credit.
+Each slot has one client attempt, nullable observed latency/CPU/provider charge
+and an artifact digest. A compound operational unit binds both temporal samples
+in its input manifest; those are distinct samples, not automatic retries.
+`complete` means all slots terminal, not all correct or quality targets passed.
+WER/CER/ranking remain explicitly valid-only; coverage, all-slot positive-hit,
+negative-rejection and exact-match denominators retain errors and unrun slots.
+
+Operational plan `camera_days` is the **maximum** planned exposure. Each valid
+attempt supplies its separately observed `camera_days`, bounded by that maximum.
+No unused timeout budget or failed/unrun window becomes measured exposure.
+Synthetic held-scene windows must be labelled synthetic, not field camera-days.
+No emitted event means no measured alert latency, never a fabricated zero.
+CPU is owned-process-group or owned-server-cgroup time; it is not a monetary bill.
+No reported charge means `null`, distinct from a genuinely reported zero charge.
+
+```sh
+python -m aikey.benchmark multi-attempt-score /private/evaluation/attempts.json
+python -m aikey.benchmark multi-attempt-targets /private/evaluation/attempts.json
+```
+
+The second command requires a complete valid baseline and derives numeric
+no-regression floors (error metrics at most baseline; success/ranking at least
+baseline; complete timing p95 at most 110% of baseline, rounded up). Freeze that
+output **before tuning**. It does not waive failed initial engineering targets:
+a baseline with zero silence rejection still has a silence problem. Missing
+timers remain `null`/`needs_evidence`; timing comparisons require the same
+independently checked host/resource envelope. Matching declared corpus hashes
+are necessary, not independent attestation or permission for a hardware claim.
+
+### Actual-model helpers
+
+`tools/benchmark_multimodal_corpus.py` renders owned fictitious text cards,
+locally synthesizes German TTS using an explicitly selected installed Mac voice
+and FFmpeg, and creates an unlabelled cartoon search index with separate gold.
+Its encoded bytes and generation environment must be frozen, not regenerated
+silently for an existing run. Never include gold/contact sheets in a model bundle.
+It performs no recognition, writes only a new directory and downloads nothing.
+
+`tools/benchmark_modal_adapter.py` executes one frozen OCR slot through the real
+crop/normalization adapter, preserving a failed request separately from no plate.
+`tools/benchmark_local_modal.py` runs a frozen local CPU Whisper or ONNX CLIP
+model through the real loopback server/client/parser routes. It records loading,
+warmup and index construction separately from measured inputs, preserves actual
+input transformations, and stops after an uncertain failure without retrying.
+Whisper does not echo model identity: its binding comes from the exact admitted
+artifact/runtime, never a fabricated server-reported model match.
+
+`tools/benchmark_operation_adapter.py` executes two actual inference samples
+of a held generated scene through the tracker, smart-event encoder and an owned
+loopback HTTP sink. It records real monotonic exposure and sink arrival, not a
+virtual clock, copied predictions, motion-gated ONVIF ingress or Protect/mobile
+notification. Labels are joined to observed event counts outside the worker.
+
+These helpers are explicit evaluation entrypoints, not automatic deployments or
+admission attestations. The external owner must verify exact source/model/runtime
+digests, private networking, read-only inputs, CPU/RAM/process limits, a whole-run
+deadline, no prior active owner, and terminal cleanup. They read no production
+profiles, credentials or camera state. Raw outputs stay private; publish redacted
+aggregate metrics and scope only. Unit-test transcribers/embeddings are fixture
+checks and must never be reported as actual model measurements.
 
 ## Multimodal measurements (`aikey-multimodal-cases/1`)
 

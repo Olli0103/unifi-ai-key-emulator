@@ -1,0 +1,29 @@
+{
+  "schema": "owned-multimodal-initial-target-status/1",
+  "initial_policy_sha256": "12962ab1e7a34e3b0c514ffabec18a6e7247274265ae0500983814b76853ece5",
+  "operation_policy_sha256": "083598a3720da93597d6df42e90ee54b9b37a6ca2906b1fd64cd334cc19cf8b6",
+  "targets": {
+    "plate": {
+      "all_slot_exact_accuracy": true,
+      "positive_exact_accuracy": true,
+      "negative_rejection": true
+    },
+    "speech": {
+      "wer": true,
+      "cer": true,
+      "negative_rejection": false,
+      "valid_coverage": true
+    },
+    "retrieval": {
+      "mrr_at_5": false,
+      "ndcg_at_5": false,
+      "negative_rejection": true,
+      "valid_coverage": true
+    },
+    "operation": {
+      "missed_critical": true,
+      "false_alarms_per_synthetic_camera_day": true
+    }
+  },
+  "claims": "Benchmark completed, not quality promotion. Speech/retrieval initial targets failed. No tuning or retest. Synthetic operational windows are not field exposure; native notifications/hardware comparison need evidence."
+}
