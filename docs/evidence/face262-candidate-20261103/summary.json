@@ -1,0 +1,100 @@
+{
+  "candidate_source": "8b237f2eab63e0784740173acaee58c82bf94e02",
+  "observation_date": "2026-11-03",
+  "records": {
+    "native-activation-apply-result": {
+      "all_nine_non_face_processes_preserved": true,
+      "image_replacements": 0,
+      "lock_polls": 1,
+      "maintenance_intent_written": false,
+      "models_preserved": true,
+      "new_image": "sha256:dd0d59e78c80accb2f0529ced657d96cc960e7c2b670613af09256df6dc40d99",
+      "no_real_image_or_inference_requests": true,
+      "source": "8b237f2eab63e0784740173acaee58c82bf94e02",
+      "stable_profiles_authority_operator_preserved": true,
+      "status": "not_started_consumer_waiting_terminal"
+    },
+    "native-activation-prefix-result": {
+      "actual_staged_constructor_and_plan_prefix_passed": true,
+      "backup_all_bytes_read_back": true,
+      "candidate_origins_all_hash_equal": true,
+      "exact_adapter_sole_face_up_and_original_project_directory_ast_checked": true,
+      "fence_intent_unchanged": true,
+      "full_parsed_compose_only_face_image_changed": true,
+      "model_or_biometric_requests": 0,
+      "old_image_and_ten_original_processes_retained": true,
+      "private_current_participant_snapshot_only_not_live_config_change": true,
+      "service_actions": 0,
+      "six_loaded_unit_states_exact": true,
+      "source": "8b237f2eab63e0784740173acaee58c82bf94e02",
+      "writer_lock_attempted": false
+    },
+    "native-admission-result": {
+      "all_ten_processes_unchanged": true,
+      "live_operator_and_compose_unchanged": true,
+      "lock_polls": 1,
+      "maintenance_intent_written": false,
+      "no_model_or_biometric_requests": true,
+      "service_actions": 0,
+      "six_marker_links_and_intent_unchanged": true,
+      "source": "8b237f2eab63e0784740173acaee58c82bf94e02",
+      "status": "no_window_consumer_waiting_terminal"
+    },
+    "native-build-result": {
+      "actual_installed_modules_equal": true,
+      "all_ten_existing_processes_unchanged": true,
+      "core_versions_exact": true,
+      "deployed": false,
+      "entrypoint_command_preserved": true,
+      "image": "sha256:dd0d59e78c80accb2f0529ced657d96cc960e7c2b670613af09256df6dc40d99",
+      "image_rebuilt": false,
+      "license_equal": true,
+      "module_count": 135,
+      "numpy_opencv_cryptography_versions_preserved": true,
+      "offline_dependencies_upgraded": 2,
+      "original_build_actor_returned_success": false,
+      "post_build_verification_recovered_from_optional_cmd_shape": true,
+      "source": "8b237f2eab63e0784740173acaee58c82bf94e02"
+    },
+    "native-qualify-result": {
+      "actual_installed_modules_equal": true,
+      "all_ten_existing_processes_unchanged": true,
+      "biometric_record_reads": 0,
+      "core_versions": {
+        "aiohttp": "3.14.5",
+        "cryptography": "50.0.1",
+        "numpy": "2.5.3",
+        "opencv-python-headless": "5.0.0.93",
+        "pillow": "13.0.0"
+      },
+      "deployed": false,
+      "existing_model_graphs_loaded_without_inference": true,
+      "fictional_http_valid_and_malformed_refusals": true,
+      "license_equal": true,
+      "model_bytes_unchanged": true,
+      "model_inference_calls": 0,
+      "models_mount_read_only": true,
+      "module_count": 135,
+      "owned_candidate_container_absent": true,
+      "owned_http_resources_collected": true,
+      "real_image_requests": 0,
+      "real_profile_mounts": 0,
+      "repeated_cancel_owned_thread_serialization": true,
+      "source": "8b237f2eab63e0784740173acaee58c82bf94e02",
+      "source_image": "sha256:dd0d59e78c80accb2f0529ced657d96cc960e7c2b670613af09256df6dc40d99"
+    },
+    "terminal-reconciliation": {
+      "actual_service_replacements": 0,
+      "all_ten_original_processes_exact": true,
+      "backup_private_nas_file_bytes": 2959,
+      "durable_intent_idle_no_new_transaction": true,
+      "live_compose_operator_and_six_fence_links_preserved": true,
+      "no_active_update_owner": true,
+      "old_face_image_still_running": true,
+      "replacement_and_rollback_actuator_receipts_absent": true,
+      "terminal_status": "not_started_consumer_waiting_terminal"
+    }
+  },
+  "schema": 1,
+  "scope": "existing_installation_candidate_not_deployed"
+}
