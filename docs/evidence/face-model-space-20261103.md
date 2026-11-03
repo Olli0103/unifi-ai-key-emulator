@@ -93,7 +93,12 @@ The expanded local group passed **721 cases**, 17 existing decoder-dependent
 skips and four existing Pillow warnings; the final dedicated model-space group
 passed **50 cases**, including later CLI and mid-job mismatch additions. The
 normalizer and 13 storage/metadata/deletion methods are AST-identical to the
-parent. Whole-tree Ruff and diff checks pass. An initial expanded command named
+parent. The first Linux browser job found two indirect fictional enrollments
+in the owned browser runner without the newly required space; those fixtures now
+supply their fictional space. The corrected sandboxed Chrome desktop/mobile
+scenario passes, owned resources are collected, and both identity components and
+both confirmation screens were inspected. No production guard or UI markup was
+changed to accept the fixtures. Whole-tree Ruff and diff checks pass. An initial expanded command named
 a nonexistent test file and ran no tests; its corrected invocation supplied the
 721-case result.
 
