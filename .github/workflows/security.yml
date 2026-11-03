@@ -121,6 +121,7 @@ jobs:
           python tools/diagnostic_browser_check.py --browser-executable "${browser}" --output diagnostic-browser-results
           python tools/face_identity_browser_check.py --browser-executable "${browser}" --output face-identity-browser-results
           python tools/face_enrollment_browser_check.py --browser-executable "${browser}" --output face-enrollment-browser-results
+          python tools/face_route_browser_check.py --browser-executable "${browser}" --output face-route-browser-results
           python tools/key_face_scope_browser_check.py --browser-executable "${browser}" --output key-face-scope-browser-results
       - name: Retain only fictional screenshots and source-bound results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -159,6 +160,8 @@ jobs:
             face-identity-browser-results/result.json
             face-enrollment-browser-results/*.png
             face-enrollment-browser-results/result.json
+            face-route-browser-results/*.png
+            face-route-browser-results/report.json
             key-face-scope-browser-results/*.png
             key-face-scope-browser-results/result.json
           if-no-files-found: error

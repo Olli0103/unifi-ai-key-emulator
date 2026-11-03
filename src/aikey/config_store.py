@@ -63,6 +63,10 @@ class UnsafeConfigurationChange(ConfigurationStoreError):
     """The requested change crosses a separate migration or secret boundary."""
 
 
+class FaceRouteOutcomeUncertain(ConfigurationStoreError):
+    """A route replacement may already have committed; reconcile, never retry."""
+
+
 @dataclass(frozen=True)
 class ConfigurationSnapshot:
     revision: str
@@ -243,6 +247,72 @@ class ConfigurationStore:
         policy = raw.get("face_recognition")
         return {"revision": _revision(content), "configured": isinstance(policy, dict),
                 "camera_ids": tuple(policy["camera_ids"]) if isinstance(policy, dict) else None}
+
+    def face_route_status(self):
+        """Saved endpoint/count only; never inspect templates or query a server."""
+        from .face_policy import recognition_policy
+        from .protocol import _json_object
+        content, _ = self._read(self.path)
+        try:
+            policy = recognition_policy(_json_object(content).get("face_recognition"))
+        except ValueError as exc:
+            raise UnsafeConfigurationChange("Saved local face route unavailable") from exc
+        return {"revision": _revision(content), "configured": policy is not None,
+                "server": policy["server"] if policy else None,
+                "camera_count": len(policy["camera_ids"]) if policy else 0}
+
+    def _prepare_face_route(self, content, current, expected_revision, server):
+        from .face_policy import recognition_policy
+        from .faces import _private_server
+        from .protocol import _json_object
+        revision = _revision(content)
+        if (not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision)
+                or not hmac.compare_digest(revision, expected_revision)):
+            raise RevisionConflict("Configuration changed since it was read")
+        try:
+            raw = _json_object(content)
+            policy = recognition_policy(raw.get("face_recognition"))
+            if policy is None or not isinstance(server, str) or len(server) > 512:
+                raise ValueError
+            server = _private_server(server).removesuffix("/v1/faces")
+        except ValueError as exc:
+            raise UnsafeConfigurationChange("An existing local face role and valid local route are required") from exc
+        candidate = deepcopy(raw)
+        if server != policy["server"]:
+            candidate["face_recognition"]["server"] = server
+        checked = self._validate(candidate)
+        self._assert_immutable(current, checked)
+        self._assert_search_profile(checked, current)
+        self._assert_credential_routes(current, checked)
+        changes = tuple(_changed(raw, candidate))
+        if changes not in ((), ("face_recognition.server",)):
+            raise UnsafeConfigurationChange("Only the existing local face server may change")
+        encoded = self._encode(candidate)
+        if len(encoded) > _MAX_CONFIG_BYTES:
+            raise UnsafeConfigurationChange("Local face configuration is too large")
+        return ConfigurationPreview(revision, _revision(encoded) if changes else revision,
+            _public(checked), changes, bool(changes)), encoded
+
+    def preview_face_route(self, expected_revision, server):
+        content, current = self._read(self.path)
+        return self._prepare_face_route(content, current, expected_revision, server)[0]
+
+    def apply_face_route(self, expected_revision, server):
+        """Change saved destination only; no scope/template/runtime operation."""
+        with self._locked():
+            content, current = self._read(self.path)
+            preview, encoded = self._prepare_face_route(content, current, expected_revision, server)
+            if not preview.changed_fields:
+                return ConfigurationSnapshot(preview.current_revision, _public(current))
+            self._archive(content)
+            try:
+                self._replace(encoded)
+                persisted, checked = self._read(self.path)
+                if _revision(persisted) != preview.resulting_revision:
+                    raise ConfigurationStoreError("Local face route read-back differs")
+            except (OSError, ValueError, ConfigurationStoreError) as exc:
+                raise FaceRouteOutcomeUncertain("Local face route replacement outcome is uncertain") from exc
+            return ConfigurationSnapshot(_revision(persisted), _public(checked))
 
     def enroll_local_face(self, expected_revision, store, name, template, space, store_revision):
         """Keep the saved policy current through the separate face-store commit.

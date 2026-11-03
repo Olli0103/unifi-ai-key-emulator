@@ -40,6 +40,30 @@ restart occurs. The [source and fictional browser qualification](evidence/face-i
 does not qualify native grouping/search, biometric quality or broader lifecycle
 acceptance.
 
+## Saved local face-service address
+
+**Local face service** (`/face-route`) can change only the saved address of an
+already configured local Key face service. It cannot create a role, enable
+recognition, add cameras, install models or edit templates. The page shows the
+saved address/count, not proof of running settings. Preview does not write or
+contact the service; a separate initially unchecked, session/revision-bound
+confirmation saves only the proposed numeric local HTTP root. No destination
+or camera selection can be smuggled into the apply form.
+
+Choose a service you control; a local address alone does not prove no forwarding
+or no charges. A different face model cannot reuse saved templates. Coordinate
+Face/Key/admin versions before new enrollment: new admin enrollment reads the
+saved address immediately, while the running Key keeps its old settings until
+restarted separately. This page has no restart or endpoint-test action.
+
+Previous configuration remains in private history. A no-op preserves exact bytes.
+Admitting a save discards pending route confirmations and temporary enrollment
+previews, not saved identities. A possible commit/audit-acknowledgement failure
+is uncertain: reload the saved address; never automatically retry or restore an
+old policy. There is no automatic Undo. Camera order, permissions, other roles,
+credentials and identity files remain unchanged. [Source and fictional
+store/HTTP/browser qualification](evidence/local-face-route-20261103.md).
+
 ## Saved AI Key face camera restriction
 
 **Saved Key face cameras** (`/key-face-cameras`) can reduce an existing explicit
