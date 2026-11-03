@@ -3,8 +3,9 @@
 ``POST /v1/faces`` takes one JPEG (and optional normalized regions to search)
 and returns the faces found, each with a normalized box, a detector score
 and a 128-value SFace embedding. It runs OpenCV's YuNet detector and SFace
-recognizer entirely on this machine: no face image or embedding leaves it,
-and nothing is logged or stored. Identity matching happens in the AI Key
+recognizer locally. This server makes no outbound service calls or persistent
+image/template writes; embeddings are returned to the requesting client.
+Identity matching happens in the AI Key
 against its own private, deletable templates (``aikey.faces``).
 """
 
@@ -16,10 +17,12 @@ import json
 import math
 from typing import Callable
 
-from aiohttp import web
+from aiohttp import BodyPartReader, web
+from aiohttp.http_exceptions import BadHttpMessage
 
 
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
+_MAX_REGION_BYTES = 65536
 _MAX_REGIONS = 16
 _MAX_FACES = 16
 
@@ -85,30 +88,33 @@ def opencv_analyzer(detector_path: str, recognizer_path: str, *,
     return analyze
 
 
+async def _read_part(part: BodyPartReader, limit: int) -> bytes:
+    # Request.client_max_size does not account for streamed multipart reads.
+    # Keep the existing wire bytes; never truncate, decode or re-encode an image.
+    if (part.headers.get("Content-Transfer-Encoding", "binary").lower()
+            not in {"binary", "8bit"}
+            or part.headers.get("Content-Encoding", "identity").lower() != "identity"):
+        raise ImageError("Encoded parts unsupported")
+    value = bytearray()
+    while chunk := await part.read_chunk(8192):
+        if len(value) + len(chunk) > limit:
+            raise ImageError("Part too large")
+        value.extend(chunk)
+    return bytes(value)
+
+
 def build_app(analyze: Analyzer) -> web.Application:
     lock = asyncio.Lock()
+    operations = set()
     counters = {"requests": 0, "analyzed": 0, "faces": 0, "rejected": 0, "failed": 0}
 
-    async def faces(request: web.Request) -> web.Response:
-        counters["requests"] += 1
-        image, regions = None, None
-        try:
-            if request.content_type != "multipart/form-data":
-                raise ImageError("multipart required")
-            reader = await request.multipart()
-            while (part := await reader.next()) is not None:
-                if part.name == "image":
-                    image = await part.read(decode=False)
-                    if len(image) > _MAX_IMAGE_BYTES:
-                        raise ImageError("Image too large")
-                elif part.name == "regions":
-                    regions = parse_regions((await part.read(decode=False))[:65536].decode())
-            if image is None or not image.startswith(b"\xff\xd8\xff"):
-                raise ImageError("JPEG required")
-        except (ImageError, UnicodeDecodeError):
-            counters["rejected"] += 1
-            return web.json_response({"error": "invalid_request"}, status=400)
+    async def run_analysis(request, image, regions):
+        # The owning task, not its HTTP waiter, holds the model lock until the
+        # non-cancellable thread has actually ended. Repeated waiter cancellation
+        # cannot release it early or cancel another request's model call.
         async with lock:
+            if request.transport is None or request.transport.is_closing():
+                return web.Response(status=499)
             try:
                 result = await asyncio.to_thread(analyze, image, regions)
             except ImageError:
@@ -123,12 +129,49 @@ def build_app(analyze: Analyzer) -> web.Application:
             {"box": [round(v, 5) for v in box], "score": round(score, 4), "embedding": embedding}
             for box, score, embedding in result]})
 
+    def completed(work):
+        operations.discard(work)
+        if not work.cancelled():
+            work.exception()  # Observe completion even after the client left.
+
+    async def drain(_app):
+        if operations:
+            await asyncio.shield(asyncio.gather(*tuple(operations), return_exceptions=True))
+
+    async def faces(request: web.Request) -> web.Response:
+        counters["requests"] += 1
+        image, regions = None, None
+        try:
+            if request.content_type != "multipart/form-data":
+                raise ImageError("multipart required")
+            reader = await request.multipart()
+            seen = set()
+            while (part := await reader.next()) is not None:
+                if (not isinstance(part, BodyPartReader)
+                        or part.name not in {"image", "regions"} or part.name in seen):
+                    raise ImageError("Unexpected or repeated part")
+                seen.add(part.name)
+                if part.name == "image":
+                    image = await _read_part(part, _MAX_IMAGE_BYTES)
+                elif part.name == "regions":
+                    regions = parse_regions((await _read_part(part, _MAX_REGION_BYTES)).decode())
+            if image is None or not image.startswith(b"\xff\xd8\xff"):
+                raise ImageError("JPEG required")
+        except (ValueError, AssertionError, BadHttpMessage, RuntimeError):
+            counters["rejected"] += 1
+            return web.json_response({"error": "invalid_request"}, status=400)
+        work = asyncio.create_task(run_analysis(request, image, regions))
+        operations.add(work)
+        work.add_done_callback(completed)
+        return await asyncio.shield(work)
+
     async def health(_request: web.Request) -> web.Response:
         return web.json_response({"status": "ok", **counters})
 
     app = web.Application(client_max_size=_MAX_IMAGE_BYTES + 131072)
     app.router.add_post("/v1/faces", faces)
     app.router.add_get("/healthz", health)
+    app.on_cleanup.append(drain)
     return app
 
 
