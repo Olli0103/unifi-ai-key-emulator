@@ -1,0 +1,9 @@
+{
+  "evidence": "face262_candidate_terminal_20261103",
+  "files": {
+    "summary.json": "ba00b8f3c919cfdcdf74521fbbd9b01d3c29b7c15f644f73c2cbc874d79b6c22"
+  },
+  "not_a_release_or_native_feature_acceptance": true,
+  "schema": 1,
+  "source": "8b237f2eab63e0784740173acaee58c82bf94e02"
+}

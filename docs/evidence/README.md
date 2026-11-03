@@ -31,3 +31,5 @@ Public source packages were AI Key 2.2.8 and Protect 7.2.105 with its matching s
 The records identify package-relative paths and local analysis artifacts. Vendor binaries and extracted source are not included in the distribution. Before any further investigation, establish authorized access, necessity, scope and applicable terms. A public download link and a matching hash do not establish those rights.
 
 - [3 November local Key face model-space binding](face-model-space-20261103.md): explicit encoder identity, no silent legacy relabelling, fictional migration/refusal checks; no native rollout or quality claim.
+
+- [3 November Face262 candidate and terminal refusal](face262-candidate-20261103.md): 135 candidate modules qualified, actual switch refused for waiting consumers before intent/effect, all ten processes independently reconciled unchanged; no deployment, rollback or native feature acceptance.
