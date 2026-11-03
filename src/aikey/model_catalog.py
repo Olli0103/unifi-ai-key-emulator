@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from pathlib import Path
 import re
@@ -11,6 +10,7 @@ import stat
 
 import aiohttp
 
+from .protocol import _json_object
 from .providers import ProviderError, validate_inference_config
 from .provider_network import ProviderConnector
 from .speech import SpeechError, SpeechProvider
@@ -146,7 +146,7 @@ async def fetch_catalog(provider) -> dict:
                                 raise CatalogError("catalog_response_too_large")
                             body.extend(chunk)
                     try:
-                        page, cursor = _page(json.loads(body), provider.provider)
+                        page, cursor = _page(_json_object(bytes(body)), provider.provider)
                     except (ValueError, TypeError, RecursionError) as exc:
                         if isinstance(exc, CatalogError):
                             raise
