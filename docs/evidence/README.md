@@ -35,3 +35,5 @@ The records identify package-relative paths and local analysis artifacts. Vendor
 - [3 November Face262 candidate and terminal refusal](face262-candidate-20261103.md): 135 candidate modules qualified, actual switch refused for waiting consumers before intent/effect, all ten processes independently reconciled unchanged; no deployment, rollback or native feature acceptance.
 
 - [3 November explicit local face enrollment](face-enrollment-control-20261103.md): owner-supplied image, local model-space-bound preview, separate save consent and transient-template lifecycle; source/fictional browser qualification only, no real enrollment or installation.
+
+- [3 November CLI enrollment model-work fence](face-cli-model-fence-20261103.md): CLI enrollment joins an already enrolled shared guard before the synchronous local request; fictional exclusion/error/cleanup checks, no native maintenance or universal remote-idle claim.
