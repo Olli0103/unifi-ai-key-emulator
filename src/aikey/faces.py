@@ -11,13 +11,15 @@ it stays unknown rather than being given the nearest name.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import hashlib
 import json
 import math
 import os
 import re
 import stat
 import sys
-import tempfile
+import secrets
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -38,6 +40,18 @@ _NAME = re.compile(r"[^\x00-\x1f\x7f]{1,64}\Z")
 
 class FaceStoreError(ValueError):
     """Fixed failure without names, images or embeddings."""
+
+
+class FaceStoreRevisionConflict(FaceStoreError):
+    """Saved templates changed since the operator's observation."""
+
+
+class FaceStoreOutcomeUncertain(FaceStoreError):
+    """A write may have committed; inspect state without automatic retry."""
+
+
+_DIRECT_READ = object()
+_MISSING_REVISION = hashlib.sha256(b"local-aikey-face-store/missing/1").hexdigest()
 
 
 def _unit(embedding) -> list[float]:
@@ -61,18 +75,96 @@ class FaceStore:
         self.directory = Path(state_dir) / "faces"
         self.path = self.directory / "identities.json"
 
-    def _load(self) -> dict:
+    @staticmethod
+    def _directory_info(descriptor, *, private):
+        info = os.fstat(descriptor)
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_mode & (0o077 if private else 0o022)):
+            raise FaceStoreError("face_store_not_private")
+        return info
+
+    def _bound(self, root, directory):
+        """Keep the observed roots, not a replacement symlink/path alias."""
         try:
-            descriptor = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            found = os.stat(self.directory.parent, follow_symlinks=False)
+            opened = os.fstat(root)
+            if not stat.S_ISDIR(found.st_mode) or (found.st_dev, found.st_ino) != (opened.st_dev, opened.st_ino):
+                return False
+            if directory is not None:
+                found = os.stat("faces", dir_fd=root, follow_symlinks=False)
+                opened = os.fstat(directory)
+                return (stat.S_ISDIR(found.st_mode)
+                        and (found.st_dev, found.st_ino) == (opened.st_dev, opened.st_ino))
+            return True
+        except OSError:
+            return False
+
+    @contextmanager
+    def _access(self, *, writer=False, create=False):
+        from .file_lock import acquire
+
+        root = directory = lock = None
+        try:
+            try:
+                root = os.open(self.directory.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            except FileNotFoundError:
+                if writer:
+                    raise FaceStoreError("face_store_state_root_missing") from None
+                yield None
+                return
+            self._directory_info(root, private=False)
+            if writer:
+                lock = os.open(".face-store.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
+                               | os.O_NONBLOCK, 0o600, dir_fd=root)
+                meta = os.fstat(lock)
+                if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != os.geteuid()
+                        or meta.st_mode & 0o077 or meta.st_nlink != 1):
+                    raise FaceStoreError("face_store_not_private")
+                try:
+                    acquire(lock, timeout=5)
+                except TimeoutError:
+                    raise FaceStoreError("face_store_busy") from None
+            if create:
+                try:
+                    os.mkdir("faces", mode=0o700, dir_fd=root)
+                    os.fsync(root)
+                except FileExistsError:
+                    pass
+            try:
+                directory = os.open("faces", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)
+            except FileNotFoundError:
+                directory = None
+            if directory is not None:
+                self._directory_info(directory, private=True)
+            if not self._bound(root, directory):
+                raise FaceStoreError("face_store_unavailable")
+            yield directory
+            if not self._bound(root, directory):
+                failure = FaceStoreOutcomeUncertain if writer else FaceStoreError
+                raise failure("face_store_write_uncertain" if writer else "face_store_unavailable")
+        except OSError:
+            raise FaceStoreError("face_store_unavailable") from None
+        finally:
+            for descriptor in (directory, lock, root):
+                if descriptor is not None:
+                    os.close(descriptor)
+
+    @staticmethod
+    def _bytes(directory) -> bytes | None:
+        if directory is None:
+            return None
+        try:
+            descriptor = os.open("identities.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=directory)
         except FileNotFoundError:
-            return {"schema": 1, "identities": {}}
+            return None
         except OSError:
             raise FaceStoreError("face_store_unavailable") from None
         try:
             with os.fdopen(descriptor, "rb") as source:
                 info = os.fstat(source.fileno())
                 if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
-                        or info.st_mode & 0o077):
+                        or info.st_mode & 0o077 or info.st_nlink != 1):
                     raise FaceStoreError("face_store_not_private")
                 if not 0 < info.st_size <= _MAX_STORE_BYTES:
                     raise FaceStoreError("face_store_invalid")
@@ -81,6 +173,12 @@ class FaceStore:
             raise FaceStoreError("face_store_unavailable") from None
         if not 0 < len(raw) <= _MAX_STORE_BYTES:
             raise FaceStoreError("face_store_invalid")
+        return raw
+
+    @staticmethod
+    def _parse(raw) -> dict:
+        if raw is None:
+            return {"schema": 1, "identities": {}}
         try:
             data = _json_object(raw)
             _validate_store(data)
@@ -88,48 +186,104 @@ class FaceStore:
             raise FaceStoreError("face_store_invalid") from None
         return data
 
-    def _save(self, data: dict) -> None:
-        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self.directory, 0o700)
-        fd, temporary = tempfile.mkstemp(prefix=".faces-", dir=self.directory)
+    def _load(self, directory_fd=_DIRECT_READ) -> dict:
+        if directory_fd is _DIRECT_READ:
+            with self._access() as directory:
+                return self._load(directory_fd=directory)
+        return self._parse(self._bytes(directory_fd))
+
+    @staticmethod
+    def _revision(raw):
+        return _MISSING_REVISION if raw is None else hashlib.sha256(raw).hexdigest()
+
+    def snapshot(self) -> dict:
+        """Private metadata only, never vectors; one captured atomic record."""
+        with self._access() as directory:
+            raw = self._bytes(directory)
+            data = self._parse(raw)
+            return {"revision": self._revision(raw), "identities": [
+                {"name": name, "templates": len(entry["templates"]), "created": entry["created"]}
+                for name, entry in sorted(data["identities"].items())]}
+
+    def _check_revision(self, directory, expected):
+        if expected is not None and (not isinstance(expected, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", expected)
+                or expected != self._revision(self._bytes(directory))):
+            raise FaceStoreRevisionConflict("face_store_changed")
+
+    def _save(self, data: dict, *, directory_fd) -> None:
+        _validate_store(data)
+        encoded = json.dumps(data, separators=(",", ":")).encode("utf-8")
+        temporary = ".faces-" + secrets.token_hex(16)
+        created = committed = False
         try:
-            with os.fdopen(fd, "w") as handle:
-                json.dump(data, handle, separators=(",", ":"))
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=directory_fd)
+            created = True
+            with os.fdopen(fd, "wb") as handle:
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(encoded)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, self.path)
+            os.replace(temporary, "identities.json", src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+            committed = True
+            os.fsync(directory_fd)
+            if self._bytes(directory_fd) != encoded:
+                raise FaceStoreOutcomeUncertain("face_store_write_uncertain")
+        except (OSError, FaceStoreError):
+            raise FaceStoreOutcomeUncertain("face_store_write_uncertain") from None
         finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+            if created and not committed:
+                try:
+                    os.unlink(temporary, dir_fd=directory_fd)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    raise FaceStoreOutcomeUncertain("face_store_write_uncertain") from None
 
     def names(self) -> list[str]:
         return sorted(self._load()["identities"])
 
-    def enroll(self, name: str, embedding) -> int:
+    def enroll(self, name: str, embedding, *, expected_revision: str | None = None) -> int:
         if not isinstance(name, str) or not _NAME.fullmatch(name.strip()):
             raise FaceStoreError("invalid_name")
         name = name.strip()
-        data = self._load()
-        identities = data["identities"]
-        if name not in identities and len(identities) >= _MAX_IDENTITIES:
-            raise FaceStoreError("too_many_identities")
-        entry = identities.setdefault(name, {"templates": [], "created": int(time.time())})
-        if len(entry["templates"]) >= _MAX_TEMPLATES:
-            raise FaceStoreError("too_many_templates")
-        entry["templates"].append(_unit(embedding))
-        self._save(data)
-        return len(entry["templates"])
+        template = _unit(embedding)
+        with self._access(writer=True, create=True) as directory:
+            self._check_revision(directory, expected_revision)
+            data = self._load(directory_fd=directory)
+            identities = data["identities"]
+            if name not in identities and len(identities) >= _MAX_IDENTITIES:
+                raise FaceStoreError("too_many_identities")
+            entry = identities.setdefault(name, {"templates": [], "created": int(time.time())})
+            if len(entry["templates"]) >= _MAX_TEMPLATES:
+                raise FaceStoreError("too_many_templates")
+            entry["templates"].append(template)
+            self._save(data, directory_fd=directory)
+            return len(entry["templates"])
 
-    def delete(self, name: str) -> bool:
-        data = self._load()
-        removed = data["identities"].pop(name, None) is not None
-        if removed:
-            self._save(data)
-        return removed
+    def delete(self, name: str, *, expected_revision: str | None = None) -> bool:
+        if not isinstance(name, str):
+            raise FaceStoreError("invalid_name")
+        with self._access(writer=True) as directory:
+            self._check_revision(directory, expected_revision)
+            data = self._load(directory_fd=directory)
+            removed = data["identities"].pop(name, None) is not None
+            if removed:
+                self._save(data, directory_fd=directory)
+            return removed
 
-    def purge(self) -> None:
-        if self.path.exists():
-            self.path.unlink()
+    def purge(self, *, expected_revision: str | None = None) -> None:
+        with self._access(writer=True) as directory:
+            self._check_revision(directory, expected_revision)
+            if self._bytes(directory) is not None:
+                try:
+                    os.unlink("identities.json", dir_fd=directory)
+                    os.fsync(directory)
+                    if self._bytes(directory) is not None:
+                        raise FaceStoreOutcomeUncertain("face_store_write_uncertain")
+                except (OSError, FaceStoreError):
+                    raise FaceStoreOutcomeUncertain("face_store_write_uncertain") from None
 
     def match(self, embedding) -> tuple[str | None, list[tuple[str, float]]]:
         """Best identity at or above the threshold, plus up to three candidates."""
