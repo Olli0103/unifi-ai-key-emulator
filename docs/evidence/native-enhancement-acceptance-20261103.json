@@ -1,0 +1,41 @@
+{
+  "schema": "local-aikey-native-enhancement-acceptance/1",
+  "date": "2026-11-03",
+  "issue": 23,
+  "protect_version": "7.3.74",
+  "native": {
+    "enhance_actions": 1,
+    "model_requests": 1,
+    "completed": 1,
+    "aligned": 1,
+    "derivative_bytes": 47726,
+    "derivative_dimensions": [573, 573],
+    "stored_and_displayed_derivative_match": true,
+    "original_bytes": 11499,
+    "original_dimensions": [230, 230],
+    "original_displayed_bytes_unchanged": true,
+    "native_hide_show_retains_derivative_without_inference": true,
+    "original_recording_playback_after": true,
+    "adopted_processors": 5,
+    "paired_cameras": 9,
+    "recording_cameras": 11,
+    "process_identities_unchanged": 10,
+    "key_configuration_unchanged": true
+  },
+  "synthetic": {
+    "focused_tests_passed": 48,
+    "replacement_service_cases": ["valid_jpeg", "unsupported_png", "http_503"],
+    "completed_object_not_replayed": true,
+    "earlier_journal_and_original_preserved": true
+  },
+  "source_binding": {
+    "normalize_and_execute_source_exact": true,
+    "enhanced_multipart_ast_exact": true,
+    "whole_callback_source_exact": false
+  },
+  "production_configuration_changes": 0,
+  "service_actions": 0,
+  "new_enrollments": 0,
+  "quality_claim": false,
+  "private_media_published": false
+}
