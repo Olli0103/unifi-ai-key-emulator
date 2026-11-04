@@ -41,7 +41,22 @@ _MAX_IDENTITIES = 50
 _MAX_TEMPLATES = 20
 _MAX_EMBED_REPLY_BYTES = 256 * 1024
 _MAX_STORE_BYTES = 8 * 1024 * 1024
+_MAX_ENROLLMENT_IMAGE_BYTES = 10 * 1024 * 1024
 _NAME = re.compile(r"[^\x00-\x1f\x7f]{1,64}\Z")
+
+# Fixed public reason codes only; raw filesystem/provider exception text may
+# contain a private filename, identity label, embedding or response body.
+_CLI_REASONS = frozenset({
+    "enrollment_input_required", "enrollment_photo_unavailable", "enrollment_unavailable",
+    "enrollment_photo_needs_exactly_one_face", "invalid_name", "invalid_embedding",
+    "face_embedding_space_invalid", "face_embedding_space_mismatch", "face_server_must_be_local",
+    "face_store_not_private", "face_store_state_root_missing", "face_store_unavailable",
+    "face_store_busy", "face_store_invalid", "face_store_changed", "face_store_write_uncertain",
+    "face_store_migration_required", "too_many_identities", "too_many_templates",
+    "model_work_fence_unavailable", "model_work_fence_not_exclusive", "model_work_fence_write_failed",
+    "model_work_fence_unresolved", "model_work_fence_transaction_changed", "model_work_fence_requires_boolean",
+    "model_work_fence_binding_changed", "model_work_fence_invalid_deadline", "model_work_fence_wait_expired",
+})
 
 
 def checked_embedding_space(value) -> str:
@@ -423,12 +438,45 @@ def embed_single_face(image: bytes, server: str) -> tuple[list[float], str]:
         raise FaceStoreError('enrollment_unavailable') from None
 
 
+def _enrollment_image(path: Path) -> bytes:
+    """One bounded regular-file snapshot, not a symlink/device/FIFO stream.
+
+    Explicit input photos need not have private-store permissions: this never
+    changes their mode/content, copies them to state or decodes/reformats them.
+    Regular filesystem I/O is not a hostile-filesystem wall-clock guarantee.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as source:
+            before = os.fstat(source.fileno())
+            if not stat.S_ISREG(before.st_mode) or not 1 <= before.st_size <= _MAX_ENROLLMENT_IMAGE_BYTES:
+                raise FaceStoreError("enrollment_photo_unavailable")
+            raw = source.read(_MAX_ENROLLMENT_IMAGE_BYTES + 1)
+            after = os.fstat(source.fileno())
+        fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if (not 1 <= len(raw) <= _MAX_ENROLLMENT_IMAGE_BYTES or len(raw) != before.st_size
+                or any(getattr(before, field) != getattr(after, field) for field in fields)):
+            raise FaceStoreError("enrollment_photo_unavailable")
+        return raw
+    except (OSError, ValueError):
+        raise FaceStoreError("enrollment_photo_unavailable") from None
+
+
+class _FaceArgumentParser(argparse.ArgumentParser):
+    def error(self, _message):
+        # argparse's default message echoes invalid values and file paths.
+        # Static usage remains useful; supplied biometric labels stay private.
+        self.print_usage(sys.stderr)
+        self.exit(2, "local-aikey-faces: invalid_arguments\n")
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="local-aikey-faces")
+    parser = _FaceArgumentParser(prog="local-aikey-faces")
     parser.add_argument("command", choices=("list", "enroll", "delete", "purge"))
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--name")
-    parser.add_argument("--image", type=Path)
+    parser.add_argument("--image", type=Path,
+                        help="Explicit nonempty regular photo, at most 10 MiB; no leaf symlinks")
     parser.add_argument("--server", default="http://127.0.0.1:8179")
     args = parser.parse_args(argv)
     store = FaceStore(args.state_dir)
@@ -437,7 +485,10 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(store.names(), ensure_ascii=False))
         elif args.command == "enroll":
             if not args.name or not args.image:
-                raise FaceStoreError("enroll needs --name and --image")
+                raise FaceStoreError("enrollment_input_required")
+            name = args.name.strip()
+            if not _NAME.fullmatch(name):
+                raise FaceStoreError("invalid_name")
             fence = ModelWorkFence.from_state(args.state_dir)
             lease = None
             try:
@@ -445,12 +496,24 @@ def main(argv: list[str] | None = None) -> int:
                 # this owning CLI thread. No cancelled executor waiter can drop
                 # exclusion while a detached enrollment request still runs.
                 lease = asyncio.run(fence.acquire(deadline=time.monotonic() + 10))
-                template, space = embed_single_face(args.image.read_bytes(), args.server)
+                status = store.enrollment_status()
+                if status["migration_required"]:
+                    raise FaceStoreError("face_store_migration_required")
+                identities = status["identities"]
+                if identities.get(name, 0) >= _MAX_TEMPLATES:
+                    raise FaceStoreError("too_many_templates")
+                if name not in identities and len(identities) >= _MAX_IDENTITIES:
+                    raise FaceStoreError("too_many_identities")
+                image = _enrollment_image(args.image)
+                template, space = embed_single_face(image, args.server)
+                # Delete/purge/sibling changes remain possible during analysis.
+                # Never undo them by reviving a stale pre-analysis enrollment.
+                count = store.enroll(name, template, embedding_space=space,
+                                     expected_revision=status["revision"])
             finally:
                 if lease is not None:
                     lease.close()
                 fence.close()
-            count = store.enroll(args.name, template, embedding_space=space)
             print(json.dumps({"templates": count}))
         elif args.command == "delete":
             print(json.dumps({"deleted": store.delete(args.name or "")}))
@@ -458,7 +521,21 @@ def main(argv: list[str] | None = None) -> int:
             store.purge()
             print(json.dumps({"purged": True}))
     except (FaceStoreError, ModelWorkFenceError, OSError, ValueError, KeyError) as exc:
-        print(f"local-aikey-faces: {exc.__class__.__name__}: {exc}", file=sys.stderr)
+        reason = None
+        if (isinstance(exc, (FaceStoreError, ModelWorkFenceError)) and len(exc.args) == 1
+                and type(exc.args[0]) is str):
+            reason = exc.args[0]
+        elif type(exc) is TimeoutError and exc.args == ("model_work_fence_wait_expired",):
+            reason = "model_work_fence_wait_expired"
+        if reason not in _CLI_REASONS:
+            location = "faces.py"
+            trace = exc.__traceback__
+            while trace is not None:
+                if trace.tb_frame.f_globals.get("__name__") == __name__:
+                    location = f"faces.py:{trace.tb_lineno}"
+                trace = trace.tb_next
+            reason = f"face_action_unavailable [{location}]"
+        print(f"local-aikey-faces: {reason}", file=sys.stderr)
         return 2
     return 0
 
