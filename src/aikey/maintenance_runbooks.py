@@ -99,6 +99,7 @@ def prepare_apple_update(host: Path, bridge: Path, *, config: Path, state_dir: P
         raise maintenance.MaintenanceError("invalid_apple_profile_certificate")
     inputs = {"state_dir": str(state_dir), "service": service, "new_name": new_name, "approval_nonce": secrets.token_hex(16),
               "image": image, "kind": kind, "streams": streams,
+              "config_sha256": revision, "config": str(config),
               "health_url": health_url, "certificate": str(certificate),
               "certificate_pin": hashlib.sha256(ssl.PEM_cert_to_DER_cert(first.group())).hexdigest(),
               "engine": str(engine), "engine_sha256": artifact_digest(engine),
@@ -106,7 +107,11 @@ def prepare_apple_update(host: Path, bridge: Path, *, config: Path, state_dir: P
               "plan_sha256": hashlib.sha256(json.dumps(dataclasses.asdict(planned), sort_keys=True).encode()).hexdigest()}
     package = Path(__file__).parent
     resources = {"aikey/" + name: maintenance._read(package / name).decode()
-                 for name in ("__init__.py", "apple_supervisor.py", "apple_upgrade.py", "maintenance_hash.py")}
+                 for name in ("__init__.py", "apple_supervisor.py", "apple_upgrade.py", "maintenance_hash.py",
+                              "apple_upgrade_state.py", "apple_upgrade_recovery.py", "host_control_store.py",
+                              "host_runtime_command.py", "file_lock.py", "private_files.py", "process_exit.py",
+                              "config.py", "protocol.py", "secret_files.py", "startup_configuration.py",
+                              "host_activation.py", "device_workflow_fence.py")}
     return maintenance.prepare(host, bridge, script=package / "maintenance_apple_runbook.py",
         inputs=inputs, kind="update", profile=profile, revision=revision, timeout=600,
         expected_effect="offline_replace",

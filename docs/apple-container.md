@@ -155,15 +155,51 @@ local-apple-upgrade plan --state-dir state/supervisor --service aiport-mac --new
 local-apple-upgrade swap --state-dir state/supervisor --service aiport-mac --new-name <new-container> --image <new-image> --kind aiport --slot-state state/aiport-mac --health-port 8443 --streams 3
 ```
 
-`plan` is read-only. It checks that the pin matches the running container, the new name is free, the new image exists for the same platform, and every live setting can be reproduced. Otherwise it refuses with a fixed reason, `unsupported:<list>`. For example, custom environment variables are refused rather than passed on the command line, because they may hold secrets.
+`plan` is read-only. It checks the live pin, unused candidate name, image
+platform, and reproducibility of every reviewed setting. Unsupported custom
+settings are refused, not silently dropped. Changed image environment defaults
+or working directories need a separately tested migration; this image-only
+operator refuses them. Prefer immutable image digests. Mutable local image names
+are not release provenance or a guarantee against concurrent retagging.
 
-`swap` does the following:
-1. It waits until the service is idle. For an AI Port that means connected with no open smart event; for the AI Key, an empty worker queue.
-2. It holds the supervisor, stops the old container and starts the new one.
-3. It waits for readiness. For an AI Port: adopted, connected and every expected stream decoding. For the AI Key: adopted, connected and search connected.
-4. On success it pins the new container. Otherwise it deletes the new container, restarts the old one and pins it again.
+`swap` waits for idle, revalidates the complete plan, records a durable host
+intent and holds the supervisor. It observes the old instance stopped before
+creating the candidate, and observes the candidate's operation label, full
+configuration and running state before readiness/pinning. A failed readiness
+check can compensate only after positively observed candidate stop/deletion
+and old-instance restart. A CLI acknowledgement alone is insufficient.
 
-The old container stays stopped for a later rollback. The output is only the service name and one result code: `swapped`, `not_idle`, `hold_failed`, `stop_failed`, `rolled_back:run_failed`, `rolled_back:not_ready` or `rollback_not_ready`.
+Readiness uses the selected profile's CA and **exact certificate leaf**, a fresh
+private literal HTTPS endpoint matching its published address/port, and the
+configuration revision loaded by that process. Legacy runtimes without that
+revision remain unverified. AI Port additionally needs adopted/control-connected
+and every expected stream decoding; AI Key needs adopted/control/search-connected.
+This is not native quality or index-association acceptance.
+
+An interrupted or uncertain operation leaves `upgrade.json` pending. Ordinary
+supervision, pinning and hold/release cannot override that fence, even when the
+ordinary timed hold expires. Inspect and explicitly reconcile the **original**
+operation:
+
+```bash
+local-apple-upgrade status --state-dir state/supervisor --service aiport-mac
+local-apple-upgrade recover --state-dir state/supervisor --service aiport-mac --kind aiport --slot-state state/aiport-mac --health-port 8443 --streams 3
+```
+
+Recovery never replays saved arbitrary run arguments or creates another
+candidate. It can only stop/delete the original positively identified candidate,
+start the unchanged retained old instance, verify readiness and restore its pin.
+Missing or mismatched command evidence remains unknown; current absence alone
+is not proof that an earlier request was never sent. At most three explicit
+recovery attempts are admitted. The original failure/actions remain intact in a
+separate reconciliation record; a recovered operation is not relabeled as an
+original successful upgrade. See [recovery contracts and limits](apple-upgrade-recovery.md).
+
+The supervisor authority directory must be private and **outside every guest
+mount**, not inside device state. This is a source/operator implementation and
+isolated test qualification, not activation of the historical installation or
+proof of native Apple 1.6.1 power-loss/daemon cancellation behavior. The old
+container is retained; guest state is never replaced with an older snapshot.
 
 On 26 Sep 2026 at 08:41:14 the pinned Mac AI Port was stopped, with no event open. The agent's next tick started the same container at 08:41:18. Within 12 s its control connection was back and all three streams were decoding. Protect showed the AI Port `CONNECTED` with its three paired cameras unchanged. A native Flur Animal event followed at 08:41:59. The AI Key and the NAS AI Ports were untouched.
 

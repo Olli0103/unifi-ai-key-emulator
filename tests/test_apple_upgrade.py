@@ -85,6 +85,8 @@ def recreate(argv):
     """What a container started from ``argv`` would report, for round-trip checks."""
     entry = _entry(argv[argv.index("--name") + 1], argv[argv.index("--entrypoint") + 2])
     config = entry["configuration"]
+    config['labels'] = dict(argv[index + 1].split('=', 1)
+                            for index, argument in enumerate(argv) if argument == '--label')
     config["initProcess"]["arguments"] = argv[argv.index("--entrypoint") + 3:]
     config["initProcess"]["executable"] = argv[argv.index("--entrypoint") + 1]
     config["initProcess"]["user"]["raw"]["userString"] = argv[argv.index("--user") + 1]
@@ -221,7 +223,7 @@ def _swap(state_dir, host, *, idle=True, ready=(True,)):
 def test_a_ready_replacement_is_pinned_and_the_old_container_is_kept(state_dir):
     host = Host([_entry()])
     assert _swap(state_dir, host, ready=(False, False, True)) == "swapped"
-    assert host.verbs() == ["stop", "run"]
+    assert host.verbs() == ["inspect", "inspect", "stop", "run"]
     assert host.entries[OLD]["status"]["state"] == "stopped"          # kept for rollback
     assert host.entries[NEW]["status"]["state"] == "running"
     assert _spec(state_dir)[0]["container"] == NEW and _spec(state_dir)[0]["image"] == NEW_IMAGE
@@ -247,15 +249,18 @@ def test_a_replacement_that_never_becomes_ready_is_rolled_back(state_dir):
                      sleep=lambda s: clock.__setitem__(0, clock[0] + s), clock=lambda: clock[0],
                      idle_timeout=10, ready_timeout=10)
     assert result == "rolled_back:not_ready"
-    assert host.verbs() == ["stop", "run", "stop", "delete", "start"]
+    assert host.verbs() == ["inspect", "inspect", "stop", "run", "stop", "delete", "start"]
     assert NEW not in host.entries and host.entries[OLD]["status"]["state"] == "running"
     assert _spec(state_dir)[0]["container"] == OLD
 
 
-def test_a_failed_start_restores_the_old_container(state_dir):
+def test_a_failed_start_acknowledgement_does_not_prove_no_late_container_can_arrive(state_dir):
     host = Host([_entry()], run_rc=1)
-    assert _swap(state_dir, host) == "rolled_back:run_failed"
-    assert host.entries[OLD]["status"]["state"] == "running" and NEW not in host.entries
+    assert _swap(state_dir, host) == "run_outcome_uncertain"
+    assert host.entries[OLD]["status"]["state"] == "stopped" and NEW not in host.entries
+    assert ["start", OLD] not in host.calls
+    from aikey.apple_upgrade_state import pending
+    assert pending(state_dir) is not None
     assert _spec(state_dir)[0]["container"] == OLD
 
 
@@ -268,7 +273,7 @@ def test_a_failed_rollback_is_reported_and_the_old_pin_restored(state_dir):
 def test_a_failed_stop_changes_nothing_and_releases_the_hold(state_dir):
     host = Host([_entry()], stop_rc=1)
     assert _swap(state_dir, host) == "stop_failed"
-    assert host.verbs() == ["stop"] and _spec(state_dir)[0]["container"] == OLD
+    assert host.verbs() == ["inspect", "inspect", "stop"] and _spec(state_dir)[0]["container"] == OLD
     runtime = json.loads((state_dir / sup.RUNTIME_FILE).read_text())
     assert "aiport-mac" not in runtime.get("holds", {})
 

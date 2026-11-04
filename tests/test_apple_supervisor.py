@@ -204,3 +204,22 @@ def test_a_sibling_only_backend_without_published_ports_is_supervised(tmp_path):
     backend["status"]["state"] = "stopped"
     assert sup.tick(tmp_path, run=Host([backend]), now=2.0)["services"] == {
         "whisper": "blocked:drift"}
+
+
+@pytest.mark.parametrize('conflict', ['same_container', 'same_root', 'nested_root', 'same_endpoint'])
+def test_invalid_second_pin_never_replaces_the_valid_registry(state_dir, conflict):
+    first = _entry('aiport-new', 'stopped')
+    second = _entry('second', 'stopped', address='192.168.0.136', port=9443, source='/independent/state')
+    if conflict == 'same_container':
+        second = first
+    elif conflict == 'same_root':
+        second['configuration']['mounts'][1]['source'] = STATE
+    elif conflict == 'nested_root':
+        second['configuration']['mounts'][1]['source'] = STATE + '/child'
+    else:
+        second['configuration']['publishedPorts'] = first['configuration']['publishedPorts']
+    before = (state_dir / sup.SPEC_FILE).read_bytes()
+    with pytest.raises(sup.SupervisorError):
+        sup.pin(state_dir, 'second-service', second['id'], run=Host([first] if conflict == 'same_container' else [first, second]))
+    assert (state_dir / sup.SPEC_FILE).read_bytes() == before
+    assert len(sup.load_spec(state_dir / sup.SPEC_FILE)[0]) == 1

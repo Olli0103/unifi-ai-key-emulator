@@ -24,6 +24,7 @@ from .aiport_nas_reconcile import verify_camera_plan
 from .device_workflow import _private
 from .device_workflow_fence import check as check_device_intent
 from .protocol import _json_object
+from .host_control_store import canonical_path, private_directory as control_directory
 
 SCHEMA='aikey-apple-instance-manifest/1'
 RUNTIME_VERSION='1.6.1'
@@ -45,19 +46,11 @@ def digest(raw):
 
 
 def path_value(value):
-    path=Path(value)
-    if (not path.is_absolute() or path.resolve()!=path or path.is_symlink()
-            or any(c in str(path) for c in ':\r\n\x00')):
-        raise ApplePlanError('apple_runtime_path_not_canonical')
-    return path
+    return canonical_path(value, ApplePlanError)
 
 
 def private_directory(value):
-    path=path_value(value)
-    info=path.lstat()
-    if (not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077):
-        raise ApplePlanError('apple_state_not_private')
-    return path
+    return control_directory(value, ApplePlanError)
 
 
 def identity(directory,*,key=False):

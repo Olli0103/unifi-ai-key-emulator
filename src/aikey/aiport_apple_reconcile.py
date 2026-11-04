@@ -14,7 +14,6 @@ import os
 from pathlib import Path
 import re
 import secrets
-import stat
 import subprocess
 import time
 
@@ -25,7 +24,7 @@ from .apple_supervisor import CONTAINER
 from .apple_upgrade import run_argv,UpgradeError
 from .config import atomic_private
 from .device_workflow import _private
-from .file_lock import acquire
+from .host_control_store import writer as control_writer
 from .protocol import _json_object,_unique_object,_reject_constant,_finite_float
 
 RECEIPT='reconcile.json'
@@ -204,32 +203,8 @@ def conflicts(rows,instance):
 
 @contextmanager
 def writer(directory,*,mutate=True):
-    directory=private_directory(directory)
-    root=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
-    lock=None
-    try:
-        if mutate:
-            flags=os.O_RDWR|os.O_NOFOLLOW|os.O_NONBLOCK
-            try:
-                lock=os.open('.writer.lock',flags|os.O_CREAT,0o600,dir_fd=root)
-            except FileNotFoundError:
-                lock=os.open('.writer.lock',flags,dir_fd=root)
-            info=os.fstat(lock)
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077 or info.st_nlink!=1):
-                raise AppleRuntimeError('apple_writer_lock_not_private')
-            acquire(lock,timeout=5)
-        def bound():
-            found=directory.lstat()
-            opened=os.fstat(root)
-            if (not stat.S_ISDIR(found.st_mode) or found.st_uid!=os.geteuid() or found.st_mode&0o077
-                    or (found.st_dev,found.st_ino)!=(opened.st_dev,opened.st_ino)):
-                raise AppleRuntimeError('apple_writer_root_changed')
-        bound()
-        yield directory,bound
-    finally:
-        if lock is not None:
-            os.close(lock)
-        os.close(root)
+    with control_writer(directory,mutate=mutate,error=AppleRuntimeError,validate=private_directory) as result:
+        yield result
 
 
 @contextmanager
