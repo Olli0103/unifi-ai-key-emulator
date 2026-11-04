@@ -7,6 +7,8 @@ experimental source/package version, not a supported public-release claim.
 
 - Reworked public installation/deployment documentation and removed installation-
   specific camera labels, addresses, user paths and private migration notebooks.
+- Removed obsolete tests of a private ten-module September image patch plan.
+  Current full-package/image installation checks remain the shipping contract.
 - Generalized readiness output and newly generated LaunchAgent labels. Existing
   loaded agents are not renamed automatically; inspect/unload the predecessor
   before installing one replacement, as described in the Apple guide.

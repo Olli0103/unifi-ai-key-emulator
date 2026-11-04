@@ -309,10 +309,10 @@ def test_a_hypothetical_five_point_camera_still_needs_a_new_slot():
 def test_observed_stream_points_override_a_model_estimate():
     inventory, _ = live_like()
     doorbell = next(row["mac"] for row in inventory["cameras"] if row["name"] == "Camera E")
-    esszimmer = next(row["mac"] for row in inventory["cameras"] if row["name"] == "Camera D")
+    camera_d = next(row["mac"] for row in inventory["cameras"] if row["name"] == "Camera D")
     # e.g. Protect switched Camera D to a 2K stream: 3 points instead of 5.
     inventory, slots = live_like(extra=[("Neu", "UVC G4 Bullet")],
-                                 points={esszimmer: 3, doorbell: 2})
+                                 points={camera_d: 3, doorbell: 2})
     plan = plan_rollout(inventory, slots)
     assert ("add_to_allowlist", "nas-slot-2", "Neu") in kinds(plan)
     assert str(plan["slots"]["nas-slot-2"]["load"]) == "1"

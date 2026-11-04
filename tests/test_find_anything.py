@@ -1284,8 +1284,8 @@ async def test_an_audio_image_without_tags_or_a_local_describer_fails(controller
 
 def test_the_tag_server_must_be_local(controller):
     options = config(controller)["find_anything"]
-    assert clip.validate_find_anything_config({**options, "tag_server": "http://172.30.50.14:8190/"})[
-        "tag_server"] == "http://172.30.50.14:8190"
+    assert clip.validate_find_anything_config({**options, "tag_server": "http://10.88.0.14:8190/"})[
+        "tag_server"] == "http://10.88.0.14:8190"
     for bad in ("https://tags.example.com", "http://8.8.8.8:8190", "http://10.0.0.1/v1", 5):
         with pytest.raises(clip.ClipError):
             clip.validate_find_anything_config({**options, "tag_server": bad})

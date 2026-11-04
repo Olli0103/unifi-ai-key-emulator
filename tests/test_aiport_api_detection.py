@@ -1023,7 +1023,7 @@ def _scored_detector(tmp_path, detections, score_reply):
         {"provider": "openai", "model": "gpt-6-luna", "base_url": "https://api.openai.com/v1",
          "allow_remote": True, "api_key_file": str(key)},
         tmp_path, threshold=0.8, transport=lambda *_: _reply(json.dumps({"detections": detections})),
-        score_server="http://172.30.50.14:8190/", score_transport=score_transport)
+        score_server="http://10.88.0.14:8190/", score_transport=score_transport)
     return detector, sent
 
 
@@ -1034,7 +1034,7 @@ def test_the_score_detector_gives_real_confidences_and_uncertain_objects_stay_in
                             {"kind": "animal", "label": "dog", "score": 0.22, "box": [0.6, 0.6, 0.7, 0.71]}]}
     detector, sent = _scored_detector(tmp_path, [person, cat], reply)
     scored = {o.kind: o.score for o in detector.detect_for_camera(FIRST, STILL)}
-    assert sent == ["http://172.30.50.14:8190/v1/detect"]
+    assert sent == ["http://10.88.0.14:8190/v1/detect"]
     assert scored == {"person": 0.91, "animal": 0.5}          # weak match: uncertain, not dropped
     counts = detector.diagnostic_counts(FIRST)["scores"]
     assert (counts["matched"], counts["certain"], counts["uncertain"]) == (2, 1, 1)
