@@ -12,6 +12,7 @@ from aikey.admin_maintenance import Bridge, MaintenanceError, work_once
 from aikey.maintenance_runbooks import prepare_apple_update
 from aikey import apple_supervisor as supervisor
 from aikey.tls import ensure_identity_certificate
+from aikey.startup_configuration import observation
 from test_apple_upgrade import Host, _entry, _image, OLD, OLD_IMAGE
 from test_admin_runtime_observation import target
 
@@ -23,7 +24,9 @@ def host_fixture(tmp_path, run_rc=0):
     root = tmp_path / "supervisor"
     root.mkdir(mode=0o700)
     entry = _entry()
-    entry["configuration"]["mounts"][1]["source"] = str(tmp_path)
+    guest = tmp_path / "guest"
+    guest.mkdir(mode=0o700)
+    entry["configuration"]["mounts"][1]["source"] = str(guest)
     supervisor.pin(root, "aiport-mac", OLD, run=Host([entry]))
     # The source is a synthetic container engine fixture, not a real engine.
     (tmp_path / "engine_fixture.py").write_bytes(Path(__file__).with_name("test_apple_upgrade.py").read_bytes())
@@ -45,7 +48,8 @@ print(out)
 sys.exit(code)
 ''')
     engine.chmod(0o700)
-    config = tmp_path / "config.json"
+    config = guest / "config.json"
+    config.touch(mode=0o600)
     config.write_bytes(b'{"fictional":"configuration-and-identity-unchanged"}\n')
     archive = tmp_path / "recovery.tar"
     archive.write_bytes(b"fictional-retained-recovery-bytes-not-a-live-restore-drill")
@@ -53,11 +57,13 @@ sys.exit(code)
 
 
 @pytest.mark.parametrize("run_rc", [0, 1])
-async def test_owned_apple_swap_or_verified_rollback_preserves_identity_config(tmp_path, run_rc):
+async def test_owned_apple_swap_or_failed_run_fence_preserves_identity_config(tmp_path, run_rc):
     root, engine, config, archive = host_fixture(tmp_path, run_rc)
     health = {"service": "aiport-candidate", "adopted": True, "control_connected": True,
               "smart_events_entered": 0, "smart_events_left": 0,
-              "active_streams": 2, "streams_with_decoded_frames": 2}
+              "active_streams": 2, "streams_with_decoded_frames": 2,
+              "host_activation_schema": "aikey-host-activation/1",
+              "startup_configuration": observation(hashlib.sha256(config.read_bytes()).hexdigest())}
     peer, requests, url = await target(tmp_path / "tls", health)
     (config.parent / "device.crt").write_bytes((tmp_path / "tls" / "device.crt").read_bytes())
     host, bridge = tmp_path / "authority", tmp_path / "bridge"
@@ -69,15 +75,17 @@ async def test_owned_apple_swap_or_verified_rollback_preserves_identity_config(t
             recovery_archive=archive, streams=2, engine=engine)
         Bridge(bridge).submit(operation, hashlib.sha256(before).hexdigest(), "c" * 32)
         await asyncio.to_thread(work_once, host, bridge)
-        assert Bridge(bridge).receipt("c" * 32)["state"] == ("succeeded" if run_rc == 0 else "rolled_back")
+        assert Bridge(bridge).receipt("c" * 32)["state"] == ("succeeded" if run_rc == 0 else "uncertain")
         state = json.loads((tmp_path / "engine-state.json").read_text())
         running = [row for row in state["entries"] if row["status"]["state"] == "running"]
-        assert len(running) == 1 and running[0]["id"] == ("aiport-new" if run_rc == 0 else OLD)
+        assert len(running) == (1 if run_rc == 0 else 0)
+        if run_rc == 0:
+            assert running[0]["id"] == "aiport-new"
         assert config.read_bytes() == before and archive.read_bytes() == recovery
-        assert len(requests) >= 3
+        assert len(requests) >= (3 if run_rc == 0 else 2)
         assert all(not any(name.lower() in {"authorization", "cookie"} for name in row) for row in requests)
         pin = json.loads((root / supervisor.SPEC_FILE).read_text())["services"][0]
-        assert pin["container"] == running[0]["id"]
+        assert pin["container"] == ("aiport-new" if run_rc == 0 else OLD)
     finally:
         await peer.close()
 
@@ -86,7 +94,9 @@ async def test_nonidle_runtime_is_refused_before_hold_or_stop(tmp_path):
     root, engine, config, archive = host_fixture(tmp_path)
     health = {"service": "aiport-candidate", "adopted": True, "control_connected": True,
               "smart_events_entered": 1, "smart_events_left": 0,
-              "active_streams": 2, "streams_with_decoded_frames": 2}
+              "active_streams": 2, "streams_with_decoded_frames": 2,
+              "host_activation_schema": "aikey-host-activation/1",
+              "startup_configuration": observation(hashlib.sha256(config.read_bytes()).hexdigest())}
     peer, requests, url = await target(tmp_path / "tls", health)
     (config.parent / "device.crt").write_bytes((tmp_path / "tls" / "device.crt").read_bytes())
     host, bridge = tmp_path / "authority", tmp_path / "bridge"
@@ -122,7 +132,9 @@ async def test_trusted_but_wrong_health_leaf_is_refused_before_http_and_stop(tmp
     peer, requests, url = await target(tmp_path / "other-tls", {
         "service": "aiport-candidate", "adopted": True, "control_connected": True,
         "smart_events_entered": 0, "smart_events_left": 0,
-        "active_streams": 2, "streams_with_decoded_frames": 2})
+        "active_streams": 2, "streams_with_decoded_frames": 2,
+              "host_activation_schema": "aikey-host-activation/1",
+              "startup_configuration": observation(hashlib.sha256(config.read_bytes()).hexdigest())})
     certificate = own / "device.crt"
     certificate.write_bytes(certificate.read_bytes() + (tmp_path / "other-tls" / "device.crt").read_bytes())
     (config.parent / "device.crt").write_bytes(certificate.read_bytes())

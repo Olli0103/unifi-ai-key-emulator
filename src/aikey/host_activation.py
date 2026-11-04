@@ -5,6 +5,7 @@ is released. Startup can read only the exact reviewed bytes. No credential,
 path, timestamp/foreign monotonic clock or executable authority is carried.
 """
 import os
+import json
 from pathlib import Path
 import re
 import stat
@@ -71,7 +72,6 @@ def check_startup(config,revision):
 
 def publish(config,value):
     """Caller holds the existing configuration mutex and its host authority."""
-    from .aiport_apple_plan import encode
     checked(value)
     previous=read(config)
     if previous is not None and previous['phase']=='prepared':
@@ -79,7 +79,7 @@ def publish(config,value):
         after={key:item for key,item in value.items() if key!='phase'}
         if before!=after:
             raise HostActivationError('host_activation_owned_by_another_intent')
-    atomic_private(path(config),encode(value))
+    atomic_private(path(config),(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False)+'\n').encode())
     descriptor=os.open(Path(config).parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
     try:
         os.fsync(descriptor)
