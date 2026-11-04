@@ -75,8 +75,10 @@ local-aiport-apple run --plan /private/host/deployment.json \
   --state-dir /private/host/authority
 ```
 
-The authority directory must already exist and be private. Keep using that same
-directory. Default `run` is read-only: image/runtime inspection and pinned
+The authority directory must already exist, be private and be disjoint from
+all guest mounts and Key state, including ancestor/descendant paths. A worker
+must not be able to write its own host journal. Keep using that same directory.
+Default `run` is read-only: image/runtime inspection and pinned
 health, with a brief non-listening TCP bind probe for proposed starts. It creates
 no lock/journal, container, service listener or identity. Review `would_start`,
 blockers and `ready_for_apply`; the latter is local preflight, not native proof.

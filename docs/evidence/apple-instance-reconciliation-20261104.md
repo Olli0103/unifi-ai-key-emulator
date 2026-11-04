@@ -40,6 +40,15 @@ writers have been upgraded.
   both. No model/controller/runtime was contacted by those comparisons.
 
 These are overlapping test groups, not additive totals or a full-suite result.
+Further review reproduced apply accepting a host authority journal inside the
+guest-writable state mount. Authority roots are now required to be disjoint
+from all selected mounts and Key roots before even a daemon read command or
+lock/journal creation. Eight read-only/apply cases cover equal, child, ancestor
+and Key paths: all eight fail on the preceding source. The corrected combined
+authority/CLI/startup/documentation group passes **595** cases. The first full
+Mac run was intentionally interrupted for this
+source correction; its partial counts are not a full-suite pass.
+
 Original failures are retained privately: a final journal publication failure
 was initially reported too optimistically as ordinary rollback; it now remains
 explicitly uncertain. An initial Key test expected the wrong exception family;

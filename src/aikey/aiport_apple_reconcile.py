@@ -237,6 +237,12 @@ def authority(directory,manifest,*,mutate):
     """Same configuration mutexes used by all supported Admin writers."""
     from .aiport_config_store import AiPortConfigurationStore
     from .config_store import ConfigurationStore
+    directory=private_directory(directory)
+    roots={Path(volume['source']) for row in manifest['instances'] for volume in row['volumes']}
+    if manifest['aikey'] is not None:
+        roots.add(Path(manifest['aikey']['state_dir']))
+    if any(directory==root or directory in root.parents or root in directory.parents for root in roots):
+        raise AppleRuntimeError('apple_host_authority_must_be_outside_guest_mounts')
     with writer(directory,mutate=mutate) as scope:
         with ExitStack() as guards:
             if mutate:

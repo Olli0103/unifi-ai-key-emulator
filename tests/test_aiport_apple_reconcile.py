@@ -401,3 +401,25 @@ def test_numeric_receipt_fields_cannot_be_coerced_into_an_owned_intent(tmp_path,
     with pytest.raises(AppleRuntimeError,match='receipt_unavailable'):
         reconcile(*inputs,apply=True,run=host.run,probe=host.probe,host_check=host.check)
     assert host.mutations()==before
+
+
+@pytest.mark.parametrize('kind',['equal','child','ancestor','key'])
+@pytest.mark.parametrize('apply',[False,True])
+def test_host_authority_cannot_be_in_or_overlap_guest_or_key_state(tmp_path,kind,apply):
+    inputs=list(actor_fixture(tmp_path))
+    root=inputs[3][1]
+    if kind=='child':
+        root=root/'host-authority'
+        root.mkdir(mode=0o700)
+    elif kind=='ancestor':
+        root=root.parent
+    elif kind=='key':
+        root=inputs[4]['aikey_state']
+    inputs[-1]=root
+    before={path:path.read_bytes() for path in root.rglob('*') if path.is_file()}
+    host=Host(inputs[0])
+    with pytest.raises(AppleRuntimeError,match='authority_must_be_outside'):
+        reconcile(*inputs,apply=apply,run=host.run,probe=host.probe,host_check=host.check)
+    assert not host.calls
+    assert not (root/'reconcile.json').exists() and not (root/'.writer.lock').exists()
+    assert all(path.read_bytes()==raw for path,raw in before.items())
