@@ -63,7 +63,8 @@ async def test_language_is_validated_and_health_exposes_only_counts(client):
     health = await (await client.get("/healthz")).json()
     processing = health.pop("processing_seconds")
     assert health == {"status": "ok", "requests": 2, "transcribed": 1, "rejected": 1,
-                      "failed": 0, "abandoned": 0, "audio_seconds": 1.0}
+                      "failed": 0, "abandoned": 0, "audio_seconds": 1.0,
+                      "voice_activity": {"enabled": False, "checked": 0, "no_speech": 0}}
     assert 0 <= processing < 5
     assert client.calls == [(16000, "auto")]
 
@@ -130,3 +131,89 @@ def test_the_openvino_backend_returns_timestamped_segments_and_maps_the_language
     assert seen == {"model_dir": "/models/turbo", "device": "NPU", "options": {"CACHE_DIR": "/cache"},
                     "samples": 16000, "language": "<|de|>", "task": "transcribe", "timestamps": True}
     assert transcribe([0.0], "auto")[1] is None and seen["language"] is None
+
+
+@pytest.mark.parametrize("has_speech", [False, True])
+async def test_vad_gates_model_without_cropping_or_changing_timestamps(has_speech):
+    import numpy as np
+    seen = []
+
+    def vad(samples):
+        seen.append(samples)
+        return has_speech
+
+    def transcribe(samples, language):
+        assert samples is seen[0]
+        assert np.array_equal(samples, seen[0])
+        seen.append(language)
+        return [(0.2, 0.8, " Original.")], language
+
+    async with TestClient(TestServer(build_app(transcribe, voice_activity=vad))) as client:
+        response = await client.post("/v1/audio/transcriptions", data=_form(_wav(), language="de"))
+        assert response.status == 200
+        body = await response.json()
+        assert body == {"text": "Original." if has_speech else "",
+                        "segments": [{"start": 0.2, "end": 0.8, "text": " Original."}] if has_speech else [],
+                        "duration": 1.0, "language": "de"}
+        assert len(seen) == (2 if has_speech else 1)
+        health = await (await client.get("/healthz")).json()
+        assert health["voice_activity"] == {"enabled": True, "checked": 1,
+                                            "no_speech": 0 if has_speech else 1}
+
+
+@pytest.mark.parametrize("result", [None, 0, "false", RuntimeError("private details")])
+async def test_vad_failure_is_not_empty_success_or_unfiltered_fallback(result):
+    calls = []
+
+    def vad(samples):
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    def transcribe(samples, language):
+        calls.append(1)
+        return [], language
+
+    async with TestClient(TestServer(build_app(transcribe, voice_activity=vad))) as client:
+        response = await client.post("/v1/audio/transcriptions", data=_form(_wav()))
+        assert response.status == 500
+        assert await response.json() == {"error": "transcription_failed"}
+        health = await (await client.get("/healthz")).json()
+        assert health["failed"] == 1 and health["voice_activity"]["no_speech"] == 0
+        assert not calls
+
+
+async def test_cancelled_vad_keeps_shared_inference_lock_until_thread_finishes():
+    import asyncio
+    import threading
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    def vad(samples):
+        calls.append(1)
+        entered.set()
+        assert release.wait(5)
+        return False
+
+    def transcribe(samples, language):
+        pytest.fail("negative VAD must not reach transcription")
+
+    try:
+        async with TestClient(TestServer(build_app(transcribe, voice_activity=vad),
+                                         handler_cancellation=True)) as client:
+            first = asyncio.create_task(client.post("/v1/audio/transcriptions", data=_form(_wav())))
+            for _ in range(200):
+                if entered.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert entered.is_set()
+            first.cancel()
+            await asyncio.gather(first, return_exceptions=True)
+            second = asyncio.create_task(client.post("/v1/audio/transcriptions", data=_form(_wav())))
+            await asyncio.sleep(0.1)
+            assert calls == [1]
+            release.set()
+            assert (await second).status == 200
+            assert calls == [1, 1]
+    finally:
+        release.set()

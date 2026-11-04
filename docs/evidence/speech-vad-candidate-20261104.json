@@ -1,0 +1,54 @@
+{
+  "schema": "speech-vad-candidate/1",
+  "source_base": "5b85378d8b675075d56912dfad90f8f32f1af89c",
+  "source_files": {
+    "voice_activity.py": "38f045d034eb4ec851e401de6cdb37c88b645342a464407b29c621f57ecb4a13",
+    "whisper_server.py": "741e67858735e53aaea10be243a44c86255b99fc443e78eaafb8cebfe965da9e"
+  },
+  "model_sha256": "bda1d8db4345ead87114912ab9b53d2d8a1fe7160f2159e84f4e7d06acf2c0b5",
+  "vad_model_sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+  "runtime_sha256": "0c614db98e9809684d119ff04506ff75ccbe11122386f2fc0c24fdf36d26116a",
+  "corpus_input_sha256": {
+    "speech-01": "d886cff86f0d57b86af86f652ace4ac2dbde35b46535e55e27fa2e6715f9db1a",
+    "speech-02": "60b1edf417f6cbff7b6766322a6b9b49f0b074a0cd4b00a8d6094167d02c01d2",
+    "speech-03": "bb3ba44c4f0bb876f7db0c2b7f3f70800461b4492fadfcb7003bdc2a5b93d26a",
+    "speech-04": "011bd4d1aa155f946290122fd2258430a6f9207396feef66d9edbe58e92b24de",
+    "speech-05": "f7d69e675db67d588ed333bc1bba7a9213a08e813da43f97f7d3d99cbfa4ecd2",
+    "speech-06": "aa2a2408373f583a7de6a68999213f7a9c1ec0c1ec04ce904df01a7747eed497",
+    "speech-07": "d303811b8c84619667cd0501342f84ec6cbe69f7aa3856dcf52fabda374c92b8",
+    "speech-08": "0023d5e301826111b066f11804a616660f4ebfa1b564fc5431f0f07c2c87e300"
+  },
+  "results": {
+    "planned": 8,
+    "completed": 8,
+    "errors": 0,
+    "exact_positive": 6,
+    "positives": 6,
+    "correct_negative": 2,
+    "negatives": 2,
+    "wer": 0,
+    "cer": 0,
+    "whisper_invocations": 6,
+    "vad_checked": 8,
+    "latency_ms": {
+      "median": 3069.2528794752434,
+      "max": 3394.86235298682,
+      "negative_range": [
+        9.737259009853005,
+        10.461380006745458
+      ]
+    },
+    "timing_scope": "client HTTP start to parsed response including VAD; first request cold, no warmup",
+    "cpu_ms": null,
+    "provider_charge": null
+  },
+  "isolation": {
+    "network": "none",
+    "cpus": 4,
+    "memory_gib": 8,
+    "uid": 1000,
+    "existing_containers_unchanged": 73,
+    "owned_containers_removed": true
+  },
+  "production_activated": false
+}
