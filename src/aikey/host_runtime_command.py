@@ -21,6 +21,9 @@ import subprocess
 import time
 
 LIMIT = 1024 * 1024
+# Apple's signed 1.6.1 CLI is larger than 64 MiB. Keep executor hashing
+# bounded while admitting the actual supported runtime, not just tiny fixtures.
+ENGINE_LIMIT = 128 * 1024 * 1024
 SCHEMA = 'aikey-host-command/1'
 RESULT_SCHEMA = 'aikey-host-command-result/1'
 _HASH = re.compile('[0-9a-f]{64}\\Z')
@@ -320,7 +323,7 @@ def main(argv=None):
             spec = importlib.util.spec_from_file_location('owned_hash', Path(__file__).with_name('maintenance_hash.py'))
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-            if module.artifact_digest(args.engine, 64 * 1024 * 1024) != args.engine_sha256:
+            if module.artifact_digest(args.engine, ENGINE_LIMIT) != args.engine_sha256:
                 return 2
             actual = [args.engine, *command[1:]]
         except (OSError, ValueError, TypeError):

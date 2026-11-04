@@ -286,3 +286,40 @@ def test_effect_receipt_mismatch_is_not_no_execution(tmp_path, fault):
     path.write_text(json.dumps(value))
     with pytest.raises(ValueError):
         helper.read_effect(tmp_path, context)
+
+
+@pytest.mark.parametrize('case', ['official_size', 'digest_changed', 'oversized'])
+def test_pinned_apple_engine_supports_current_binary_and_retains_bounds(tmp_path, monkeypatch, capsys, case):
+    """Actual hashing/admission, synthetic executor; no Apple daemon in CI."""
+    import hashlib
+    engine = tmp_path / 'container'
+    # Official signed Apple 1.6.1 arm64 CLI is 68,535,328 bytes (>64 MiB).
+    size = 68_535_328 if case != 'oversized' else 128 * 1024 * 1024 + 1
+    with engine.open('wb') as stream:
+        stream.truncate(size)
+    digest = hashlib.sha256()
+    with engine.open('rb') as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    called = []
+    def execute(argv, **kwargs):
+        called.append(argv)
+        return {'schema': helper.SCHEMA, 'spawned': True, 'command_terminal': True,
+                'exit_code': 0, 'error': None, 'output': '[]\n'}
+    monkeypatch.setattr(helper, 'execute', execute)
+    # main installs process-global handlers; restore them after this invocation.
+    handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        code = helper.main(['--parent-pid', str(os.getpid()), '--timeout', '5',
+            '--engine', str(engine.resolve()), '--engine-sha256',
+            'f' * 64 if case == 'digest_changed' else digest.hexdigest(), '--',
+            '/usr/local/bin/container', 'list', '--all', '--format', 'json'])
+    finally:
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
+    if case == 'official_size':
+        assert code == 0
+        assert called == [[str(engine.resolve()), 'list', '--all', '--format', 'json']]
+        assert json.loads(capsys.readouterr().out)['output'] == '[]\n'
+    else:
+        assert code == 2 and called == [] and capsys.readouterr().out == ''
