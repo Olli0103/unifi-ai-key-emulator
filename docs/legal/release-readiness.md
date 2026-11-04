@@ -72,8 +72,11 @@ required evidence remains missing. Its source fingerprint must match the approve
 to tracked inputs invalidates the fingerprint. This records review of a
 specific tree; it cannot prove the truth or legal sufficiency of attestations.
 
-This repository has no publishing workflow. Any future package, image or release
-publisher must require the final check and a maintainer approval before upload.
+The [owner-gated publishing workflow](../releasing.md) requires this final
+non-audit check and actual maintainer staging approval before package/image
+upload or signing. A second protected environment reviews the complete signed
+candidate before public GitHub release. The publication decision remains pending;
+adding the workflow does not grant rights or establish a completed release.
 The separate [native Linux image installation checks](../container-clean-install.md)
 build and exercise local ephemeral images without registry/image publication.
 Their sanitized metadata artifacts are not signed release artifacts, native

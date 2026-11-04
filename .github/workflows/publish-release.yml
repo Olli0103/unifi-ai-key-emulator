@@ -1,0 +1,647 @@
+# No automatic push/tag trigger. No unreviewed package/image uploads.
+name: Owner-gated signed release
+'on':
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing public tag matching this exact main commit and project version
+        type: string
+        required: true
+      publish:
+        description: Request reviewed staging, then final candidate approval (default is read-only)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: owner-gated-release
+  cancel-in-progress: false
+jobs:
+  qualify:
+    if: github.repository == 'Olli0103/unifi-ai-key-emulator' && github.ref == 'refs/heads/main' && github.actor == 'Olli0103'
+      && github.triggering_actor == 'Olli0103' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+    - name: Exact dispatch source, no persisted Git credentials
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Python 3.12
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - name: Read-only readiness; publishing is opt-in
+      env:
+        REQUEST_PUBLICATION: ${{ inputs.publish }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        arguments=()
+        if [ "${REQUEST_PUBLICATION}" = true ]; then arguments+=(--publish); fi
+        python tools/release_prepare.py --tag "${RELEASE_TAG}" "${arguments[@]}"
+  reserve:
+    if: inputs.publish
+    needs: qualify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release-stage
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    outputs:
+      release_id: ${{ steps.reserve.outputs.release_id }}
+    steps:
+    - name: Exact dispatch source, no persisted Git credentials
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Python 3.12
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - name: Fresh non-audit source, tag, seven CI jobs and environment policy
+      id: preparation
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python tools/release_prepare.py --tag "${RELEASE_TAG}" --publish > "${RUNNER_TEMP}/fresh-preparation.json"
+        python - <<'PYCODE'
+        import json,os
+        from pathlib import Path
+        value=json.loads((Path(os.environ['RUNNER_TEMP'])/'fresh-preparation.json').read_text())
+        rows=[row for row in value['continuous_integration'] if row['workflow']=='container-install.yml']
+        assert len(rows)==1 and type(rows[0]['run_id']) is int and rows[0]['run_id']>0
+        with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+            f.write('image_run='+str(rows[0]['run_id'])+'\n')
+        PYCODE
+    - name: Reserve draft once; positively reconcile lost acknowledgement
+      id: reserve
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python tools/release_publication.py reserve --tag "${RELEASE_TAG}" > "${RUNNER_TEMP}/release-reservation.json"
+        python - <<'PY'
+        import json, os
+        from pathlib import Path
+        value=json.loads((Path(os.environ["RUNNER_TEMP"])/"release-reservation.json").read_text())
+        assert value["phase"]=="draft_reserved" and type(value["release_id"]) is int and value["release_id"]>0
+        with open(os.environ["GITHUB_OUTPUT"],"a") as output:
+            output.write("release_id="+str(value["release_id"])+"\n")
+        PY
+    - name: Retain release-reservation
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: release-reservation
+        path: ${{ runner.temp }}/release-reservation.json
+        if-no-files-found: error
+        retention-days: 14
+  packages:
+    needs: reserve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RESERVATION_ID: ${{ needs.reserve.outputs.release_id }}
+    steps:
+    - name: Exact dispatch source, no persisted Git credentials
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Python 3.12
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - name: Fresh non-audit source, tag, seven CI jobs and environment policy
+      id: preparation
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python tools/release_prepare.py --tag "${RELEASE_TAG}" --publish > "${RUNNER_TEMP}/fresh-preparation.json"
+        python - <<'PYCODE'
+        import json,os
+        from pathlib import Path
+        value=json.loads((Path(os.environ['RUNNER_TEMP'])/'fresh-preparation.json').read_text())
+        rows=[row for row in value['continuous_integration'] if row['workflow']=='container-install.yml']
+        assert len(rows)==1 and type(rows[0]['run_id']) is int and rows[0]['run_id']>0
+        with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+            f.write('image_run='+str(rows[0]['run_id'])+'\n')
+        PYCODE
+    - name: Two clean reproducible builds and locked runtime SBOM
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        bash tools/release_package_build.sh
+    - name: Package provenance
+      id: package_provenance
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+      with:
+        create-storage-record: false
+        push-to-registry: false
+        subject-path: ${{ runner.temp }}/release-packages/local_aikey-*
+    - name: Retain standard bundle ${{ runner.temp }}/release-packages/package-provenance.sigstore.json
+      env:
+        BUNDLE: ${{ steps.package_provenance.outputs.bundle-path }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        cp -- "${BUNDLE}" "${{ runner.temp }}/release-packages/package-provenance.sigstore.json"
+    - name: Package SBOM attestation
+      id: package_sbom
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+      with:
+        create-storage-record: false
+        push-to-registry: false
+        subject-path: ${{ runner.temp }}/release-packages/local_aikey-*
+        sbom-path: ${{ runner.temp }}/release-packages/package.cdx.json
+    - name: Retain standard bundle ${{ runner.temp }}/release-packages/package-sbom.sigstore.json
+      env:
+        BUNDLE: ${{ steps.package_sbom.outputs.bundle-path }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        cp -- "${BUNDLE}" "${{ runner.temp }}/release-packages/package-sbom.sigstore.json"
+    - name: Retain release-packages
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: release-packages
+        path: ${{ runner.temp }}/release-packages/*
+        if-no-files-found: error
+        retention-days: 14
+  images:
+    needs: reserve
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - arch: amd64
+          runner: ubuntu-24.04
+        - arch: arm64
+          runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RESERVATION_ID: ${{ needs.reserve.outputs.release_id }}
+      INSTALL_ARCH: ${{ matrix.arch }}
+      SOURCE_REVISION: ${{ github.sha }}
+      SOURCE_REPOSITORY: ${{ github.repository }}
+      INSTALL_NONCE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+    steps:
+    - name: Exact dispatch source, no persisted Git credentials
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Python 3.12
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - name: Fresh non-audit source, tag, seven CI jobs and environment policy
+      id: preparation
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python tools/release_prepare.py --tag "${RELEASE_TAG}" --publish > "${RUNNER_TEMP}/fresh-preparation.json"
+        python - <<'PYCODE'
+        import json,os
+        from pathlib import Path
+        value=json.loads((Path(os.environ['RUNNER_TEMP'])/'fresh-preparation.json').read_text())
+        rows=[row for row in value['continuous_integration'] if row['workflow']=='container-install.yml']
+        assert len(rows)==1 and type(rows[0]['run_id']) is int and rows[0]['run_id']>0
+        with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+            f.write('image_run='+str(rows[0]['run_id'])+'\n')
+        PYCODE
+    - name: Maintained native Docker Buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      with:
+        version: v0.38.2
+        driver: docker
+        cache-binary: false
+    - name: Exact qualified main-run inventory, not an old head
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: container-install-${{ matrix.arch }}
+        path: ${{ runner.temp }}/qualified-images
+        run-id: ${{ steps.preparation.outputs.image_run }}
+        repository: ${{ github.repository }}
+        github-token: ${{ github.token }}
+        digest-mismatch: error
+    - name: Verify native context
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        bash tools/container_install_run.sh context
+    - name: Install checksum-pinned Syft
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        bash tools/container_install_run.sh scanner
+    - name: Run the existing eight installed-source/state cases natively
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        bash tools/container_install_run.sh build
+    - name: Bind pre-push intent to tested image configs and inventories
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python tools/release_candidate.py image-intent --tag "${RELEASE_TAG}" --release-id "${RESERVATION_ID}" --architecture "${INSTALL_ARCH}" --qualified "${RUNNER_TEMP}/qualified-images" --results "${RUNNER_TEMP}/container-results" --destination "${RUNNER_TEMP}/image-intent.json"
+    - name: Retain release-image-intent-${{ matrix.arch }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: release-image-intent-${{ matrix.arch }}
+        path: ${{ runner.temp }}/image-intent.json
+        if-no-files-found: error
+        retention-days: 14
+    - name: Short-lived workflow registry login
+      uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+        ecr: false
+        logout: true
+    - name: Push only these attempt-specific images; observe immutable manifests
+      id: push
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python tools/release_candidate.py push-images --tag "${RELEASE_TAG}" --release-id "${RESERVATION_ID}" --architecture "${INSTALL_ARCH}" --intent "${RUNNER_TEMP}/image-intent.json" --results "${RUNNER_TEMP}/container-results" --destination "${RUNNER_TEMP}/staged-images.json"
+    - name: Remove owned local fixtures and verify zero remaining resources
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        bash tools/container_install_run.sh cleanup
+    - name: Retain only sanitized complete native handoff
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python tools/release_candidate.py stage-assets --tag "${RELEASE_TAG}" --release-id "${RESERVATION_ID}" --architecture "${INSTALL_ARCH}" --results "${RUNNER_TEMP}/container-results" --staged "${RUNNER_TEMP}/staged-images.json" --destination "${RUNNER_TEMP}/release-images"
+    - name: aikey provenance
+      id: aikey_provenance
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+      with:
+        create-storage-record: false
+        push-to-registry: false
+        subject-name: ${{ steps.push.outputs.aikey_name }}
+        subject-digest: ${{ steps.push.outputs.aikey_digest }}
+    - name: Retain standard bundle ${{ runner.temp }}/release-images/aikey-${{ matrix.arch }}-provenance.sigstore.json
+      env:
+        BUNDLE: ${{ steps.aikey_provenance.outputs.bundle-path }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        cp -- "${BUNDLE}" "${{ runner.temp }}/release-images/aikey-${{ matrix.arch }}-provenance.sigstore.json"
+    - name: aikey sbom
+      id: aikey_sbom
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+      with:
+        create-storage-record: false
+        push-to-registry: false
+        subject-name: ${{ steps.push.outputs.aikey_name }}
+        subject-digest: ${{ steps.push.outputs.aikey_digest }}
+        sbom-path: ${{ runner.temp }}/release-images/aikey-${{ matrix.arch }}.cdx.json
+    - name: Retain standard bundle ${{ runner.temp }}/release-images/aikey-${{ matrix.arch }}-sbom.sigstore.json
+      env:
+        BUNDLE: ${{ steps.aikey_sbom.outputs.bundle-path }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        cp -- "${BUNDLE}" "${{ runner.temp }}/release-images/aikey-${{ matrix.arch }}-sbom.sigstore.json"
+    - name: aiport provenance
+      id: aiport_provenance
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+      with:
+        create-storage-record: false
+        push-to-registry: false
+        subject-name: ${{ steps.push.outputs.aiport_name }}
+        subject-digest: ${{ steps.push.outputs.aiport_digest }}
+    - name: Retain standard bundle ${{ runner.temp }}/release-images/aiport-${{ matrix.arch }}-provenance.sigstore.json
+      env:
+        BUNDLE: ${{ steps.aiport_provenance.outputs.bundle-path }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        cp -- "${BUNDLE}" "${{ runner.temp }}/release-images/aiport-${{ matrix.arch }}-provenance.sigstore.json"
+    - name: aiport sbom
+      id: aiport_sbom
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+      with:
+        create-storage-record: false
+        push-to-registry: false
+        subject-name: ${{ steps.push.outputs.aiport_name }}
+        subject-digest: ${{ steps.push.outputs.aiport_digest }}
+        sbom-path: ${{ runner.temp }}/release-images/aiport-${{ matrix.arch }}.cdx.json
+    - name: Retain standard bundle ${{ runner.temp }}/release-images/aiport-${{ matrix.arch }}-sbom.sigstore.json
+      env:
+        BUNDLE: ${{ steps.aiport_sbom.outputs.bundle-path }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        cp -- "${BUNDLE}" "${{ runner.temp }}/release-images/aiport-${{ matrix.arch }}-sbom.sigstore.json"
+    - name: Retain release-images-${{ matrix.arch }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: release-images-${{ matrix.arch }}
+        path: ${{ runner.temp }}/release-images/*
+        if-no-files-found: error
+        retention-days: 14
+  assemble:
+    needs:
+    - reserve
+    - packages
+    - images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RESERVATION_ID: ${{ needs.reserve.outputs.release_id }}
+    steps:
+    - name: Exact dispatch source, no persisted Git credentials
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Python 3.12
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - name: Fresh non-audit source, tag, seven CI jobs and environment policy
+      id: preparation
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python tools/release_prepare.py --tag "${RELEASE_TAG}" --publish > "${RUNNER_TEMP}/fresh-preparation.json"
+        python - <<'PYCODE'
+        import json,os
+        from pathlib import Path
+        value=json.loads((Path(os.environ['RUNNER_TEMP'])/'fresh-preparation.json').read_text())
+        rows=[row for row in value['continuous_integration'] if row['workflow']=='container-install.yml']
+        assert len(rows)==1 and type(rows[0]['run_id']) is int and rows[0]['run_id']>0
+        with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+            f.write('image_run='+str(rows[0]['run_id'])+'\n')
+        PYCODE
+    - name: Maintained native Docker Buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      with:
+        version: v0.38.2
+        driver: docker
+        cache-binary: false
+    - name: Short-lived workflow registry login
+      uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+        ecr: false
+        logout: true
+    - name: Download only this run's candidate components
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        pattern: release-*
+        path: ${{ runner.temp }}/inputs
+        merge-multiple: false
+        digest-mismatch: error
+    - name: Verify upstream signatures, bytes and cleanup before index intent
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python tools/release_candidate.py indexes --tag "${RELEASE_TAG}" --release-id "${RESERVATION_ID}" --inputs "${RUNNER_TEMP}/inputs" --destination "${RUNNER_TEMP}/release-candidate"
+    - name: Retain release-index-intent
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: release-index-intent
+        path: ${{ runner.temp }}/index-intent.json
+        if-no-files-found: error
+        retention-days: 14
+    - name: Create only attempt-specific dual-native indices
+      id: push
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python tools/release_candidate.py push-indexes --tag "${RELEASE_TAG}" --release-id "${RESERVATION_ID}" --destination "${RUNNER_TEMP}/release-candidate"
+    - name: aikey multiarch provenance
+      id: aikey_index
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+      with:
+        create-storage-record: false
+        push-to-registry: false
+        subject-name: ${{ steps.push.outputs.aikey_name }}
+        subject-digest: ${{ steps.push.outputs.aikey_digest }}
+    - name: Retain standard bundle ${{ runner.temp }}/release-candidate/aikey-index-provenance.sigstore.json
+      env:
+        BUNDLE: ${{ steps.aikey_index.outputs.bundle-path }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        cp -- "${BUNDLE}" "${{ runner.temp }}/release-candidate/aikey-index-provenance.sigstore.json"
+    - name: aiport multiarch provenance
+      id: aiport_index
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+      with:
+        create-storage-record: false
+        push-to-registry: false
+        subject-name: ${{ steps.push.outputs.aiport_name }}
+        subject-digest: ${{ steps.push.outputs.aiport_digest }}
+    - name: Retain standard bundle ${{ runner.temp }}/release-candidate/aiport-index-provenance.sigstore.json
+      env:
+        BUNDLE: ${{ steps.aiport_index.outputs.bundle-path }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        cp -- "${BUNDLE}" "${{ runner.temp }}/release-candidate/aiport-index-provenance.sigstore.json"
+    - name: Bind complete release set and sorted checksums
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python tools/release_candidate.py finalize --tag "${RELEASE_TAG}" --release-id "${RESERVATION_ID}" --destination "${RUNNER_TEMP}/release-candidate"
+    - name: Complete candidate and checksum provenance
+      id: root
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+      with:
+        create-storage-record: false
+        push-to-registry: false
+        subject-path: |-
+          ${{ runner.temp }}/release-candidate/release.json
+          ${{ runner.temp }}/release-candidate/SHA256SUMS
+    - name: Retain standard bundle ${{ runner.temp }}/release-candidate/release-provenance.sigstore.json
+      env:
+        BUNDLE: ${{ steps.root.outputs.bundle-path }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        cp -- "${BUNDLE}" "${{ runner.temp }}/release-candidate/release-provenance.sigstore.json"
+    - name: Use the final consumer against the captured candidate
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python tools/release_candidate.py check --tag "${RELEASE_TAG}" --release-id "${RESERVATION_ID}" --destination "${RUNNER_TEMP}/release-candidate"
+    - name: Retain release-candidate
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: release-candidate
+        path: ${{ runner.temp }}/release-candidate/*
+        if-no-files-found: error
+        retention-days: 14
+    - name: Expose concrete digest-bound review inputs before final approval
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        cat "${RUNNER_TEMP}/release-candidate/SHA256SUMS" >> "${GITHUB_STEP_SUMMARY}"
+        python - <<'PY'
+        import hashlib,os
+        from pathlib import Path
+        p=Path(os.environ["RUNNER_TEMP"])/"release-candidate/release.json"
+        with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:
+            f.write("\nCandidate manifest SHA-256: `"+hashlib.sha256(p.read_bytes()).hexdigest()+"`\n")
+        PY
+  publish:
+    needs:
+    - reserve
+    - assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+      actions: read
+      packages: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RESERVATION_ID: ${{ needs.reserve.outputs.release_id }}
+    steps:
+    - name: Exact dispatch source, no persisted Git credentials
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Python 3.12
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - name: Fresh non-audit source, tag, seven CI jobs and environment policy
+      id: preparation
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python tools/release_prepare.py --tag "${RELEASE_TAG}" --publish > "${RUNNER_TEMP}/fresh-preparation.json"
+        python - <<'PYCODE'
+        import json,os
+        from pathlib import Path
+        value=json.loads((Path(os.environ['RUNNER_TEMP'])/'fresh-preparation.json').read_text())
+        rows=[row for row in value['continuous_integration'] if row['workflow']=='container-install.yml']
+        assert len(rows)==1 and type(rows[0]['run_id']) is int and rows[0]['run_id']>0
+        with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+            f.write('image_run='+str(rows[0]['run_id'])+'\n')
+        PYCODE
+    - name: Maintained native Docker Buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      with:
+        version: v0.38.2
+        driver: docker
+        cache-binary: false
+    - name: Short-lived workflow registry login
+      uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+        ecr: false
+        logout: true
+    - name: Download the already reviewed complete candidate
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: release-candidate
+        path: ${{ runner.temp }}/release-candidate
+        digest-mismatch: error
+    - name: Create-only asset upload and exact provider digest readback
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python tools/release_publication.py upload --tag "${RELEASE_TAG}" --release-id "${RESERVATION_ID}" --assets "${RUNNER_TEMP}/release-candidate" > "${RUNNER_TEMP}/release-upload.json"
+    - name: Publish only the same positively verified original draft
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        python tools/release_publication.py complete --tag "${RELEASE_TAG}" --release-id "${RESERVATION_ID}" --assets "${RUNNER_TEMP}/release-candidate" > "${RUNNER_TEMP}/release-publication.json"
+    - name: Retain release-publication
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: release-publication
+        path: |-
+          ${{ runner.temp }}/release-upload.json
+          ${{ runner.temp }}/release-publication.json
+        if-no-files-found: error
+        retention-days: 14
