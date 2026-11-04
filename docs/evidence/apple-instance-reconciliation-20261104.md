@@ -55,6 +55,14 @@ explicitly uncertain. An initial Key test expected the wrong exception family;
 the actual writer guard already refused correctly. A mistyped compatibility
 test filename ran zero tests and was corrected, not counted as a passing run.
 
+Actual CLI replay also reproduced lost admission diagnostics: a stale inventory
+was safely rejected but surfaced only as a generic operation failure. Shared
+inventory/slot failures now map to a bounded allowlist of actionable codes;
+unknown errors are never echoed. Four regressions fail on the previous source,
+and the corrected seven-case CLI group passes. The second full Mac run was
+intentionally interrupted for this acceptance correction (3,449 cases passed
+before interruption, not a full-suite pass).
+
 ## Native and original-acceptance boundary
 
 | Original acceptance | What this change establishes | Still required |

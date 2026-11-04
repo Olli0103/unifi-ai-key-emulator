@@ -9,6 +9,8 @@ import re
 from .aiport_apple_plan import ApplePlanError,build_manifest,encode,private_directory
 from .aiport_apple_reconcile import AppleRuntimeError,AppleOutcomeUncertain,reconcile,settle
 from .aiport_apple_host import HostPreflight
+from .aiport_nas_reconcile import ReconcileError
+from .aiport_instance_state import InstanceStateError
 from .camera_inventory import fetch_inventory,InventoryError
 from .device_workflow import _private
 from .protocol import _json_object
@@ -110,6 +112,27 @@ def _publish(path,value):
 
 
 def _code(error):
+    # Shared readers carry human-readable fixed messages, not Apple error
+    # subclasses. Preserve actionable admission reasons without echoing an
+    # unknown exception, private path or lower-layer payload.
+    if isinstance(error,(ReconcileError,InstanceStateError)):
+        known={
+            'A fresh, supported pinned Protect inventory is required':'apple_fresh_supported_inventory_required',
+            'A complete AI Port plan is required':'apple_complete_capacity_plan_required',
+            'Protect camera inventory or capacity changed; review a new plan':'apple_camera_inventory_or_capacity_changed',
+            'Plan, camera inventory or slot identity no longer matches':'apple_plan_inventory_or_slot_identity_changed',
+            'Configured AI Port camera is outside its verified slot':'apple_configured_camera_outside_reviewed_slot',
+            'Selected NAS slot lacks verified camera capacity':'apple_selected_slot_capacity_unverified',
+            'A valid addressed AI Port plan slot is required':'apple_selected_slot_requires_assigned_address',
+            'Invalid AI Port plan slot':'apple_selected_slot_invalid',
+            'ONVIF ingest is not implemented; this slot cannot be provisioned':'apple_onvif_ingest_unsupported',
+            'Existing AI Port identity differs from the planned slot':'apple_slot_identity_changed',
+            'Existing AI Port identity is incomplete or invalid':'apple_slot_identity_invalid',
+            'A pinned controller certificate is required':'apple_pinned_controller_certificate_required',
+            'Controller certificate does not match pin or validity':'apple_controller_certificate_pin_or_validity_refused',
+        }
+        return known.get(error.args[0] if error.args and isinstance(error.args[0],str) else None,
+                         'apple_inventory_or_slot_preflight_refused')
     if (isinstance(error,(ApplePlanError,AppleRuntimeError)) and error.args
             and isinstance(error.args[0],str) and re.fullmatch('[a-z][a-z0-9_]{0,95}',error.args[0])):
         return error.args[0]

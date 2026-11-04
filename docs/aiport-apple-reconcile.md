@@ -66,6 +66,13 @@ do not paste it into public issues. Publication is create-only; identical bytes
 are a no-op, different existing bytes are retained. Planning issues no container
 command, loads no model and changes no identity or configuration.
 
+Admission failures use fixed actionable codes, for example
+`apple_fresh_supported_inventory_required`,
+`apple_plan_inventory_or_slot_identity_changed`,
+`apple_selected_slot_requires_assigned_address` and
+`apple_onvif_ingest_unsupported`. Unknown shared errors stay a fixed generic
+preflight refusal, never a raw exception or private path.
+
 ```sh
 local-aiport-apple run --plan /private/host/deployment.json \
   --inventory /private/host/inventory.json --slot-state 1=/private/port-1 \

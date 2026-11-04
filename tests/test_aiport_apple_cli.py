@@ -5,8 +5,11 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 from aikey import aiport_apple_cli as cli
 from aikey.config import atomic_private
+from aikey.aiport_nas_reconcile import ReconcileError
 from test_aiport_apple_reconcile import actor_fixture,Host
 
 
@@ -77,3 +80,32 @@ def test_cli_parser_and_real_core_apply_share_exact_manifest_receipt_contract(tm
     assert json.loads((host_state/'reconcile.json').read_bytes())['phase']=='completed'
     assert cli.main(args)==0
     assert json.loads(capsys.readouterr().out)['mode']=='unchanged'
+
+
+@pytest.mark.parametrize('fault,expected',[
+    ('stale','apple_fresh_supported_inventory_required'),
+    ('version','apple_fresh_supported_inventory_required'),
+    ('camera_removed','apple_plan_inventory_or_slot_identity_changed')])
+def test_actual_cli_admission_failure_is_actionable_before_output_or_runtime(tmp_path,capsys,fault,expected):
+    inputs,common,output,_=arguments(tmp_path)
+    report_path=Path(common[common.index('--inventory')+1])
+    report=json.loads(report_path.read_bytes())
+    if fault=='stale':
+        report['fetched_at']-=301
+    elif fault=='version':
+        report['protect_version']='unknown'
+    else:
+        report['cameras'].pop()
+    atomic_private(report_path,json.dumps(report))
+    before={path:path.read_bytes() for root in [*inputs[3].values(),inputs[4]['aikey_state']]
+            for path in root.rglob('*') if path.is_file()}
+    assert cli.main(['plan',*common,'--output',str(output)])==2
+    result=json.loads(capsys.readouterr().out)
+    assert result['error']==expected and not result['automatic_retry']
+    assert not output.exists() and all(path.read_bytes()==raw for path,raw in before.items())
+
+
+def test_unknown_shared_failure_is_not_echoed_as_an_operator_reason():
+    canary='fictional private payload '+str(os.getpid())
+    assert cli._code(ReconcileError(canary))=='apple_inventory_or_slot_preflight_refused'
+    assert canary not in cli._code(ValueError(canary))
