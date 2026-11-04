@@ -1188,6 +1188,11 @@ saved-state reconciliation, not automatic retry or reversal.
 
 ## Explicit local face enrollment
 
+The separate `local-aikey-faces enroll` CLI now uses a bounded regular-file
+photo snapshot and revision-bound save under its existing model-work lease.
+Its [CLI boundary and recovery contract](evidence/face-cli-enrollment-20261104.md)
+does not change this browser flow or constitute native enrollment acceptance.
+
 From **Local face identities**, **Enroll a local face identity** uses an already
 configured local Key face role only. It does not configure a model/server, enable
 recognition, add cameras, access recordings or name a native Protect group. All
