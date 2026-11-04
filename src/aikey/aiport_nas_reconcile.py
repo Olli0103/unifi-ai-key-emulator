@@ -170,10 +170,9 @@ def _verify_configured_cameras(plan: dict, report: dict, states: dict[int, Path]
                 "Configured AI Port camera is outside its verified slot") from exc
 
 
-def verify_inputs(plan: dict, manifest: dict, report: dict,
-                  states: dict[int, Path], options: dict,
-                  *, now: int | None = None) -> list[str]:
-    """Reject inventory drift, stale reports and edited deployment manifests."""
+def verify_camera_plan(plan: dict, report: dict, states: dict[int, Path],
+                       controller_ip: str, *, now: int | None = None) -> None:
+    """Shared read-only plan/camera admission for NAS and Apple host actors."""
     current_time = int(time.time()) if now is None else now
     fetched = report.get("fetched_at") if isinstance(report, dict) else None
     if (not isinstance(report, dict) or report.get("schema") != "aikey-camera-preflight/1"
@@ -206,14 +205,24 @@ def verify_inputs(plan: dict, manifest: dict, report: dict,
                             key: value for key, value in plan.items()
                             if key not in descriptive}):
                 raise ReconcileError("Protect camera inventory or capacity changed; review a new plan")
-        expected = build_nas_compose(plan, states, **options)
     except (AiPortPlanError, NasComposeError, KeyError, TypeError, ValueError) as exc:
         if isinstance(exc, ReconcileError):
             raise
         raise ReconcileError("Plan, camera inventory or slot identity no longer matches") from exc
+    _verify_configured_cameras(plan, report, states, controller_ip)
+
+
+def verify_inputs(plan: dict, manifest: dict, report: dict,
+                  states: dict[int, Path], options: dict,
+                  *, now: int | None = None) -> list[str]:
+    """Reject inventory drift, stale reports and edited deployment manifests."""
+    verify_camera_plan(plan,report,states,options['controller_ip'],now=now)
+    try:
+        expected = build_nas_compose(plan, states, **options)
+    except (AiPortPlanError, NasComposeError, KeyError, TypeError, ValueError) as exc:
+        raise ReconcileError("Plan, camera inventory or slot identity no longer matches") from exc
     if manifest != expected:
         raise ReconcileError("Compose manifest differs from verified plan and slot identities")
-    _verify_configured_cameras(plan, report, states, options["controller_ip"])
     if not expected["services"]:
         raise ReconcileError("No NAS services selected")
     return sorted(expected["services"])

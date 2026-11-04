@@ -1317,7 +1317,7 @@ class ConfigurationStore:
             raise ConfigurationStoreError("Cannot persist configuration history") from exc
 
     @contextmanager
-    def _locked(self, *, allow_device_pending: bool = False) -> Iterator[None]:
+    def _locked(self, *, allow_device_pending: bool = False, allow_host_pending: bool = False) -> Iterator[None]:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         flags = os.O_CREAT | os.O_RDWR
         if hasattr(os, "O_NOFOLLOW"):
@@ -1345,6 +1345,12 @@ class ConfigurationStore:
                 except DeviceIntentError:
                     raise UnsafeConfigurationChange(
                         'An unfinished device configuration save needs reconciliation before another change') from None
+            if not allow_host_pending:
+                from .host_activation import HostActivationError,check_writable
+                try:
+                    check_writable(self.path)
+                except HostActivationError:
+                    raise UnsafeConfigurationChange('Pending host activation needs original host reconciliation') from None
             yield
 
     def _replace(self, content: bytes) -> None:

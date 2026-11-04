@@ -876,7 +876,7 @@ class AiPortConfigurationStore:
         atomic_private(archived, content)
 
     @contextmanager
-    def _locked(self, *, allow_device_pending: bool = False) -> Iterator[None]:
+    def _locked(self, *, allow_device_pending: bool = False, allow_host_pending: bool = False) -> Iterator[None]:
         descriptor = -1
         try:
             descriptor = os.open(self.lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
@@ -895,6 +895,12 @@ class AiPortConfigurationStore:
                     except DeviceIntentError:
                         raise AiPortUnsafePolicyChange(
                             'An unfinished device configuration save needs reconciliation before another change') from None
+                if not allow_host_pending:
+                    from .host_activation import HostActivationError,check_writable
+                    try:
+                        check_writable(self.path)
+                    except HostActivationError:
+                        raise AiPortUnsafePolicyChange('Pending host activation needs original host reconciliation') from None
                 yield
         except OSError as exc:
             raise AiPortConfigurationError("aiport_config_lock_unavailable") from exc

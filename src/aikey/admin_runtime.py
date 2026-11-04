@@ -285,10 +285,17 @@ class RuntimeObserver:
         runtime = _normalize(kind, value)
         from .startup_configuration import revision, SCOPE
         loaded = revision(value.get("startup_configuration"))
-        return {"observation": "runtime_health", "runtime": runtime,
+        from .host_activation import SCHEMA
+        activation=value.get('host_activation_schema')
+        if activation is not None and activation!=SCHEMA:
+            raise ValueError('Unexpected host activation schema')
+        result={"observation": "runtime_health", "runtime": runtime,
                 "observed_at": datetime.now(timezone.utc).isoformat(),
                 "tls_ca_and_leaf_pin_verified": True, "runtime_configuration_revision": loaded,
                 "runtime_configuration_revision_scope": SCOPE if loaded is not None else None}
+        if activation is not None:
+            result['host_activation_schema']=activation
+        return result
 
     async def read_session_identity(self, profile):
         """Fresh pinned E5 component identity, including hybrid CLIP+E5 Keys."""

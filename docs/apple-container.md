@@ -173,6 +173,10 @@ hold the specific supervisor before removing a container.
 
 ## Networking limits and later search work
 
+For the separate source-only 1.6.1 AI Port create/start operator, see
+[reviewed instance reconciliation](aiport-apple-reconcile.md). It does not
+automatically install privileged transport, adopt devices or pair cameras.
+
 Apple's default network uses NAT. Published ports pass through a proxy that opens a separate connection to the container. The application therefore cannot assume it sees the original controller IP. This follows from the 1.4.1 `ConnectHandler.swift` and `UDPForwarder.swift` implementation, reviewed alongside `NetworkMode.swift` in the [release source](https://github.com/apple/container/tree/1.4.1/Sources).
 
 Keep discovery disabled inside the container. Publishing UDP 10001 does not establish LAN multicast forwarding, and a proxied sender address conflicts with the emulator's exact controller-IP allowlist. Do not broaden that allowlist to make the test pass. The tested Mac setup used host-side discovery to populate the native candidate's address. For a separate host responder, use the opt-in companion below.
