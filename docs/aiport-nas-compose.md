@@ -30,7 +30,28 @@ Apple `container image save` emits an OCI archive. Before using the NAS vendor D
 
 If the NAS already has a suitable macvlan, add `--external-network EXISTING_NETWORK_NAME` to both generation and reconciliation commands. The manifest then joins that network instead of creating a second one on the same LAN. Before reading or starting containers, reconciliation inspects the existing Docker network and requires the declared macvlan driver, parent interface, subnet and gateway. It also checks that each container is attached to the named network at its planned IP and MAC. The NAS Docker UI may show a friendly network-card label; use the actual parent interface reported by `docker network inspect` for `--parent`. This check does not reserve an IP in the router or prove that Protect can reach the container.
 
-On the NAS, first verify the parent interface and each IP reservation. `local-aiport-nas-reconcile` provides a read-only default run and an explicit `--apply` mode. Pass the same plan, Compose file, slot-state assignments and network/identity arguments used to create the manifest, plus `--api-key-file`, `--web-trust-file`, and `--web-cert-file` for the pinned Protect integration API. Keep all these files private. The command fetches a fresh inventory, rejects changed camera assignments, regenerates and compares the complete manifest, validates Docker Compose, and reads the current service states. It also inspects each existing container's image, port-443 command, IP, MAC, non-root user, read-only root filesystem, dropped capabilities, no-new-privileges setting, unprivileged-port sysctl, absence of published host ports, and private state mount against the manifest. Its dry run reports which slots would start and gives each running slot a readiness state: `connected`, `awaiting_adoption`, or `controller_disconnected`. With `--apply`, it starts only absent or stopped selected slots using `--no-recreate --no-build --pull never`; it never replaces a running service. It refuses to start another slot while an existing adopted slot is disconnected. After each start it checks the container's own pinned HTTPS `/healthz` through `docker compose exec`, because the NAS host usually cannot reach a macvlan container directly. A newly started, unadopted slot can report `awaiting_adoption`; an adopted slot must reconnect during 16 bounded checks separated by two seconds. If it cannot, the reconciler stops only slots attempted during that invocation. It does not remove any containers or volumes.
+On the NAS, first verify the parent interface and each IP reservation. `local-aiport-nas-reconcile` provides a read-only default run and an explicit `--apply` mode. Pass the same plan, Compose file, slot-state assignments and network/identity arguments used to create the manifest, plus `--api-key-file`, `--web-trust-file`, and `--web-cert-file` for the pinned Protect integration API. Keep all these files private. The command fetches a fresh inventory, rejects changed camera assignments, regenerates and compares the complete manifest, validates Docker Compose, and reads the current service states. It also inspects each existing container's image, port-443 command, IP, MAC, non-root user, read-only root filesystem, dropped capabilities, no-new-privileges setting, unprivileged-port sysctl, absence of published host ports, and private state mount against the manifest. Its dry run reports which slots would start and gives each running slot a readiness state: `connected`, `awaiting_adoption`, or `controller_disconnected`. With `--apply`, it creates absent selected slots without starting them using `--no-recreate --no-build --pull never`, verifies their operation labels, then starts only the observed container IDs; it never replaces a running service. It refuses to start another slot while an existing adopted slot is disconnected. After each start it checks the container's own pinned HTTPS `/healthz` through `docker exec` addressed to the inspected container ID, because the NAS host usually cannot reach a macvlan container directly. A newly started, unadopted slot can report `awaiting_adoption`; an adopted slot must reconnect during 16 bounded checks separated by two seconds. If it cannot, the reconciler stops only positively observed starts from that operation, by exact container ID. A lost reply or unobserved stop remains uncertain and blocks another apply. It does not remove any containers or volumes.
+
+
+Apply requires an existing owner-only (0700), canonical `--host-state` directory
+outside every guest mount, shared by all operators for this deployment. The
+host writer and existing configuration mutexes serialize admission. Before any
+start, the actor persists the original operation and a startup reservation,
+and uses a private operation-labelled Compose recipe. Dollar interpolation is
+refused. The Linux CLI is `/usr/bin/docker` with an explicit local Unix socket, not a saved Docker context; the monitored command child retains
+the host lease until collection even if its actor exits. Images to be started
+must advertise `org.local-aikey.host-activation=1`; old running slots are only
+observed, not upgraded. No config or identity backup is restored on failure.
+
+After interruption, use the same original inputs and authority with `--settle`
+instead of `--apply`. Settlement only observes: it requires the original
+container/operation, unchanged configuration and identity, plus a terminal
+command receipt and positive postcondition for an unacknowledged mutation.
+Container absence alone does not prove that a late request is impossible.
+Missing evidence keeps the reservation and operation fenced; never delete the
+intent or force a retry. Completed prior receipts and failed outcomes are
+retained in the private authority directory. This mechanism is not proof of
+native adoption, camera pairing, recording continuity or host recovery.
 
 The reconciler and inventory reader share one exact supported-version check
 (currently Protect 7.3.60, 7.3.68, 7.3.70 and 7.3.74). Other versions, including
@@ -38,7 +59,7 @@ unknown patch releases and prerelease suffixes, remain blocked. This is inventor
 schema support, not blanket AI Port feature-parity qualification. Version support
 does not bypass inventory freshness, slot/camera assignment or manifest checks.
 
-Example dry run for slot 2 (add `--apply` only after checking the output and LAN reservations):
+Example dry run for slot 2 (add `--apply --host-state PRIVATE_HOST_AUTHORITY` only after checking the output and LAN reservations):
 
 ```sh
 local-aiport-nas-reconcile \

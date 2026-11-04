@@ -7,7 +7,7 @@ import pytest
 
 from aikey import aiport_nas_compose as compose
 from aikey import aiport_nas_reconcile as reconciler
-from test_aiport_nas_reconcile import FakeDocker, inputs
+from test_aiport_nas_reconcile import reconcile as fixture_reconcile, FakeDocker, inputs
 from test_aiport_nas_compose import fixture
 from test_compose_project_fencing import arguments
 
@@ -248,12 +248,12 @@ def test_runtime_exact_mounts_and_isolated_health_network(tmp_path, mutation):
     manifest = compose.build_nas_compose(plan, states, runtime_layout=layout(tmp_path), **options)
     fake = LayoutDocker(manifest, mutation)
     if mutation is None:
-        result = reconciler.reconcile(tmp_path / "compose.json", manifest, states, run=fake)
+        result = fixture_reconcile(tmp_path / "compose.json", manifest, states, run=fake)
         assert result["running"] == ["aiport_slot_2"]
         assert result["would_start"] == []
     else:
         with pytest.raises(reconciler.ReconcileError):
-            reconciler.reconcile(
+            fixture_reconcile(
                 tmp_path / "compose.json",
                 manifest,
                 states,
@@ -261,7 +261,7 @@ def test_runtime_exact_mounts_and_isolated_health_network(tmp_path, mutation):
                 run=fake,
                 pause=lambda _: None,
             )
-    assert not any("up" in call or "stop" in call for call in fake.calls)
+    assert not any("start" in call or "stop" in call for call in fake.calls)
 
 
 def test_both_clis_load_private_explicit_runtime_layout(tmp_path, monkeypatch, capsys):
@@ -320,7 +320,7 @@ def test_declared_layout_start_and_rollback_keep_exact_guards(tmp_path, failed_h
     fake.fail_health = failed_health
     if failed_health:
         with pytest.raises(reconciler.ReconcileError, match="health"):
-            reconciler.reconcile(
+            fixture_reconcile(
                 tmp_path / "compose.json",
                 manifest,
                 states,
@@ -330,12 +330,12 @@ def test_declared_layout_start_and_rollback_keep_exact_guards(tmp_path, failed_h
             )
         assert sum("stop" in call for call in fake.calls) == 1
     else:
-        result = reconciler.reconcile(
+        result = fixture_reconcile(
             tmp_path / "compose.json", manifest, states, apply=True, run=fake, pause=lambda _: None
         )
         assert result["started"] == ["aiport_slot_2"]
         assert not any("stop" in call for call in fake.calls)
-    assert sum("up" in call for call in fake.calls) == 1
+    assert sum("start" in call for call in fake.calls) == 1
 
 
 @pytest.mark.parametrize(

@@ -2,7 +2,7 @@
 
 Invoked by absolute package path with Python -I. Never a shell, provider worker
 or generic untrusted process sandbox. Its CLI accepts only the existing local
-Apple runtime / interface-reader commands, not arbitrary executables.
+Apple runtime / interface-reader and local-socket NAS Docker commands, not arbitrary executables.
 """
 import argparse
 import fcntl
@@ -25,7 +25,7 @@ SCHEMA = 'aikey-host-command/1'
 RESULT_SCHEMA = 'aikey-host-command-result/1'
 _HASH = re.compile('[0-9a-f]{64}\\Z')
 _OP = re.compile('[0-9a-f]{32}\\Z')
-_ACTION = re.compile(r'(?:stop_old|run_new|create_new|start_new|stop_new|delete_new|restart_old|recover_(?:stop_new|delete_new|restart_old)_[123])\Z')
+_ACTION = re.compile(r'(?:stop_old|run_new|create_new|start_new|stop_new|delete_new|restart_old|recover_(?:stop_new|delete_new|restart_old)_[123]|nas_(?:create|start|stop)_(?:[1-9]|1[0-6]))\Z')
 ERRORS = {'owner_lost', 'cancelled', 'timeout', 'output_limit', 'exec_failed', 'output_refused', 'observation_failed'}
 
 
@@ -124,6 +124,31 @@ def allowed(argv):
     if not isinstance(argv, list) or not argv or len(argv) > 256:
         return False
     if not all(isinstance(item, str) and 0 < len(item) <= 8192 and '\x00' not in item for item in argv):
+        return False
+    if argv[0] == '/usr/bin/docker':
+        if argv[1:3] != ['--host', 'unix:///var/run/docker.sock']:
+            return False
+        argv = [argv[0], *argv[3:]]
+        if argv[1:2] == ['start'] and len(argv) == 3:
+            return bool(re.fullmatch('[0-9a-fA-F]{12,64}', argv[2]))
+        if argv[1:2] == ['exec'] and len(argv) == 7:
+            return (bool(re.fullmatch('[0-9a-fA-F]{12,64}', argv[2]))
+                    and argv[3:5] == ['python', '-c'] and bool(_HASH.fullmatch(argv[6])))
+        if argv[1:4] == ['image', 'inspect', '--format'] and len(argv) == 6:
+            return argv[4] == '{{json .Config.Labels}}' and bool(re.fullmatch('[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}', argv[5]))
+        if argv[1:4] == ['stop', '--time', '10'] and len(argv) == 5:
+            return bool(re.fullmatch('[0-9a-fA-F]{12,64}', argv[-1]))
+        if argv[1:3] == ['inspect', '--format'] and len(argv) == 5:
+            return bool(re.fullmatch('[0-9a-fA-F]{12,64}', argv[-1]))
+        if argv[1:4] == ['network', 'inspect', '--format'] and len(argv) == 6:
+            return bool(re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', argv[-1]))
+        if (len(argv) >= 8 and argv[1:3] == ['compose', '--project-name']
+                and re.fullmatch('[a-z0-9][a-z0-9_-]{0,62}', argv[3])
+                and argv[4] == '-f' and Path(argv[5]).is_absolute()):
+            tail = argv[6:]
+            return (tail == ['config', '--quiet'] or tail == ['ps', '--all', '--format', 'json']
+                    or tail[:-1] == ['create', '--no-recreate', '--no-build', '--pull', 'never']
+                    and bool(re.fullmatch('aiport_slot_[0-9]+', tail[-1])))
         return False
     if argv == ['/sbin/ifconfig']:
         return True

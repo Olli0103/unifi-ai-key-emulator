@@ -11,6 +11,7 @@ import asyncio
 from fractions import Fraction
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import ssl
@@ -230,7 +231,9 @@ def verify_inputs(plan: dict, manifest: dict, report: dict,
 
 def _run(argv: list[str], timeout: int = 15) -> str:
     try:
-        result = subprocess.run(argv, capture_output=True, text=True,
+        result = subprocess.run(['/usr/bin/docker', '--host', 'unix:///var/run/docker.sock', *argv[1:]],
+                                env={key: os.environ[key] for key in ('PATH', 'HOME', 'TMPDIR') if key in os.environ},
+                                capture_output=True, text=True,
                                 timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ReconcileError("Docker command unavailable or timed out") from exc
@@ -426,8 +429,14 @@ def _readiness(health: dict) -> str:
 
 def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
               *, apply: bool = False, run: Callable[[list[str], int], str] = _run,
-              pause: Callable[[float], None] = time.sleep) -> dict:
+              pause: Callable[[float], None] = time.sleep, host_state=None, verify=None) -> dict:
     """Validate Compose, inspect state, and optionally start only missing slots."""
+    if apply:
+        if host_state is None or verify is None:
+            raise ReconcileError("NAS apply requires private host-state and fresh input verification")
+        from .nas_reconcile_intent import execute
+        return execute(manifest_path, manifest, states, host_state=host_state, verify=verify,
+                       run=None if run is _run else run, pause=pause)
     services = sorted(manifest["services"])
     project_name = manifest.get("name")
     run(_compose(manifest_path, project_name, "config", "--quiet"), 15)
@@ -446,43 +455,8 @@ def reconcile(manifest_path: Path, manifest: dict, states: dict[int, Path],
         slot = int(name.removeprefix("aiport_slot_"))
         health[name] = _health(run, manifest_path, name, states[slot], project_name)
         readiness[name] = _readiness(health[name])
-    if not apply:
-        return {"mode": "dry_run", "running": running, "would_start": to_start,
-                "health": health, "readiness": readiness}
-    if any(status == "controller_disconnected" for status in readiness.values()):
-        raise ReconcileError("An adopted AI Port is disconnected; no new slots were started")
-    attempted = []
-    try:
-        for name in to_start:
-            attempted.append(name)
-            run(_compose(manifest_path, project_name, "up", "-d", "--no-deps", "--no-recreate",
-                         "--no-build", "--pull", "never", name), 90)
-            current = _rows(run(_compose(manifest_path, project_name, "ps", "--all", "--format", "json"),
-                                15), services)
-            if name not in current or current[name]["State"] != "running":
-                raise ReconcileError(f"{name} did not enter running state")
-            _inspect(run, current[name], manifest["services"][name], network_name, health_network_name)
-            slot = int(name.removeprefix("aiport_slot_"))
-            for attempt in range(_HEALTH_ATTEMPTS):
-                try:
-                    health[name] = _health(run, manifest_path, name, states[slot], project_name)
-                    readiness[name] = _readiness(health[name])
-                    if readiness[name] == "controller_disconnected":
-                        raise ReconcileError(f"{name} is adopted but disconnected from Protect")
-                    break
-                except ReconcileError:
-                    if attempt == _HEALTH_ATTEMPTS - 1:
-                        raise
-                    pause(_HEALTH_PAUSE_SECONDS)
-        return {"mode": "applied", "preserved": running, "started": to_start,
-                "health": health, "readiness": readiness}
-    except ReconcileError:
-        for name in reversed(attempted):
-            try:
-                run(_compose(manifest_path, project_name, "stop", "--timeout", "10", name), 30)
-            except ReconcileError:
-                pass
-        raise
+    return {"mode": "dry_run", "running": running, "would_start": to_start,
+            "health": health, "readiness": readiness}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -506,6 +480,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--web-trust-file", required=True, type=Path)
     parser.add_argument("--web-cert-file", required=True, type=Path)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--host-state", type=Path)
+    parser.add_argument("--settle", action="store_true")
     args = parser.parse_args(argv)
     try:
         runtime_layout = read_runtime_layout(args.runtime_layout)
@@ -527,7 +503,15 @@ def main(argv: list[str] | None = None) -> int:
                    "external_network": args.external_network, "project_name": args.project_name,
                    "runtime_layout": runtime_layout}
         verify_inputs(plan, manifest, report, states, options)
-        outcome = reconcile(args.compose, manifest, states, apply=args.apply)
+        if args.apply or args.settle:
+            if args.host_state is None or args.apply and args.settle:
+                raise ReconcileError("NAS apply/settle requires one private host authority")
+            from .nas_reconcile_intent import execute
+            outcome = execute(args.compose, manifest, states, host_state=args.host_state,
+                verify=lambda: verify_inputs(plan, manifest, report, states, options),
+                settle=args.settle)
+        else:
+            outcome = reconcile(args.compose, manifest, states, apply=False)
     except (InventoryError, ReconcileError, OSError, ValueError) as exc:
         parser.error(str(exc))
     print(json.dumps(outcome, indent=2))

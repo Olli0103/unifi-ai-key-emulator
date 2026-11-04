@@ -2,6 +2,7 @@
 
 import json
 import time
+from pathlib import Path
 from copy import deepcopy
 
 import pytest
@@ -9,8 +10,18 @@ import pytest
 from aikey.aiport_nas_compose import build_nas_compose
 from aikey.aiport_deployment import plan_ai_ports
 from aikey.aiport_instance_state import provision_slot
-from aikey.aiport_nas_reconcile import ReconcileError, reconcile, verify_inputs
+from aikey.aiport_nas_reconcile import ReconcileError, reconcile as actual_reconcile, verify_inputs
 from test_aiport_nas_compose import fixture
+
+
+def reconcile(path, manifest, states, **kwargs):
+    # Fixtures exercise the actor with a pure verifier; real freshness and CLI
+    # admission are independently covered below and in test_nas_reconcile_intent.
+    if kwargs.get('apply'):
+        directory = path.parent/'authority'
+        directory.mkdir(mode=0o700, exist_ok=True)
+        kwargs.update(host_state=directory, verify=lambda: None)
+    return actual_reconcile(path, manifest, states, **kwargs)
 
 
 def inputs(tmp_path, selected_slot=2):
@@ -182,10 +193,19 @@ class FakeDocker:
         self.control_connected = control_connected
         self.unsafe_network = unsafe_network
         self.started = False
+        self.created = False
+        self.operation = None
         self.calls = []
 
     def __call__(self, argv, timeout):
         self.calls.append(argv)
+        if '-f' in argv and Path(argv[argv.index('-f')+1]).exists():
+            recipe = json.loads(Path(argv[argv.index('-f')+1]).read_text())
+            self.operation = recipe['services']['aiport_slot_2'].get('labels', {}).get('org.aikey.operation')
+        if argv[1:3] == ['image', 'inspect']:
+            return json.dumps({'org.local-aikey.host-activation': '1'})
+        if 'inspect' in argv and '.Config.Labels' in argv[3]:
+            return json.dumps({'org.aikey.operation': self.operation})
         if argv[:3] == ["docker", "network", "inspect"]:
             expected = self.manifest["x-aikey-network-check"]
             value = {
@@ -206,6 +226,9 @@ class FakeDocker:
             if self.started:
                 return json.dumps({"Service": "aiport_slot_2", "State": "running",
                                    "ID": "a" * 12, "Publishers": []})
+            if self.created:
+                return json.dumps({'Service': 'aiport_slot_2', 'State': 'exited',
+                                   'ID': 'a'*12, 'Publishers': []})
             return self.rows
         if "inspect" in argv:
             service = self.manifest["services"]["aiport_slot_2"]
@@ -249,7 +272,11 @@ class FakeDocker:
                 raise ReconcileError("health failed")
             return json.dumps({"service": "aiport-candidate", "adopted": self.adopted,
                                "control_connected": self.control_connected})
-        if "up" in argv:
+        if "create" in argv:
+            self.created = True
+            return ""
+        if "start" in argv:
+            self.created = True
             self.started = True
             return ""
         if "stop" in argv:
@@ -264,15 +291,15 @@ def test_dry_run_does_not_mutate_and_apply_starts_once(tmp_path):
     fake = FakeDocker(manifest)
     dry = reconcile(path, manifest, states, run=fake)
     assert dry["would_start"] == ["aiport_slot_2"]
-    assert not any("up" in call or "stop" in call for call in fake.calls)
+    assert not any("start" in call or "stop" in call for call in fake.calls)
     fake.calls.clear()
     applied = reconcile(path, manifest, states, apply=True, run=fake,
                         pause=lambda _: None)
     assert applied["started"] == ["aiport_slot_2"]
     assert applied["readiness"] == {"aiport_slot_2": "awaiting_adoption"}
-    assert sum("up" in call for call in fake.calls) == 1
-    assert "--no-recreate" in next(call for call in fake.calls if "up" in call)
-    assert "--pull" in next(call for call in fake.calls if "up" in call)
+    assert sum("start" in call for call in fake.calls) == 1
+    assert "--no-recreate" in next(call for call in fake.calls if "create" in call)
+    assert "--pull" in next(call for call in fake.calls if "create" in call)
 
 
 def test_external_macvlan_is_verified_before_start(tmp_path):
@@ -302,7 +329,7 @@ def test_wrong_external_macvlan_or_container_attachment_blocks_apply(
     with pytest.raises(ReconcileError):
         reconcile(tmp_path / "compose.json", manifest, {2: states[2]},
                   apply=True, run=fake)
-    assert not any("up" in call or "stop" in call for call in fake.calls)
+    assert not any("start" in call or "stop" in call for call in fake.calls)
 
 
 def test_existing_running_container_is_preserved(tmp_path):
@@ -314,17 +341,17 @@ def test_existing_running_container_is_preserved(tmp_path):
                         apply=True, run=fake)
     assert outcome["preserved"] == ["aiport_slot_2"]
     assert outcome["started"] == []
-    assert not any("up" in call or "stop" in call for call in fake.calls)
+    assert not any("start" in call or "stop" in call for call in fake.calls)
 
 
 def test_adopted_new_slot_must_reconnect_or_it_is_stopped(tmp_path):
     _, states, _, manifest, _ = inputs(tmp_path)
     fake = FakeDocker(manifest, adopted=True)
-    with pytest.raises(ReconcileError, match="disconnected from Protect"):
+    with pytest.raises(ReconcileError, match="nas_started_runtime_disconnected"):
         reconcile(tmp_path / "compose.json", manifest, states,
                   apply=True, run=fake, pause=lambda _: None)
     assert sum("exec" in call for call in fake.calls) == 16
-    assert [call[-1] for call in fake.calls if "stop" in call] == ["aiport_slot_2"]
+    assert [call[-1] for call in fake.calls if "stop" in call] == ["a"*12]
 
 
 def test_existing_disconnected_slot_blocks_new_apply_without_stopping_it(tmp_path):
@@ -334,9 +361,9 @@ def test_existing_disconnected_slot_blocks_new_apply_without_stopping_it(tmp_pat
     fake = FakeDocker(manifest, json.dumps(row), adopted=True)
     dry = reconcile(tmp_path / "compose.json", manifest, states, run=fake)
     assert dry["readiness"] == {"aiport_slot_2": "controller_disconnected"}
-    with pytest.raises(ReconcileError, match="no new slots"):
+    with pytest.raises(ReconcileError, match="nas_prior_runtime_disconnected"):
         reconcile(tmp_path / "compose.json", manifest, states, apply=True, run=fake)
-    assert not any("up" in call or "stop" in call for call in fake.calls)
+    assert not any("start" in call or "stop" in call for call in fake.calls)
 
 
 def test_connected_adopted_slot_reports_ready(tmp_path):
@@ -353,7 +380,7 @@ def test_failed_new_container_stops_only_attempted_service(tmp_path):
     with pytest.raises(ReconcileError):
         reconcile(tmp_path / "compose.json", manifest, states,
                   apply=True, run=fake, pause=lambda _: None)
-    assert [call[-1] for call in fake.calls if "stop" in call] == ["aiport_slot_2"]
+    assert [call[-1] for call in fake.calls if "stop" in call] == ["a"*12]
 
 
 @pytest.mark.parametrize("rows", [
@@ -367,7 +394,7 @@ def test_unexpected_docker_state_is_rejected_before_mutation(tmp_path, rows):
     with pytest.raises(ReconcileError):
         reconcile(tmp_path / "compose.json", manifest, states,
                   apply=True, run=fake)
-    assert not any("up" in call or "stop" in call for call in fake.calls)
+    assert not any("start" in call or "stop" in call for call in fake.calls)
 
 
 def test_running_slot_with_wrong_network_address_is_rejected(tmp_path):
@@ -377,7 +404,7 @@ def test_running_slot_with_wrong_network_address_is_rejected(tmp_path):
     fake = FakeDocker(manifest, json.dumps(row), wrong_ip=True)
     with pytest.raises(ReconcileError, match="IP or MAC"):
         reconcile(tmp_path / "compose.json", manifest, states, apply=True, run=fake)
-    assert not any("up" in call or "stop" in call for call in fake.calls)
+    assert not any("start" in call or "stop" in call for call in fake.calls)
 
 
 @pytest.mark.parametrize("unsafe_runtime", [
@@ -391,7 +418,7 @@ def test_existing_slot_with_weakened_isolation_is_rejected(tmp_path, unsafe_runt
     fake = FakeDocker(manifest, json.dumps(row), unsafe_runtime=unsafe_runtime)
     with pytest.raises(ReconcileError, match="user, isolation or state mount"):
         reconcile(tmp_path / "compose.json", manifest, states, apply=True, run=fake)
-    assert not any("up" in call or "stop" in call for call in fake.calls)
+    assert not any("start" in call or "stop" in call for call in fake.calls)
 
 
 def test_existing_slot_with_wrong_port_command_is_rejected_before_start(tmp_path):
@@ -401,4 +428,4 @@ def test_existing_slot_with_wrong_port_command_is_rejected_before_start(tmp_path
     fake = FakeDocker(manifest, json.dumps(row), unsafe_runtime="wrong_port")
     with pytest.raises(ReconcileError, match="command"):
         reconcile(tmp_path / "compose.json", manifest, states, apply=True, run=fake)
-    assert not any("up" in call or "stop" in call for call in fake.calls)
+    assert not any("start" in call or "stop" in call for call in fake.calls)
