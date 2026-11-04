@@ -91,6 +91,7 @@ class Application:
         await self.worker.refresh_caption_budget_status()
         return web.json_response({"service": "local-aikey", "version": "0.1.0",
             "startup_configuration": self._startup_configuration,
+            "host_activation_schema": "aikey-host-activation/1",
             "device": self.device.status, "worker": self.worker.status(),
             "camera_registry": (self.camera_registry.status() if self.camera_registry is not None
                                 else {"enabled": False}),

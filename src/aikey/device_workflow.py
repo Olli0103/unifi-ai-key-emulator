@@ -731,10 +731,15 @@ class DeviceWorkflowStore:
     def transaction_status(self):
         content,current=self._read()
         record=fence.read(self.store.path)
+        from .host_activation import read as host_activation
+        reserved=host_activation(self.store.path)
         result={'schema':SCHEMA,'profile':self.profile,'revision':_sha(content),
                 'pending':record is not None and record['state']=='prepared',
                 'rollback_available':False,'reconcile_available':False,
                 'activation':'saved_not_active_runtime'}
+        result['host_activation_pending']=reserved is not None and reserved['phase']=='prepared'
+        if result['host_activation_pending']:
+            return result
         if record is None:
             return result
         if record['profile']!=self.profile:

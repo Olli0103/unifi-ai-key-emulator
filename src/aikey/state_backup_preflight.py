@@ -96,6 +96,13 @@ def _profile_spec(kind: str, directory: Path) -> dict:
         identity = _mac(config.get("mac"))
     from .controller_trust import DIRECTORY, selected, _root as trust_root, _read as trust_read
     retained = {}
+    from .host_activation import read as host_activation,path as activation_path
+    reservation=host_activation(directory/'config.json')
+    if reservation is not None:
+        if reservation['phase']=='prepared':
+            raise ValueError('pending host activation blocks coherent backup')
+        reserved=activation_path(directory/'config.json')
+        retained[reserved.relative_to(directory).as_posix()]=_sha256(reserved)
     if kind=='aiport' and config.get('face_model_space_ref'):
         from .port_feature_models import load_face_space
         load_face_space(directory,config['face_model_space_ref'],_mac(config.get('mac')),config.get('live_face'))

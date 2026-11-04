@@ -143,6 +143,8 @@ def load_startup_config(path: Path) -> tuple[dict, str]:
         raw, revision = read_snapshot(path, limit=1024 * 1024)
         config = json.loads(raw)
         check_device_intent(path,durable=False)
+        from .host_activation import check_startup
+        check_startup(path,revision)
     except (OSError, ValueError, UnicodeError) as exc:
         raise ConfigError("Cannot read valid startup configuration") from exc
     return validate_config(config, base=path.resolve().parent), revision

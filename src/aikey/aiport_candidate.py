@@ -713,13 +713,18 @@ class CandidateService:
     @classmethod
     def from_configuration_file(cls, path: Path):
         from .device_workflow_fence import DeviceIntentError, check
+        from .host_activation import HostActivationError,check_startup
         try:
             check(path,durable=False)
             raw = _private_file(path, 4096)
+            check_startup(path,hashlib.sha256(raw).hexdigest())
             config = parse_config(raw, state_dir=path.parent)
             check(path,durable=False)
+            check_startup(path,hashlib.sha256(raw).hexdigest())
         except DeviceIntentError:
             raise CandidateError('Unfinished device configuration needs reconciliation before startup') from None
+        except HostActivationError:
+            raise CandidateError('Pending host activation requires the exact reviewed startup bytes') from None
         if config.get('onvif_catalog_ref'):
             from .onvif_catalog import load
             try:
@@ -2248,6 +2253,7 @@ class CandidateService:
                 live_budget_healthy = False
         return web.json_response({"service": "aiport-candidate", "adopted": self.adoption.adopted,
             "startup_configuration": self._startup_configuration,
+            "host_activation_schema": "aikey-host-activation/1",
             "pool_binding_schema": binding_schema if self._pool_camera_order else None,
             "pool_binding_revision": (binding_revision(self.config["mac"], self._pool_camera_order)
                                       if self._pool_camera_order else None),

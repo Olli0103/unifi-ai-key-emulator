@@ -200,7 +200,9 @@ class DeviceControls:
                 continue
             base = self._hidden({'csrf': csrf, 'profile': profile, 'revision': row['revision']})
             txn = row['transaction']
-            if txn['pending']:
+            if txn.get('host_activation_pending'):
+                body+='<p>A host startup reservation is pending. Reconcile the original host-controller intent; this page cannot replay it.</p>'
+            elif txn['pending']:
                 body += "<p>A prior write needs reconciliation. No new device edits or activation are admitted.</p>"
                 if txn['reconcile_available']:
                     body += ("<form method='post' action='/devices/reconcile-preview'>" + base
@@ -349,7 +351,7 @@ class DeviceControls:
                         if any(search.values()):
                             selection.update(search)
                 status = await asyncio.to_thread(store.transaction_status)
-                if status['pending']:
+                if status['pending'] or status.get('host_activation_pending'):
                     raise ValueError
                 preview = await asyncio.to_thread(store.preview_controller, fields['revision'], selection)
                 action = 'controller'
