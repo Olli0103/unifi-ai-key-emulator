@@ -46,7 +46,7 @@ Each architecture's existing `container-install-*` artifact contains exactly:
 
 - `summary.json`: the complete original install/cleanup result;
 - `image-inventory.json`: source, image IDs, architecture/profile, scanner
-  version, package counts, missing-SPDX counts, SBOM hashes and cleanup binding;
+  version, package counts, missing-SPDX/PURL counts, SBOM hashes and cleanup binding;
 - `aikey-sbom.cdx.json` and `aiport-sbom.cdx.json`: the standard image inventories.
 
 No raw native scanner report (which includes image environment/history), image
@@ -60,6 +60,11 @@ SPDX expression. A nonzero count is **unknown**, not a zero-license obligation,
 an allowlist decision or an automatic release failure/approval. Even a declared
 SPDX expression is not proof of rights, notice compliance or corresponding-source
 availability. Both `licenses_reviewed` and `release_approved` remain **false**.
+`packages_without_purl` separately counts missing package URLs. Syft can emit an
+empty native PURL and omit the corresponding CycloneDX field; these represent
+the same unknown, not a missing package. Such entries retain their exact
+name/version/license metadata; no PURL is invented. Present PURLs must agree,
+and missing/conflicting required runtime versions still fail closed.
 APT versions are observed from each actual image, not asserted reproducible
 across later Debian updates. Default-image evidence excludes optional detector,
 ONNX and model variants; those need separate inventories and qualification.

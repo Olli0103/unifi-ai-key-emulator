@@ -220,7 +220,11 @@ def validate(native, cdx, identity, expected):
             require(kind == 'operating-system', 'image_inventory_component_type_refused')
     def key(row, origin):
         values = tuple(row.get(field) for field in ('name', 'version', 'purl'))
-        if not all(isinstance(value, str) and 0 < len(value) <= 4096 for value in values):
+        name, version, purl = values
+        valid = (all(isinstance(value, str) and 0 < len(value) <= 4096 for value in (name, version))
+                 and (purl is None or isinstance(purl, str)
+                      and (purl == '' or purl.startswith('pkg:') and len(purl) <= 4096)))
+        if not valid:
             error = CheckError('image_inventory_component_identity_refused')
             # Fixed field/type/length facts only, never the offending payload,
             # component name, paths or image environment/configuration.
@@ -228,7 +232,10 @@ def validate(native, cdx, identity, expected):
                 field: {'type': type(value).__name__, 'length': len(value) if isinstance(value, str) else None}
                 for field, value in zip(('name', 'version', 'purl'), values)}}
             raise error
-        return values
+        # PURL is optional in both formats. Syft emits an empty native string
+        # but omits the empty CycloneDX field. Preserve this as unknown, never
+        # invent a URL or discard a package to force agreement.
+        return name, version, purl or None
     def native_key(row):
         licenses = tuple(sorted(item.get('spdxExpression') or item['value'] for item in row.get('licenses', [])))
         return key(row, 'native'), licenses
@@ -242,11 +249,14 @@ def validate(native, cdx, identity, expected):
     python = {}
     deb = set()
     unknown = 0
+    without_purl = 0
     for row in artifacts:
         require(row.get('type') in {'deb', 'python', 'binary'}, 'image_inventory_unreviewed_package_type')
         counts[row['type']] += 1
         if not row.get('licenses') or not any(item.get('spdxExpression') for item in row['licenses']):
             unknown += 1
+        if not row.get('purl'):
+            without_purl += 1
         if row['type'] == 'python':
             python.setdefault(normalized(row['name']), set()).add(row['version'])
         if row['type'] == 'deb':
@@ -258,6 +268,7 @@ def validate(native, cdx, identity, expected):
             'package_count': len(artifacts), 'package_types': dict(sorted(counts.items())),
             'operating_system': {'id': distro['id'], 'version': distro['versionID']},
             'packages_without_spdx_expression': unknown, 'runtime_lock_packages_verified': len(expected),
+            'packages_without_purl': without_purl,
             'licenses_reviewed': False, 'release_approved': False}
 
 
@@ -314,7 +325,7 @@ def finalize(results, revision, architecture, nonce):
         fields = {'schema', 'image_id', 'revision', 'architecture', 'nonce', 'profile', 'scanner', 'scanner_version',
                   'package_count', 'package_types', 'packages_without_spdx_expression',
                   'runtime_lock_packages_verified', 'licenses_reviewed', 'release_approved', 'sbom_sha256',
-                  'operating_system'}
+                  'operating_system', 'packages_without_purl'}
         require(set(value) == fields and value['schema'] == RECEIPT and value['revision'] == revision
                 and value['architecture'] == architecture and value['nonce'] == nonce and value['profile'] == profile
                 and IMAGE_ID.fullmatch(value['image_id']) and value['scanner'] == 'syft'
@@ -331,6 +342,8 @@ def finalize(results, revision, architecture, nonce):
                 and type(value['package_count']) is int and value['package_count'] == sum(counts.values())
                 and type(value['packages_without_spdx_expression']) is int
                 and 0 <= value['packages_without_spdx_expression'] <= value['package_count']
+                and type(value['packages_without_purl']) is int
+                and 0 <= value['packages_without_purl'] <= value['package_count']
                 and type(value['runtime_lock_packages_verified']) is int
                 and 0 < value['runtime_lock_packages_verified'] <= counts['python'], 'image_inventory_saved_counts_refused')
         raw = read(results / (profile + '-sbom.cdx.json'), LIMIT)

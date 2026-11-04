@@ -555,3 +555,31 @@ def test_actual_collect_entrypoint_with_owned_fake_daemon_and_scanner(tmp_path, 
         assert outcome.returncode == 2 and not receipt.exists() and not list(results.iterdir())
     if fault in ("foreign_image", "changed_tool"):
         assert not trace.exists()
+
+
+@pytest.mark.parametrize("native_value", ["", None])
+def test_optional_unknown_purl_is_retained_counted_and_not_fabricated(native_value):
+    _, identity, native, cdx, expected = inventory()
+    native["artifacts"][0]["purl"] = native_value
+    cdx["components"][0].pop("purl")
+    result = check.validate(native, cdx, identity, expected)
+    assert result["package_count"] == 5 and result["packages_without_purl"] == 1
+    assert result["runtime_lock_packages_verified"] == 2
+    assert result["licenses_reviewed"] is False and result["release_approved"] is False
+    assert "purl" not in cdx["components"][0]  # No mutation to manufacture metadata.
+
+
+@pytest.mark.parametrize("value", [False, 12, [], {}, "not-a-package-url", "pkg:" + "x" * 4096])
+def test_optional_purl_is_not_permission_for_malformed_metadata(value):
+    _, identity, native, cdx, expected = inventory()
+    native["artifacts"][0]["purl"] = value
+    cdx["components"][0]["purl"] = value
+    with pytest.raises(ValueError, match="component_identity_refused"):
+        check.validate(native, cdx, identity, expected)
+
+
+def test_unknown_purl_cannot_match_a_different_present_purl():
+    _, identity, native, cdx, expected = inventory()
+    native["artifacts"][0]["purl"] = ""
+    with pytest.raises(ValueError, match="formats_disagree"):
+        check.validate(native, cdx, identity, expected)
