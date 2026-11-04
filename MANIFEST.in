@@ -1,4 +1,5 @@
 include LICENSE README.md CONTRIBUTING.md PLAN.md BUILD-RESULT.md Dockerfile compose.yaml requirements-runtime.lock .dockerignore
+include Dockerfile.aiport-candidate requirements-build.lock
 recursive-include docs *.md
 recursive-include deployment *.sh *.sql Dockerfile *.md
 recursive-include examples *

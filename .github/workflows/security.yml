@@ -190,7 +190,8 @@ jobs:
       - name: Create isolated runtime environment
         run: |
           python -m venv .runtime-sbom
-          .runtime-sbom/bin/python -m pip install --disable-pip-version-check -r requirements-runtime.lock
+          .runtime-sbom/bin/python -m pip install --disable-pip-version-check --no-deps -r requirements-runtime.lock
+          .runtime-sbom/bin/python -m pip check
       - name: Generate and validate CycloneDX SBOM
         run: >-
           python -m cyclonedx_py environment .runtime-sbom

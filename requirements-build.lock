@@ -1,0 +1,2 @@
+# Image build backend, separate from application/runtime dependencies.
+setuptools==84.0.0
