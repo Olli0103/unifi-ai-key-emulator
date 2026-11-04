@@ -218,18 +218,24 @@ def validate(native, cdx, identity, expected):
             components.append(row)
         else:
             require(kind == 'operating-system', 'image_inventory_component_type_refused')
-    def key(row):
+    def key(row, origin):
         values = tuple(row.get(field) for field in ('name', 'version', 'purl'))
-        require(all(isinstance(value, str) and 0 < len(value) <= 4096 for value in values),
-                'image_inventory_component_identity_refused')
+        if not all(isinstance(value, str) and 0 < len(value) <= 4096 for value in values):
+            error = CheckError('image_inventory_component_identity_refused')
+            # Fixed field/type/length facts only, never the offending payload,
+            # component name, paths or image environment/configuration.
+            error.inventory_context = {'format': origin, 'fields': {
+                field: {'type': type(value).__name__, 'length': len(value) if isinstance(value, str) else None}
+                for field, value in zip(('name', 'version', 'purl'), values)}}
+            raise error
         return values
     def native_key(row):
         licenses = tuple(sorted(item.get('spdxExpression') or item['value'] for item in row.get('licenses', [])))
-        return key(row), licenses
+        return key(row, 'native'), licenses
     def cdx_key(row):
         licenses = tuple(sorted(item.get('expression') or item.get('license', {}).get('id')
                                 or item['license']['name'] for item in row.get('licenses', [])))
-        return key(row), licenses
+        return key(row, 'cyclonedx'), licenses
     require(Counter(map(native_key, artifacts)) == Counter(map(cdx_key, components)),
             'image_inventory_formats_disagree')
     counts = Counter()
@@ -369,6 +375,7 @@ def main(argv=None):
         code = str(error) if isinstance(error, CheckError) else 'image_inventory_refused'
         print(json.dumps({'schema': RECEIPT, 'passed': False, 'error': code,
                           'stage': args.command, 'failure_type': type(error).__name__,
+                          'context': getattr(error, 'inventory_context', None),
                           'release_approved': False}))
         return 2
 
