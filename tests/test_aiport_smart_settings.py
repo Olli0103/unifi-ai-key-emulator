@@ -413,7 +413,7 @@ def test_package_lens_zones_stay_with_the_doorbell():
     assert [zone.object_types for zone in policy.secondary_lens_zones] == [
         frozenset({"package"})]
     assert policy.zone_ids("person", (0.2, 0.2, 0.5, 0.8)) == (3,)
-    # Haustür's shape: Package only on the package lens. That lens owns it;
+    # Camera E's shape: Package only on the package lens. That lens owns it;
     # the main lens never announces Package (every native doorbell Package
     # was a one-shot package-lens event without a box).
     assert policy.package_scope == "second_lens"

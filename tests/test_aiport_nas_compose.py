@@ -70,11 +70,11 @@ def test_existing_mac_slot_can_be_excluded_during_nas_migration(tmp_path):
 def test_existing_macvlan_can_be_reused_with_an_explicit_network_contract(tmp_path):
     plan, states, options = fixture(tmp_path)
     compose = build_nas_compose(plan, {2: states[2]},
-                                **(options | {"external_network": "caddy_lan"}))
+                                **(options | {"external_network": "aiproc_lan"}))
     assert compose["networks"] == {"aiport_lan": {
-        "external": True, "name": "caddy_lan"}}
+        "external": True, "name": "aiproc_lan"}}
     assert compose["x-aikey-network-check"] == {
-        "name": "caddy_lan", "driver": "macvlan", "parent": "bond0.10",
+        "name": "aiproc_lan", "driver": "macvlan", "parent": "bond0.10",
         "subnet": "192.168.10.0/24", "gateway": "192.168.10.1"}
     assert compose["services"]["aiport_slot_2"]["networks"]["aiport_lan"][
         "ipv4_address"] == "192.168.10.136"

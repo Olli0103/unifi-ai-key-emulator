@@ -10,7 +10,7 @@ Protect's `pushAudioTask` runs a `SPEECH_TO_TEXT` task only for an audio event w
 - **No capability flag:** unlike face enhancement, face recognition and license plates, speech has no feature-flag gate. The capability map names `supportTts` for the feature type, but `findPreferenceAiProcessor` checks only the settings.
 - **The "Speech to Text Off" row:** Protect shows the AI Key's `speechToTextSettings.enabled` there, and it is a Protect setting.
 
-On 26 Sep 2026 (read-only), none of the nine AI Port-paired legacy cameras reported any smart-audio types. Wohnzimmer (G6 Instant) supports `alrmSpeak` but has it off. Wohnzimmer alt, which has it on, has been disconnected since March 2025.
+On 26 Sep 2026 (read-only), none of the nine AI Port-paired legacy cameras reported any smart-audio types. Camera J (G6 Instant) supports `alrmSpeak` but has it off. Camera J alt, which has it on, has been disconnected since March 2025.
 
 ## Dispatch
 
@@ -54,7 +54,7 @@ Audio and transcripts are neither logged nor kept; the job journal records only 
 
 ## Live acceptance still needed
 
-1. The user enables `alrmSpeak` on a supported camera (Wohnzimmer G6) and turns on the AI Key's Speech to Text for that camera in Protect.
+1. The user enables `alrmSpeak` on a supported camera (Camera J G6) and turns on the AI Key's Speech to Text for that camera in Protect.
 2. The user chooses the speech backend. Audio leaves the network only if it is the OpenAI API.
 3. A real speech event produces a transcription row that Protect shows after a reload.
 4. For the nine AI Port-paired legacy cameras, Protect raises no `alrmSpeak`. Speech there would need an AI Port audio detection path, which does not exist yet (#28).
@@ -62,8 +62,8 @@ Audio and transcripts are neither logged nor kept; the job journal records only 
 ## Live result on Protect 7.3.68 (26 Sep 2026)
 
 Setup:
-- Wohnzimmer (G6 Instant) has `alrmSpeak` on.
-- The AI Key's `speechToTextSettings` covers only Wohnzimmer.
+- Camera J (G6 Instant) has `alrmSpeak` on.
+- The AI Key's `speechToTextSettings` covers only Camera J.
 - The backend is a local whisper.cpp (`large-v3-turbo`) container on the host-only container bridge. No audio left the Mac.
 
 Result: between 10:41 and 10:48, four real speech events each dispatched `speechToText`.
@@ -76,22 +76,22 @@ Result: between 10:41 and 10:48, four real speech events each dispatched `speech
 
 This was a read-only pass in a signed-in console session. It read settings, capability flags and event counts only. No audio was fetched, no transcript text was read, and no setting was changed.
 
-**Settings on both sides agree on one camera.** The AI Key's `speechToTextSettings` is enabled, `allCameras` is false, and it lists exactly one camera, Wohnzimmer. That is the per-row Speech to Text microphone under Intelligence › Basic Understanding. The deployed Key's `speech_to_text.camera_ids` holds the same single camera (hash-matched), with the local Whisper backend.
+**Settings on both sides agree on one camera.** The AI Key's `speechToTextSettings` is enabled, `allCameras` is false, and it lists exactly one camera, Camera J. That is the per-row Speech to Text microphone under Intelligence › Basic Understanding. The deployed Key's `speech_to_text.camera_ids` holds the same single camera (hash-matched), with the local Whisper backend.
 
 | Camera | Paired | Protect-advertised audio types | Speech to Text row | State |
 |---|---|---|---|---|
-| Wohnzimmer (G6 Instant) | no | 9 supported, `alrmSpeak` on | on | **eligible and active** |
-| Wohnzimmer alt (G4 Instant) | no | 5 supported, `alrmSpeak` on | off | **supported but offline** (disconnected since March 2025) |
-| Einfahrt, Flur, Garage, Büro, Esszimmer, Schlafzimmer, Giebel Vorn, Haustür, Giebel hinten | yes | none | off | **unsupported while paired** |
+| Camera J (G6 Instant) | no | 9 supported, `alrmSpeak` on | on | **eligible and active** |
+| Camera J alt (G4 Instant) | no | 5 supported, `alrmSpeak` on | off | **supported but offline** (disconnected since March 2025) |
+| Camera F, Camera A, Camera H, Camera C, Camera D, Camera B, Camera G, Camera E, Camera I | yes | none | off | **unsupported while paired** |
 
 **Why the nine show no audio types.**
 - **Pairing masks native detection.** For a paired camera, Protect takes the capability flags from the AI Port's per-camera flag map. On all four AI Ports, every map entry reports an empty `smartDetectAudioTypes` and `hasMic: false`, even though every camera reports a microphone of its own.
-- **Garage shows it is pairing, not hardware.** Garage (G4 Dome) raised 109 native `alrmSpeak` events between 23 Sep 14:14 and 24 Sep 16:43 UTC, and none since. The NAS AI Port project was created about 40 minutes after the last one. Those events carried no speech task, because Garage was not in the speech settings.
-- **Model hint for Esszimmer.** Esszimmer is the same model as Wohnzimmer alt, which advertises `alrmSpeak` unpaired.
+- **Camera H shows it is pairing, not hardware.** Camera H (G4 Dome) raised 109 native `alrmSpeak` events between 23 Sep 14:14 and 24 Sep 16:43 UTC, and none since. The NAS AI Port project was created about 40 minutes after the last one. Those events carried no speech task, because Camera H was not in the speech settings.
+- **Model hint for Camera D.** Camera D is the same model as Camera J alt, which advertises `alrmSpeak` unpaired.
 - **So "no smart-audio types" is a pairing effect.** The earlier record said the nine paired cameras had none. Where hardware support exists, it is hidden by pairing.
 
 **Recent native speech (7 days to 28 Sep 07:30 UTC):**
-- Wohnzimmer: 664 `alrmSpeak` events, of which 529 have speech state `done` and 132 `failed`; 3 had no state yet.
+- Camera J: 664 `alrmSpeak` events, of which 529 have speech state `done` and 132 `failed`; 3 had no state yet.
 - No other camera had any `smartAudioDetect` event.
 
 **Route for the nine: found in the 7.3.60 controller code (28 Sep 2026).** The earlier `needs_evidence` is resolved statically. A static read of the local 7.3.60 `service.js` (not redistributed) shows the whole path:
@@ -114,16 +114,16 @@ This was a read-only pass in a signed-in console session. It read settings, capa
 - **Tests:** synthetic positive and negative tests in `tests/test_aiport_speech.py`.
 
 **Live on Protect 7.3.68 (Mac AI Port, 28 Sep 2026):**
-- **Audio:** the relay aliases of Flur, Büro and Schlafzimmer carry audio; all three decoders were ready within seconds.
+- **Audio:** the relay aliases of Camera A, Camera C and Camera B carry audio; all three decoders were ready within seconds.
 - **Capability:** Protect copied the advertised `alrmSpeak` onto the three paired cameras (`smartDetectAudioTypes`).
 - **Settings:** after Speech was enabled per camera (`smartDetectSettings.audioTypes`), Protect pushed `ChangeAudioEventsSettings`.
   - On the first deploy one camera never got a push, which the readiness pulse (d85141a) now covers.
   - After the redeploy all three were enabled.
-- **AI Key:** Speech to Text covers Wohnzimmer, Flur, Büro and Schlafzimmer on both sides: Protect's setting and the Key's `camera_ids`.
+- **AI Key:** Speech to Text covers Camera J, Camera A, Camera C and Camera B on both sides: Protect's setting and the Key's `camera_ids`.
 - **First native speech on AI Port-paired cameras:**
-  - **Büro 09:24 UTC:** a `smartAudioDetect` event with `alrmSpeak`, `sttState` done and **1** transcription row. The Key job for it posted **1** segment. The exact-event count matches.
-  - **Flur:** 1 event done, 1 row.
-  - **Failures:** early Büro failures came from the two Key restarts and from Protect's HTTP 503 on just-ended exports, which is now retried (bff4627).
+  - **Camera C 09:24 UTC:** a `smartAudioDetect` event with `alrmSpeak`, `sttState` done and **1** transcription row. The Key job for it posted **1** segment. The exact-event count matches.
+  - **Camera A:** 1 event done, 1 row.
+  - **Failures:** early Camera C failures came from the two Key restarts and from Protect's HTTP 503 on just-ended exports, which is now retried (bff4627).
 - **Still `needs_evidence`:**
   - the detector's precision and recall over a day;
   - the six NAS cameras, which need the NAS redeploy (Compose blocker, #6).
@@ -132,4 +132,4 @@ This was a read-only pass in a signed-in console session. It read settings, capa
 
 **What does not need that evidence** (owner decisions, not taken here):
 - Unpairing a camera would bring back its own `alrmSpeak`, at the cost of its AI Port object detection.
-- Wohnzimmer alt would become eligible if it came back online and its Speech to Text row were turned on.
+- Camera J alt would become eligible if it came back online and its Speech to Text row were turned on.

@@ -120,3 +120,20 @@ tests. A firmware version, camera name or callback HTTP success does not prove
 saved Protect results. Preserve existing identities and pairings during tests.
 Do not deploy, trigger real inference, change providers or merge without the
 owner's authorization for that concrete action.
+
+## Protected main branch
+
+Changes go through a pull request. Direct pushes, force pushes and branch deletion
+are blocked for `main`, including administrators. The branch must be up to date,
+review conversations resolved and all seven required GitHub Actions jobs green:
+`test-and-build`, `browser-ui`, `dependency-and-sbom`, `reproducible-release`,
+`secret-scan`, `container-install (amd64)` and `container-install (arm64)`.
+
+External approvals are welcome but are not a mandatory count in this
+single-maintainer project. This is not an independent-review attestation.
+Do not weaken branch protection to merge a failing change.
+
+Public examples must use synthetic labels and documentation addresses, never
+a maintainer's camera locations, private infrastructure inventory or user paths.
+Dated native records must retain their failure outcomes and qualification limits
+when their operational details are anonymized.

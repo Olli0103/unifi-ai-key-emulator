@@ -16,8 +16,8 @@ def cameras():
     return [{"id": cid, "mac": MAC[cid], "name": name, "type": "UVC G4 Instant",
              "state": "CONNECTED", "host": f"192.168.10.{i}",
              "aiPortCapacityPoints": 0.25}
-            for i, (cid, name) in enumerate(((A, "Flur"), (B, "Esszimmer"),
-                                             (C, "Garage"), (D, "Keller")), 1)]
+            for i, (cid, name) in enumerate(((A, "Camera A"), (B, "Camera D"),
+                                             (C, "Camera H"), (D, "Keller")), 1)]
 
 
 def aiports():
@@ -30,7 +30,7 @@ def stream(cid):
 
 
 def slots():
-    # Mac still allowlists Esszimmer, which Protect paired to the NAS slot.
+    # Mac still allowlists Camera D, which Protect paired to the NAS slot.
     return {"mac": {"mac": "2A11000000F1", "paired_streams": [stream(A), stream(B)]},
             "nas-2": {"mac": "2A11000000F2", "paired_streams": [stream(B)]}}
 
@@ -38,8 +38,8 @@ def slots():
 def test_diff_classifies_without_any_pairing_action():
     diff = diff_slots(slots(), aiports(), cameras())
     kinds = [(a["action"], a.get("slot"), a.get("camera")) for a in diff["actions"]]
-    assert ("remove_from_allowlist", "mac", "Esszimmer") in kinds
-    assert ("add_to_allowlist", "nas-2", "Garage") in kinds
+    assert ("remove_from_allowlist", "mac", "Camera D") in kinds
+    assert ("add_to_allowlist", "nas-2", "Camera H") in kinds
     assert ("manual_pairing", None, "Keller") in kinds
     assert not any(a["action"] in {"pair", "unpair"} for a in diff["actions"])
     assert diff["slots"]["nas-2"]["capacity_points"] == 0.5

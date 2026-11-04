@@ -482,7 +482,7 @@ def readiness(config: dict) -> dict:
             "Vision configuration cannot be validated until required credentials are readable"
         )
     return {"ready_for_device_start": all(checks.values()), "checks": checks, "errors": errors,
-            "target": {"console": "UDM Pro Max", "protect": config["controller"].get("protect_version"),
+            "target": {"console": "UniFi Protect", "protect": config["controller"].get("protect_version"),
                        "deployment": config["runtime"].get("deployment", "unspecified")},
             "inspected_controller": "7.2.105", "native_compatibility": "needs_evidence",
             "vision_provider": provider,

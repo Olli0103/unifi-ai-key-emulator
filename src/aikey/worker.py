@@ -189,9 +189,9 @@ def validate_test_scope_config(value):
     if profile == "description_only":
         # Protect 7.3.x routes a description-only RAM result to
         # saveRamDescriptionEnhancement, which only updates an existing RAM
-        # row. On Wohnzimmer (G6, 23 Sep) it set ramState "done" with an empty
+        # row. On Camera J (G6, 23 Sep) it set ramState "done" with an empty
         # ramDescription; the full tagging callback saved the caption and kept
-        # the event's detections (Esszimmer, Büro).
+        # the event's detections (Camera D, Camera C).
         raise WorkerError("Description-only callback does not persist on Protect 7.3.x; "
                           "use the full RAM callback")
     if type(profile) is not str or profile != "full":
@@ -1747,7 +1747,7 @@ class JobProcessor:
                 or body["end"] - body["start"] > self.max_video_duration_ms):
             raise WorkerError("recognizeKeyFrames is limited to captioned, muted target-camera video")
         # Face regions come from faceMeta. Without them, Protect sends person
-        # regions (personMeta, 26 Sep Wohnzimmer) and the Key finds the face in
+        # regions (personMeta, 26 Sep Camera J) and the Key finds the face in
         # each person and links it to that person's tracker.
         chosen = {}
         meta = body.get("faceMeta") or body["personMeta"]

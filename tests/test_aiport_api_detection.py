@@ -747,7 +747,7 @@ def _reply(text, **envelope):
 
 
 def test_a_detection_request_has_room_for_twenty_detections(tmp_path):
-    # Garage, 26 Sep: about five vehicles per reply with a 256-token budget;
+    # Camera H, 26 Sep: about five vehicles per reply with a 256-token budget;
     # busier frames ended incomplete. The schema allows 20 detections.
     requests = []
 

@@ -277,7 +277,7 @@ def test_dry_run_does_not_mutate_and_apply_starts_once(tmp_path):
 
 def test_external_macvlan_is_verified_before_start(tmp_path):
     plan, states, options, _, report = inputs(tmp_path)
-    options["external_network"] = "caddy_lan"
+    options["external_network"] = "aiproc_lan"
     selected = {2: states[2]}
     manifest = build_nas_compose(plan, selected, **options)
     assert verify_inputs(plan, manifest, report, selected, options) == ["aiport_slot_2"]
@@ -295,7 +295,7 @@ def test_wrong_external_macvlan_or_container_attachment_blocks_apply(
         tmp_path, unsafe_network):
     plan, states, options, _, _ = inputs(tmp_path)
     manifest = build_nas_compose(plan, {2: states[2]},
-                                 **(options | {"external_network": "caddy_lan"}))
+                                 **(options | {"external_network": "aiproc_lan"}))
     row = {"Service": "aiport_slot_2", "State": "created",
            "ID": "a" * 12, "Publishers": []}
     fake = FakeDocker(manifest, json.dumps(row), unsafe_network=unsafe_network)

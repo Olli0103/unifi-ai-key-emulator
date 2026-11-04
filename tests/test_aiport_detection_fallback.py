@@ -11,7 +11,7 @@ from test_aiport_api_detection import FRAME, STILL, _ollama_config, _response
 
 CAMERA = "2A1122334455"
 FALLBACK = {"provider_config": {"provider": "ollama", "model": "qwen3-vl:4b-instruct",
-                                "base_url": "http://192.168.0.110:11434",
+                                "base_url": "http://10.77.0.110:11434",
                                 "allow_remote": True, "allow_insecure_http": True},
             "timeout_s": 60, "max_per_hour": 3}
 LOCAL_REPLY = _response(json.dumps({"detections": [

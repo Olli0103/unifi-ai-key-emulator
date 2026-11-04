@@ -1,135 +1,177 @@
-# UGREEN NAS deployment guide
+# AI Key on Linux with Docker Compose
 
-Target platform: UGREEN NAS and UDM Pro Max with Protect 7.3.56. No NAS or controller changes occurred during the local build. Verify the NAS paths, account UID/GID and free ports before deployment. Choose a vision provider below.
+This is a source-build recipe for a Linux server or NAS with Docker Engine and
+Compose 2.20+. It is not specific to a NAS vendor. It deploys one AI Key, not AI
+Port instances. For Ports, use [their network/Compose guide](aiport-nas-compose.md).
+Read [deployment requirements](deployment.md) and [compatibility limits](compatibility.md)
+first. No stable release or official prebuilt project image is available.
 
-That target and the recipe below describe the initial deployment preparation,
-not the current tested controller version or a transcript of all commands run.
-Later [29 October NAS observations](evidence/nas-source-upgrade-20261029.md)
-record real Docker/Compose, PostgreSQL and selected native paths on Protect
-7.3.74. The [follow-up through #165](evidence/key-port-batch165-20261030.md)
-records Key/four-Port rolling upgrades with existing identity/pairing retention.
-The later [Admin-only #243 observation](evidence/admin243-native-20261102.md)
-records installed-byte and read-only HTTP checks, with mixed-version limits.
-The [four-Port #243 follow-up](evidence/ports243-native-20261102.md) records
-the later serial image-only updates and preserved native identities/pairings.
-Neither establishes every recipe command, a fresh independent install, all
-search/recognition quality, host/controller disaster recovery or a sustained pilot.
+## Network and storage
 
-Fresh standalone AI Key preparation can use [offline setup](first-run.md).
-It creates a new directory only and does not configure Compose, search/database,
-controller-channel trust, discovery or adoption. Use it in the eventual runtime
-namespace so generated absolute state/secret paths remain valid; the existing
-`/state` mount recipe below is not automatically converted. Never reinitialize
-adopted state to switch installation methods.
+The root [compose.yaml](../compose.yaml) uses Linux host networking. Management
+HTTPS defaults to TCP 8080. Optional discovery uses UDP 10001. The optional
+`search` profile uses TCP 5432 on the same host address. Check that these ports
+are free before starting anything. Restrict them to the controller and required
+private peers. Docker Desktop host networking is not covered by this recipe.
 
-The example addresses `192.0.2.1` and `192.0.2.110` are documentation placeholders. Replace them with the actual console and NAS addresses in every command and configuration file.
+The emulator connects to the configured console using verified TLS, normally
+control 7442 and media/callback 7444, with search 7443 when enabled. Provider
+clients have separate destinations and never receive the device certificate.
+There is no bundled vision-model server.
 
-## Prepared deployment
+`state/` holds identity, keys, trust, credentials and journals. Keep it private
+and persistent. Compose runs the emulator as `AIKEY_UID:AIKEY_GID`, with a
+read-only root, dropped capabilities and a temporary `/tmp`. PostgreSQL's
+entrypoint prepares its files before switching to its own unprivileged account.
 
-`compose.yaml` runs the emulator on Linux host networking. A separately enabled `search` profile adds a dedicated PostgreSQL 14/pgvector service. Compose 2.20 or newer is required for the [optional dependency declaration](https://docs.docker.com/reference/compose-file/services/#depends_on). The emulator runs as the configured NAS UID/GID; PostgreSQL prepares its files as root and then uses its own unprivileged account.
+## Build and initialize without connecting to Protect
 
-Expected ports are HTTPS management 8080, UDP discovery 10001 when enabled, and PostgreSQL 5432 when the search profile is enabled. Plain HTTP management is disabled outside the loopback lab. Do not start the profile if an existing NAS service owns those ports. Choose a separate network identity if needed; changing the advertised PostgreSQL port would not match the inspected controller.
-
-The emulator initiates verified TLS connections to the UDM's control 7442, search 7443 and media/callback 7444 ports. Its media and callback allowlists contain only the configured controller origins. The model and embedding APIs use separate clients without the device certificate.
-
-## First startup sequence
-
-These are deployment instructions, not a record of commands already run.
-
-1. Copy the project to a dedicated NAS directory. Copy `examples/nas.env` to `.env`; set `AIKEY_UID` and `AIKEY_GID` to the directory owner's numeric IDs. Set `CONSOLE_IP` to the exact UDM IPv4 address.
-2. Create `state/` owned by that account, with mode 700. Verify the ports above and sufficient storage for media, job journals and the search volume.
-3. Build and initialize, without starting controller connections:
+Use a new reviewed source checkout as described in [source installation](deployment.md#1-select-and-install-the-source).
+Run these commands from that checkout as the intended state owner:
 
 ```sh
+cp examples/nas.env .env
+mkdir -m 700 state
+```
+
+Edit `.env` with the real numeric state-owner IDs and controller address before
+continuing. Replace the documentation addresses in `init` with your real
+controller and advertised host address. Then build and initialize:
+
+```sh
+docker compose config --quiet
 docker compose build emulator
 docker compose run --rm --no-deps emulator init --config /state/config.json --state-dir /state --controller 192.0.2.1 --device-ip 192.0.2.110
-docker compose run --rm --no-deps emulator check --config /state/config.json
 ```
 
-4. Edit `state/config.json`. Keep the generated identity and private paths. Confirm that the controller and NAS addresses match the deployment. In this image use `/usr/bin/ffmpeg` and opt into `worker.request_mp4_exports=true`. Leave discovery, automatic deep-mode features and search disabled for the first connection test.
+Before running the commands above, edit the copied `.env`: set `AIKEY_UID` and `AIKEY_GID` to the
+numeric owner of `state/`, and `CONSOLE_IP` to the real controller address.
+Replace the two documentation addresses in the initialization command with the
+controller and this host's advertised address. The example subnet is not usable
+on your LAN. If `state/` already exists, inspect it instead of rerunning this
+fresh-install recipe. Never initialize over an adopted or partial identity.
 
-Select the vision provider. For OpenAI, create a private `state/openai-key` file through the NAS's trusted local editor, then configure its path without putting its value in shell history:
+`init` writes local private files only. It deliberately does not start a device
+or complete provider/profile selection. Edit `state/config.json` with a trusted
+local editor, preserving all generated identity and file paths:
 
-```sh
-docker compose run --rm --no-deps emulator provider openai --config /state/config.json --model VISION_MODEL_ID --api-key-file /state/openai-key
-```
+| Setting | Choose |
+| --- | --- |
+| `controller.host` | The actual console name/address |
+| `controller.protect_version` | The installed Protect version, not the initializer's historical default |
+| `controller.control_profile` | The compatible protocol; `device-service` requires a verified `expected_fingerprint` |
+| `controller.expected_fingerprint` | Independently verified control-certificate SHA-256 |
+| `controller.verify_hostname` | Keep `true` if the certificate covers the chosen address; explicit pin-only mode otherwise |
+| `device.ip` | This host's reachable LAN address |
+| `runtime.bind` | This host's address, or a deliberately firewall-restricted bind |
+| `worker.ffmpeg_path` | `/usr/bin/ffmpeg` in this image |
+| `worker.request_mp4_exports` | `true` if the target supports the documented MP4 export route |
+| `discovery.enabled`, `search.enabled`, `database.enabled` | Leave `false` for a first connection without search |
 
-For a later Ollama installation on the NAS, use:
+This lower-level recipe uses `/state/config.json` because that is Compose's
+startup path and the database sidecar's mount contract. The separate
+[offline setup command](first-run.md) creates a new child directory. Do not
+substitute it into this layout without updating every mount/path deliberately.
+
+## Select the provider and import trust
+
+For an existing Ollama server on this Linux host:
 
 ```sh
 docker compose run --rm --no-deps emulator provider ollama --config /state/config.json --model INSTALLED_VISION_MODEL
 ```
 
-These configuration commands make no model calls and install no model. They require an explicit vision-capable model name. Other OpenAI-compatible servers use `provider openai-compatible` with a base URL. See [provider configuration](providers.md). The E5 embedding service remains separate; replacing it with an arbitrary provider's embedding model would not match this search profile.
-5. Import the controller certificate with a fingerprint verified independently. The CLI handshake only reads the certificate:
+With host networking, loopback addresses refer to the Linux host. For another
+model host or provider, use the explicit endpoint/remote permissions in
+[provider configuration](providers.md). For OpenAI, create `state/openai-key`
+with a trusted editor and mode 600, then save only its file reference:
 
 ```sh
-docker compose run --rm --no-deps emulator trust --config /state/config.json --fingerprint VERIFIED_SHA256
+docker compose run --rm --no-deps emulator provider openai --config /state/config.json --model VISION_MODEL_ID --api-key-file /state/openai-key
 ```
 
-6. Review `check` output. A passed local configuration check still reports native compatibility as `needs_evidence`. The first `run` may create a candidate processor record. After that specific live test is authorized, start only the emulator:
+These commands save configuration, not a model or connectivity result. Real
+inference sends selected frames to that endpoint and may incur charges.
+
+Obtain and independently verify the controller certificate's fingerprint, then
+import it. This step makes a TLS handshake but no adoption request:
+
+```sh
+docker compose run --rm --no-deps emulator trust --config /state/config.json --channel control --fingerprint VERIFIED_SHA256
+docker compose run --rm --no-deps emulator check --config /state/config.json
+```
+
+Fix readiness errors before starting. A successful check is not native
+compatibility or model availability. Keep certificate verification enabled.
+
+## Start and adopt
+
+Starting connects to Protect and may create a pending device:
 
 ```sh
 docker compose up -d emulator
+docker compose ps
+docker compose logs --tail 50 emulator
 ```
 
-7. For discovery, explicitly enable it, use the NAS interface address and set `allowed_controller_ips` to the exact UDM IPv4. Multicast is optional and restricted to device mode on Linux. Before clicking Adopt, prepare the database section below if search is intended. New configurations use management username `ui`, matching the ordinary AI processor adoption path in inspected Protect 7.2.105. Supply the random password from the private `state/management-password` file through credentialed adoption; a factory-password-only attempt will fail. Existing explicit usernames remain unchanged and need deliberate alignment or a verified controller username override. The initial recipe was not itself a native test; use the dated version-specific records above for later observations. Protect may rotate the management password after adoption; that initial file is not updated to the controller-managed password. Do not paste credentials into chat or logs.
+Adopt it in Protect using the intended version-specific flow. New configurations
+use management username `ui` and a private random initial password. Some
+consoles require [bounded factory enrollment](factory-enrollment.md). The console
+may rotate the credential; the original `management-password` file is not updated
+to that controller-managed password. Do not print or share it in diagnostics.
 
-## Prepare search before adopting the processor
+For optional discovery, use the actual interface address and exact controller
+allowlist. Do not broaden the allowlist to hide a routing problem. Follow the
+[one-camera native verification checklist](deployment.md#4-start-adopt-and-verify-one-camera)
+before enabling continuous processing or additional features.
 
-The initial database-password file is private and starts with the same value as the initial management password. The controller can rotate the device password during adoption. Start PostgreSQL and enable database synchronization before that rotation when search is intended.
+## Optional search must be prepared before credential rotation
 
-If the processor was already adopted with database synchronization disabled, its database-password file may be stale. Do not initialize a new search volume from it and assume that it matches Protect. That case requires an explicit credential reconciliation against the controller-managed device credential. An existing database volume requires a tested rotation, not a replaced secret file or volume deletion.
+The included `search` profile is a dedicated PostgreSQL 14/pgvector dense-search
+preparation. It is **not** the complete hybrid/BM25 deployment. If your Protect
+version requires other extensions/tokenizers or a different search profile,
+this image alone is insufficient. Read [database](database-contract.md),
+[search](search-contract.md) and [migration](index-migration.md) contracts first.
 
-Set `database.enabled=true`. Keep the database host at `127.0.0.1` for the host-network sidecar, database/user `unifi-protect`, and SSL root certificate `/state/device.crt`. The PostgreSQL entrypoint allows SCRAM/TLS from the exact UDM address and emulator loopback address only. It uses the persistent `aikey-postgres` volume. The emulator's rotation callback changes the role password before acknowledging the management credential change.
+The initial database-password file starts with the initial management password.
+Before adopting a fresh installation with search, prepare the database and
+credential synchronization so adoption's rotation can update the role. Set
+`database.enabled=true`, keep the sidecar host at `127.0.0.1`, database/user
+`unifi-protect`, and its TLS root at `/state/device.crt`. Configure the matched
+embedding backend and separate search-channel trust. Import the search
+certificate using its own independently verified fingerprint, not an assumed
+copy of the control certificate.
 
 ```sh
+docker compose run --rm --no-deps emulator trust --config /state/config.json --channel search --fingerprint VERIFIED_SEARCH_SHA256
 docker compose --profile search build
-docker compose --profile search up -d
+docker compose --profile search up -d postgres
 ```
 
-Enable `worker.description_embeddings` and the E5 query responder together only after the model backend and database profile are confirmed. Deep/VLM capability flags are explicit overrides because the inspected controller couples them. Do not enable face, plate, audio or legacy image-search flags.
+Confirm the final database server can execute a query against the intended
+database, then start the configured emulator. `pg_isready` can also see a temporary
+initialization server and does not establish schema/profile readiness. Enable
+`worker.description_embeddings` and the E5 responder together only after the
+correct model/database profile is ready. The controller applies its migrations.
 
-The controller applies its own migrations. This build supplies only the documented dense-search database preparation. If the installed version requires BM25 extensions or reranking, this profile is insufficient. Resolve that requirement before claiming native search.
+An already-adopted device may have stale initial database credentials. Do not
+initialize a new search volume or replace secret files and assume they match
+Protect. Reconcile the controller-managed credential and test rotation without
+removing the retained volume. This recipe does not automate that recovery.
 
-See [pause, uninstall and restore](uninstall-restore.md) before removing any
-service or volume; cold copies, credential state and shared network namespaces
-need separate treatment.
+## Stop, update and restore
 
-## Acceptance and rollback
+```sh
+docker compose stop emulator
+```
 
-Verify ordinary adoption, reconnect without replaying the token, one controller-created inference job, one persisted description and positive/negative native search cases separately. Check the correct event after refresh and after a planned service restart. Save sanitized errors and exact firmware versions.
+Stop the optional database separately if needed. Retain state and volumes.
+Never use `down -v`, identity regeneration or an old password file as routine
+troubleshooting. Back up state and a consistent database dump together before
+updates. Build a replacement from a reviewed revision, change one instance at
+a time and repeat native adoption/result/search/restart checks. See
+[uninstall/restore](uninstall-restore.md) and [host migration](planning/nas-final-cutover.md).
 
-Stop the emulator with `docker compose stop emulator`. Stop the optional database separately if started. Keep the state directory, private key and database volume for diagnosis and recovery; do not use `down -v` or regenerate identity as routine troubleshooting. Removing the test processor from Protect is a separate console change.
-
-Back up state and the database together before upgrades. Protect firmware changes can invalidate this private protocol. Pending jobs are not durably resumed, and an uncertain callback needs inspection before any retry. Longer runtime and load behavior have not yet been measured.
-
-## Dated recovery evidence
-
-For hosts whose separately mounted `/home` arrives after the lingering user
-manager, see [boot ordering and recovery](nas-boot-recovery.md). An optional,
-bounded systemd drop-in prevents loading an empty user timer target before that
-mount. The [31 October kernel-panic observation](evidence/nas-kernel-panic-recovery-20261031.md)
-records actual processor reconnection, a recovered timer-discovery failure and
-an unresolved private-network/Admin dependency; it is not a full recovery PASS.
-
-The [29 October source upgrade](evidence/nas-source-upgrade-20261029.md) records
-the later private hybrid-search deployment, current source/runtime versions,
-verified cold backups, identity/index preservation, paired network-namespace
-replacement and bounded native checks. It is not a fresh-install/public Compose
-qualification, full restore/rollback, host-reboot or quality/soak PASS.
-
-The instructions above describe the public dense-search preparation, not every
-later private deployment. The [29 October isolated restore](evidence/nas-restore-20261029.md)
-restored a deployed hybrid-image backup into a separate network-less database
-and checked row counts, vector readability and selected identity/configuration
-files. It did not replace the live database or activate a copied identity.
-
-For an official PostgreSQL-style entrypoint, `pg_isready` alone can see the
-temporary initialization server before the requested database exists. Wait for
-the final server and execute a bounded `SELECT 1` against the exact target
-database before restore. After restore, check the actual profile, tables,
-extensions **and tokenizer/catalog registrations**, then native retrieval after
-the controller's verified bootstrap. Extension presence and a zero exit code
-from `pg_restore` are not hybrid-search readiness. Full recovery and sustained
-operation remain open under #24.
+Host boot ordering and user-level service dependencies vary by NAS OS. The
+[systemd boot-order guide](nas-boot-recovery.md) describes one class of mounted-home
+failure; it is not a universal fix or proof of full reboot recovery.

@@ -3342,7 +3342,7 @@ def _edges(sink, edge):
 
 @pytest.mark.asyncio
 async def test_stopping_during_an_active_event_closes_it_with_a_leave(tmp_path, monkeypatch):
-    # Esszimmer, 26 Sep 03:46: the AI Port was redeployed mid-event and
+    # Camera D, 26 Sep 03:46: the AI Port was redeployed mid-event and
     # Protect kept the Animal event open for about six minutes.
     service, sink, _frame = await _person_event_service(tmp_path, monkeypatch)
     assert len(_edges(sink, "enter")) == 1
@@ -3607,7 +3607,7 @@ async def _night_restart_scene(tmp_path, monkeypatch, frames, *, mode="announce"
 
     def fake_provider(_url, _headers, payload):
         # The provider reads this IR object as a package every time, as it
-        # did for the user's cat on Flur and Esszimmer.
+        # did for the user's cat on Camera A and Camera D.
         if "close-up crop" in json.dumps(payload):
             calls["verify"] += 1
             text = json.dumps({"kind": "package", "label": "package"})
@@ -3748,7 +3748,7 @@ async def test_shadow_mode_keeps_a_sleeping_cat_read_as_a_package_silent(tmp_pat
     enters, calls, _detect, health = await _night_restart_scene(
         tmp_path, monkeypatch, [_scene(seed, cat=True) for seed in range(60)], mode=None)
     assert [e for e in enters if "package" in e["objectTypes"]] == []
-    # The follow-up would have announced it: the live Esszimmer verdict.
+    # The follow-up would have announced it: the live Camera D verdict.
     assert health["package_ir_followup"]["mode"] == "shadow"
     assert health["package_ir_followup"]["confirmed"] == 1
     assert calls["detect"] == 2
@@ -3758,7 +3758,7 @@ async def test_shadow_mode_keeps_a_sleeping_cat_read_as_a_package_silent(tmp_pat
 @pytest.mark.asyncio
 async def test_a_doorbell_whose_package_lens_owns_package_gets_no_main_lens_package(
         tmp_path, monkeypatch):
-    # Haustür (G4 Doorbell Pro), live policy shape: main-lens zone for
+    # Camera E (G4 Doorbell Pro), live policy shape: main-lens zone for
     # person/vehicle/animal, Package only on the package lens.
     camera = "2A1122334455"
     config = fixture_state(tmp_path)

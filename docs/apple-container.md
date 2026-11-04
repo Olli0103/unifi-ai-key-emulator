@@ -1,6 +1,6 @@
 # Apple container on macOS
 
-This guide uses Apple container 1.4.1 on an Apple silicon Mac. The Linux ARM64 image has been built and run against Protect 7.3.56 on a UDM Pro Max. Native discovery, adoption, an online control connection, matching time synchronization, management-password rotation and reconnect after a planned restart were observed. Factory authentication was rejected after enrollment.
+This guide uses Apple container 1.4.1 on an Apple silicon Mac. The Linux ARM64 image has been built and run against Protect 7.3.56 on a UniFi console. Native discovery, adoption, an online control connection, matching time synchronization, management-password rotation and reconnect after a planned restart were observed. Factory authentication was rejected after enrollment.
 
 Later tests on Protect 7.3.60 verified one native on-demand description and automatic event captions on G5 Flex and G4 Instant through OpenAI. The on-demand route returned its caption without persisting it. An exact-event GET verified the G5 Flex caption; the G4 Instant caption matched the worker result in the native event panel. Both remained visible after a full Safari page reload. Each used a separate single-use permit. Search and PostgreSQL remained disabled in **those Apple-container trials**. The static protocol research uses Protect 7.2.105 and AI Key firmware 2.2.8, distinct from these live checks.
 
@@ -122,13 +122,20 @@ Existing configurations retain their explicit username. If an older configuratio
 
 Apple `container` has no restart policy. After a Mac reboot, a crash, or a stopped `container` system service, the AI Key and a Mac AI Port stay down until someone starts them. `local-apple-supervise` fills that gap. It runs from a launchd agent once a minute and at login, and it only ever *starts* an exact pinned container. It never stops, recreates or restarts a running container, so it cannot interrupt a caption request or create a second device identity.
 
-Pin each running service once, then install the agent:
+For a fresh installation, pin each running service once, then install the agent.
+The generated label is now `org.local.aikey-supervise`. Existing installations
+may have an older label: inspect the currently loaded LaunchAgent and boot it out
+by its actual label before installing a replacement. Do not install a second
+supervisor beside it. The optional PostgreSQL relay uses
+`org.local.aikey-pg-relay` for newly generated agents; apply the same one-agent
+rule. Changing source does not rename or unload an already installed agent.
+
 
 ```bash
 local-apple-supervise pin aikey-mac <aikey-container> --state-dir state/supervisor
 local-apple-supervise pin aiport-mac <aiport-container> --state-dir state/supervisor
-local-apple-supervise plist --state-dir state/supervisor > ~/Library/LaunchAgents/com.olli.local-apple-supervise.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.olli.local-apple-supervise.plist
+local-apple-supervise plist --state-dir state/supervisor > ~/Library/LaunchAgents/org.local.aikey-supervise.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.local.aikey-supervise.plist
 ```
 
 A pin records the container's image, its published host address and port, and its `/state` bind mount. A stopped pinned container is started only when all of these hold:
@@ -201,7 +208,7 @@ isolated test qualification, not activation of the historical installation or
 proof of native Apple 1.6.1 power-loss/daemon cancellation behavior. The old
 container is retained; guest state is never replaced with an older snapshot.
 
-On 26 Sep 2026 at 08:41:14 the pinned Mac AI Port was stopped, with no event open. The agent's next tick started the same container at 08:41:18. Within 12 s its control connection was back and all three streams were decoding. Protect showed the AI Port `CONNECTED` with its three paired cameras unchanged. A native Flur Animal event followed at 08:41:59. The AI Key and the NAS AI Ports were untouched.
+On 26 Sep 2026 at 08:41:14 the pinned Mac AI Port was stopped, with no event open. The agent's next tick started the same container at 08:41:18. Within 12 s its control connection was back and all three streams were decoding. Protect showed the AI Port `CONNECTED` with its three paired cameras unchanged. A native Camera A Animal event followed at 08:41:59. The AI Key and the NAS AI Ports were untouched.
 
 For permanent removal or recovery, follow the [uninstall/restore
 boundaries](uninstall-restore.md); retain identity, journals and indexes and

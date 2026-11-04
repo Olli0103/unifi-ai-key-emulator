@@ -781,7 +781,7 @@ reconcile; no automatic retry, restart or rollback is attempted.
 The maintained fictional desktop/mobile browser check covers preview, required
 acknowledgement, Space/Tab/Enter confirmation, saved result, exact undo and
 refusal of the old confirmation after Undo.
-This is not live camera tuning, native Flur acceptance or full #17 completion.
+This is not live camera tuning, native Camera A acceptance or full #17 completion.
 
 ## Plate-crop camera permission
 

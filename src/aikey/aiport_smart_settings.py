@@ -277,7 +277,7 @@ class SmartPolicy:
         if any("package" in zone.object_types for zone in self.smart_zones):
             return "package_zone"   # the user drew Package on the main lens
         if any("package" in zone.object_types for zone in self.secondary_lens_zones):
-            # A doorbell's package lens owns Package (Haustür: every native
+            # A doorbell's package lens owns Package (Camera E: every native
             # Package came from it, one-shot without a box). Without a main-
             # lens Package zone the AI Port never announces Package for it.
             return "second_lens"

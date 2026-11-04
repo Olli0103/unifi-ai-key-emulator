@@ -166,7 +166,7 @@ def test_recovery_refuses_drift_without_vm_mutation(tmp_path, foreign):
     if foreign == 'label':
         host.entries[NEW]['configuration']['labels'] = {}
     elif foreign == 'old_configuration':
-        host.entries[OLD]['configuration']['dns']['nameservers'] = ['192.168.0.2']
+        host.entries[OLD]['configuration']['dns']['nameservers'] = ['10.77.0.2']
     elif foreign == 'registry':
         value = json.loads((tmp_path / sup.SPEC_FILE).read_text())
         value['max_starts_per_hour'] = 4

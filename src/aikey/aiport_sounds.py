@@ -55,13 +55,12 @@ CLASSES = {
     "alrmGlassBreak": ("Shatter",),
 }
 # AudioSet classes that, when they score at least as high, mean the sound was
-# something else. Live, 5 Oct: a 101 s "baby cry" in the Flur, where the
-# owner's cat lives, and about five "glass breaks" a day at the front door,
-# where keys and coins jingle. A vetoed hop counts as below the bar.
+# something else. Cat vocalizations can resemble crying; keys and coins can
+# resemble breaking glass. A vetoed hop counts as below the bar.
 CONFUSERS = {
     "alrmBabyCry": ("Cat", "Meow", "Caterwaul", "Purr", "Hiss"),
     # 5-7 Oct: 11 barks whose strongest class was the generic "Domestic
-    # animals, pets" or "Animal", mostly under 0.6, indoors where the cat lives.
+    # animals, pets" or "Animal", mostly under 0.6, in an indoor trial.
     "alrmBark": ("Cat", "Meow", "Caterwaul", "Purr", "Hiss"),
     "alrmGlassBreak": ("Chink, clink", "Keys jangling", "Coin (dropping)",
                        "Dishes, pots, and pans", "Cutlery, silverware"),
@@ -73,7 +72,7 @@ HISTORY_SAMPLES = 6 * SAMPLE_RATE          # beep-pattern analysis only
 # leave. Tightened after the first live day (30 Sep): car alarms must hold
 # for about 2 s (road noise crossed a 1 s bar), glass must shatter clearly,
 # and the rest need a higher score. Sirens need 0.7 for about 4 s (5 Oct:
-# 11 night-time sirens in 6 hours on the road-facing Einfahrt, each a few
+# 11 night-time sirens in 6 hours on the road-facing Camera F, each a few
 # seconds long; a passing emergency vehicle sounds for much longer). A bark
 # needs 0.6 (7 Oct: most false barks scored under it).
 POLICY = {"alarm": (0.4, 3, 6.0), "alrmSiren": (0.7, 8, 4.0),

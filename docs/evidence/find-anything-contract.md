@@ -1,5 +1,8 @@
 # AI Key Find Anything (basic mode) contract (issues #2, #21)
 
+This is an anonymized historical protocol/evidence record. Addresses and labels
+are documentation substitutions, not tested literal network settings.
+
 **Status, 26 Sep 2026 15:55: verified natively on Protect 7.3.68** (Mac search host, see [Live verification](#live-verification-26-sep-2026)). The blocker section further down is kept as history.
 
 This is static evidence from the Protect 7.3.60 controller bundle (`service.js`, SHA-256 `9364cc9e…`), plus read-only live checks on Protect 7.3.68 on 26 Sep 2026. Nothing was changed on the controller for this record.
@@ -23,25 +26,14 @@ On every external AI processor connect, `onAiprocessorConnected` does four thing
 
 A built-in console AI processor would take precedence, but this console has none. No capability flag is checked on this path.
 
-## Live state (Protect 7.3.68, 26 Sep, read-only)
+## Historical network qualification
 
-- **AI Key:** `host: 192.168.0.98`, `isBuiltIn: false`, **`isSearchHost: false`**, `aiMode: basic`. It is the only AI processor.
-- **Nothing listens on `192.168.0.98:5432`**, so every connect-time PostgreSQL attempt fails and Protect has no search host.
-- **Emulator config:** `search.enabled: false`, `database.enabled: false`. The existing query profile answers only E5 (`multilingual-e5-small`, 384 values), which is the deep-mode session path, not the basic CLIP path.
-- **Caption callbacks:** they send `keyMomentsTags: []` and no `thumbnailTags`, so nothing could be indexed even with a host.
-
-## Blocker: the search host on this Mac
-
-The repo's PostgreSQL profile (`deployment/postgres`: pgvector PG14, `unifi-protect` superuser, SCRAM over TLS) admits only the console's exact `/32`. On this Mac:
-
-- **A container can't do this.** Apple `container` port publishing rewrites every peer to `192.168.64.1`; I measured this for both a LAN-side and a container-side connection. The HBA rule would then have to admit the NAT address, which in practice means any LAN host with the password. The profile forbids that broadening.
-- **An unsigned host binary can't either.** A host-native PostgreSQL would see real source addresses. But the macOS application firewall (stealth mode) blocks unsigned Homebrew servers, as it did for `whisper-server`. Changing firewall settings is not done here.
-
-Options for the owner:
-
-1. **Postgres.app on the Mac (recommended).** It is Developer-ID signed, so the firewall setting "automatically allow downloaded signed software" admits it. It has pgvector, listens on `192.168.0.98:5432`, and uses HBA `hostssl … 192.168.0.1/32 scram-sha-256` exactly as in the profile. Data stays on the Mac.
-2. **Container with HBA for `192.168.64.1/32`.** SCRAM over TLS with a long random device credential, but any LAN host can attempt to log in.
-3. **Move the AI Key to the NAS.** There the macvlan network preserves source addresses, as for the AI Port slots. This is a larger identity move.
+The initial Apple-container search experiment had no reachable search host.
+Published-port NAT changed the observed peer address, conflicting with the
+exact console allowlist. A separately bounded host relay was later tested, as
+recorded below. This is not a recommendation to widen PostgreSQL HBA rules,
+change a host firewall or reproduce a private network. Use the current
+[deployment guide](../deployment.md) and platform-specific database contract.
 
 ## Once a search host exists, the smallest compatible path
 
@@ -53,12 +45,12 @@ Options for the owner:
 ## Live verification (26 Sep 2026)
 
 **Setup on the Mac (no firewall change, no NAS move yet).**
-- **PostgreSQL:** `local-postgres-search` runs the `deployment/postgres` profile (pgvector 0.8.6, PG14) on a named volume. It is published only on the host bridge, `192.168.64.1:55432`, with TLS from a private CA whose server certificate names `192.168.0.98`.
-- **Relay:** `aikey.pg_relay` listens on `192.168.0.98:5432` under the signed `/usr/bin/python3`. It admits only `192.168.0.1/32` (the console) and `192.168.64.0/24` (the host-only container bridge), and splices bytes to PostgreSQL. TLS and SCRAM stay end to end.
-- **CLIP:** `local-clip-vitl14` runs ONNX CLIP ViT-L/14, pinned to Hugging Face revision `c3077901`, on `192.168.64.1:8180` only.
+- **PostgreSQL:** `local-postgres-search` runs the `deployment/postgres` profile (pgvector 0.8.6, PG14) on a named volume. It is published only on the host bridge, `198.51.100.1:55432`, with TLS from a private CA whose server certificate names `192.0.2.98`.
+- **Relay:** `aikey.pg_relay` listens on `192.0.2.98:5432` under the signed `/usr/bin/python3`. It admits only `192.0.2.1/32` (the console) and `198.51.100.0/24` (the host-only container bridge), and splices bytes to PostgreSQL. TLS and SCRAM stay end to end.
+- **CLIP:** `local-clip-vitl14` runs ONNX CLIP ViT-L/14, pinned to Hugging Face revision `c3077901`, on `198.51.100.1:8180` only.
 - **AI Key config:**
   - `search.profile: clip-basic-v1`;
-  - `database.enabled: true`, host `192.168.0.98`, `verify-full` against that CA;
+  - `database.enabled: true`, host `192.0.2.98`, `verify-full` against that CA;
   - `find_anything.index_camera_ids`: the 10 connected cameras;
   - `controller.search_ca_file` and `controller.search_expected_fingerprint` hold the separate 7443 certificate pin (`CN=unifi.local`; 7442 serves `CN=localhost`).
 
@@ -68,13 +60,13 @@ Options for the owner:
 
 | Check | Result |
 |---|---|
-| Protect `aiprocessors` | AI Key `192.168.0.98` `isSearchHost: true` (was `false`) |
+| Protect `aiprocessors` | AI Key `192.0.2.98` `isSearchHost: true` (was `false`) |
 | Relay | console connections accepted; host and other sources refused |
 | Search host tables | 6 tables created by Protect's own migrations |
 | AI Key search WebSocket | `connected: true`, 0 failures; the `NL_PARSE` counter follows Protect queries |
 | Index jobs (15:44–15:52) | 7 `searchSnapshots` callbacks, all HTTP 200; local CLIP only, 0 provider requests |
-| `ramDetections` | 7 rows, 7 with a 768-value embedding, 7 events, 2 cameras (Flur, Haustür) |
-| Protect `detection-nls`, `minSimilarity=35` | "person": 6 hits (the six person objects; the vehicle excluded); "a person walking in a hallway": 4 Flur hits, top similarity 49; "a sailing boat on the ocean": 0; "an airplane in the sky": 0 |
+| `ramDetections` | 7 rows, 7 with a 768-value embedding, 7 events, 2 cameras (Camera A, Camera E) |
+| Protect `detection-nls`, `minSimilarity=35` | "person": 6 hits (the six person objects; the vehicle excluded); "a person walking in a hallway": 4 Camera A hits, top similarity 49; "a sailing boat on the ocean": 0; "an airplane in the sky": 0 |
 | Event readback (top hit) | `smartDetectZone`/person event lists 1 detected thumbnail of type person with an object ID; the thumbnail is served (HTTP 200, not viewed) |
 
 **Contract details found live.**
@@ -88,13 +80,13 @@ Options for the owner:
 - **Coverage:**
   - Audio-event image tasks (`ramType: image`, one cropped thumbnail each) are not indexed yet.
   - Face-camera recognition tasks go to local faces and are not indexed.
-  - Key moments come from a console-local service, not from cameras or AI Ports. Protect's `/ai-feature-console/v1` socket admits only local addresses; Protect streams it `SmartDetectTrack` raw tracks, and that service sends back `FrameSelection`. AI Port-paired cameras are covered: Flur, a G3 on our Mac AI Port, was indexed and returned by search. When Protect selects a key moment is outside the Key's control.
-- **Durability:** CLIP and Postgres are pinned in the Mac supervisor. Since 26 Sep 16:35 the relay runs as the launchd agent `com.olli.local-aikey-pg-relay` (`KeepAlive`, `RunAtLoad`, 10 s throttle), generated by `pg_relay.py --launch-agent`.
+  - Key moments come from a console-local service, not from cameras or AI Ports. Protect's `/ai-feature-console/v1` socket admits only local addresses; Protect streams it `SmartDetectTrack` raw tracks, and that service sends back `FrameSelection`. AI Port-paired cameras are covered: Camera A, a G3 on the tested AI Port, was indexed and returned by search. When Protect selects a key moment is outside the Key's control.
+- **Durability:** CLIP and Postgres are pinned in the Mac supervisor. Since 26 Sep 16:35 the relay runs as the launchd agent `org.local.aikey-pg-relay` (`KeepAlive`, `RunAtLoad`, 10 s throttle), generated by `pg_relay.py --launch-agent`.
   - **Location:** the agent runs a copy of the script in `~/Library/Application Support/local-aikey-relay/`, which also holds its status file. macOS privacy protection refuses launchd-started processes access to `~/Documents` (`Operation not permitted`, exit 2 on the first attempt).
   - **Restart tests:** `kill -9` brought a new listener back in 1 s (`runs = 2`). A login-style `bootout` then `bootstrap` returned one listener.
   - **Readback after both:** Protect `detection-nls` at `minSimilarity=35`: "person" 9 hits, "a person walking in a hallway" 6, "a sailing boat on the ocean" 0, "an airplane in the sky" 0. The AI Key stays `isSearchHost: true`, and the restarted relay counted the console connections (0 upstream failures).
   - **Not done:** a real Mac reboot.
-  - **Rollback:** `launchctl bootout gui/$UID/com.olli.local-aikey-pg-relay` and remove `~/Library/LaunchAgents/com.olli.local-aikey-pg-relay.plist`.
+  - **Rollback:** `launchctl bootout gui/$UID/org.local.aikey-pg-relay` and remove `~/Library/LaunchAgents/org.local.aikey-pg-relay.plist`.
 - **Deep mode** (E5 session search) and hybrid search: not implemented. Search by image: verified, see below.
 - **NAS:** the search host moves to the NAS only at the final cutover ([plan](../planning/nas-final-cutover.md)).
 
@@ -114,7 +106,7 @@ Options for the owner:
 
 **Native readback.**
 - **Flag:** Protect `aiprocessors` shows `featureFlags.supportImageSearch: {enabled: true}` after reconnect.
-- **Positive:** the query was Protect's own stored thumbnail of a Flur person object, fetched and re-uploaded in the browser without being viewed. The top result is **that same object, similarity 92**, followed by other Flur persons at 91 and 89. At `minSimilarity=70`: 9 hits.
+- **Positive:** the query was Protect's own stored thumbnail of a Camera A person object, fetched and re-uploaded in the browser without being viewed. The top result is **that same object, similarity 92**, followed by other Camera A persons at 91 and 89. At `minSimilarity=70`: 9 hits.
 - **Negative:** a synthetic drawing (sky, sun, grass; no camera content). The best result is 67. At `minSimilarity=70`: **0 hits**.
 - **AI Key health:** `image_queries: 2`, no failures, 0 vision-provider requests.
 
@@ -144,11 +136,11 @@ Options for the owner:
 
 Enabling the opt-in would resume that run at once. That means backfilling up to 5000 recorded events on every camera, with live AI tasks paused for about 100 minutes by Protect's own estimate.
 
-**Status (18:05):** the live retroactive run was `needs_evidence` pending Olli's decision. It is now on; see the next section.
+**Status (18:05):** the live retroactive run was `needs_evidence` pending the operator's decision. It is now on; see the next section.
 
-## Retroactive processing on (Olli's decision, 26 Sep 2026 20:57)
+## Retroactive processing on (the operator's decision, 26 Sep 2026 20:57)
 
-Olli asked for retroactive processing on the current deployment, resuming the stored run. The run was **not** cancelled or replaced.
+the operator asked for retroactive processing on the current deployment, resuming the stored run. The run was **not** cancelled or replaced.
 
 **Resume semantics (7.3.60 static).**
 - **Start trigger:** Protect's `onConnected` starts the runner when the stored state is `running` and a connected processor advertises `supportRetroactiveProcessing`.
@@ -161,7 +153,7 @@ Olli asked for retroactive processing on the current deployment, resuming the st
 **Preparation (commit after b9eac9a, "Prepare the AI Key for Protect's retroactive backfill").**
 - **Ledger rollover:** completed local index jobs now roll out of the 1024-entry worker ledger after a minute. Otherwise the ledger (364 entries) would have filled after about 660 events, and Protect would have counted every later rejected push as processed.
 - **Queue and deadline:** worker `max_queue` went from 24 to 64, so Protect's 50-task window always fits. Crop jobs get a 600 s budget.
-- **Refusals before any fetch:** backfilled audio thumbnails (`ramType: image`) and crops from cameras outside the index are refused before any fetch. Only the offline "Wohnzimmer alt" is outside the index.
+- **Refusals before any fetch:** backfilled audio thumbnails (`ramType: image`) and crops from cameras outside the index are refused before any fetch. Only the offline "Camera J alt" is outside the index.
 - **Provider boundary:** backfilled crops go only to the local CLIP server. Backfilled speech goes to local Whisper. No old frame, crop or audio reaches the external provider.
 - **Checkpoints:** search-index backup `search-20260926T205550` (71 rows, scratch restore verified) and `config.json.before-retroactive-20260926`.
 
@@ -261,14 +253,14 @@ Read-only, from a tab in the signed-in Chrome profile. Only metadata, counts and
 
 | Camera | Eligible events | Indexed | Missing |
 |---|---|---|---|
-| Haustür | 548 | 542 | 6 |
-| Wohnzimmer | 584 | 573 | 11 |
-| Einfahrt | 396 | 387 | 9 |
-| Garage | 377 | 377 | 0 |
-| Esszimmer | 182 | 182 | 0 |
-| Büro | 178 | 169 | 9 |
-| Giebel hinten | 43 | 39 | 4 |
-| Giebel Vorn | 2 | 2 | 0 |
+| Camera E | 548 | 542 | 6 |
+| Camera J | 584 | 573 | 11 |
+| Camera F | 396 | 387 | 9 |
+| Camera H | 377 | 377 | 0 |
+| Camera D | 182 | 182 | 0 |
+| Camera C | 178 | 169 | 9 |
+| Camera I | 43 | 39 | 4 |
+| Camera G | 2 | 2 | 0 |
 
 **Why the 39 cannot be reconciled safely.**
 - **No automatic retry:** Protect gave each dropped task a task row, and it fails after its 30-minute timeout as `timeout`, without the retry flag. So `retryFailTasks`, which picks only `failedRetry`, never re-sends it.
@@ -309,7 +301,7 @@ Read-only, from a tab in the signed-in Chrome profile. Only metadata, counts and
 
 Sources:
 - **Read-only Protect 7.3.68 API:** event metadata (counts only).
-- **A console support file downloaded with Olli's approval:** only filtered counts and message templates were read; the archive and every extract were deleted afterwards.
+- **A console support file downloaded with the operator's approval:** only filtered counts and message templates were read; the archive and every extract were deleted afterwards.
 - **Protect 7.3.60 static code.**
 
 No media was fetched. No run was started, cancelled or resumed.

@@ -152,14 +152,14 @@ async def test_authenticated_camera_page_refreshes_inventory_and_marks_allowlist
             raise InventoryError("Protect unavailable")
         return {"schema": "aikey-camera-preflight/1", "protect_version": "7.3.60",
                 "fetched_at": 1800000000, "summary": {"total": 4}, "cameras": [
-                    {"id": f"{1:024x}", "name": "<Büro>", "model": "UVC G5 Flex", "state": "CONNECTED",
+                    {"id": f"{1:024x}", "name": "<Camera C>", "model": "UVC G5 Flex", "state": "CONNECTED",
                      "processing_class": "smart_event_candidate",
                      "mac": "2A1122334455", "smart_detect_types": ["person"]},
-                    {"id": f"{2:024x}", "name": "Esszimmer", "model": "UVC G4 Instant",
+                    {"id": f"{2:024x}", "name": "Camera D", "model": "UVC G4 Instant",
                      "processing_class": "legacy_ingress_needed",
                      "state": "CONNECTED", "mac": "2A1122334499",
                      "smart_detect_types": []},
-                    {"id": f"{3:024x}", "name": "Wohnzimmer", "model": "UVC G6 Instant",
+                    {"id": f"{3:024x}", "name": "Camera J", "model": "UVC G6 Instant",
                      "processing_class": "smart_event_candidate",
                      "state": "CONNECTED", "mac": "2A1122334498",
                      "smart_detect_types": ["person"]},
@@ -186,8 +186,8 @@ async def test_authenticated_camera_page_refreshes_inventory_and_marks_allowlist
         page = await client.get("/cameras")
         markup = await page.text()
         assert page.status == 200 and requests == [1]
-        assert "&lt;Büro&gt;" in markup and "<Büro>" not in markup
-        assert "Esszimmer" in markup and "Wohnzimmer" in markup
+        assert "&lt;Camera C&gt;" in markup and "<Camera C>" not in markup
+        assert "Camera D" in markup and "Camera J" in markup
         assert "Legacy ONVIF" in markup and "Legacy camera target" in markup
         assert "3 connected legacy / G3–G5 targets" in markup
         assert "AI Port capacity plan: 2 instance(s) for 3 connected target camera(s)" in markup
@@ -201,7 +201,7 @@ async def test_authenticated_camera_page_refreshes_inventory_and_marks_allowlist
         unavailable[0] = True
         failed = await (await client.get("/cameras")).text()
         assert "Camera inventory unavailable" in failed
-        assert "Esszimmer" not in failed
+        assert "Camera D" not in failed
     finally:
         await client.close()
         await server.close()
@@ -348,7 +348,7 @@ async def test_rollout_page_shows_the_diff_and_applies_only_local_allowlist(
                                  for s in config["paired_streams"]]}
 
     monkeypatch.setattr("aikey.aiport_rollout.read_slot_health", health)
-    cameras = [("2A1122334455", "Flur"), ("2A1122334456", "Büro")]
+    cameras = [("2A1122334455", "Camera A"), ("2A1122334456", "Camera C")]
 
     async def inventory():
         return {"schema": "aikey-camera-preflight/1", "fetched_at": 1, "protect_version": "7.3.68",
@@ -418,7 +418,7 @@ async def test_rollout_page_shows_the_exact_compose_service_before_apply(tmp_pat
         return {"pool_cameras": [{"policy_enabled": True} for _ in config["paired_streams"]]}
 
     monkeypatch.setattr("aikey.aiport_rollout.read_slot_health", health)
-    cameras = [("2A1122334455", "Flur"), ("2A1122334456", "Büro"), ("2A1122334457", "Keller")]
+    cameras = [("2A1122334455", "Camera A"), ("2A1122334456", "Camera C"), ("2A1122334457", "Keller")]
 
     async def inventory():   # three 4K cameras: the third needs a new AI Port
         return {"schema": "aikey-camera-preflight/1", "fetched_at": 1, "protect_version": "7.3.68",
@@ -437,7 +437,7 @@ async def test_rollout_page_shows_the_exact_compose_service_before_apply(tmp_pat
         "new_slots": {"target": "nas", "state_parent": str(tmp_path),
                       "addresses": ["192.168.10.30"]},
         "compose": {"path": str(compose), "template": "aiport_slot_2",
-                    "state_parent": "/home/olli/aiport-deployment"}}))
+                    "state_parent": "/srv/aikey-deployment"}}))
     password = "synthetic-admin-passphrase"
     site = ControlSite(key_config, port_config, signing_key=b"s" * 32,
                        password_record=AdminSecurity.create_password_record(password),
@@ -454,7 +454,7 @@ async def test_rollout_page_shows_the_exact_compose_service_before_apply(tmp_pat
         page = await (await client.get("/aiport-rollout")).text()
         assert "compose_add_service · nas-slot-1" in page
         assert "service aiport_slot_1 · 192.168.10.30" in page
-        assert "state /home/olli/aiport-deployment/slot-1" in page
+        assert "state /srv/aikey-deployment/slot-1" in page
         assert "ipv4_address: 192.168.10.30" in page and "<pre>" in page
         assert "nas-slot-1: capacity evidenced" in page
         assert "redeploy_nas_project" in page and "adopt_in_protect" in page

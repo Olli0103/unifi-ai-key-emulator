@@ -136,7 +136,7 @@ def test_a_provider_save_keeps_the_local_fallback_and_drops_a_legacy_event_cap(t
     raw["live_pool_detector"].update({
         "max_events_per_hour": 30, "held_package_followup": "announce",
         "fallback": {"provider_config": {"provider": "ollama", "model": "qwen3-vl:8b-instruct",
-                                         "base_url": "http://192.168.0.110:11434",
+                                         "base_url": "http://10.77.0.110:11434",
                                          "allow_remote": True, "allow_insecure_http": True},
                      "timeout_s": 90}})
     path.write_text(json.dumps(raw) + "\n")

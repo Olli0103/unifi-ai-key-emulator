@@ -37,7 +37,7 @@ def _animal_zone(**corners):
 
 
 def test_cat_along_the_frame_edge_is_inside_a_default_inset_full_frame_zone():
-    # Flur, 26 Sep 03:25: a cat box mostly in the <=4% strip between the
+    # Camera A, 26 Sep 03:25: a cat box mostly in the <=4% strip between the
     # default zone edge and the frame border overlapped the zone by <50%.
     zone = _animal_zone(x1=25, y1=35, x2=976, y2=960)
     for box in ((0.40, 0.93, 0.50, 1.0),     # under the camera, bottom edge

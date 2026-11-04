@@ -40,7 +40,7 @@ FACE_SNAPSHOT_SIDE = 512
 # small, turned-away or flat faces made stray single-face groups (1 Oct: 22 of
 # 50 groups held one face).
 SEND_MIN_FACE_PX = 40
-# The yaw estimate from five landmarks is coarse; 50 held back 70 of 98 Büro
+# The yaw estimate from five landmarks is coarse; 50 held back 70 of 98 Camera C
 # faces in an hour (1 Oct), so the bound only drops clear profiles.
 SEND_MAX_YAW = 65.0
 SEND_MAX_BLUR = 0.85

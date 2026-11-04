@@ -53,7 +53,7 @@ are reported separately in the PR, not inferred here.
 ## Limits
 
 Source/fictional browser evidence is not deployment, native camera quality,
-calibration or controlled Flur ground truth. No live threshold was changed.
+calibration or controlled Camera A ground truth. No live threshold was changed.
 Key/Port feature parity and complete #17 acceptance remain open. Native
 multi-camera/zone evidence, recording/PTZ status, ONVIF and release provenance
 retain their separate outstanding criteria. No new dependency, model or binary

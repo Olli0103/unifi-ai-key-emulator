@@ -422,7 +422,7 @@ def test_a_bark_needs_a_score_of_at_least_0_6():
 
 
 def test_a_siren_needs_a_clear_score_held_for_about_four_seconds():
-    # 5 Oct: 11 night-time sirens in 6 hours on the road-facing Einfahrt.
+    # 5 Oct: 11 night-time sirens in 6 hours on the road-facing Camera F.
     clock, scores = Clock(), Scores()
     events = detector(scores, clock)
     scores.value = {"alrmSiren": 0.65}                  # passed the old 0.6 bar

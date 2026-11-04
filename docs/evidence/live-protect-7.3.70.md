@@ -1,6 +1,6 @@
 # Live AI Key evidence on Protect 7.3.70 (29–30 Sep 2026)
 
-The Protect controller on the UDM Pro Max auto-updated from 7.3.68 to 7.3.70 at 03:59 local time on 29 Sep. The adopted software AI Key (UP-AI-KEY profile) ran first as an Apple container on the Mac. From 29 Sep 18:35 UTC it ran as a Docker container on the NAS (amd64). Throughout, it kept its identity, its address 192.168.0.98 and its adoption.
+The Protect controller on the UniFi console auto-updated from 7.3.68 to 7.3.70 at 03:59 local time on 29 Sep. The adopted software AI Key (UP-AI-KEY profile) ran first as an Apple container on the Mac. From 29 Sep 18:35 UTC it ran as a Docker container on the NAS (amd64). Throughout, it kept its identity, its address 192.0.2.98 and its adoption.
 
 The values below are content-free device health counters, worker journal states and integration-API readbacks. No captions, transcripts, frames, faces or identifiers are published.
 
@@ -19,7 +19,7 @@ The values below are content-free device health counters, worker journal states 
 - **Search index (row counts only).** The Key's PostgreSQL gained rows, including 2 for the native face camera after the face-task search tags change (30 Sep). Counts do not attribute rows to that change.
 - **Player AI summary.**
   - 06:56–06:57 local, 30 Sep: all 4 on-demand jobs timed out behind a speech backlog (fixed in 7807494).
-  - **Owner-reported, not independently read back:** Olli's screenshot shows a summary rendered in the Büro player for an event at 09:09 local.
+  - **Owner-reported, not independently read back:** the operator's screenshot shows a summary rendered in the Camera C player for an event at 09:09 local.
   - **Deployment, health readback only:** the Key then ran r6 with `worker.inference_concurrency` 1 (health `inference_gate.capacity` 1).
   - **Worker journal only:** 7 on-demand jobs timed out at 08:25–08:26 UTC, just after a Key restart with a 17-job backlog. Caption jobs waiting for the model gate held all six workers, so the summaries waited for a free worker despite their queue priority.
   - **Code only, synthetic tests:** a bounded caption lane (see *Limits and their scopes* in `docs/aiport-candidate.md`). It is not deployed.
@@ -63,11 +63,11 @@ Read with the Protect web app's own API client in the owner's signed-in browser;
 
 ## Owner-approved tests (1 Oct 2026, Europe/Berlin)
 
-Olli approved three gates. Each one was read back natively, in the owner's browser or on the NAS. The results below separate what was saved from what was only counted.
+the operator approved three gates. Each one was read back natively, in the owner's browser or on the NAS. The results below separate what was saved from what was only counted.
 
 **Slot 4 stream recovery.**
-- Garage dropped out after a DISCONNECTED state, and Protect never re-sent the stream start.
-- Restarting only `aiport_slot_4` at 05:11:29 brought the slot back to `streams_with_decoded_frames` 2/2 by 05:12:14, with 0 rejected stream controls. Garage resumed.
+- Camera H dropped out after a DISCONNECTED state, and Protect never re-sent the stream start.
+- Restarting only `aiport_slot_4` at 05:11:29 brought the slot back to `streams_with_decoded_frames` 2/2 by 05:12:14, with 0 rejected stream controls. Camera H resumed.
 
 **Deep Understanding on all cameras (enabled 05:14:07).**
 - *Saved settings:* the `deepUnderstanding` AI policy reads `enabled: true` with `cameras: []`. The NVR's `deepUnderstandingSettings` reads `{enabled: true, allCameras: true}`. The Key reports `aiMode: deep` and `describeConfigHash` 9fec385b7771.
@@ -93,11 +93,11 @@ What actually happens:
 
 Closing this gap needs a search-host image with those extensions and a local cross-encoder rerank service. That is a new service and was not deployed.
 
-**Büro second-stage verification test.**
+**Camera C second-stage verification test.**
 - Baseline: slot threshold 0.8 with no per-camera override, verified before the change.
-- 05:20:42: Büro alone was lowered to 0.4 with image r44 (`camera_thresholds`, 2efc5ba).
+- 05:20:42: Camera C alone was lowered to 0.4 with image r44 (`camera_thresholds`, 2efc5ba).
 - 05:50:45: the bounded automatic restore ran. The config and compose file are byte-identical to their backups, the image is `deep-r43-20260930`, threshold 0.8 with no override, and the slot reads 3/3 streams with speech on.
-- During the window Büro had 0 observations and almost no motion (early morning), so no track entered the reverification window. The Key counted 0 reverification requests and 0 refusals; no problems arose with events, notifications or NAS load.
+- During the window Camera C had 0 observations and almost no motion (early morning), so no track entered the reverification window. The Key counted 0 reverification requests and 0 refusals; no problems arose with events, notifications or NAS load.
 - Result: inconclusive. A reverified event stays needs_evidence.
 
 ## Owner-approved follow-ups (1 Oct 2026, 07:50–09:10 Europe/Berlin)
@@ -150,7 +150,7 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - First readback on slot 1: 18 analyses, 15 faces, 9 held back as turned, 5 sent.
 - *Vision server (npu-20261001-faces):* YuNet on the NPU finds five landmarks, the face is aligned to GFPGAN's FFHQ 512 template, restored and pasted back with a feathered mask. Crops under 64 px are declined, and the square method is the fallback.
 - *Native readback:* an Enhance on a fresh face (14:28) went through the aligned path (`enhanced_aligned` 1) and Protect saved it (`faceEnhanceState: done`, `enhancedImageId`).
-- *Start-up race:* restarting slot 4 once left Garage unstarted (one `UiStreamControl` refused); a second start gave 2/2. The same code path existed before r45.
+- *Start-up race:* restarting slot 4 once left Camera H unstarted (one `UiStreamControl` refused); a second start gave 2/2. The same code path existed before r45.
 - *Not yet done:* an AdaFace comparison needs named people to measure against; it waits until faces are named again.
 - *Detector fix, deployed 14:39:54:*
   - The `npu-20261001-faces` image ran YuNet once per output (12 inferences per detector call), because its output mapping called the compiled model inside a generator. `named_outputs` (07ddb6c) runs one inference and maps all 12 names; it ships as `npu-20261001-faces2`, with the previous container kept stopped.
@@ -158,8 +158,8 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - First 4 minutes live: 8 re-ID and 12 embedding requests, 0 failed. No Enhance has run on the new image yet, so its saved Protect outcome stays needs_evidence.
 
 **Faces on every camera (15:15–17:05).**
-- *Why only Büro and Wohnzimmer:* faces are analysed only for detected people, and in that hour only Büro (272 person observations) and Flur saw people. Wohnzimmer is the native G6. History shows faces from 8 cameras.
-- *What was wrong:* the 50° angle gate held back 70 of 98 Büro faces, and every frame was decoded at no more than 1280 px wide, so a 4K camera's faces shrank threefold.
+- *Why only Camera C and Camera J:* faces are analysed only for detected people, and in that hour only Camera C (272 person observations) and Camera A saw people. Camera J is the native G6. History shows faces from 8 cameras.
+- *What was wrong:* the 50° angle gate held back 70 of 98 Camera C faces, and every frame was decoded at no more than 1280 px wide, so a 4K camera's faces shrank threefold.
 - *AI Ports r46–r49 (44c7b30, fffb392, 09474db, fe44d7f, 50882ec):*
   - the angle gate holds back only clear profiles (65°);
   - a person without a sendable face gets up to 8 tries;
@@ -169,7 +169,7 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - all 9 paired cameras: face listed, enabled by Protect, engine loaded, twins at 2 fps; Protect has face detection on for all 10 connected cameras;
   - real FFmpeg on a 4K test pattern: 20 + 20 frames in 10 s for 1.8 CPU s;
   - slot CPU 20–39 % of a core, NAS load about 3;
-  - Büro 17:04: 27 of 27 analyses on full resolution (16 ready, 11 after waiting for the twin), 26 faces, 9 sent.
+  - Camera C 17:04: 27 of 27 analyses on full resolution (16 ready, 11 after waiting for the twin), 26 faces, 9 sent.
 - *Two fixes on the way:* a 4 s pairing window (r48 widened it to 15 s), and twins still encoding when faces were scheduled (r49 waits up to 1.5 s).
 - *Open:* the outdoor cameras saw no person during the readback, so their face yield stays needs_evidence.
 - *Start-up race (r50, 4a732a0):* a slot restart sometimes refused one camera's UiStreamControl, and Protect never repeats it, so the camera stayed off until a second restart.
@@ -194,16 +194,16 @@ Closing this gap needs a search-host image with those extensions and a local cro
 
 **Parity checks (2 Oct, Europe/Berlin).**
 - *Manifest:* brought up to the 1 Oct readbacks (`ai-key/2026-10-02.2`). Deep mode, describe tasks and their callback, E5 session search, the description embedding, hybrid BM25/rerank search, enhanced-face callbacks and emulator upgrades are now native-verified. Capability flags stay fixture-tested with an `indirect` live result, because a flag is never evidence on its own.
-- *Plates:* Einfahrt saved 6 licence-plate events in 7 days, the last on 1 Oct at 17:13. Garage had 97 vehicle events and no plate; most likely no plate is visible from its view (inference). The AI Ports acknowledge Protect's LPR settings (`smart_settings_lpr_acks` 2 per slot).
+- *Plates:* Camera F saved 6 licence-plate events in 7 days, the last on 1 Oct at 17:13. Camera H had 97 vehicle events and no plate; most likely no plate is visible from its view (inference). The AI Ports acknowledge Protect's LPR settings (`smart_settings_lpr_acks` 2 per slot).
 - *Search recovery drill:* the 07:11 backup (871 sessions, 1,841 members, 5,612 CLIP vectors) restored into a network-less throwaway container on the bm25 image; the counts matched the live database and dense queries served. BM25 queries failed until Protect's own hybrid setup SQL ran, because the tokenizer catalog lives in extension tables that the dump does not carry. Protect runs that SQL on every Key connect, so the restore path is complete. A live restore through Protect stays needs_evidence.
 - *Plate reading quality (r53, 79bea28, slots 3 and 4 from 08:50):*
   - Protect showed plates such as "H?K? 3058" and "L?S RH ?7", because the plate was read from the 1280 px detection frame in the same request as the whole scene.
-  - A vehicle on a plate camera whose plate is missing or uncertain now gets one plate-only read on a crop of the same frame's full-resolution twin; plate cameras decode their twin at native width, 3840 px on Einfahrt. The crop reading is merged with the scene reading, so an uncertain character stays "?". A complete plate is reused for an overlapping box for 2 minutes. At most one crop per camera every 2 s.
+  - A vehicle on a plate camera whose plate is missing or uncertain now gets one plate-only read on a crop of the same frame's full-resolution twin; plate cameras decode their twin at native width, 3840 px on Camera F. The crop reading is merged with the scene reading, so an uncertain character stays "?". A complete plate is reused for an overlapping box for 2 minutes. At most one crop per camera every 2 s.
   - Per-camera counts are in `plate_crops`; slot 3 CPU is 46 % of a core.
-  - First readback: Garage made 2 crop reads with no plate visible, as expected from its view. Einfahrt's improvement needs a passing vehicle (needs_evidence).
+  - First readback: Camera H made 2 crop reads with no plate visible, as expected from its view. Camera F's improvement needs a passing vehicle (needs_evidence).
   - *Attribution fix (code only, not deployed):* the detector sees no track identity, yet r53 reused a complete plate for any overlapping box for 2 minutes. A synthetic replacement vehicle with no reading of its own, or with a contradicting partial reading ("ABC 9?9"), inherited the old plate. Now a cached plate only completes a reading whose every legible character agrees. A contradicting reading drops the old entry and is cropped on its own. A recently read spot is not cropped again, which keeps requests bounded, but it keeps its own reading. Paid budget and uncertain characters are unchanged. This was a source finding, not an observed misidentification; real plate quality, saved native outcomes and NAS load stay needs_evidence.
 - *Emulator upgrades:* seven Key image replacements on 1 Oct kept adoption and identity (same AI Key, adopted, no re-adoption). A rollback and a real state migration stay needs_evidence.
-- *Faces after the AdaFace switch (06:50–07:32):* Flur, Schlafzimmer, Büro, Esszimmer and Haustür sent faces; the four outdoor cameras saw no person. Esszimmer recovered one dropped stream on its own.
+- *Faces after the AdaFace switch (06:50–07:32):* Camera A, Camera B, Camera C, Camera D and Camera E sent faces; the four outdoor cameras saw no person. Camera D recovered one dropped stream on its own.
 - *AI Port firmware:*
   - Protect lists the four AI Ports at 5.1.12 with 5.1.16 available, an early-access build that is not in the public catalog, whose newest release is 5.1.12. Device auto-update is on at 03:00.
   - An update sends `UpdateFirmwareRequest` (download link, timeout) over the AI Port control socket, and the AI Ports used to leave it unanswered. r52 (c3b69ac, live 07:36) refuses it at once with status 501 `firmware_update_unsupported`, counts it and never fetches the link.
@@ -211,7 +211,7 @@ Closing this gap needs a search-host image with those extensions and a local cro
 - *Second-stage verification with real confidences (started 2 Oct, owner-approved):*
   - *Score detector:* YOLOX-S (Megvii, Apache-2.0, COCO; release 0.1.1rc0, sha256 c5c2d13e…) serves `/v1/detect` on the NAS NPU in 32 ms per frame (CPU 52 ms). On YOLOX's own sample image it gives the reference result: bicycle 0.95, dog 0.91, truck 0.61.
   - *AI Port r55 (b1de9ee), slot 1 only from 12:09:* the vision model still decides what exists. Each person, vehicle or animal takes the confidence of an overlapping same-kind YOLOX box; a weak or missing match is reported as 0.5, inside the reverification window, instead of being dropped. Packages keep their score, and the vision scores are kept when the score detector fails.
-  - *Readback:* Protect saved real confidences on Flur (92, 86, 88, 70, 89, 77 %). For the first time Protect sent second-stage requests to the Key (11). The Key refused all 11 (`export_interval`): Protect spans the export from the first to the last thumbnail, an AI Port track has one thumbnail, and the MP4 adaptation required start < end.
+  - *Readback:* Protect saved real confidences on Camera A (92, 86, 88, 70, 89, 77 %). For the first time Protect sent second-stage requests to the Key (11). The Key refused all 11 (`export_interval`): Protect spans the export from the first to the last thumbnail, an AI Port track has one thumbnail, and the MP4 adaptation required start < end.
   - *Key r26 (a5cc171, 12:26):* a zero-length window now exports the second that starts at the thumbnail.
   - *Open:* in the next 20 minutes no new request arrived (RequestAI unrefused, no reverify job). Whether Protect retries after the earlier failures, and a saved verdict (`preReverificationObjectType`), stay needs_evidence.
 
@@ -233,12 +233,12 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - It logs times and counts only.
   - First automatic restart: 3 Oct 15:09.
 - *First saved native verdict:*
-  - On 3 Oct 14:10 Protect asked the Key to verify a Wohnzimmer (G6) animal thumbnail. The Key's CLIP verifier confirmed it and the callback answered 200 at 14:11:28.
+  - On 3 Oct 14:10 Protect asked the Key to verify a Camera J (G6) animal thumbnail. The Key's CLIP verifier confirmed it and the callback answered 200 at 14:11:28.
   - Protect saved `preReverificationObjectType: animal` and `preReverificationConfidence: 72` and now shows the detection at 99 %.
   - AI Port-sourced verdicts stay needs_evidence.
 - *Long tracks:* one task was refused as `reverify_export`. Protect spans the export from the first to the last thumbnail, and a long G6 track exceeds the 120 s video bound. Since this change (code), the Key verifies the 120 s window from the first person, vehicle or animal thumbnail and counts it as `narrowed`. Later thumbnails keep their saved state. A long task with no such region in its window is still refused before any media.
 - *Thumbnail at the export end:* one task failed at frame extraction (3 Oct, about 15:08). Protect ends the export at the last thumbnail, and the Key seeked to the very end, which holds no frame. A reverification thumbnail at the export end now decodes the final second (code).
-- *Verdicts after the restarts (3 Oct, 15:00–15:40):* three more, all Wohnzimmer G6: person 74 → 86 % and 74 → 89 %, animal 74 → 99 %. In-window AI Port thumbnails existed in the same period (Büro person 56 %, Flur animal 76 % and 50 %) but got no verdict.
+- *Verdicts after the restarts (3 Oct, 15:00–15:40):* three more, all Camera J G6: person 74 → 86 % and 74 → 89 %, animal 74 → 99 %. In-window AI Port thumbnails existed in the same period (Camera C person 56 %, Camera A animal 76 % and 50 %) but got no verdict.
 - *AI Port marking (code, not deployed):*
   - The source path from eligibility to the published snapshot works in synthetic tests. A person tracked at 56 % inside a 40–80 % window is published with `reVerifyEligible: true`, and one at 95 % with false.
   - The one defect found was at the window edges: the check used the raw score while events publish whole percent, so a score published as 80 % stayed unflagged and one published as 40 % was dropped. Both now follow the published percent.
@@ -246,26 +246,26 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - Why Protect asked for no AI Port verdict since 2 Oct about 12:26 stays needs_evidence until these counts are deployed and read. One hypothesis to check is that a later settings message withdrew the window.
 - *Firmware:* every AI Port slot refused Protect's update request at least once (1–2 each, 501 `firmware_update_unsupported`). The 03:00 auto-update leaves 5.1.12 in place.
 - *Plates (counts since the slots started 2 Oct):*
-  - Einfahrt: 59 vehicles, 11 plates read, 2 partial; 23 crop re-reads, 6 read, 4 complete, 5 improved, 2 conflicts kept apart.
+  - Camera F: 59 vehicles, 11 plates read, 2 partial; 23 crop re-reads, 6 read, 4 complete, 5 improved, 2 conflicts kept apart.
   - The second slot-4 plate camera: 386 vehicles and 105 crop re-reads, none with a legible plate.
 
 **False sound alarms (2–5 Oct).**
 - *Readback (owner's web session, counts only):* in 72 hours the AI Ports' sound classifier raised:
-  - 20 sirens, all on the road-facing Einfahrt and all between 20:00 and 07:00, 11 of them on 5 Oct between 00:26 and 06:20, each event 24–31 s long in Protect (about 20 s of that is Protect's own padding);
-  - 25 barks, 14 of them on Garage and 7 on Einfahrt;
-  - 6 glass breaks, 5 of them at the Haustür doorbell during the day;
-  - 2 CO alarms and one 101 s baby cry in the Flur, where the owner's cat lives.
+  - 20 sirens, all on the road-facing Camera F and all between 20:00 and 07:00, 11 of them on 5 Oct between 00:26 and 06:20, each event 24–31 s long in Protect (about 20 s of that is Protect's own padding);
+  - 25 barks, 14 of them on Camera H and 7 on Camera F;
+  - 6 glass breaks, 5 of them at the Camera E doorbell during the day;
+  - 2 CO alarms and one 101 s baby cry in the Camera A, where the owner's cat lives.
 - *Change (code):*
   - A siren needs 0.7 for about 4 s instead of 0.6 for about 2 s.
   - Cat classes veto a baby cry; clinks, keys, coins and dishes veto glass break.
   - Health counts the vetoes and, for each entered type, the strongest AudioSet class name, score band and level band. These counts show what the night-time sirens are without keeping any audio.
 - Bark, CO and the remaining siren false positives stay needs_evidence until those counts are read.
-- *Speech off outdoors (5 Oct, owner's request):* in 48 hours the outdoor cameras raised about 800 speech events each (Garage 803, Giebel hinten 785, Haustür 664), most likely wind and road noise. Speech was removed from the Protect audio types of Haustür, Garage and Giebel hinten; Einfahrt and Giebel Vorn were already off. The AI Ports picked the change up only on reconnect, not while running.
+- *Speech off outdoors (5 Oct, owner's request):* in 48 hours the outdoor cameras raised about 800 speech events each (Camera H 803, Camera I 785, Camera E 664), most likely wind and road noise. Speech was removed from the Protect audio types of Camera E, Camera H and Camera I; Camera F and Camera G were already off. The AI Ports picked the change up only on reconnect, not while running.
 - *AI Port r56 (39e039a, all four slots, 5 Oct about 07:40):* every slot reconnected with all streams decoding; speech reads 3 of 3 on slot 1, 1 of 2 on slot 2 and 0 on slots 3 and 4.
-- *Garage plates off (5 Oct, owner's decision):*
-  - Since 2 Oct, Garage passed 386 vehicles with no plate in either the scene reading or 105 paid crop re-reads.
-  - Garage was removed from slot 4's `plate_cameras` (backup `config.json.before-garage-plates-20261005`), which ends its plate prompt, its crop re-reads and its native-resolution twin.
-  - Slot 4 restarted with both streams decoding. Einfahrt keeps its plate reads.
+- *Camera H plates off (5 Oct, owner's decision):*
+  - Since 2 Oct, Camera H passed 386 vehicles with no plate in either the scene reading or 105 paid crop re-reads.
+  - Camera H was removed from slot 4's `plate_cameras` (backup `config.json.before-garage-plates-20261005`), which ends its plate prompt, its crop re-reads and its native-resolution twin.
+  - Slot 4 restarted with both streams decoding. Camera F keeps its plate reads.
 - *GPU preemption timeout (staged for the owner):*
   - `tools/i915-preempt-timeout.sh` on the NAS raises the i915 preemption timeout of the render and compute engines from 7.5 s to 60 s, applied now and at boot, and reports GPU resets logged since boot. `--undo` restores the default.
   - It needs root, so the owner runs it; the watchdog stays in place either way.
@@ -289,8 +289,8 @@ Closing this gap needs a search-host image with those extensions and a local cro
   - The leak's source is unknown. At the old rate (about 1,000 descriptors in 14 hours) the new limit lasts weeks, and the watchdog covers the rest.
 
 **Second-stage verification is not requested for AI Port cameras.**
-- From 3 Oct 15:35 to 7 Oct 09:30, Protect saved 23 verdicts, all for the native Wohnzimmer G6 (18 person, 5 animal, all confirmed).
-- In the same period, slot 1 published 314 snapshots with `reVerifyEligible: true`. Protect stored 470 AI Port thumbnails inside the 40–80 % window (Flur 133, Schlafzimmer 212, Büro 125), none with a verdict and none requested.
+- From 3 Oct 15:35 to 7 Oct 09:30, Protect saved 23 verdicts, all for the native Camera J G6 (18 person, 5 animal, all confirmed).
+- In the same period, slot 1 published 314 snapshots with `reVerifyEligible: true`. Protect stored 470 AI Port thumbnails inside the 40–80 % window (Camera A 133, Camera B 212, Camera C 125), none with a verdict and none requested.
 - The flag sits where native cameras put it. A 28 Sep support file shows native snapshots on the leave edge carrying it the same way, with two extra fields (`clockBestMonotonic`, `framingRect`) that AI Port snapshots lack.
 - Without the bundle source, the cause is unconfirmed. Protect may not send second-stage tasks for AI Port-paired cameras, perhaps because a real AI Port applies the `reVerificationPolicy` it receives on the device; or a missing field may stop it.
 - Meanwhile slot 1's score detector only lowers the confidence Protect shows for uncertain detections; nothing verifies them.
@@ -298,7 +298,7 @@ Closing this gap needs a search-host image with those extensions and a local cro
 - *Key r29 (fd63bb4, about 14:15):* in its first five minutes, 18 of 20 describe tasks were saved using 12 windowed exports, with no size refusals and 2 HTTP 404s.
 
 **Sounds after r56 (5 Oct 07:45 to 7 Oct 09:30, 50 hours).**
-- No siren on Einfahrt (20 in the 72 hours before). Two sirens on Giebel hinten at 07:51 and 07:52 on 5 Oct were probably real.
+- No siren on Camera F (20 in the 72 hours before). Two sirens on Camera I at 07:51 and 07:52 on 5 Oct were probably real.
 - Barks: 11 across six cameras. Their strongest class was the generic "Domestic animals, pets" or "Animal", mostly with scores under 0.6.
 - Car horns: 5, all classified as horns.
 - Glass breaks: 2, classed as "Crack" and "Breaking"; one more was vetoed as a clink.

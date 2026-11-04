@@ -79,7 +79,7 @@ recording playback or camera/model inference was performed. The current Mac
 has no Apple `container` executable at the checked supported locations, so actual
 Mac qualification remains blocked on a qualified runtime/transport environment.
 Official 1.6.1 docs/release metadata were read; older privileged-bind issue
-reports are not treated as a measured 1.6.1 failure. The Flur alarm test remains
+reports are not treated as a measured 1.6.1 failure. The Camera A alarm test remains
 paused and unrelated to these source checks.
 
 ## Origin

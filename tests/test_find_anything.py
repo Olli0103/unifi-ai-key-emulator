@@ -549,9 +549,9 @@ def image_search(uri, identifier="img-1"):
 async def test_search_by_image_returns_a_local_clip_vector(controller, tmp_path):
     options = {"search": {"enabled": True, "profile": clip.PROFILE},
                "find_anything": {"clip_server": controller.origin},
-               "controller": {"host": "192.168.0.1"}, "device": {"mac": "02:9d:90:a5:48:ca"}}
+               "controller": {"host": "10.77.0.1"}, "device": {"mac": "02:00:00:00:00:a1"}}
     service = SearchService(options, tmp_path)
-    uri = "https://192.168.0.1:7444/internal/files/recognizeImage/upload-1.jpg"
+    uri = "https://10.77.0.1:7444/internal/files/recognizeImage/upload-1.jpg"
     try:
         for body in (_image("JPEG"), _image("PNG")):
             service._media_session = _FakeSession(body=body)
@@ -559,7 +559,7 @@ async def test_search_by_image_returns_a_local_clip_vector(controller, tmp_path)
             assert response.header["errorCode"] == 0 and set(response.body) == {"imgEmbed"}
             assert len(response.body["imgEmbed"]) == 768 and response.body["imgEmbed"][0] == 1.0
             [(url, headers)] = service._media_session.requests
-            assert url == uri and headers["x-ident"] == "029D90A548CA"
+            assert url == uri and headers["x-ident"] == "0200000000A1"
         assert controller.clip_requests[-1] == {"jpeg": True, "regions": [[0.0, 0.0, 1.0, 1.0]]}
         assert service.status["image_queries"] == 2 and service.status["image_failures"] == {}
     finally:
@@ -568,18 +568,18 @@ async def test_search_by_image_returns_a_local_clip_vector(controller, tmp_path)
 
 
 @pytest.mark.parametrize("uri,category", [
-    ("http://192.168.0.1:7443/internal/files/recognizeImage/a.jpg", "uri"),
-    ("https://192.168.0.2:7444/internal/files/recognizeImage/a.jpg", "uri"),
-    ("https://192.168.0.1:7444/api/cameras", "uri"),
-    ("https://192.168.0.1:7443/internal/files/recognizeImage/a.jpg", "uri"),     # not the media port
-    ("https://192.168.0.1:7444/internal/files/../api", "uri"),
-    ("https://192.168.0.1:7444/internal/files/recognizeImage/a.jpg?x=1", "uri"),
+    ("http://10.77.0.1:7443/internal/files/recognizeImage/a.jpg", "uri"),
+    ("https://10.77.0.2:7444/internal/files/recognizeImage/a.jpg", "uri"),
+    ("https://10.77.0.1:7444/api/cameras", "uri"),
+    ("https://10.77.0.1:7443/internal/files/recognizeImage/a.jpg", "uri"),     # not the media port
+    ("https://10.77.0.1:7444/internal/files/../api", "uri"),
+    ("https://10.77.0.1:7444/internal/files/recognizeImage/a.jpg?x=1", "uri"),
     (None, "uri"),
 ])
 async def test_search_by_image_fetches_only_the_console_upload_route(tmp_path, uri, category):
     options = {"search": {"enabled": True, "profile": clip.PROFILE},
                "find_anything": {"clip_server": "http://127.0.0.1:1"},
-               "controller": {"host": "192.168.0.1"}, "device": {"mac": "02:9d:90:a5:48:ca"}}
+               "controller": {"host": "10.77.0.1"}, "device": {"mac": "02:00:00:00:00:a1"}}
     service = SearchService(options, tmp_path)
     service._media_session = _FakeSession(body=_image("JPEG"))
     response = decode_message(await service.handle_message(image_search(uri)))
@@ -590,9 +590,9 @@ async def test_search_by_image_fetches_only_the_console_upload_route(tmp_path, u
 async def test_search_by_image_refuses_non_images_and_http_errors(tmp_path):
     options = {"search": {"enabled": True, "profile": clip.PROFILE},
                "find_anything": {"clip_server": "http://127.0.0.1:1"},
-               "controller": {"host": "192.168.0.1"}, "device": {"mac": "02:9d:90:a5:48:ca"}}
+               "controller": {"host": "10.77.0.1"}, "device": {"mac": "02:00:00:00:00:a1"}}
     service = SearchService(options, tmp_path)
-    uri = "https://192.168.0.1:7444/internal/files/recognizeImage/a.jpg"
+    uri = "https://10.77.0.1:7444/internal/files/recognizeImage/a.jpg"
     for session in (_FakeSession(body=b"GIF89a..."), _FakeSession(status=404)):
         service._media_session = session
         assert decode_message(await service.handle_message(image_search(uri))).header["errorCode"] == 1

@@ -3283,7 +3283,7 @@ class CandidateService:
         """Send a leave for each open native event before the link closes.
 
         Without it Protect keeps the event open until its own timeout (about
-        six minutes after a redeploy, Esszimmer 26 Sep 03:46). The leave has
+        six minutes after a redeploy, Camera D 26 Sep 03:46). The leave has
         no snapshots: a stopping AI Port cannot serve their upload.
         """
         ws = self._current_ws

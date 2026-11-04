@@ -18,19 +18,19 @@ OTHER_ID = f"{2:024x}"
 
 def test_exact_camera_watch_requires_one_eligible_current_name():
     inventory = {"cameras": [
-        {"id": CAMERA_ID, "name": "Flur"},
-        {"id": OTHER_ID, "name": "Garage"},
+        {"id": CAMERA_ID, "name": "Camera A"},
+        {"id": OTHER_ID, "name": "Camera H"},
     ]}
     plan = {"instances": [{"camera_ids": [CAMERA_ID]}]}
-    assert _selected_camera_ids(inventory, plan, "Flur") == {CAMERA_ID}
+    assert _selected_camera_ids(inventory, plan, "Camera A") == {CAMERA_ID}
     assert _selected_camera_ids(inventory, plan, None) == {CAMERA_ID}
-    for name in ("Garage", "flur", "Missing"):
+    for name in ("Camera H", "camera a", "Missing"):
         with pytest.raises(AiPortPlanError, match="one eligible"):
             _selected_camera_ids(inventory, plan, name)
-    inventory["cameras"][1]["name"] = "Flur"
+    inventory["cameras"][1]["name"] = "Camera A"
     plan["instances"][0]["camera_ids"].append(OTHER_ID)
     with pytest.raises(AiPortPlanError, match="one eligible"):
-        _selected_camera_ids(inventory, plan, "Flur")
+        _selected_camera_ids(inventory, plan, "Camera A")
 
 
 def frame(*, camera=CAMERA_ID, action="add", event="smartDetectZone",
@@ -72,9 +72,9 @@ def test_event_parser_rejects_malformed_targeted_data(bad):
 async def test_watch_counts_native_subscription_events_without_retaining_payloads(monkeypatch):
     async def fake_inventory(*args, **kwargs):
         return {"schema": "aikey-camera-preflight/1", "cameras": [
-            {"id": CAMERA_ID, "name": "Flur", "model": "UVC G3 Instant",
+            {"id": CAMERA_ID, "name": "Camera A", "model": "UVC G3 Instant",
              "state": "CONNECTED", "processing_class": "legacy_ingress_needed"},
-            {"id": OTHER_ID, "name": "Garage", "model": "UVC G4 Dome",
+            {"id": OTHER_ID, "name": "Camera H", "model": "UVC G4 Dome",
              "state": "CONNECTED", "processing_class": "legacy_ingress_needed"}]}
 
     class FakeSocket:
@@ -134,7 +134,7 @@ async def test_watch_counts_native_subscription_events_without_retaining_payload
     progress = []
     result = await watch_events("192.0.2.1", api_key_file=Path("key"),
                                 trust_file=Path("trust"), cert_file=Path("cert"),
-                                camera_name="Flur", seconds=1,
+                                camera_name="Camera A", seconds=1,
                                 on_progress=progress.append)
     assert result["subscription_opened"] is True
     assert result["messages_seen"] == 7
@@ -175,7 +175,7 @@ async def test_watch_rejects_unbounded_duration_before_network():
 async def test_watch_deadline_cancels_a_stalled_websocket_read(monkeypatch):
     async def fake_inventory(*args, **kwargs):
         return {"schema": "aikey-camera-preflight/1", "cameras": [
-            {"id": CAMERA_ID, "name": "Flur", "model": "UVC G3 Instant",
+            {"id": CAMERA_ID, "name": "Camera A", "model": "UVC G3 Instant",
              "state": "CONNECTED", "processing_class": "legacy_ingress_needed"}]}
 
     read_cancelled = False
@@ -216,7 +216,7 @@ async def test_watch_deadline_cancels_a_stalled_websocket_read(monkeypatch):
     started = asyncio.get_running_loop().time()
     result = await watch_events("192.0.2.1", api_key_file=Path("key"),
                                 trust_file=Path("trust"), cert_file=Path("cert"),
-                                camera_name="Flur", seconds=1)
+                                camera_name="Camera A", seconds=1)
     assert asyncio.get_running_loop().time() - started < 2
     assert read_cancelled is True
     assert result["subscription_opened"] is True

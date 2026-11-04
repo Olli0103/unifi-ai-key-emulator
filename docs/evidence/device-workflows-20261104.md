@@ -81,5 +81,5 @@ final full-suite and exact-head CI results belong in the PR.
 No production Admin update, processor restart, real pairing/zone/credential
 change, model installation or real media request occurs in this qualification.
 Native face grouping/OCR/search/alarms/ONVIF quality and hardware parity retain
-their own issues. The deferred controlled Flur test remains paused. No legal,
+their own issues. The deferred controlled Camera A test remains paused. No legal,
 contributor-rights, fresh independent tester or public release signoff is added.

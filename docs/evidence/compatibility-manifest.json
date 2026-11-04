@@ -27,7 +27,7 @@
    "kind": "live",
    "protect_version": "7.3.56",
    "date": "2026-09-22",
-   "console": "UDM Pro Max",
+   "console": "UniFi console",
    "deployment": "Linux ARM64 image under Apple container 1.4.1 on an Apple silicon Mac",
    "operator": "integration owner",
    "observed": [
@@ -55,7 +55,7 @@
    "kind": "live",
    "protect_version": "7.3.60",
    "date": "2026-09-22 to 2026-09-23",
-   "console": "UDM Pro Max",
+   "console": "UniFi console",
    "camera_family": "G5 Flex and G4 Instant (one event each)",
    "vision_provider": "OpenAI Responses; the exact model identifier is not in the public records",
    "operator": "integration owner",
@@ -87,7 +87,7 @@
    "kind": "live",
    "protect_version": "7.3.68",
    "date": "2026-09-26",
-   "console": "UDM Pro Max",
+   "console": "UniFi console",
    "camera_family": "G6 Instant (one persisted caption)",
    "vision_provider": "OpenAI Responses; the exact model identifier is not in the public records",
    "operator": "integration owner",
@@ -99,7 +99,7 @@
     "one automatic G6 Instant recognizeKeyFrames event with a full RAM callback; exact-event GET returned metadata.ramState done and a non-empty metadata.ramDescription, with the camera's own detections kept",
     "a description-only RAM result from 23 Sep read back as ramState done with an empty ramDescription",
     "recognizeKeyFrames key moments placed exactly at the export end in 13 of 39 requests",
-    "four Wohnzimmer (G6 Instant) alrmSpeak audio events dispatched speechToText; the local Whisper backend answered; Protect saved 10, 13, 6 and 6 transcription rows (35, equal to the posted segments), all with text and times inside their events, and set metadata sttState done, sttDetected and sttSearchable (26 Sep, readback by the event transcriptions route)",
+    "four Camera J (G6 Instant) alrmSpeak audio events dispatched speechToText; the local Whisper backend answered; Protect saved 10, 13, 6 and 6 transcription rows (35, equal to the posted segments), all with text and times inside their events, and set metadata sttState done, sttDetected and sttSearchable (26 Sep, readback by the event transcriptions route)",
     "search host: after the AI Key connected with database rotation enabled, Protect ran its aiprocessor migrations on the Key's PostgreSQL (pgvector) at the Key's address, created 6 tables and set isSearchHost true (26 Sep 15:00)",
     "changeUserPassword on connect carried the device's current password as the new one; the credential rotation hook applied it to the real unifi-protect role (result 0) and Protect's connect-time PostgreSQL login then succeeded",
     "basic Find Anything text search: NL_PARSE with model clip-ViT-L-14 answered with a 768-value local CLIP text vector; Protect's detection-nls vector search returned person objects for person queries and 0 hits for unrelated text at minSimilarity 35, before and after relay restarts",
@@ -130,7 +130,7 @@
    "kind": "live",
    "protect_version": "7.3.70",
    "date": "2026-09-30 to 2026-10-07 (dated entries)",
-   "console": "UDM Pro Max",
+   "console": "UniFi console",
    "camera_family": "AI Port-paired G3/G4/G5 cameras and a G6 Instant",
    "vision_provider": "local Ollama qwen3-vl 8B instruct on the NAS iGPU",
    "operator": "integration owner",
@@ -164,7 +164,7 @@
    "kind": "live",
    "protect_version": "7.3.74",
    "date": "2026-10-29",
-   "console": "UDM Pro Max",
+   "console": "UniFi console",
    "deployment": "Linux AMD64 NAS, inventory-only image overlay; existing adopted state retained",
    "operator": "integration owner",
    "observed": [
@@ -1077,7 +1077,7 @@
     "Zero-shot accuracy on real low-confidence crops is not measured",
     "No verdict for an AI Port-sourced track has been saved yet"
    ],
-   "notes": "Unsure or background verdicts answer detectedAs none, which saveReverification ignores, so the event is unchanged; a different type is sent only at a zero-shot probability of 0.9 or more. 3 Oct 2026: Protect asked to verify a Wohnzimmer (G6) animal thumbnail; the Key confirmed it (callback 200) and Protect saved preReverificationObjectType animal and preReverificationConfidence 72, now showing 99 %. A track longer than max_video_duration_ms is verified in the window from its first object."
+   "notes": "Unsure or background verdicts answer detectedAs none, which saveReverification ignores, so the event is unchanged; a different type is sent only at a zero-shot probability of 0.9 or more. 3 Oct 2026: Protect asked to verify a Camera J (G6) animal thumbnail; the Key confirmed it (callback 200) and Protect saved preReverificationObjectType animal and preReverificationConfidence 72, now showing 99 %. A track longer than max_video_duration_ms is verified in the window from its first object."
   },
   {
    "id": "control.recognize_key_frames",
@@ -1943,7 +1943,7 @@
    ],
    "activation": "explicit_opt_in",
    "missing_evidence": [
-    "Fresh native readback after the native-face skip (27 Sep 00:21 UTC): new Wohnzimmer events with camera faces and no new AI Key faces",
+    "Fresh native readback after the native-face skip (27 Sep 00:21 UTC): new Camera J events with camera faces and no new AI Key faces",
     "AI Key faces carry no faceEmbed, so Protect puts each in its own group (65 singleton groups on 26 Sep); grouping needs Protect's camera-model embedding, which the Key cannot produce",
     "Named recognition needs an owner-named group and an eligible legacy camera; none is eligible today"
    ]
