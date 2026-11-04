@@ -7,7 +7,7 @@ import pytest
 
 from aikey import aiport_nas_compose as compose
 from aikey import aiport_nas_reconcile as reconciler
-from test_aiport_nas_reconcile import FakeDocker, inputs
+from test_aiport_nas_reconcile import FakeDocker, inputs, reconcile as fixture_reconcile
 
 
 INVALID = ["", "UPPER", "../elsewhere", "a/b", "white space", "bad\nline",
@@ -45,7 +45,7 @@ def test_reconciler_refuses_invalid_project_before_any_docker_command(tmp_path, 
     manifest["name"] = name
     fake = FakeDocker(manifest)
     with pytest.raises(reconciler.ReconcileError, match="project"):
-        reconciler.reconcile(tmp_path / "compose.json", manifest, states,
+        fixture_reconcile(tmp_path / "compose.json", manifest, states,
                              run=fake)
     assert not fake.calls
 
@@ -77,17 +77,17 @@ def test_every_compose_boundary_uses_reviewed_project_not_environment(tmp_path, 
     fake = NamespacedDocker(manifest, fail_health=mode == "rollback")
     if mode == "rollback":
         with pytest.raises(reconciler.ReconcileError, match="health"):
-            reconciler.reconcile(tmp_path / "reviewed.json", manifest, states,
+            fixture_reconcile(tmp_path / "reviewed.json", manifest, states,
                                  apply=True, run=fake, pause=lambda _: None)
         assert any("stop" in call for call in fake.calls)
     else:
-        result = reconciler.reconcile(tmp_path / "reviewed.json", manifest, states,
+        result = fixture_reconcile(tmp_path / "reviewed.json", manifest, states,
                                       apply=mode == "apply", run=fake, pause=lambda _: None)
         assert result["mode"] == ("dry_run" if mode == "dry" else "applied")
     assert fake.project_selections and set(fake.project_selections) == {name}
     assert all("unrelated-project" not in call for call in fake.original_calls)
     if mode != "dry":
-        assert any("up" in call for call in fake.calls)
+        assert any("create" in call for call in fake.calls)
         assert any("exec" in call for call in fake.calls)
 
 
