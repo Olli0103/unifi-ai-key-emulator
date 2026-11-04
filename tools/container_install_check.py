@@ -300,7 +300,8 @@ def record(response,exit_code,profile,case,architecture,revision):
             'case':case,'exit_code':exit_code,'response':response}
 
 
-def summary(directory,revision,architecture):
+def checked_records(directory,revision,architecture):
+    """Validate completed cases without pretending that cleanup has happened."""
     directory=Path(directory)
     records=[]
     for profile in PROFILES:
@@ -317,6 +318,12 @@ def summary(directory,revision,architecture):
     for profile in PROFILES:
         own=[row for row in positives if row['profile']==profile]
         require(len({row['saved_private_files'] for row in own})==1,'container_cross_phase_state_mismatch')
+    return records
+
+
+def summary(directory,revision,architecture):
+    directory=Path(directory)
+    records=checked_records(directory,revision,architecture)
     cleanup=load(directory/'cleanup.json')
     require(set(cleanup)=={'schema','revision','architecture','containers','volumes','image_tags'}
             and cleanup['schema']=='aikey-container-install-cleanup/1'

@@ -1,6 +1,20 @@
 {
   "schema": "community-release-evidence/1",
   "reviewed_snapshot_sha256": null,
+  "publication": {
+    "status": "needs_evidence",
+    "reviewer": null,
+    "evidence_ref": null,
+    "tag": null,
+    "package_destination": null,
+    "images": {
+      "aikey": null,
+      "aiport": null
+    },
+    "signing_method": null,
+    "github_environment": null,
+    "staging_environment": null
+  },
   "checks": {
     "code_origin": {
       "status": "needs_evidence",

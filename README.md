@@ -27,6 +27,11 @@ Project-authored code is licensed under [Apache-2.0](LICENSE). [Community releas
 
 A [read-only camera inventory preflight](docs/camera-inventory-preflight.md) is available for Protect 7.3.60. It reads the local integration API with a private API-key file and pinned web certificate, then writes a private eligibility report. It does not enable processing. An opt-in continuous policy now refreshes that same inventory and gates automatic jobs by an explicit model-family allowlist and a durable 12-per-hour global limit. The current NAS Key retains its explicit continuous policy through the source upgrade. Native dispatch/overload across the complete camera set, quality qualification and legacy event ingress remain separate open work.
 
+The [owner-gated release procedure](docs/releasing.md) connects exact public
+tags, reproducible packages, native image qualification, standard Sigstore
+bundles and create-only publication. Its human evidence/approval gates remain
+pending; this is not an announcement of a completed signed public release.
+
 ## Run the local lab
 
 Requires Python 3.12 or newer. The lab uses synthetic loopback controller, media, model and embedding services. It does not contact Protect or send images to an external model.
