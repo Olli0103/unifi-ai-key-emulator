@@ -19,7 +19,7 @@ import tempfile
 import tomllib
 import urllib.request
 
-from container_install_check import digest, git_context, load, publish, read, require
+from container_install_check import CheckError, digest, git_context, load, publish, read, require
 
 VERSION = '1.56.0'
 SYFT_COMMIT = '173055c39e9752f7b450ea404cd1801695277426'
@@ -364,9 +364,11 @@ def main(argv=None):
             publish(args.output, finalize(args.results, args.revision, args.architecture, args.nonce))
         return 0
     except (OSError, ValueError, TypeError, KeyError, AttributeError, IndexError, RuntimeError,
-            subprocess.SubprocessError):
+            subprocess.SubprocessError) as error:
         # No raw producer errors, image configuration, private paths or keys.
-        print(json.dumps({'schema': RECEIPT, 'passed': False, 'error': 'image_inventory_refused',
+        code = str(error) if isinstance(error, CheckError) else 'image_inventory_refused'
+        print(json.dumps({'schema': RECEIPT, 'passed': False, 'error': code,
+                          'stage': args.command, 'failure_type': type(error).__name__,
                           'release_approved': False}))
         return 2
 
