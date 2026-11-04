@@ -86,10 +86,23 @@ def openvino_transcriber(model_dir: str, device: str, cache_dir: str | None = No
     return transcribe
 
 
-def build_app(transcribe: Transcriber, *, default_language: str = "auto") -> web.Application:
+def build_app(transcribe: Transcriber, *, default_language: str = "auto",
+              voice_activity: Callable[[object], bool] | None = None) -> web.Application:
     lock = asyncio.Lock()
     counters = {"requests": 0, "transcribed": 0, "rejected": 0, "failed": 0, "abandoned": 0,
                 "audio_seconds": 0.0, "processing_seconds": 0.0}
+    vad_counts = {"checked": 0, "no_speech": 0}
+
+    def recognize(samples, language):
+        if voice_activity is not None:
+            has_speech = voice_activity(samples)
+            if type(has_speech) is not bool:
+                raise ValueError("invalid_voice_activity_result")
+            vad_counts["checked"] += 1
+            if not has_speech:
+                vad_counts["no_speech"] += 1
+                return [], None if language == "auto" else language
+        return transcribe(samples, language)
 
     async def transcriptions(request: web.Request) -> web.Response:
         counters["requests"] += 1
@@ -131,7 +144,7 @@ def build_app(transcribe: Transcriber, *, default_language: str = "auto") -> web
                 counters["abandoned"] += 1
                 return web.Response(status=499)
             started = time.monotonic()
-            work = asyncio.ensure_future(asyncio.to_thread(transcribe, samples, language))
+            work = asyncio.ensure_future(asyncio.to_thread(recognize, samples, language))
             try:
                 segments, detected = await asyncio.shield(work)
             except asyncio.CancelledError:
@@ -157,7 +170,9 @@ def build_app(transcribe: Transcriber, *, default_language: str = "auto") -> web
         return web.json_response(body)
 
     async def health(_request: web.Request) -> web.Response:
-        return web.json_response({"status": "ok", **counters})
+        return web.json_response({"status": "ok", **counters,
+                                  "voice_activity": {"enabled": voice_activity is not None,
+                                                     **vad_counts}})
 
     app = web.Application(client_max_size=_MAX_AUDIO_BYTES + 65536)
     app.router.add_post("/v1/audio/transcriptions", transcriptions)
@@ -178,15 +193,23 @@ def main(argv: list[str] | None = None) -> int:
                         help="openvino: --model is an OpenVINO model directory")
     parser.add_argument("--device", default="NPU", help="OpenVINO device (NPU, GPU or CPU)")
     parser.add_argument("--cache-dir", help="OpenVINO compiled-model cache (writable)")
+    parser.add_argument("--vad-model", help="verified local Silero ONNX model; rejects non-speech before Whisper")
     args = parser.parse_args(argv)
     if args.language != "auto" and not _LANGUAGE.fullmatch(args.language):
         parser.error("--language must be auto or a two-letter code")
     if args.device not in {"NPU", "GPU", "CPU"}:
         parser.error("--device must be NPU, GPU or CPU")
+    voice_activity = None
+    if args.vad_model:
+        from .voice_activity import SileroVoiceActivity, VoiceActivityError
+        try:
+            voice_activity = SileroVoiceActivity(args.vad_model)
+        except (VoiceActivityError, ImportError):
+            parser.error("voice activity initialization failed; install speech-vad and verify the pinned model")
     transcriber = (openvino_transcriber(args.model, args.device, args.cache_dir)
                    if args.backend == "openvino" else
                    whisper_cpp_transcriber(args.model, args.threads, fallback=not args.no_fallback))
-    app = build_app(transcriber, default_language=args.language)
+    app = build_app(transcriber, default_language=args.language, voice_activity=voice_activity)
     web.run_app(app, host=args.host, port=args.port, access_log=None, print=None)
     return 0
 
