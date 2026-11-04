@@ -74,6 +74,10 @@ specific tree; it cannot prove the truth or legal sufficiency of attestations.
 
 This repository has no publishing workflow. Any future package, image or release
 publisher must require the final check and a maintainer approval before upload.
+The separate [native Linux image installation checks](../container-clean-install.md)
+build and exercise local ephemeral images without registry/image publication.
+Their sanitized metadata artifacts are not signed release artifacts, native
+Protect acceptance, redistribution clearance or a replacement for these gates.
 The full-history secret scan has four distinct exact-fingerprint exceptions in
 `.gitleaksignore`: one synthetic loopback credential sentinel from historical
 commit `0f519e4`, and normalization-format whitelist constants plus their

@@ -1,4 +1,4 @@
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337
 LABEL org.local-aikey.host-activation="1"
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
@@ -7,8 +7,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certi
     && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml LICENSE /app/
 COPY requirements-runtime.lock /app/
+COPY requirements-build.lock /app/
 COPY src /app/src
-RUN pip install -r requirements-runtime.lock && pip install --no-deps .
+RUN pip install --no-deps -r requirements-build.lock -r requirements-runtime.lock \
+    && pip install --no-deps --no-build-isolation . \
+    && pip check
 ARG ENABLE_LOCAL_DETECTOR=0
 RUN if [ "$ENABLE_LOCAL_DETECTOR" = "1" ]; then \
       pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
