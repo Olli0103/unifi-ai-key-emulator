@@ -11,6 +11,7 @@ import asyncio
 from fractions import Fraction
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import ssl
@@ -230,7 +231,9 @@ def verify_inputs(plan: dict, manifest: dict, report: dict,
 
 def _run(argv: list[str], timeout: int = 15) -> str:
     try:
-        result = subprocess.run(argv, capture_output=True, text=True,
+        result = subprocess.run(['/usr/bin/docker', '--host', 'unix:///var/run/docker.sock', *argv[1:]],
+                                env={key: os.environ[key] for key in ('PATH', 'HOME', 'TMPDIR') if key in os.environ},
+                                capture_output=True, text=True,
                                 timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ReconcileError("Docker command unavailable or timed out") from exc
