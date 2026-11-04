@@ -21,7 +21,14 @@ third-party Node action, signing key or publishing permission.
    agree with the inspected image ID, architecture, OS and labels. Its decoded
    image-configuration bytes must hash to that ID. This distinguishes the image
    config ID from a registry manifest/index digest; they are not interchangeable.
-4. Both formats must agree on package names, versions, purls and license values.
+4. Both formats must agree on package names, versions and present purls. The
+   **same pinned Syft converter** independently re-encodes the native report to
+   CycloneDX; the complete public result must match except freshly generated
+   UUID/timestamp. Syft labels conversion experimental, so this exact pinned
+   path is qualified and future converter/schema changes fail closed. This
+   keeps license expressions, grouping, names and URLs intact rather than
+   introducing a home-made SPDX interpreter or treating different encodings
+   as different obligations.
    OS entries must agree with the native Debian distribution record. File
    entries must reference a native file with matching path and SHA-256; unknown
    component types, duplicate references and missing/extra packages fail.

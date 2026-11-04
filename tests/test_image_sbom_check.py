@@ -78,10 +78,12 @@ def inventory(profile="aikey"):
         "artifacts": artifacts,
     }
     cdx = {
+        "serialNumber": "urn:uuid:12345678-1234-4234-8234-123456789abc",
         "bomFormat": "CycloneDX",
         "specVersion": "1.7",
         "version": 1,
         "metadata": {
+            "timestamp": "2026-11-04T00:00:00Z",
             "component": {"type": "container", "name": image_id, "version": image_id},
             "tools": {"components": [{"name": "syft", "version": check.VERSION}]},
         },
@@ -103,12 +105,12 @@ def inventory(profile="aikey"):
         ],
     }
     expected = {"local-aikey": "0.1.0", "typing-extensions": "4.16.0"}
-    return image, identity, native, cdx, expected
+    return image, identity, native, cdx, expected, deepcopy(cdx)
 
 
 def test_subject_bound_formats_retain_unknown_licenses_without_approval():
-    _, identity, native, cdx, expected = inventory()
-    receipt = check.validate(native, cdx, identity, expected)
+    _, identity, native, cdx, expected, converted = inventory()
+    receipt = check.validate(native, cdx, identity, expected, converted=converted)
     assert receipt["package_count"] == 5 and receipt["packages_without_spdx_expression"] == 5
     assert receipt["runtime_lock_packages_verified"] == 2
     assert receipt["licenses_reviewed"] is False and receipt["release_approved"] is False
@@ -170,7 +172,7 @@ def test_foreign_inspection_cannot_reach_scanner(fault):
     ],
 )
 def test_stale_cross_image_or_incomplete_catalogue_is_not_a_release_inventory(fault):
-    _, identity, native, cdx, expected = inventory()
+    _, identity, native, cdx, expected, converted = inventory()
     metadata = native["source"]["metadata"]
     if fault == "image_id":
         metadata["imageID"] = "sha256:" + "a" * 64
@@ -228,7 +230,7 @@ def test_stale_cross_image_or_incomplete_catalogue_is_not_a_release_inventory(fa
     if fault == "new_type":
         native["artifacts"][0]["type"] = "unreviewed"
     with pytest.raises(ValueError):
-        check.validate(native, cdx, identity, expected)
+        check.validate(native, cdx, identity, expected, converted=converted)
 
 
 def saved_inventories(tmp_path):
@@ -243,10 +245,10 @@ def saved_inventories(tmp_path):
         path.write_text(json.dumps(value))
     check.publish(tmp_path / "summary.json", summary(tmp_path, REV, "arm64"))
     for profile in ("aikey", "aiport"):
-        _, identity, native, cdx, expected = inventory(profile)
+        _, identity, native, cdx, expected, converted = inventory(profile)
         path = tmp_path / (profile + "-sbom.cdx.json")
         path.write_text(json.dumps(cdx))
-        value = check.validate(native, cdx, identity, expected) | {
+        value = check.validate(native, cdx, identity, expected, converted=converted) | {
             "sbom_sha256": check.digest(path.read_bytes())
         }
         check.publish(tmp_path / (profile + "-inventory.json"), value)
@@ -406,22 +408,26 @@ def test_exact_locks_include_build_backend_and_local_distribution():
 
 
 def test_license_metadata_must_agree_without_turning_it_into_legal_approval():
-    _, identity, native, cdx, expected = inventory()
+    _, identity, native, cdx, expected, converted = inventory()
     native["artifacts"][0]["licenses"] = [
         {"spdxExpression": "Apache-2.0", "value": "Apache License"}
     ]
     cdx["components"][0]["licenses"] = [{"license": {"id": "Apache-2.0"}}]
-    assert check.validate(native, cdx, identity, expected)["licenses_reviewed"] is False
+    converted = deepcopy(cdx)
+    assert (
+        check.validate(native, cdx, identity, expected, converted=converted)["licenses_reviewed"]
+        is False
+    )
     cdx["components"][0]["licenses"] = [{"license": {"id": "MIT"}}]
-    with pytest.raises(ValueError, match="formats_disagree"):
-        check.validate(native, cdx, identity, expected)
+    with pytest.raises(ValueError, match="conversion_disagrees"):
+        check.validate(native, cdx, identity, expected, converted=converted)
 
 
 @pytest.mark.parametrize(
     "fault", ["none", "changed_file", "foreign_file", "wrong_os", "unknown_type"]
 )
 def test_nonpackage_components_match_their_real_native_producer(fault):
-    _, identity, native, cdx, expected = inventory()
+    _, identity, native, cdx, expected, converted = inventory()
     native["files"] = [
         {
             "id": "file-ref",
@@ -436,6 +442,7 @@ def test_nonpackage_components_match_their_real_native_producer(fault):
         "hashes": [{"alg": "SHA-256", "content": "a" * 64}],
     }
     cdx["components"].append(component)
+    converted = deepcopy(cdx)
     if fault == "changed_file":
         component["hashes"][0]["content"] = "b" * 64
     if fault == "foreign_file":
@@ -445,17 +452,28 @@ def test_nonpackage_components_match_their_real_native_producer(fault):
     if fault == "unknown_type":
         component["type"] = "unknown"
     if fault == "none":
-        assert check.validate(native, cdx, identity, expected)["package_count"] == 5
+        assert (
+            check.validate(native, cdx, identity, expected, converted=converted)["package_count"]
+            == 5
+        )
     else:
         with pytest.raises(ValueError):
-            check.validate(native, cdx, identity, expected)
+            check.validate(native, cdx, identity, expected, converted=converted)
 
 
 @pytest.mark.parametrize(
-    "fault", ["none", "foreign_image", "scanner_exit", "changed_tool", "partial_output"]
+    "fault",
+    [
+        "none",
+        "foreign_image",
+        "scanner_exit",
+        "changed_tool",
+        "partial_output",
+        "converted_changed",
+    ],
 )
 def test_actual_collect_entrypoint_with_owned_fake_daemon_and_scanner(tmp_path, fault):
-    image, _, native, cdx, _ = inventory()
+    image, _, native, cdx, _, _ = inventory()
     canary = "synthetic-private-native-report-canary"
     native["private_fixture_canary"] = canary
     source = tmp_path / "source"
@@ -487,7 +505,7 @@ def test_actual_collect_entrypoint_with_owned_fake_daemon_and_scanner(tmp_path, 
         + repr(json.dumps({"version": check.VERSION, "gitCommit": check.SYFT_COMMIT}))
         + ")\n sys.exit(0)\n"
         + ("print(" + repr(canary) + ");sys.exit(7)\n" if fault == "scanner_exit" else "")
-        + "assert sys.argv[-1]=="
+        + 'if sys.argv[1]=="scan": assert sys.argv[-1]=='
         + repr("docker:" + image["Id"])
         + "\n"
         + "for argument in sys.argv:\n"
@@ -503,6 +521,15 @@ def test_actual_collect_entrypoint_with_owned_fake_daemon_and_scanner(tmp_path, 
         )
     )
     scanner.chmod(0o700)
+    if fault == "converted_changed":
+        with scanner.open("a") as output:
+            output.write(
+                '\nif sys.argv[1]=="convert":\n'
+                ' target=pathlib.Path(sys.argv[-1].split("=",1)[1])\n'
+                " value=json.loads(target.read_text())\n"
+                ' value["components"][0]["licenses"]=[{"license":{"id":"MIT"}}]\n'
+                " target.write_text(json.dumps(value))\n"
+            )
     check.publish(
         binaries / "tool.json",
         {
@@ -559,10 +586,11 @@ def test_actual_collect_entrypoint_with_owned_fake_daemon_and_scanner(tmp_path, 
 
 @pytest.mark.parametrize("native_value", ["", None])
 def test_optional_unknown_purl_is_retained_counted_and_not_fabricated(native_value):
-    _, identity, native, cdx, expected = inventory()
+    _, identity, native, cdx, expected, converted = inventory()
     native["artifacts"][0]["purl"] = native_value
     cdx["components"][0].pop("purl")
-    result = check.validate(native, cdx, identity, expected)
+    converted["components"][0].pop("purl")
+    result = check.validate(native, cdx, identity, expected, converted=converted)
     assert result["package_count"] == 5 and result["packages_without_purl"] == 1
     assert result["runtime_lock_packages_verified"] == 2
     assert result["licenses_reviewed"] is False and result["release_approved"] is False
@@ -571,15 +599,45 @@ def test_optional_unknown_purl_is_retained_counted_and_not_fabricated(native_val
 
 @pytest.mark.parametrize("value", [False, 12, [], {}, "not-a-package-url", "pkg:" + "x" * 4096])
 def test_optional_purl_is_not_permission_for_malformed_metadata(value):
-    _, identity, native, cdx, expected = inventory()
+    _, identity, native, cdx, expected, converted = inventory()
     native["artifacts"][0]["purl"] = value
     cdx["components"][0]["purl"] = value
+    converted["components"][0]["purl"] = value
     with pytest.raises(ValueError, match="component_identity_refused"):
-        check.validate(native, cdx, identity, expected)
+        check.validate(native, cdx, identity, expected, converted=converted)
 
 
 def test_unknown_purl_cannot_match_a_different_present_purl():
-    _, identity, native, cdx, expected = inventory()
+    _, identity, native, cdx, expected, converted = inventory()
     native["artifacts"][0]["purl"] = ""
     with pytest.raises(ValueError, match="formats_disagree"):
-        check.validate(native, cdx, identity, expected)
+        check.validate(native, cdx, identity, expected, converted=converted)
+
+
+def test_only_new_valid_serial_and_aware_timestamp_are_volatile_conversion_fields():
+    _, _, _, cdx, _, converted = inventory()
+    converted["serialNumber"] = "urn:uuid:87654321-1234-4234-8234-123456789abc"
+    converted["metadata"]["timestamp"] = "2026-11-04T01:02:03+01:00"
+    check.conversion_equal(cdx, converted)
+    assert cdx["metadata"]["timestamp"] == "2026-11-04T00:00:00Z"  # No input mutation.
+
+
+@pytest.mark.parametrize(
+    "fault", ["serial", "timestamp", "naive_time", "extra_field", "license", "dependency"]
+)
+def test_full_conversion_comparison_rejects_other_changes(fault):
+    _, _, _, cdx, _, converted = inventory()
+    if fault == "serial":
+        converted["serialNumber"] = "fictional-invalid-serial"
+    if fault == "timestamp":
+        converted["metadata"]["timestamp"] = "fictional-invalid-time"
+    if fault == "naive_time":
+        converted["metadata"]["timestamp"] = "2026-11-04T00:00:00"
+    if fault == "extra_field":
+        converted["unreviewed-field"] = "fictional-canary"
+    if fault == "license":
+        converted["components"][0]["licenses"] = [{"license": {"id": "MIT"}}]
+    if fault == "dependency":
+        converted["dependencies"] = [{"ref": "foreign-reference"}]
+    with pytest.raises(ValueError):
+        check.conversion_equal(cdx, converted)

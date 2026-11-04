@@ -8,6 +8,8 @@ from __future__ import annotations
 import argparse
 import base64
 from collections import Counter
+from copy import deepcopy
+from datetime import datetime
 import io
 import json
 import os
@@ -18,6 +20,7 @@ import tarfile
 import tempfile
 import tomllib
 import urllib.request
+from uuid import UUID
 
 from container_install_check import CheckError, digest, git_context, load, publish, read, require
 
@@ -153,7 +156,27 @@ def expected_python(root):
     return result
 
 
-def validate(native, cdx, identity, expected):
+def conversion_equal(observed, converted):
+    """Use Syft's own license/format conversion, not a home-made SPDX parser.
+
+    Only its documented newly generated UUID/timestamp may differ. Package,
+    license-expression grouping, URLs, files, dependencies and all other
+    metadata remain in this comparison.
+    """
+    values = []
+    for original in (observed, converted):
+        value = deepcopy(original)
+        serial = value.pop('serialNumber')
+        require(isinstance(serial, str) and str(UUID(serial)).lower() == serial.removeprefix('urn:uuid:')
+                and serial.startswith('urn:uuid:'), 'image_inventory_bom_serial_refused')
+        timestamp = datetime.fromisoformat(value['metadata'].pop('timestamp'))
+        require(timestamp.tzinfo is not None, 'image_inventory_bom_timestamp_refused')
+        values.append(value)
+    require(values[0] == values[1], 'image_inventory_conversion_disagrees')
+
+
+def validate(native, cdx, identity, expected, *, converted):
+    conversion_equal(cdx, converted)
     source = native['source']
     metadata = source['metadata']
     require(source.get('type') == 'image' and metadata.get('imageID') == identity['image_id']
@@ -236,14 +259,7 @@ def validate(native, cdx, identity, expected):
         # but omits the empty CycloneDX field. Preserve this as unknown, never
         # invent a URL or discard a package to force agreement.
         return name, version, purl or None
-    def native_key(row):
-        licenses = tuple(sorted(item.get('spdxExpression') or item['value'] for item in row.get('licenses', [])))
-        return key(row, 'native'), licenses
-    def cdx_key(row):
-        licenses = tuple(sorted(item.get('expression') or item.get('license', {}).get('id')
-                                or item['license']['name'] for item in row.get('licenses', [])))
-        return key(row, 'cyclonedx'), licenses
-    require(Counter(map(native_key, artifacts)) == Counter(map(cdx_key, components)),
+    require(Counter(key(row, 'native') for row in artifacts) == Counter(key(row, 'cyclonedx') for row in components),
             'image_inventory_formats_disagree')
     counts = Counter()
     python = {}
@@ -269,7 +285,7 @@ def validate(native, cdx, identity, expected):
             'operating_system': {'id': distro['id'], 'version': distro['versionID']},
             'packages_without_spdx_expression': unknown, 'runtime_lock_packages_verified': len(expected),
             'packages_without_purl': without_purl,
-            'licenses_reviewed': False, 'release_approved': False}
+            'conversion_verified': True, 'licenses_reviewed': False, 'release_approved': False}
 
 
 def collect(args):
@@ -298,8 +314,14 @@ def collect(args):
         command([str(tool), 'scan', '--config', str(config), '--quiet', '--scope', 'squashed',
                  '--output', 'syft-json=' + str(native), '--output', 'cyclonedx-json=' + str(cdx),
                  'docker:' + identity['image_id']], env=env, limit=65536)
+        converted = directory / 'converted.json'
+        # The pinned converter handles SPDX expression grouping and URL/name
+        # representation. It reads only the existing native report, not images,
+        # and must reproduce the full public report except fresh UUID/time.
+        command([str(tool), 'convert', str(native), '--config', str(config), '--quiet',
+                 '--output', 'cyclonedx-json=' + str(converted)], env=env, limit=65536, timeout=60)
         public = json_file(cdx)
-        receipt = validate(json_file(native), public, identity, expected)
+        receipt = validate(json_file(native), public, identity, expected, converted=json_file(converted))
         target = Path(args.results) / (args.profile + '-sbom.cdx.json')
         # Publish full standard metadata only after validating both outputs.
         raw = read(cdx, LIMIT)
@@ -325,12 +347,13 @@ def finalize(results, revision, architecture, nonce):
         fields = {'schema', 'image_id', 'revision', 'architecture', 'nonce', 'profile', 'scanner', 'scanner_version',
                   'package_count', 'package_types', 'packages_without_spdx_expression',
                   'runtime_lock_packages_verified', 'licenses_reviewed', 'release_approved', 'sbom_sha256',
-                  'operating_system', 'packages_without_purl'}
+                  'operating_system', 'packages_without_purl', 'conversion_verified'}
         require(set(value) == fields and value['schema'] == RECEIPT and value['revision'] == revision
                 and value['architecture'] == architecture and value['nonce'] == nonce and value['profile'] == profile
                 and IMAGE_ID.fullmatch(value['image_id']) and value['scanner'] == 'syft'
                 and value['scanner_version'] == VERSION and value['licenses_reviewed'] is False
                 and value['release_approved'] is False
+                and value['conversion_verified'] is True
                 and set(value['operating_system']) == {'id', 'version'}
                 and value['operating_system']['id'] == 'debian'
                 and isinstance(value['operating_system']['version'], str)
