@@ -1,6 +1,6 @@
 # AI Port Person indexing acceptance, 29 October 2026
 
-Issue [#99](https://github.com/Olli0103/unifi-ai-key-emulator/issues/99) concerns native class indexing, not detection accuracy or full AI Port parity.
+Issue [#99](https://github.com/Olli0103/unifi-protect-local-ai/issues/99) concerns native class indexing, not detection accuracy or full AI Port parity.
 
 ## Native readback
 
@@ -19,10 +19,10 @@ The native stored event and class-filter resources provide authoritative saved-c
 
 ## Acceptance mapping
 
-1. Original-camera Smart event and Person filter while still paired: the current native resource comparison proves the same stored event identities and Person class after reload. The earlier subscription add/update evidence is in [the issue's September readback](https://github.com/Olli0103/unifi-ai-key-emulator/issues/99#issuecomment-5843562015).
+1. Original-camera Smart event and Person filter while still paired: the current native resource comparison proves the same stored event identities and Person class after reload. The earlier subscription add/update evidence is in [the issue's September readback](https://github.com/Olli0103/unifi-protect-local-ai/issues/99#issuecomment-5843562015).
 2. No duplicate or cross-camera event in the bounded comparison: the checks above pass. There is no test configuration to roll back; production pairings and recording settings were unchanged. This does not establish semantic duplicate-detection accuracy.
 3. Existing synthetic tests cover enter, moving, leave, stream stop, active-event shutdown, per-camera policy revocation, one-use expiry and count-only subscription output. A targeted run on source `343bedf` passed **13 tests**, with 174 deselected. The full exact-head Linux run passed 1,937 tests, with 109 skipped and five existing warnings.
-4. Live detection, distinct from historical replay: the current legacy-camera events and live-pool counters corroborate the earlier [end-to-end live acceptance](https://github.com/Olli0103/unifi-ai-key-emulator/issues/99#issuecomment-5851341199). No historical probe was run in this validation.
+4. Live detection, distinct from historical replay: the current legacy-camera events and live-pool counters corroborate the earlier [end-to-end live acceptance](https://github.com/Olli0103/unifi-protect-local-ai/issues/99#issuecomment-5851341199). No historical probe was run in this validation.
 
 ## Limits
 

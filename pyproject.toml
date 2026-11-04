@@ -12,8 +12,8 @@ requires-python = ">=3.12"
 dependencies = ["aiohttp==3.14.5", "cryptography==50.0.1", "pillow>=13,<14"]
 
 [project.urls]
-Repository = "https://github.com/Olli0103/unifi-ai-key-emulator"
-Issues = "https://github.com/Olli0103/unifi-ai-key-emulator/issues"
+Repository = "https://github.com/Olli0103/unifi-protect-local-ai"
+Issues = "https://github.com/Olli0103/unifi-protect-local-ai/issues"
 
 [project.optional-dependencies]
 dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "ruff==0.16.8", "build==1.6.1",

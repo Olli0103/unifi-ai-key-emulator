@@ -1,7 +1,7 @@
 # Keep new primary defaults out of legacy profiles — 2 November 2026
 
-Part of [#13](https://github.com/Olli0103/unifi-ai-key-emulator/issues/13) and
-[#17](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17).
+Part of [#13](https://github.com/Olli0103/unifi-protect-local-ai/issues/13) and
+[#17](https://github.com/Olli0103/unifi-protect-local-ai/issues/17).
 
 Before native Admin activation, source review found a concrete mixed-version
 boundary: a new provider form submitted default `structured_output=false` and

@@ -4,9 +4,9 @@ This source checkpoint fills a remove-only control-site gap for an **existing
 AI Key `face_recognition` policy**. It is not initial recognition enrollment,
 native Protect grouping, Port 512-value recognition, an instant revocation or a
 template-deletion operation. The broader
-[control-site](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17),
-[administration](https://github.com/Olli0103/unifi-ai-key-emulator/issues/13) and
-[face lifecycle](https://github.com/Olli0103/unifi-ai-key-emulator/issues/20)
+[control-site](https://github.com/Olli0103/unifi-protect-local-ai/issues/17),
+[administration](https://github.com/Olli0103/unifi-protect-local-ai/issues/13) and
+[face lifecycle](https://github.com/Olli0103/unifi-protect-local-ai/issues/20)
 issues remain OPEN.
 
 ## Implemented flow

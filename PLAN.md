@@ -5,7 +5,7 @@ Build an independent, maintainable open-source processor that implements the nat
 This is a development plan, not a claim that the features below are available. The implementation issues are the work queue. Each must carry acceptance evidence before it closes.
 
 <!-- tracking-issue -->
-Tracking issue: [AI Key and AI Port parity and open-source product roadmap](https://github.com/Olli0103/unifi-ai-key-emulator/issues/1). See the [dependency-linked issue index](docs/planning/issues.md).
+Tracking issue: [AI Key and AI Port parity and open-source product roadmap](https://github.com/Olli0103/unifi-protect-local-ai/issues/1). See the [dependency-linked issue index](docs/planning/issues.md).
 
 ## Current evidence
 

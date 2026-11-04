@@ -1,6 +1,6 @@
 # Native on-demand enhancement acceptance — 3 November 2026
 
-Acceptance for [#23](https://github.com/Olli0103/unifi-ai-key-emulator/issues/23),
+Acceptance for [#23](https://github.com/Olli0103/unifi-protect-local-ai/issues/23),
 using the existing optional enhancement adapter. This change adds regression
 coverage and evidence, not a new production adapter or activation. The separate
 unfinished control-site enhancement form is not included.

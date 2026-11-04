@@ -141,10 +141,10 @@ For example, substituting the actual approved commit:
 ```sh
 gh attestation verify release.json \
   --bundle release-provenance.sigstore.json \
-  --repo Olli0103/unifi-ai-key-emulator \
+  --repo Olli0103/unifi-protect-local-ai \
   --source-digest ACTUAL_FULL_COMMIT --signer-digest ACTUAL_FULL_COMMIT \
   --source-ref refs/heads/main \
-  --signer-workflow Olli0103/unifi-ai-key-emulator/.github/workflows/publish-release.yml \
+  --signer-workflow Olli0103/unifi-protect-local-ai/.github/workflows/publish-release.yml \
   --cert-oidc-issuer https://token.actions.githubusercontent.com \
   --deny-self-hosted-runners
 ```

@@ -1,6 +1,6 @@
 # Native speech transcription acceptance, 29 October 2026
 
-Issue [#15](https://github.com/Olli0103/unifi-ai-key-emulator/issues/15). Scope is the native transcription adapter and its policy/failure behavior, not recognition accuracy or every microphone/model combination.
+Issue [#15](https://github.com/Olli0103/unifi-protect-local-ai/issues/15). Scope is the native transcription adapter and its policy/failure behavior, not recognition accuracy or every microphone/model combination.
 
 ## Saved native readback
 

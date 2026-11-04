@@ -1,8 +1,8 @@
 # Primary API request budget and safe error subtypes — 2 November 2026
 
-Part of [#14](https://github.com/Olli0103/unifi-ai-key-emulator/issues/14),
-[#17](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17) and the
-bounded measurement prerequisites of [#7](https://github.com/Olli0103/unifi-ai-key-emulator/issues/7).
+Part of [#14](https://github.com/Olli0103/unifi-protect-local-ai/issues/14),
+[#17](https://github.com/Olli0103/unifi-protect-local-ai/issues/17) and the
+bounded measurement prerequisites of [#7](https://github.com/Olli0103/unifi-protect-local-ai/issues/7).
 
 ## Observed boundary, not an inferred root cause
 

@@ -9,7 +9,7 @@ Linux runners are free for this public repository according to
 checked on 4 November 2026. This is not a pricing promise for private forks.
 
 This fills a source/CI gap in
-[issue 16](https://github.com/Olli0103/unifi-ai-key-emulator/issues/16), not its
+[issue 16](https://github.com/Olli0103/unifi-protect-local-ai/issues/16), not its
 whole signed-release acceptance. Actual Apple-container networking/recovery,
 native Protect installation/results, rights clearance and public release remain
 separate gates in [release readiness](legal/release-readiness.md),

@@ -35,7 +35,7 @@ relative file targets. This is not execution of shell/Docker/tool scripts,
 validation of every shell expansion or runtime value, a filesystem/network/model
 acceptance test, external URL/anchor audit, independent installation or human
 accessibility review. Arbitrary Markdown syntax is not a complete shell language.
-The broader [#25](https://github.com/Olli0103/unifi-ai-key-emulator/issues/25)
+The broader [#25](https://github.com/Olli0103/unifi-protect-local-ai/issues/25)
 acceptance remains OPEN; this change does not authorize following deployment
 examples on an existing adopted installation.
 

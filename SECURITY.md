@@ -4,7 +4,7 @@ This project handles controller credentials, camera media and model-provider key
 
 ## Reporting a vulnerability
 
-Do not include credentials, camera images, recordings, private hostnames or controller traces in a public issue. Use [GitHub's private vulnerability-reporting form](https://github.com/Olli0103/unifi-ai-key-emulator/security/advisories/new). Private vulnerability reporting was enabled and independently read back through GitHub's repository API on 29 October 2026. This verifies the enabled reporting route, not a test report or notification delivery.
+Do not include credentials, camera images, recordings, private hostnames or controller traces in a public issue. Use [GitHub's private vulnerability-reporting form](https://github.com/Olli0103/unifi-protect-local-ai/security/advisories/new). Private vulnerability reporting was enabled and independently read back through GitHub's repository API on 29 October 2026. This verifies the enabled reporting route, not a test report or notification delivery.
 
 Report the affected exact commit, Protect version, a synthetic reproduction, impact and proposed disclosure constraints. Redact sensitive material before submitting it. If GitHub cannot offer the private form to your account, use GitHub Support or contact the repository owner without disclosing the vulnerability, then arrange a private route. Never fall back to posting the details publicly.
 

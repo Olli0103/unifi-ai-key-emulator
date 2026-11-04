@@ -1,6 +1,6 @@
 # Queued API failures and diagnostic quotas
 
-Work toward [#79](https://github.com/Olli0103/unifi-ai-key-emulator/issues/79), 29 October 2026.
+Work toward [#79](https://github.com/Olli0103/unifi-protect-local-ai/issues/79), 29 October 2026.
 
 An isolated regression reproduced a quota bypass in `FairInference`. With a one-attempt camera quota, API confirmation-frame retention and frames queued before the worker started, a failed API request could be followed by a second request for that camera. The success path cleared queued frames at the limit; the API-failure path did not.
 

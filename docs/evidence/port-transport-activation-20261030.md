@@ -3,7 +3,7 @@
 ## Scope and source binding
 
 The existing four NAS AI Ports were individually upgraded to reviewed source
-`901ea18675d2d49908242f930704e6b073b7b22a` ([#193](https://github.com/Olli0103/unifi-ai-key-emulator/pull/193)).
+`901ea18675d2d49908242f930704e6b073b7b22a` ([#193](https://github.com/Olli0103/unifi-protect-local-ai/pull/193)).
 The merged tree at `168392a5bb572cb5b8c8f6a80bc7996e33763ee4` is identical to that tested tree.
 This installs the strict outer provider/score JSON decoder in the actual Port
 processors; updating the separate administration image alone would not do so.

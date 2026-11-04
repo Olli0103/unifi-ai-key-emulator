@@ -1,7 +1,7 @@
 # Apple instance operator: source and synthetic qualification, 4 November 2026
 
 Scope: the missing bounded Mac create/start path for
-[issue 45](https://github.com/Olli0103/unifi-ai-key-emulator/issues/45), on top of
+[issue 45](https://github.com/Olli0103/unifi-protect-local-ai/issues/45), on top of
 merged control-workflow source `572b492827aef462f17a9a4d8509ec2def559d49`.
 This record is same-agent source/fixture evidence, not an independent review.
 

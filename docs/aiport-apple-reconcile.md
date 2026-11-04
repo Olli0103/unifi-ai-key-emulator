@@ -4,7 +4,7 @@
 adds the Mac create/start path for already prepared stable AI Port slots. It is
 not a daemon, installer, pairing tool or native-qualified replacement for the
 [historical Apple recipe](apple-container.md). The broader
-[instance issue](https://github.com/Olli0103/unifi-ai-key-emulator/issues/45)
+[instance issue](https://github.com/Olli0103/unifi-protect-local-ai/issues/45)
 remains OPEN: real Mac/NAS creation/removal, recording continuity and native
 Protect verification are still required.
 

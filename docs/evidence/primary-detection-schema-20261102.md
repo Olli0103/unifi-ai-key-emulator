@@ -1,8 +1,8 @@
 # Optional primary detection schema — 2 November 2026
 
-Part of [#14](https://github.com/Olli0103/unifi-ai-key-emulator/issues/14)
-and [#7](https://github.com/Olli0103/unifi-ai-key-emulator/issues/7), with
-the saved operator choice in [#17](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17).
+Part of [#14](https://github.com/Olli0103/unifi-protect-local-ai/issues/14)
+and [#7](https://github.com/Olli0103/unifi-protect-local-ai/issues/7), with
+the saved operator choice in [#17](https://github.com/Olli0103/unifi-protect-local-ai/issues/17).
 
 ## Original baseline remains partial
 

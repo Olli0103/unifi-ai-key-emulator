@@ -12,7 +12,7 @@ and role-model edits also started from parser-normalized data, changing accepted
 camera spelling/default representation outside the requested edit. Six baseline
 regressions failed; two unmanaged-field rejection controls passed.
 
-[PR #191](https://github.com/Olli0103/unifi-ai-key-emulator/pull/191), tested head
+[PR #191](https://github.com/Olli0103/unifi-protect-local-ai/pull/191), tested head
 `b83baa5047a5d229440ce16b1339f4333ec05f1a`, parent
 `3b907930acfdf61a52709b9199f57d12840f9f1c`, fixes both paths. Provider preview,
 apply and detection-model changes use the same captured original JSON bytes,
@@ -31,7 +31,7 @@ Static UI text explains that any existing gates and routing are kept.
   adding its explicit fixture port fixed setup without weakening assertions.
 - Native Mac: **3,124 passed, three skipped, 22 warnings, 56 subtests passed**,
   231.95 seconds.
-- [Linux CI](https://github.com/Olli0103/unifi-ai-key-emulator/actions/runs/40999450372):
+- [Linux CI](https://github.com/Olli0103/unifi-protect-local-ai/actions/runs/40999450372):
   **3,126 passed, one skipped, 22 warnings, 56 subtests passed**, 156.86 seconds.
   All four required jobs succeeded. Two PostgreSQL tests skipped only on Mac
   pass against CI's disposable database; missing real CLIP weights stay unproved.

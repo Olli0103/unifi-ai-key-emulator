@@ -27,4 +27,4 @@ Read on 29 October 2026:
 
 - [aiohttp changelog](https://docs.aiohttp.org/en/stable/changes.html), versions 3.14.4 and 3.14.5.
 - [Pillow 13.0.0 release and migration notes](https://pillow.readthedocs.io/en/stable/releasenotes/13.0.0.html).
-- [Failed dependency audit](https://github.com/Olli0103/unifi-ai-key-emulator/actions/runs/40851171316/job/123370715242).
+- [Failed dependency audit](https://github.com/Olli0103/unifi-protect-local-ai/actions/runs/40851171316/job/123370715242).

@@ -1,7 +1,7 @@
 # Additional named speech-camera consent — 2 November 2026
 
-Issues [#13](https://github.com/Olli0103/unifi-ai-key-emulator/issues/13)
-and [#17](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17).
+Issues [#13](https://github.com/Olli0103/unifi-protect-local-ai/issues/13)
+and [#17](https://github.com/Olli0103/unifi-protect-local-ai/issues/17).
 
 ## Feature
 

@@ -92,7 +92,7 @@ existing FFmpeg 7.1 then enabled those synthetic-video tests. No package,
 model or system PATH/configuration was installed or changed.
 
 The reviewed source base is `f6f86ba08e5033129720b198397a6a75fb8ed6a5`.
-Its existing [CI run](https://github.com/Olli0103/unifi-ai-key-emulator/actions/runs/41620328973)
+Its existing [CI run](https://github.com/Olli0103/unifi-protect-local-ai/actions/runs/41620328973)
 completed five actual workflow jobs successfully; a skipped review-bot context
 is not an independent review. This acceptance change adds evidence only, not
 new runtime code or activation of later staged source.

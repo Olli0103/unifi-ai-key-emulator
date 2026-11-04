@@ -3,9 +3,9 @@
 This source checkpoint adds a signed-in list and targeted deletion for the
 **AI Key's existing local 128-value SFace identity store**. It builds on the
 [transaction foundation](face-store-transactions-20261103.md). The broader
-[face lifecycle issue](https://github.com/Olli0103/unifi-ai-key-emulator/issues/20),
-[GUI issue](https://github.com/Olli0103/unifi-ai-key-emulator/issues/13) and
-[configuration issue](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17)
+[face lifecycle issue](https://github.com/Olli0103/unifi-protect-local-ai/issues/20),
+[GUI issue](https://github.com/Olli0103/unifi-protect-local-ai/issues/13) and
+[configuration issue](https://github.com/Olli0103/unifi-protect-local-ai/issues/17)
 remain OPEN; no native acceptance box is completed here.
 
 ## Operator flow and scope

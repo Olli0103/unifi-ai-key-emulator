@@ -144,7 +144,7 @@ linked checks; missing model weights remain an explicit skip rather than a pass.
 The authenticated private HTTPS admin is actually deployed, with strict
 CA/hostname verification, separate persistent admin authority, secure cookies,
 logout, retained processor identities and an image-bound certificate-maintenance
-timer. [The CLIP guard qualification](https://github.com/Olli0103/unifi-ai-key-emulator/pull/196)
+timer. [The CLIP guard qualification](https://github.com/Olli0103/unifi-protect-local-ai/pull/196)
 records the subsequent admin-only update, read-only real-profile checks and
 limits. The mutation throttle has source/HTTP checks in the current change;
 its production activation must be recorded separately before claiming it is

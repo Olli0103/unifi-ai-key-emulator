@@ -3,7 +3,7 @@
 ## Scope
 
 This completes the host-operated source/lifecycle implementation for original
-[#18](https://github.com/Olli0103/unifi-ai-key-emulator/issues/18), within its
+[#18](https://github.com/Olli0103/unifi-protect-local-ai/issues/18), within its
 explicit public-source/synthetic-fixture handoff boundary. It does **not** claim
 that a production index was migrated, that native search quality improved, or
 that a host/controller power-loss experiment passed. Native rollout stays with
