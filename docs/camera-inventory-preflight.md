@@ -1,6 +1,6 @@
 # Read-only camera inventory preflight
 
-`local-aikey inventory` reads the local Protect integration API and writes a private report. It does not alter camera settings, enable inference, grant processing scope or send footage to a provider. This is the first, read-only part of [issue #9](https://github.com/Olli0103/unifi-ai-key-emulator/issues/9), not completion of automatic all-camera operation.
+`local-aikey inventory` reads the local Protect integration API and writes a private report. It does not alter camera settings, enable inference, grant processing scope or send footage to a provider. This is the first, read-only part of [issue #9](https://github.com/Olli0103/unifi-protect-local-ai/issues/9), not completion of automatic all-camera operation.
 
 The client uses exactly two GET routes, `/v1/meta/info` and `/v1/cameras`, under
 the local `/proxy/protect/integration` prefix. The [actual reader](../src/aikey/camera_inventory.py)

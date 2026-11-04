@@ -16,7 +16,7 @@ WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/security.yml
 WORKFLOWS = sorted(WORKFLOW.parent.glob("*.yml"))
 PUBLISHER = WORKFLOW.parent / "publish-release.yml"
 OWNER_DISPATCH = (
-    "github.repository == 'Olli0103/unifi-ai-key-emulator' && "
+    "github.repository == 'Olli0103/unifi-protect-local-ai' && "
     "github.ref == 'refs/heads/main' && github.actor == 'Olli0103' && "
     "github.triggering_actor == 'Olli0103' && github.run_attempt == 1"
 )

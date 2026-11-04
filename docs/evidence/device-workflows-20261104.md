@@ -1,6 +1,6 @@
 # Complete operator workflows — 4 November 2026
 
-Original [issue #17](https://github.com/Olli0103/unifi-ai-key-emulator/issues/17)
+Original [issue #17](https://github.com/Olli0103/unifi-protect-local-ai/issues/17)
 is a frontend/shared-API/browser task. This change connects the existing role,
 camera, processing, privacy, index and host-maintenance pages to complete typed
 device/initial-feature workflows. It does not promote synthetic source evidence

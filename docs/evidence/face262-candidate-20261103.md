@@ -6,7 +6,7 @@ No service replacement, real image/model inference or biometric read occurred.
 
 ## Frozen candidate and qualification
 
-The candidate uses frozen [#262](https://github.com/Olli0103/unifi-ai-key-emulator/pull/262)
+The candidate uses frozen [#262](https://github.com/Olli0103/unifi-protect-local-ai/pull/262)
 source `8b237f2eab63e0784740173acaee58c82bf94e02` (135 modules), image
 `sha256:dd0d59e78c80accb2f0529ced657d96cc960e7c2b670613af09256df6dc40d99`.
 It includes the [Face request/thread boundary](face-server-boundary-20261103.md)

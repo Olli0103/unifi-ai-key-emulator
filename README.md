@@ -1,7 +1,7 @@
-# Local AI processor for UniFi Protect
+# Local AI Processor for UniFi Protect
 
-[![Security and quality](https://github.com/Olli0103/unifi-ai-key-emulator/actions/workflows/security.yml/badge.svg)](https://github.com/Olli0103/unifi-ai-key-emulator/actions/workflows/security.yml)
-[![Container installation](https://github.com/Olli0103/unifi-ai-key-emulator/actions/workflows/container-install.yml/badge.svg)](https://github.com/Olli0103/unifi-ai-key-emulator/actions/workflows/container-install.yml)
+[![Security and quality](https://github.com/Olli0103/unifi-protect-local-ai/actions/workflows/security.yml/badge.svg)](https://github.com/Olli0103/unifi-protect-local-ai/actions/workflows/security.yml)
+[![Container installation](https://github.com/Olli0103/unifi-protect-local-ai/actions/workflows/container-install.yml/badge.svg)](https://github.com/Olli0103/unifi-protect-local-ai/actions/workflows/container-install.yml)
 
 Run an independent AI processor alongside UniFi Protect, with your choice of
 local or hosted inference providers. The project implements experimental AI Key
@@ -60,8 +60,8 @@ The lab uses synthetic loopback controller, media, model and embedding services.
 It does not contact Protect or send images to an external model.
 
 ```sh
-git clone https://github.com/Olli0103/unifi-ai-key-emulator.git
-cd unifi-ai-key-emulator
+git clone https://github.com/Olli0103/unifi-protect-local-ai.git
+cd unifi-protect-local-ai
 python3 -m venv .venv
 .venv/bin/python -m pip install '.[dev,database]'
 .venv/bin/local-aikey lab --output lab-results.json
@@ -95,7 +95,7 @@ results, search, restart recovery and quality are separate acceptance steps.
 - [Control site](docs/control-site.md) and [operator workflows](docs/device-workflows.md)
 - [Updates, pause, uninstall and restore](docs/uninstall-restore.md)
 - [Compatibility and dated evidence](docs/evidence/README.md)
-- [Roadmap](PLAN.md), [changelog](CHANGELOG.md) and [open issues](https://github.com/Olli0103/unifi-ai-key-emulator/issues)
+- [Roadmap](PLAN.md), [changelog](CHANGELOG.md) and [open issues](https://github.com/Olli0103/unifi-protect-local-ai/issues)
 - [Contributing](CONTRIBUTING.md), [maintenance](MAINTAINERS.md) and [security policy](SECURITY.md)
 
 Project-authored code is licensed under [Apache-2.0](LICENSE). Third-party code,
@@ -110,4 +110,4 @@ its development via [GitHub Sponsors](https://github.com/sponsors/Olli0103).
 
 ## Star history
 
-[![Star history for unifi-ai-key-emulator](https://api.star-history.com/svg?repos=Olli0103/unifi-ai-key-emulator&type=Date)](https://star-history.com/#Olli0103/unifi-ai-key-emulator&Date)
+[![Star history for unifi-protect-local-ai](https://api.star-history.com/svg?repos=Olli0103/unifi-protect-local-ai&type=Date)](https://star-history.com/#Olli0103/unifi-protect-local-ai&Date)

@@ -95,7 +95,7 @@ publisher workflow or legal verification is fabricated by this inventory path.
 An unprotected GitHub environment name would not by itself prove human approval.
 
 The first tagged/signed candidate and interrupted-update/migration acceptance
-items in [issue 16](https://github.com/Olli0103/unifi-ai-key-emulator/issues/16)
+items in [issue 16](https://github.com/Olli0103/unifi-protect-local-ai/issues/16)
 remain separate. This path supplies a missing engineering input to their review,
 not native Protect acceptance or an independent user's installation.
 

@@ -1,6 +1,6 @@
 # AI Port controller contract: initial evidence
 
-This is an initial interface inventory for issue [#6](https://github.com/Olli0103/unifi-ai-key-emulator/issues/6), not a full native compatibility claim. The table records a local, read-only analysis of the Protect **7.2.105** controller package. Later live results on Protect **7.3.60** are recorded in the [firmware and live-contract notes](ai-port-firmware-contract.md). The initial table is retained as versioned evidence; its open statuses have not all been updated by those later results. No vendor source or firmware is included in this repository.
+This is an initial interface inventory for issue [#6](https://github.com/Olli0103/unifi-protect-local-ai/issues/6), not a full native compatibility claim. The table records a local, read-only analysis of the Protect **7.2.105** controller package. Later live results on Protect **7.3.60** are recorded in the [firmware and live-contract notes](ai-port-firmware-contract.md). The initial table is retained as versioned evidence; its open statuses have not all been updated by those later results. No vendor source or firmware is included in this repository.
 
 ## Evidence and confidence
 
@@ -29,7 +29,7 @@ Native proof requires the following sequence:
 4. Produce one bounded synthetic detection and verify its **original camera timeline**, recording, Alarm Manager trigger and AI Key handoff. A successful device command or an independent dashboard is insufficient.
 5. Unpair and restore the camera, then test reconnect and a second event before expanding the detector or adding ONVIF support.
 
-The device-side streaming, event-ingress, timebase, PTZ, edge-recording and result schemas are still `needs_evidence`. Until those are proved, the implementation issue [#28](https://github.com/Olli0103/unifi-ai-key-emulator/issues/28) remains blocked by #6. The [AI Port FAQ](https://help.ui.com/hc/en-us/articles/28315005177239-Protect-AI-Port-FAQs) describes the supported camera classes, resolution limits and stream behavior, but it does not publish the device protocol.
+The device-side streaming, event-ingress, timebase, PTZ, edge-recording and result schemas are still `needs_evidence`. Until those are proved, the implementation issue [#28](https://github.com/Olli0103/unifi-protect-local-ai/issues/28) remains blocked by #6. The [AI Port FAQ](https://help.ui.com/hc/en-us/articles/28315005177239-Protect-AI-Port-FAQs) describes the supported camera classes, resolution limits and stream behavior, but it does not publish the device protocol.
 
 ## Stream, PTZ and recording contracts on Protect 7.3.68 (26 Sep 2026, #6)
 

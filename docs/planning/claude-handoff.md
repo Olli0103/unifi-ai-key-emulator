@@ -13,7 +13,7 @@ After these contracts are reviewed, provider configuration and camera inventory 
 ## Copyable task prompt
 
 ```text
-Work on ISSUE_URL in Olli0103/unifi-ai-key-emulator from PUBLIC_COMMIT.
+Work on ISSUE_URL in Olli0103/unifi-protect-local-ai from PUBLIC_COMMIT.
 Read PLAN.md and the issue, including dependencies and acceptance checks.
 If a dependency or native contract is missing, report needs_evidence with
 an exact proposed interface or experiment. Do not invent compatibility.

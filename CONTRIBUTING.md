@@ -24,8 +24,8 @@ FFmpeg must also be on PATH for the real video and audio integration tests. Test
 Everything below is synthetic: the lab uses loopback controller, media, model and embedding services, and it never contacts Protect or an external model.
 
 ```sh
-git clone https://github.com/Olli0103/unifi-ai-key-emulator.git
-cd unifi-ai-key-emulator
+git clone https://github.com/Olli0103/unifi-protect-local-ai.git
+cd unifi-protect-local-ai
 python3 -m venv .venv
 .venv/bin/python -m pip install '.[dev,database]'
 .venv/bin/local-aikey lab --output lab-results.json

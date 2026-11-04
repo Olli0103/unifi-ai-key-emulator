@@ -1,6 +1,6 @@
 # Global caption admission ledger
 
-`aikey.caption_budget.CaptionBudget` is the durable accounting part of [issue #12](https://github.com/Olli0103/unifi-ai-key-emulator/issues/12). It is **not wired into live job admission yet** and does not enable all-camera processing. The adopted Mac container still uses its explicit, single-use camera permit.
+`aikey.caption_budget.CaptionBudget` is the durable accounting part of [issue #12](https://github.com/Olli0103/unifi-protect-local-ai/issues/12). It is **not wired into live job admission yet** and does not enable all-camera processing. The adopted Mac container still uses its explicit, single-use camera permit.
 
 The ledger reserves at most 12 new paid caption attempts in any rolling hour across one shared state directory. The future caller must reserve before fetching media or contacting a model. Failed calls, timeouts and uncertain provider outcomes continue to count. Multiple processes use one file lock; restarting the service cannot refund a reservation. Repeating an identical job within the 24-hour replay window returns the previous reservation, while a changed fingerprint or camera ID fails closed. The worker's own result journal remains responsible for returning completed results.
 

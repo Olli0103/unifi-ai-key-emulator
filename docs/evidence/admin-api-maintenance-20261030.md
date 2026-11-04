@@ -1,6 +1,6 @@
 # Private API, host maintenance and admin-only qualification — 30 October 2026
 
-Tracking issue: #13. Status: **OPEN**. Source [PR #201](https://github.com/Olli0103/unifi-ai-key-emulator/pull/201),
+Tracking issue: #13. Status: **OPEN**. Source [PR #201](https://github.com/Olli0103/unifi-protect-local-ai/pull/201),
 tested commit `e26deca9d866821df2758d81e1c4b45a68d4f3ca`, merge
 `0268f9e722fafcec18a151847e995007c5e90bf1`; the complete merged tree matched
 the tested tree. See [the API and maintenance contract](../admin-api.md).

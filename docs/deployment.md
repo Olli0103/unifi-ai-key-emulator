@@ -41,8 +41,8 @@ Run these commands as the dedicated non-root account that will own the state.
 Use a new checkout, not a directory containing existing device state:
 
 ```sh
-git clone https://github.com/Olli0103/unifi-ai-key-emulator.git
-cd unifi-ai-key-emulator
+git clone https://github.com/Olli0103/unifi-protect-local-ai.git
+cd unifi-protect-local-ai
 git rev-parse HEAD
 # Review this revision, or check out your chosen full commit SHA before continuing.
 git switch --detach

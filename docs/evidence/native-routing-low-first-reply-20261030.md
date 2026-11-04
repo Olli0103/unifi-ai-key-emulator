@@ -2,7 +2,7 @@
 
 ## Reviewed source and actual runtime
 
-[#207](https://github.com/Olli0103/unifi-ai-key-emulator/pull/207), source
+[#207](https://github.com/Olli0103/unifi-protect-local-ai/pull/207), source
 `daabf77ce264673d0fd52022039e2f9ab78548ab`, adds a bounded in-memory ledger
 of completed Port snapshot sends. Its qualification passed 156 focused tests,
 3,563 Mac tests (three skips), 3,565 Linux tests (one skip) and five CI jobs.

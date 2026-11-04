@@ -9,7 +9,7 @@ complete native grouping, enrollment, quality, recovery or release acceptance.
 The [model-space contract](face-model-space-20261103.md),
 [explicit enrollment flow](face-enrollment-control-20261103.md) and
 [CLI shared model lease](face-cli-model-fence-20261103.md) are now integrated.
-Their frozen [#266](https://github.com/Olli0103/unifi-ai-key-emulator/pull/266)
+Their frozen [#266](https://github.com/Olli0103/unifi-protect-local-ai/pull/266)
 source is `7320b5c1dbd6251bfc25d3dcdad7bd6b2fc2531e`, merged as
 `51347cf96320bcfb4de34b8f528c52bec1851c0d`. Exact-head Linux CI passed 5,370 tests,
 one optional skip and all five actual workflow jobs. CodeRabbit skipped review;

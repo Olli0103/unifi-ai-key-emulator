@@ -1,7 +1,7 @@
 # Complete public-person adapter matrix — 2 November 2026
 
-Part of [#7](https://github.com/Olli0103/unifi-ai-key-emulator/issues/7) and
-[#14](https://github.com/Olli0103/unifi-ai-key-emulator/issues/14), not their
+Part of [#7](https://github.com/Olli0103/unifi-protect-local-ai/issues/7) and
+[#14](https://github.com/Olli0103/unifi-protect-local-ai/issues/14), not their
 full acceptance. [Frozen public case summary](public-person-structured-30s-20261102.json).
 
 ## Prospective configuration and conservation

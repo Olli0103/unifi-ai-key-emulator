@@ -6,7 +6,7 @@ camera content is included here.
 
 ## Frozen software qualification
 
-[PR #188](https://github.com/Olli0103/unifi-ai-key-emulator/pull/188) tested head
+[PR #188](https://github.com/Olli0103/unifi-protect-local-ai/pull/188) tested head
 `8e629925afb03f1e7f989b1afd7344721ee70aa1`, parent
 `20d7e7f1204dfa9cb2fdb2df16f066812a2cab59`. It was merged as
 `03042c001924cd498bd2f982a65dc4b2f511ba45`; the entire merged tree equals the
@@ -14,7 +14,7 @@ tested tree. The checkout was nonshallow, clean, and retained 100644 modes.
 
 - Native Mac: **3,112 passed, three skipped, 22 warnings, 56 subtests passed**,
   222.17 seconds.
-- [Linux CI](https://github.com/Olli0103/unifi-ai-key-emulator/actions/runs/40996712965):
+- [Linux CI](https://github.com/Olli0103/unifi-protect-local-ai/actions/runs/40996712965):
   **3,114 passed, one skipped, 22 warnings, 56 subtests passed**, 125.81 seconds.
   All four required jobs succeeded: test-and-build, secret-scan,
   dependency-and-sbom and reproducible-release.

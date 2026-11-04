@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 import tomllib
 
-REPOSITORY = "Olli0103/unifi-ai-key-emulator"
+REPOSITORY = "Olli0103/unifi-protect-local-ai"
 OWNER = "Olli0103"
 OWNER_ID = 51629451
 PUBLIC_REPOSITORY = "https://github.com/" + REPOSITORY + ".git"
