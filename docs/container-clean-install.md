@@ -112,8 +112,9 @@ The final `aikey-container-install-summary/1` file is create-only and requires
 all eight bound case records plus the matching zero-resource cleanup receipt.
 No final passing metadata is published from a partial run, wrong exit/body
 combination, missing case or unverified cleanup. Only that complete sanitized
-JSON is retained by the artifact action; no image archive, fixture directory,
-private key, camera frame or log bundle is uploaded.
+JSON is retained alongside the subject-bound [whole-image inventories](image-inventory.md)
+and their final cleanup-bound summary; no image archive, fixture directory,
+private key, raw scanner report, camera frame or log bundle is uploaded.
 
 GitHub owns job process containment and VM teardown; the job has a 25-minute
 outer timeout. This tool is not a new host process supervisor and does not claim

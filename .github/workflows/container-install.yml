@@ -74,6 +74,13 @@ jobs:
           target.write_text(json.dumps(value))
           target.chmod(0o644)
           PY
+      - name: Install the checksum-pinned native image catalogue tool
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python tools/image_sbom_check.py install --architecture "${INSTALL_ARCH}" \
+            --directory "${RUNNER_TEMP}/image-inventory-tool"
       - name: Build both exact-commit images and exercise new-process installed state
         shell: bash
         run: |
@@ -95,9 +102,17 @@ jobs:
             docker buildx build --load --platform "linux/${INSTALL_ARCH}" \
               --file "${recipe}" --tag "${image}" \
               --label "org.opencontainers.image.revision=${SOURCE_REVISION}" \
-              --label "org.local-aikey.install-run=${INSTALL_NONCE}" "${context}"
+              --label "org.local-aikey.install-run=${INSTALL_NONCE}" \
+              --label "org.local-aikey.install-profile=${role}" "${context}"
             observed="$(docker image inspect --format '{{.Os}}/{{.Architecture}}|{{.Config.User}}|{{ index .Config.Labels "org.local-aikey.install-run" }}|{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${image}")"
             test "${observed}" = "linux/${INSTALL_ARCH}|10001:10001|${INSTALL_NONCE}|${SOURCE_REVISION}"
+            # Scan the inspected immutable local image ID before mounting any
+            # synthetic state. No registry fallback, upload or image execution
+            # by the scanner. Native raw metadata stays temporary on the runner.
+            python tools/image_sbom_check.py collect --architecture "${INSTALL_ARCH}" \
+              --repository "${SOURCE_REPOSITORY}" --revision "${SOURCE_REVISION}" \
+              --nonce "${INSTALL_NONCE}" --profile "${role}" --source "${GITHUB_WORKSPACE}" \
+              --tool "${RUNNER_TEMP}/image-inventory-tool/syft" --results "${results}"
             docker run --pull=never --rm --name "aikey-ci-${INSTALL_NONCE}-${role}-ffmpeg" \
               --label "org.local-aikey.install-run=${INSTALL_NONCE}" \
               --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
@@ -195,10 +210,17 @@ jobs:
           python "${tool}" summary --results "${RUNNER_TEMP}/container-results" \
             --revision "${SOURCE_REVISION}" --architecture "${INSTALL_ARCH}" \
             --output "${RUNNER_TEMP}/container-results/summary.json"
+          python tools/image_sbom_check.py finalize --results "${RUNNER_TEMP}/container-results" \
+            --revision "${SOURCE_REVISION}" --architecture "${INSTALL_ARCH}" --nonce "${INSTALL_NONCE}" \
+            --output "${RUNNER_TEMP}/container-results/image-inventory.json"
       - name: Retain only sanitized complete metadata, never fixture state or images
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: container-install-${{ matrix.arch }}
-          path: ${{ runner.temp }}/container-results/summary.json
+          path: |
+            ${{ runner.temp }}/container-results/summary.json
+            ${{ runner.temp }}/container-results/image-inventory.json
+            ${{ runner.temp }}/container-results/aikey-sbom.cdx.json
+            ${{ runner.temp }}/container-results/aiport-sbom.cdx.json
           if-no-files-found: error
           retention-days: 14
