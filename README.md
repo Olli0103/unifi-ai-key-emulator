@@ -102,3 +102,12 @@ Project-authored code is licensed under [Apache-2.0](LICENSE). Third-party code,
 images and models retain their own terms. Public binary/image publication has
 separate [release-readiness requirements](docs/legal/release-readiness.md);
 this README does not approve a release or firmware/model redistribution.
+
+## Support the project
+
+If you find this project useful, consider starring the repository or supporting
+its development via [GitHub Sponsors](https://github.com/sponsors/Olli0103).
+
+## Star history
+
+[![Star history for unifi-ai-key-emulator](https://api.star-history.com/svg?repos=Olli0103/unifi-ai-key-emulator&type=Date)](https://star-history.com/#Olli0103/unifi-ai-key-emulator&Date)
