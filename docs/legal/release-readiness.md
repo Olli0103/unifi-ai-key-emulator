@@ -78,6 +78,10 @@ The separate [native Linux image installation checks](../container-clean-install
 build and exercise local ephemeral images without registry/image publication.
 Their sanitized metadata artifacts are not signed release artifacts, native
 Protect acceptance, redistribution clearance or a replacement for these gates.
+The [exact-image inventory path](../image-inventory.md) now supplies OS/FFmpeg,
+Python and bundled-binary metadata with immutable image/source bindings. Unknown
+licenses remain visible; generating these inventories does not verify the
+`image_licenses` or any other human evidence entry.
 The full-history secret scan has four distinct exact-fingerprint exceptions in
 `.gitleaksignore`: one synthetic loopback credential sentinel from historical
 commit `0f519e4`, and normalization-format whitelist constants plus their
