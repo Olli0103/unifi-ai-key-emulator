@@ -1,40 +1,63 @@
-# Local AI processor
+# Local AI processor for UniFi Protect
 
-Compatible with UniFi Protect. Independent and unofficial; not affiliated with or endorsed by Ubiquiti.
+[![Security and quality](https://github.com/Olli0103/unifi-ai-key-emulator/actions/workflows/security.yml/badge.svg)](https://github.com/Olli0103/unifi-ai-key-emulator/actions/workflows/security.yml)
+[![Container installation](https://github.com/Olli0103/unifi-ai-key-emulator/actions/workflows/container-install.yml/badge.svg)](https://github.com/Olli0103/unifi-ai-key-emulator/actions/workflows/container-install.yml)
 
-An independent experimental AI processor for UniFi Protect. The implemented profile currently emulates a bounded subset of AI Key. The roadmap also targets a separate AI Port compatibility profile for G3, G4/G5 and ONVIF cameras. Native AI Key adoption has been tested with Protect 7.3.56 on a UDM Pro Max using Apple container 1.4.1 on an Apple silicon Mac. A separate [AI Port candidate](docs/aiport-candidate.md) appeared in Protect 7.3.60. It has paired three G3/G5 cameras simultaneously, decoded all three streams, and produced live Person detections on a G3 that Protect indexed under that camera and linked to its playback. Fresh management-token adoption, sustained multi-camera event indexing, additional camera capacity, and complete NAS recovery/soak qualification remain open. This is an unofficial project and is not affiliated with Ubiquiti.
+Run an independent AI processor alongside UniFi Protect, with your choice of
+local or hosted inference providers. The project implements experimental AI Key
+and AI Port compatibility profiles. It is unofficial and is not affiliated with
+or endorsed by Ubiquiti. No vendor firmware or model weights are included.
 
-The local build has device management/adoption, UCP4 control, UDP discovery, a bounded vision worker, version-specific description callbacks and an E5 query responder. Vision providers are configurable: OpenAI Responses, Claude Messages, native Ollama and OpenAI-compatible APIs. Search embeddings are configured separately. No vendor firmware or model weights are bundled.
+## Status and compatibility
 
-**Status: native adoption, control and automatic event captions verified on two camera families.** The ARM64 image built and ran under Apple container 1.4.1. Protect 7.3.56 displayed the processor online; local checks confirmed adopted state, control time synchronization, management-password rotation, disabled factory authentication and reconnect after a planned restart. On Protect 7.3.60, an on-demand description and one automatic event each on G5 Flex and G4 Instant completed through OpenAI. Both automatic captions remained visible in Protect after a full page reload. Those were separate one-use trials. Later [29 October NAS observations](docs/evidence/nas-source-upgrade-20261029.md) separately establish current-source reconnect, preserved identity/index state, native stored-session search and bounded caption/image-query paths. The [reviewed-source follow-up through #159](docs/evidence/key-port-batch159-20261029.md) upgrades the Key and all four Ports with preserved original identities/nine pairings and verified cold backups. The [follow-up through #165](docs/evidence/key-port-batch165-20261030.md) separately verifies all 90 running source modules per processor and four provider-key files, with the first Port refusal/recovery and controller-managed credential limits retained. A [full offline component restore](docs/evidence/nas-full-state-restore-20261029.md) is separate evidence, not a native controller/host restore. Quality, full native recovery and sustained operation remain open.
+This is development software, currently version `0.1.0` in source. **There is no
+published stable release, supported release line or official prebuilt project
+image yet.** Build from a reviewed source revision; do not assume a registry tag
+or PyPI package with a similar name belongs to this project.
 
-The inspected controller source is 7.2.105, alongside AI Key firmware 2.2.8. Public metadata did not return a 7.3.56 package during inspection. The live results above establish those specific behaviors, not full protocol or feature compatibility. The [bounded automatic-description path](docs/basic-descriptions.md) has separate persistence acceptance checks.
+Native observations cover selected Protect 7.3.x versions, including 7.3.74,
+with different results per feature and profile. They do not establish support
+for every controller, camera, firmware or network layout. Full feature parity,
+recognition quality, independent first-install acceptance and sustained-operation
+qualification remain open. Read the [compatibility matrix](docs/evidence/compatibility-matrix.md)
+and [known limitations](docs/compatibility.md) before connecting a device.
 
-For pausing, removing the application or recovering retained state, use the
-[safe uninstall/restore guide](docs/uninstall-restore.md). Removal is not deletion
-of Protect recordings, adopted identity, provider data or backups.
+| Profile | What it does | Deployment path |
+| --- | --- | --- |
+| AI Key | Processes controller-requested descriptions and optional search/recognition tasks | [Linux / Docker Compose](docs/nas-deployment.md), [Apple container](docs/apple-container.md) |
+| AI Port | Presents a separate processor identity for paired camera streams and explicitly configured detectors | [AI Port Linux installation](docs/aiport-install.md), [networking reference](docs/aiport-nas-compose.md) |
+| Control site | Authenticated local setup, provider/model settings, camera scope and reviewed configuration changes | [Operator workflows](docs/device-workflows.md), [control-site reference](docs/control-site.md) |
 
-## Roadmap and product status
+AI Key and AI Port are separate identities and configurations, not interchangeable
+startup modes. ONVIF metadata planning exists; working ONVIF ingest, PTZ and
+recording control are not implemented.
 
-A credentials-free [synthetic control-site preview](docs/synthetic-demo.md) is
-available with `local-aikey-demo`. It binds only to loopback, reads no deployment
-state and cannot discover/adopt devices, change settings or contact a model.
-Every displayed result is fictional, not a quality or native-acceptance claim.
+## Install and deploy
 
-The [roadmap](PLAN.md) covers native AI Key and AI Port behavior, automatic camera discovery, AI Port processing for legacy and ONVIF cameras, a provider/model control site, security and detection-quality checks, and the path to a maintained open-source product. Work is tracked in the [issue index](docs/planning/issues.md), with [Claude/contributor handoff instructions](docs/planning/claude-handoff.md).
+Start with the [deployment guide](docs/deployment.md). It covers source selection,
+requirements, a non-container AI Key installation, trust, adoption, verification,
+updates and rollback. It also links the Docker, AI Port and Apple-specific paths.
 
-Project-authored code is licensed under [Apache-2.0](LICENSE). [Community release readiness](docs/legal/release-readiness.md) tracks code origin, firmware-use authorization, contributor/employer rights, dependency/image/model obligations and adoption proof. Third-party components retain their own terms. The license choice does not establish code-origin, firmware-analysis or legal clearance; those release gates remain open. See [contributing](CONTRIBUTING.md). Opt-in all-camera admission has synthetic tests and bounded native caption-persistence observations; all-camera endurance/overload and quality acceptance remain open. A [loopback control site](docs/control-site.md) now manages vision provider and model settings for both profiles; broader feature controls remain open.
+You need Python 3.12+ for a host install, a trusted private network, persistent
+private storage, independently verified controller TLS trust and an explicitly
+chosen vision-capable model. Linux containers support AMD64 and ARM64 builds.
+Optional detectors, speech, face recognition and search need additional models
+or services. They are not installed or enabled by the base image.
 
-A [read-only camera inventory preflight](docs/camera-inventory-preflight.md) is available for Protect 7.3.60. It reads the local integration API with a private API-key file and pinned web certificate, then writes a private eligibility report. It does not enable processing. An opt-in continuous policy now refreshes that same inventory and gates automatic jobs by an explicit model-family allowlist and a durable 12-per-hour global limit. The current NAS Key retains its explicit continuous policy through the source upgrade. Native dispatch/overload across the complete camera set, quality qualification and legacy event ingress remain separate open work.
+The service can receive camera media and send it to the configured provider.
+Use a local model server if you want to keep inference within your network;
+verify that it does not forward requests elsewhere. Hosted services may charge
+for requests and retain data under their own policies. No provider fallback is
+enabled automatically. See [provider configuration](docs/providers.md).
 
-The [owner-gated release procedure](docs/releasing.md) connects exact public
-tags, reproducible packages, native image qualification, standard Sigstore
-bundles and create-only publication. Its human evidence/approval gates remain
-pending; this is not an announcement of a completed signed public release.
+Try the credentials-free [synthetic control-site demo](docs/synthetic-demo.md)
+if you want to inspect the interface before configuring a controller. Its data
+is fictional and it cannot adopt devices or run real inference.
 
 ## Run the local lab
 
-Requires Python 3.12 or newer. The lab uses synthetic loopback controller, media, model and embedding services. It does not contact Protect or send images to an external model.
+The lab uses synthetic loopback controller, media, model and embedding services.
+It does not contact Protect or send images to an external model.
 
 ```sh
 git clone https://github.com/Olli0103/unifi-ai-key-emulator.git
@@ -45,97 +68,37 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -q
 ```
 
-The integrated lab uses real TLS, client certificates, HTTP and WebSocket connections. It exercises credentialed adoption, device commands, media download, an explicitly synthetic vision response, a description callback, document/query embeddings and a process-service restart. Its simulated controller is independently written; neither it nor the emulator imports vendor code.
-
-## Initialize a real configuration
-
-For a new AI Key, [offline first-run preparation](docs/first-run.md) combines
-controller/network/provider/model selection without editing JSON. It creates
-only a new directory; trust import, service startup and adoption remain explicit.
-Existing installations must not be reinitialized. The lower-level commands below
-remain available.
-
-```sh
-.venv/bin/local-aikey init --config config.json --state-dir state
-.venv/bin/local-aikey check --config config.json
-```
-
-Initialization generates a random local MAC identity, persistent private key/certificate and private credential files. It refuses to replace an existing configuration or silently repair an incomplete identity. `check` reads local files only and exits 2 until required settings are supplied.
-
-Set `controller.host`, `device.ip`, a suitable `runtime.bind`, and a real vision provider/model. No model name is assumed. A remote model endpoint needs an explicit `inference.allow_remote`; unencrypted remote HTTP additionally needs `inference.allow_insecure_http`.
-
-Select a provider without making an API request:
-
-```sh
-.venv/bin/local-aikey provider openai --config config.json --model VISION_MODEL_ID --api-key-file /private/path/openai-key
-.venv/bin/local-aikey provider ollama --config config.json --model INSTALLED_VISION_MODEL
-.venv/bin/local-aikey provider openai-compatible --config config.json --model VISION_MODEL_ID --base-url http://127.0.0.1:1234/v1
-```
-
-Each command replaces the prior provider configuration and preserves device identity. API key values never appear in command arguments. OpenAI mode uses the Responses API and requests `store=false`; starting real inference sends the selected camera frames to OpenAI. Ollama mode calls the configured Ollama server. No automatic fallback switches providers. See [provider configuration](docs/providers.md).
-
-Controller connections require trusted TLS and the emulator client certificate. Import a controller certificate only after independently checking its SHA-256 fingerprint:
-
-```sh
-.venv/bin/local-aikey trust --config config.json --fingerprint VERIFIED_SHA256
-```
-
-That command makes a TLS handshake to the configured controller, sends no HTTP credentials or adoption request, verifies the fingerprint, and saves the certificate. It refuses to overwrite existing trust. Hostname checks remain enabled. If the console certificate does not cover its LAN name/IP, explicitly set `controller.verify_hostname=false` and `controller.expected_fingerprint` to the verified value. Every controller channel still requires a trusted certificate and checks the configured pin before sending credentials.
-
-`local-aikey run --config config.json` starts real controller connections. A pre-adoption connection can create a candidate processor record in Protect. Run it only as part of the authorized device test, not as a passive status check.
+This exercises real local TLS, HTTP and WebSocket paths with synthetic responses.
+A passing lab is not native adoption, detection-quality or end-user acceptance.
 
 ## Capabilities and current limits
 
-| Component | Implemented | Remaining native proof |
+| Area | Available implementation | Important limit |
 | --- | --- | --- |
-| Management/control | HTTPS info/adoption, stable identity, UCP4, time sync, credential rotation and reconnect observed on 7.3.56 | Additional controller commands and longer recovery testing |
-| Discovery | Read-only v1 queries, exact controller allowlist, optional Linux multicast and macOS host companion; native candidate and address observed | Other network layouts and NAS discovery |
-| Descriptions | Bounded queue, explicit provider/model, image/MP4 input; dated native caption persistence on selected versions/cameras | All-camera endurance, ground-truth quality and complete restart/recovery acceptance |
-| Search | E5 and separate CLIP/basic paths; dated native session/image-query observations, explicit profile/model guards | Labeled relevance/negative-query quality, fresh Deep processing and complete migration acceptance |
-| Search database | Private NAS PostgreSQL/hybrid-search deployment, source upgrade and offline component restore documented | [Host-operated CLIP/E5 migration](docs/index-migration.md) fixture-qualified; native rollout and full controller/host recovery remain |
+| Management | Persistent identity, TLS management, adoption/control, discovery options | Controller-version and network-layout dependent |
+| Vision | OpenAI Responses, Anthropic Messages, Ollama and OpenAI-compatible providers | Explicit model/endpoint required; quality is model and scene dependent |
+| AI Port detection | Camera-isolated stream handling, object/zone tracking, optional local/API detection | Pairing stays in Protect; capacity depends on actual stream dimensions |
+| Search | E5, CLIP and hybrid-search paths with separate profile/model contracts | Matching database extensions, model space and credential synchronization required |
+| Speech, faces and plates | Optional model services, camera scopes and enrollment controls | Not enabled by default; native parity and quality are not blanket-qualified |
+| Administration | Authenticated setup, revision-bound review/save, maintenance and reconciliation flows | A saved setting is not evidence that a running device has loaded it |
+| Installation | Native Linux AMD64/ARM64 image CI, source/package checks | CI fixtures do not prove every NAS OS or Apple runtime works |
 
-Unsupported capabilities default to disabled. The inspected controller couples
-VLM and deep-mode flags, so the build does not automatically advertise full
-intelligence. Source paths now exist for face/plate processing, speech, CLIP
-image queries, hybrid search and enhancement; that is not blanket native parity
-or quality acceptance. See the dated [7.3.70 record](docs/evidence/live-protect-7.3.70.md),
-[7.3.74 observations](docs/evidence/live-protect-7.3.74.md),
-[speech acceptance limits](docs/evidence/speech-acceptance-20261029.md) and
-[search evidence](docs/evidence/search-evidence.md). Named enrollment, plate
-quality, complete native event routing/zone ground truth, ONVIF and full
-legacy-camera enhancement remain open. Existing verified camera scopes are not
-permission to enable new processing or remote destinations.
+A successful callback does not prove that Protect indexed or displayed its result.
+Verify the original camera/event in Protect after refresh. Adoption, persistent
+results, search, restart recovery and quality are separate acceptance steps.
 
-For video, set `worker.ffmpeg_path` to an absolute executable path. `worker.request_mp4_exports=true` changes only the verified AI export route's supported `format=ubv` parameter to MP4, retaining its other allowed parameters. Arbitrary UBV files are rejected. Protect 7.3.60 accepted this MP4 export in the native on-demand test.
+## Documentation
 
-Descriptions become candidates for semantic indexing only when the actual controller creates the required task/session and the compatible search database is ready. Set `worker.description_embeddings=true` and `search.enabled=true` together for the E5 profile. Use the same `embeddings` configuration for document and query encoding. A shape-correct embedding is not proof of model compatibility. The HTTP backend expects E5 text embeddings; the optional local backend loads an existing checkpoint without downloading or executing remote model code.
+- [Documentation index](docs/README.md)
+- [Deployment and first connection](docs/deployment.md)
+- [Provider configuration](docs/providers.md)
+- [Control site](docs/control-site.md) and [operator workflows](docs/device-workflows.md)
+- [Updates, pause, uninstall and restore](docs/uninstall-restore.md)
+- [Compatibility and dated evidence](docs/evidence/README.md)
+- [Roadmap](PLAN.md), [changelog](CHANGELOG.md) and [open issues](https://github.com/Olli0103/unifi-ai-key-emulator/issues)
+- [Contributing](CONTRIBUTING.md), [maintenance](MAINTAINERS.md) and [security policy](SECURITY.md)
 
-HTTP callback success is reported as `http_accepted`, not as successful indexing. A private job journal prevents duplicate completed callbacks across restart and stops automatic replay after an uncertain callback. Pending inference is not a durable queue. The journal is bounded and stops admission at its configured capacity; review and archive terminal entries as part of longer tests.
-
-## NAS deployment
-
-For the tested Mac deployment, use the separate [Apple container guide](docs/apple-container.md). It publishes management through the Mac's LAN address, uses an optional host discovery companion, and leaves container discovery and search disabled.
-
-See [NAS setup](docs/nas-deployment.md). Compose uses Linux host networking so Protect can address management, discovery and the dedicated search database at the emulator's advertised NAS IP. This requires checking port availability on the NAS first. It adds no vision-model service, so an existing local inference server can be used.
-
-Linux ARM64/Apple-container trials and Linux AMD64/NAS deployment have separate
-dated evidence. The [NAS source upgrade](docs/evidence/nas-source-upgrade-20261029.md)
-and [five-processor follow-up](docs/evidence/key-port-batch165-20261030.md)
-include real Docker/Compose and PostgreSQL continuity observations. They do not
-validate every example command, a fresh independent installation, full native
-disaster recovery, a public release or a sustained pilot.
-
-## Engineering records
-
-- [Verification report](BUILD-RESULT.md)
-- [Build plan](PLAN.md)
-- [Device/adoption/discovery contract](docs/device-contract.md)
-- [Worker contract](docs/worker-contract.md)
-- [Vision providers](docs/providers.md)
-- [Local control site](docs/control-site.md)
-- [Search contract](docs/search-contract.md)
-- [Database credential contract](docs/database-contract.md)
-- [Security policy](SECURITY.md) and [security contract](docs/security-contract.md)
-- [Research source index](docs/evidence/README.md)
-
-Use a separately identified test processor and one selected camera for the first real trial. Native adoption, persistent descriptions, search retrieval and recovery are separate acceptance checks.
+Project-authored code is licensed under [Apache-2.0](LICENSE). Third-party code,
+images and models retain their own terms. Public binary/image publication has
+separate [release-readiness requirements](docs/legal/release-readiness.md);
+this README does not approve a release or firmware/model redistribution.

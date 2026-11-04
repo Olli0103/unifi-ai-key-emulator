@@ -9,7 +9,7 @@ from aikey import apple_supervisor as sup
 from aikey import apple_upgrade as up
 from aikey.apple_upgrade import CONTAINER, UpgradeError
 
-STATE = "/Users/me/stack/state/aiport-mac"
+STATE = "/srv/example-stack/state/aiport-mac"
 OLD, NEW = "aiport-old", "aiport-new"
 OLD_IMAGE, NEW_IMAGE = "local-aiport:old", "local-aiport:new"
 IMAGE_ENV = ["PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8"]
@@ -27,11 +27,11 @@ def _entry(name=OLD, image=OLD_IMAGE, state="running"):
                     "type": {"tmpfs": {}}},
                    {"destination": "/state", "options": [], "source": STATE,
                     "type": {"virtiofs": {}}}],
-        "publishedPorts": [{"containerPort": 8443, "count": 1, "hostAddress": "192.168.0.135",
+        "publishedPorts": [{"containerPort": 8443, "count": 1, "hostAddress": "10.77.0.135",
                             "hostPort": 8443, "proto": "tcp"}],
         "networks": [{"network": "default", "options": {"hostname": name, "mtu": 1280}}],
         "resources": {"cpuOverhead": 1, "cpus": 4, "memoryInBytes": 2 << 30},
-        "dns": {"nameservers": ["192.168.0.1"], "options": [], "searchDomains": []},
+        "dns": {"nameservers": ["10.77.0.1"], "options": [], "searchDomains": []},
         "capAdd": [], "capDrop": [], "labels": {}, "sysctls": {}, "publishedSockets": [],
         "rosetta": False, "ssh": False, "useInit": False, "virtualization": False}}
 
@@ -131,8 +131,8 @@ def test_the_plan_recreates_every_setting_of_the_live_container(state_dir):
     assert planned.argv == (
         CONTAINER, "run", "-d", "--name", NEW, "--user", "10001:10001", "--read-only",
         "--tmpfs", "/tmp:size=64m,mode=1777", "-v", f"{STATE}:/state",
-        "--cpus", "4", "--memory", "2048M", "--dns", "192.168.0.1",
-        "-p", "192.168.0.135:8443:8443", "--entrypoint", "local-aiport-candidate", NEW_IMAGE,
+        "--cpus", "4", "--memory", "2048M", "--dns", "10.77.0.1",
+        "-p", "10.77.0.135:8443:8443", "--entrypoint", "local-aiport-candidate", NEW_IMAGE,
         "--config", "/state/config.json", "--port", "8443")
     assert _comparable(recreate(list(planned.argv))) == _comparable(_entry())
     assert [c[0] for c in host.calls] == ["list", "image", "image"]          # read-only
@@ -167,7 +167,7 @@ def _mutate(path, value):
     (_mutate(("initProcess", "rlimits"), [{"type": "nofile"}]), "process_options"),
     (_mutate(("mounts",), [{"destination": "/x", "source": "/y", "options": ["rw", "noexec"],
                             "type": {"virtiofs": {}}}]), "mount"),
-    (_mutate(("publishedPorts",), [{"containerPort": 1, "count": 2, "hostAddress": "192.168.0.135",
+    (_mutate(("publishedPorts",), [{"containerPort": 1, "count": 2, "hostAddress": "10.77.0.135",
                                     "hostPort": 1, "proto": "tcp"}]), "published_port"),
 ])
 def test_a_setting_that_cannot_be_reproduced_blocks_the_plan(tmp_path, change, reason):

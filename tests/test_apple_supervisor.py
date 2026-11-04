@@ -8,10 +8,10 @@ import pytest
 from aikey import apple_supervisor as sup
 
 
-STATE = "/Users/me/stack/state/aiport-mac"
+STATE = "/srv/example-stack/state/aiport-mac"
 
 
-def _entry(name, state, *, image="local-aiport:new", address="192.168.0.135", port=8443,
+def _entry(name, state, *, image="local-aiport:new", address="10.77.0.135", port=8443,
            source=STATE):
     return {"id": name, "status": {"state": state},
             "configuration": {"image": {"reference": image},
@@ -26,7 +26,7 @@ def _entry(name, state, *, image="local-aiport:new", address="192.168.0.135", po
 class Host:
     """Fake ``container`` CLI and ``ifconfig``."""
 
-    def __init__(self, listing, *, system="running", addresses=("192.168.0.135",),
+    def __init__(self, listing, *, system="running", addresses=("10.77.0.135",),
                  start_rc=0):
         self.listing, self.system, self.addresses = listing, system, addresses
         self.start_rc, self.calls = start_rc, []
@@ -64,7 +64,7 @@ def state_dir(tmp_path):
 def test_pin_records_the_live_configuration_privately(state_dir):
     spec = json.loads((state_dir / sup.SPEC_FILE).read_text())
     assert spec["services"] == [{"name": "aiport-mac", "container": "aiport-new",
-                                 "image": "local-aiport:new", "host_address": "192.168.0.135",
+                                 "image": "local-aiport:new", "host_address": "10.77.0.135",
                                  "host_port": 8443, "state_source": STATE}]
     assert (state_dir / sup.SPEC_FILE).stat().st_mode & 0o077 == 0
 
@@ -105,7 +105,7 @@ def test_another_running_container_on_the_same_port_or_state_blocks_the_start(st
 
 def test_a_recreated_container_with_different_settings_is_drift(state_dir):
     for changed in (_entry("aiport-new", "stopped", image="local-aiport:other"),
-                    _entry("aiport-new", "stopped", address="192.168.0.99"),
+                    _entry("aiport-new", "stopped", address="10.77.0.99"),
                     _entry("aiport-new", "stopped", source="/other/state")):
         host = Host([changed])
         assert sup.tick(state_dir, run=host, now=1000.0)["services"]["aiport-mac"] == \
@@ -116,7 +116,7 @@ def test_a_recreated_container_with_different_settings_is_drift(state_dir):
 def test_missing_container_and_absent_host_address_are_reported(state_dir):
     assert sup.tick(state_dir, run=Host([]), now=1.0)["services"] == {
         "aiport-mac": "blocked:missing"}
-    host = Host([_entry("aiport-new", "stopped")], addresses=("192.168.0.98",))
+    host = Host([_entry("aiport-new", "stopped")], addresses=("10.77.0.98",))
     assert sup.tick(state_dir, run=host, now=1.0)["services"] == {
         "aiport-mac": "blocked:address_absent"}
     assert host.starts() == []
@@ -186,6 +186,7 @@ def test_the_launch_agent_runs_one_tick_a_minute(tmp_path):
     agent = plistlib.loads(sup.launch_agent(tmp_path, "/venv/bin/python").encode())
     assert agent["ProgramArguments"] == ["/venv/bin/python", "-m", "aikey.apple_supervisor",
                                          "tick", "--state-dir", str(tmp_path)]
+    assert agent["Label"] == "org.local.aikey-supervise"
     assert agent["StartInterval"] == 60 and agent["RunAtLoad"] is True
     assert "KeepAlive" not in agent
 
@@ -209,7 +210,7 @@ def test_a_sibling_only_backend_without_published_ports_is_supervised(tmp_path):
 @pytest.mark.parametrize('conflict', ['same_container', 'same_root', 'nested_root', 'same_endpoint'])
 def test_invalid_second_pin_never_replaces_the_valid_registry(state_dir, conflict):
     first = _entry('aiport-new', 'stopped')
-    second = _entry('second', 'stopped', address='192.168.0.136', port=9443, source='/independent/state')
+    second = _entry('second', 'stopped', address='10.77.0.136', port=9443, source='/independent/state')
     if conflict == 'same_container':
         second = first
     elif conflict == 'same_root':

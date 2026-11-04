@@ -27,7 +27,7 @@ _REVERIFY_KINDS = ("person", "vehicle", "animal")
 # A package stays put, so a later sparse sample would re-detect it as a new
 # track. Protect saves each package as its own one-shot event.
 _PACKAGE_COOLDOWN_SECONDS = 1800.0
-# A package first confirmed in night IR is held: the Flur cat was read as a
+# A package first confirmed in night IR is held: the Camera A cat was read as a
 # package in IR, while a parcel stays put. It is announced once it stays in
 # place this long (or is seen in colour); an animal sighting makes it Animal.
 _IR_PACKAGE_DWELL_SECONDS = 20.0
@@ -296,7 +296,7 @@ class CameraPolicyEngine:
         elif (change.kind == "package" and change.edge == "enter"
                 and active is None and infrared):
             # Every indoor Package in night IR so far was the user's cat
-            # (Flur, Esszimmer); 0 of 24 real parcels in 30 days were IR.
+            # (Camera A, Camera D); 0 of 24 real parcels in 30 days were IR.
             held[change.track_id] = (now, change.box)
             self._trackers[camera].hold(change.track_id)
             self.package_ir_held += 1

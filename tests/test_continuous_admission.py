@@ -364,7 +364,7 @@ def test_unmetered_captions_need_a_local_caption_model(tmp_path):
     # The private backend endpoint permits the owner's explicit waiver; this
     # location check alone does not prove its billing or upstream routing.
     ovms = deepcopy(config)
-    ovms["inference"].update(provider="openai-compatible", base_url="http://172.30.50.13:8000/v3",
+    ovms["inference"].update(provider="openai-compatible", base_url="http://10.88.0.13:8000/v3",
                              allow_remote=True, allow_insecure_http=True)
     assert validate_config(ovms)["worker"]["continuous"]["unmetered"] is True
     for mutation in (lambda value: value["inference"].update(provider="openai-compatible",

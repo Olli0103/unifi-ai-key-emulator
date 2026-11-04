@@ -103,7 +103,7 @@ def test_follow_up_is_bounded_per_camera_and_ignores_unreadable_frames():
 
 
 def test_a_sleeping_cat_without_measurable_movement_is_indistinguishable_from_a_parcel():
-    # Esszimmer 26 Sep 05:00: the real resting object gave no measurable
+    # Camera D 26 Sep 05:00: the real resting object gave no measurable
     # in-box motion and the shadow verdict was "confirmed"; a Protect Animal
     # event followed at 05:10. This local signal cannot veto such a cat, so
     # the follow-up must stay in shadow for startup-held night-IR candidates.

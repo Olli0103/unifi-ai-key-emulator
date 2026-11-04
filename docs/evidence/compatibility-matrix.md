@@ -198,7 +198,7 @@ Live columns show each live trial separately. `indirect` means the behavior was 
 - `capability.ai_mode_basic`: How 7.3.x interprets aiMode
 - `capability.support_ai_summary`: Whether supportAiSummary was advertised as enabled during the 7.3.60 caption trial is not in the public records
 - `capability.deep_mode_vlm`: Whether 7.3.x still couples supportDeepMode and supportVlm
-- `capability.face_recognition`: Fresh native readback after the native-face skip (27 Sep 00:21 UTC): new Wohnzimmer events with camera faces and no new AI Key faces
+- `capability.face_recognition`: Fresh native readback after the native-face skip (27 Sep 00:21 UTC): new Camera J events with camera faces and no new AI Key faces
 - `capability.face_recognition`: AI Key faces carry no faceEmbed, so Protect puts each in its own group (65 singleton groups on 26 Sep); grouping needs Protect's camera-model embedding, which the Key cannot produce
 - `capability.face_recognition`: Named recognition needs an owner-named group and an eligible legacy camera; none is eligible today
 - `capability.license_plate_recognition`: The Protect 7.3.68 AI Key plate task, result shape and save callback (LPR_LEGACY dispatch); the backend source is not available locally (issue #19)

@@ -11,7 +11,7 @@ from test_aiport_api_detection import FRAME, STILL, _ollama_config, _response
 
 CAMERA = "2A1122334455"
 FALLBACK = {"provider_config": {"provider": "ollama", "model": "qwen3-vl:4b-instruct",
-                                "base_url": "http://192.168.0.110:11434",
+                                "base_url": "http://10.77.0.110:11434",
                                 "allow_remote": True, "allow_insecure_http": True},
             "timeout_s": 60, "max_per_hour": 3}
 LOCAL_REPLY = _response(json.dumps({"detections": [
@@ -210,7 +210,7 @@ def test_a_local_openai_compatible_fallback_asks_for_the_schema_as_a_response_fo
     # OpenVINO Model Server on the NAS backend replaces Ollama as the fallback.
     calls = []
     ovms = dict(FALLBACK, provider_config={"provider": "openai-compatible", "model": "qwen3-vl-8b",
-                                           "base_url": "http://172.30.50.13:8000/v3",
+                                           "base_url": "http://10.88.0.13:8000/v3",
                                            "allow_remote": True, "allow_insecure_http": True})
     local = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps({"detections": [
         {"kind": "person", "label": "person", "score": 0.9, "box": [100, 200, 400, 800]}]})}}]}

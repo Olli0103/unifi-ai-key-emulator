@@ -435,7 +435,7 @@ WALK_NEXT = (0.32, 0.28, 0.47, 0.92)
 
 
 def test_sparse_api_samples_confirm_a_walking_person_without_box_overlap():
-    # Flur regression: two paid samples ~2 s apart both report one in-zone
+    # Camera A regression: two paid samples ~2 s apart both report one in-zone
     # person, but the walking person's boxes do not overlap at all.
     strict = CameraPolicyEngine([FIRST], max_track_gap_seconds=20)
     strict.replace_policy(FIRST, policy(FIRST))
@@ -559,7 +559,7 @@ def _multi(camera):
 
 
 def test_a_cat_read_as_animal_then_package_confirms_as_animal():
-    # Esszimmer, 25 Sep 23:38: one moving object was reported once as animal
+    # Camera D, 25 Sep 23:38: one moving object was reported once as animal
     # and three times as package, and no class ever confirmed.
     engine = CameraPolicyEngine([FIRST], max_track_gap_seconds=20, max_center_distance=1.5)
     engine.replace_policy(FIRST, _multi(FIRST))
@@ -615,7 +615,7 @@ def test_ir_cat_read_only_as_package_starts_no_package_and_confirms_as_animal():
     parcel = ObjectObservation("package", "package", 0.9, (0.60, 0.80, 0.70, 0.95))
     cat = ObjectObservation("animal", "cat", 0.85, (0.61, 0.79, 0.71, 0.96))
     night = _night_engine()
-    # Flur 00:47: the cat was read as package in both confirming samples.
+    # Camera A 00:47: the cat was read as package in both confirming samples.
     night.observe(FIRST, (parcel,), now=1, infrared=True)
     assert night.observe(FIRST, (parcel,), now=2, infrared=True) == ()
     assert night.package_ir_held == 1
@@ -692,12 +692,12 @@ def _animal_zone_policy(camera, *, x1, y1, x2, y2):
 
 
 def test_cat_at_the_bottom_edge_enters_animal_on_a_default_inset_zone():
-    # Flur's only zone (Protect's inset full-frame rectangle), 26 Sep 03:25.
+    # Camera A's only zone (Protect's inset full-frame rectangle), 26 Sep 03:25.
     cat = ObjectObservation("animal", "cat", 0.9, (0.40, 0.93, 0.50, 1.0))
-    flur = CameraPolicyEngine([FIRST], max_track_gap_seconds=20, max_center_distance=1.5)
-    flur.replace_policy(FIRST, _animal_zone_policy(FIRST, x1=25, y1=35, x2=976, y2=960))
-    assert flur.observe(FIRST, (cat,), now=1) == ()
-    entered, = flur.observe(FIRST, (cat,), now=3)
+    camera_a = CameraPolicyEngine([FIRST], max_track_gap_seconds=20, max_center_distance=1.5)
+    camera_a.replace_policy(FIRST, _animal_zone_policy(FIRST, x1=25, y1=35, x2=976, y2=960))
+    assert camera_a.observe(FIRST, (cat,), now=1) == ()
+    entered, = camera_a.observe(FIRST, (cat,), now=3)
     assert (entered.change.edge, entered.change.kind) == ("enter", "animal")
     # A zone deliberately drawn 10% in from the border still excludes it.
     inset = CameraPolicyEngine([FIRST], max_track_gap_seconds=20, max_center_distance=1.5)

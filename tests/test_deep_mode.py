@@ -117,8 +117,8 @@ def test_reid_vectors_are_normalized_and_padded_to_the_session_column():
 
 
 def test_deep_config_needs_a_local_reid_server():
-    assert deep_mode.validate_config({"reid_server": "http://172.30.50.14:8190/"}) == {
-        "reid_server": "http://172.30.50.14:8190"}
+    assert deep_mode.validate_config({"reid_server": "http://10.88.0.14:8190/"}) == {
+        "reid_server": "http://10.88.0.14:8190"}
     assert deep_mode.validate_config(None) is None
     for bad in ({"reid_server": "https://reid.example.com"}, {"reid_server": "http://8.8.8.8"},
                 {"reid_server": "http://10.0.0.1:1/x"}, {}, {"reid_server": "http://10.0.0.1", "x": 1},

@@ -40,12 +40,12 @@ The device-side streaming, event-ingress, timebase, PTZ, edge-recording and resu
 
   | Camera | Model | Requested | Main-lens maximum |
   |---|---|---|---|
-  | Flur | G3 Instant | 1920×1080 @ 30 fps | 1920×1080 |
-  | Schlafzimmer | G3 Instant | 1920×1080 @ 30 fps | 1920×1080 |
-  | Büro | G5 Flex | 2688×1512 @ 30 fps | 2688×1512 |
+  | Camera A | G3 Instant | 1920×1080 @ 30 fps | 1920×1080 |
+  | Camera B | G3 Instant | 1920×1080 @ 30 fps | 1920×1080 |
+  | Camera C | G5 Flex | 2688×1512 @ 30 fps | 2688×1512 |
 
   Protect pairs the **main (HQ) channel** at its full resolution, not a lower channel.
-- **NAS AI Ports:** their reserved capacity points match the main channel. That is 5 points (above 1440p) for Einfahrt (G4 Pro), both G4 Bullets, Esszimmer (G4 Instant) and Garage (G4 Dome), and 2 points for Haustür's 1600×1200 main lens. Their exact geometry appears after their next redeploy.
+- **NAS AI Ports:** their reserved capacity points match the main channel. That is 5 points (above 1440p) for Camera F (G4 Pro), both G4 Bullets, Camera D (G4 Instant) and Camera H (G4 Dome), and 2 points for Camera E's 1600×1200 main lens. Their exact geometry appears after their next redeploy.
 - **Recovery:** after the AI Port container restarted on the same identity, Protect re-sent the stream start and the smart policy for all three paired cameras within 30 s (`stream_controls_started: 3`, 3 streams decoding). No re-pairing was needed.
 
 **Not evidenced (`needs_evidence`).**
@@ -57,7 +57,7 @@ The device-side streaming, event-ingress, timebase, PTZ, edge-recording and resu
 
 Read-only, from the signed-in console. No video was exported or transmitted. The probe is Protect's `GET /video/export/estimate` (7.3.60 route): it sizes the recording files in a range, and fails with "No files found" (HTTP 500) when none overlap.
 
-**The restart.** The Mac AI Port container restarted at 17:40:00 UTC and relays Flur, Schlafzimmer and Büro.
+**The restart.** The Mac AI Port container restarted at 17:40:00 UTC and relays Camera A, Camera B and Camera C.
 
 **Five-minute windows, 17:25–17:55 UTC.** All three cameras answer 200 for every window, including the one spanning 17:38–17:43.
 
@@ -65,13 +65,13 @@ Read-only, from the signed-in console. No video was exported or transmitted. The
 
 | Camera | Size estimate per window |
 |---|---|
-| Flur | 1060, 1060, 4231, 7623, 6355, 3857 kB (motion from 17:40) |
-| Büro | 571 kB in every window |
-| Schlafzimmer | 1154 kB in every window |
+| Camera A | 1060, 1060, 4231, 7623, 6355, 3857 kB (motion from 17:40) |
+| Camera C | 571 kB in every window |
+| Camera B | 1154 kB in every window |
 
-- **Reading the sizes:** the constant values for Büro and Schlafzimmer show the estimate reflects file segments, not duration. So this proves **file coverage of every 30-second window**, not bitrate.
-- **Events:** Flur's 5 motion events between 17:30 and 17:50 stay on Flur, one spanning 17:40. Büro and Schlafzimmer had no events. There were no smart events on the three cameras (the household is away).
-- **Pairing and recording settings:** all nine AI Port cameras remain `isPairedWithAiPort: true`, `recordingSettings.mode: adaptive`, `CONNECTED`. The unpaired cameras are Wohnzimmer (G6) and the offline "Wohnzimmer alt".
+- **Reading the sizes:** the constant values for Camera C and Camera B show the estimate reflects file segments, not duration. So this proves **file coverage of every 30-second window**, not bitrate.
+- **Events:** Camera A's 5 motion events between 17:30 and 17:50 stay on Camera A, one spanning 17:40. Camera C and Camera B had no events. There were no smart events on the three cameras (the household is away).
+- **Pairing and recording settings:** all nine AI Port cameras remain `isPairedWithAiPort: true`, `recordingSettings.mode: adaptive`, `CONNECTED`. The unpaired cameras are Camera J (G6) and the offline "Camera J alt".
 
 **Result.** Native recordings of the Mac-paired cameras covered the restart, with no gap of 30 s or more, and events kept their original cameras.
 
@@ -84,17 +84,17 @@ Read-only, from the signed-in console. No video was exported or transmitted. The
 Read-only. Protect camera settings are summarized as zone count, classes and covered area only. The AI Port counters are sanitized.
 
 **Protect zones (7.3.68).**
-- **Smart zones:** every AI Port camera has one smart zone covering **100%** of the frame, except **Flur at 88%**. Flur's is an axis-aligned rectangle inset **2.4–4.0%** on each side: Protect's default rectangle.
+- **Smart zones:** every AI Port camera has one smart zone covering **100%** of the frame, except **Camera A at 88%**. Camera A's is an axis-aligned rectangle inset **2.4–4.0%** on each side: Protect's default rectangle.
 - **None anywhere:** no `excludeZones`, lines or loiter zones.
-- **Privacy masks:** Einfahrt (13.5% and 7.8%), Giebel Vorn (22.2%), Haustür (1.6%) and Giebel hinten (1.6%) have privacy masks. The camera applies these in its stream; they are not part of the smart-detection policy.
-- **Second-lens zones:** Haustür and Garage carry full-area second-lens zones, accepted by the policy parser.
+- **Privacy masks:** Camera F (13.5% and 7.8%), Camera G (22.2%), Camera E (1.6%) and Camera I (1.6%) have privacy masks. The camera applies these in its stream; they are not part of the smart-detection policy.
+- **Second-lens zones:** Camera E and Camera H carry full-area second-lens zones, accepted by the policy parser.
 
-**Effective admission.** Zone vertices within 5% of the frame edge snap to it before the 90% overlap test (the Flur edge correction). So Flur's zone, like all the others, admits the **whole frame**.
+**Effective admission.** Zone vertices within 5% of the frame edge snap to it before the 90% overlap test (the Camera A edge correction). So Camera A's zone, like all the others, admits the **whole frame**.
 
 **AI Port counters since each slot's last restart.**
 - All 9 cameras have enabled 4-class policies with no policy rejection.
 - Zone rejections are **0** on every camera (`outside_zone`, `excluded`, `below_overlap`, `no_class_zone`), while 143 native events were entered and left.
-- API item rejections: `box` 1 at Haustür and 1 at Garage; `kind` 115 and `shape` 1 at Garage; `label:vehicle` 2 at Haustür. Out-of-range boxes are too rare to justify clamping. Garage's unsupported kinds belong to detection vocabulary (#79).
+- API item rejections: `box` 1 at Camera E and 1 at Camera H; `kind` 115 and `shape` 1 at Camera H; `label:vehicle` 2 at Camera E. Out-of-range boxes are too rare to justify clamping. Camera H's unsupported kinds belong to detection vocabulary (#79).
 
 **Tests.** The edge snap is pinned at its boundary (`test_the_frame_edge_snap_stops_at_five_percent`): an inset of exactly 5% snaps, while 5.1% and 6% keep rejecting edge objects.
 

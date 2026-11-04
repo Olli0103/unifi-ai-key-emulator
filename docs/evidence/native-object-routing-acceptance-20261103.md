@@ -104,7 +104,7 @@ was restarted for this routing/verification observation. The separately
 owner-authorized Qwen restart earlier that day is not hidden or presented as
 a whole-system restore drill.
 
-Only the existing owner-controlled Flur test alarm was edited in separate
+Only the existing owner-controlled Camera A test alarm was edited in separate
 bounded tests; the thirty-two original alarm configurations remained exact.
 No old event was replayed and no privacy/camera/model/provider/zone permission
 was expanded. Query-alarm acceptance remains separate from plain Person

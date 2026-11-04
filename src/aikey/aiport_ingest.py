@@ -27,7 +27,7 @@ _MAX_FRAME = 1024 * 1024
 # pipe: faces were analysed on 1280 px frames, so a 4K camera's faces shrank
 # threefold below the size YuNet can use (1 Oct). Detection keeps 1280 px.
 _FULL_MAX_WIDTH = 2688
-# Plate cameras get their native width: a plate needs every pixel (4K Einfahrt).
+# Plate cameras get their native width: a plate needs every pixel (4K Camera F).
 NATIVE_MAX_WIDTH = 3840
 _MAX_FULL_FRAME = 6 * 1024 * 1024
 # A face is scheduled after the detector answers, which can take several
@@ -612,7 +612,7 @@ class AiPortIngress:
                     # failed UiStreamControl. Accept the stream and let the
                     # watch loop connect with backoff, as the relay comes up.
                     # Several streams starting at once can also miss the first
-                    # frame deadline (1 Oct: Garage stayed off after restarts).
+                    # frame deadline (1 Oct: Camera H stayed off after restarts).
                     self._desired_spec = spec
                     self.deferred_starts += 1
                     self._restart_task = asyncio.create_task(self._watch_decoder())

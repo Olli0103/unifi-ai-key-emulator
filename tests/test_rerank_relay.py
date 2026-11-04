@@ -69,5 +69,5 @@ async def test_a_bad_vision_reply_fails_closed_with_503(relay, vision, reply):
 
 
 async def test_the_relay_binds_loopback_on_protects_port():
-    relay = RerankRelay("http://172.30.50.14:8190/")
-    assert (relay.host, relay.port, relay.url) == ("127.0.0.1", 8123, "http://172.30.50.14:8190/v1/rerank")
+    relay = RerankRelay("http://10.88.0.14:8190/")
+    assert (relay.host, relay.port, relay.url) == ("127.0.0.1", 8123, "http://10.88.0.14:8190/v1/rerank")

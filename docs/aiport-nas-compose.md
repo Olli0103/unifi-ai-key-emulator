@@ -1,10 +1,13 @@
 # Multi-instance AI Port network plan for a Linux NAS
 
+For a new installation, follow the [step-by-step Linux guide](aiport-install.md).
+This page is the detailed manifest, reconciliation and rollout reference.
+
 `local-aiport-nas-compose` turns an AI Port capacity plan and already-provisioned private slot identities into a reviewable Docker Compose JSON file. Every selected NAS slot must have a reserved address; later, unselected slots may remain unaddressed. It is a deployment input, not a pairing or feature-parity claim. The candidate runs passively by default. Explicit live detector policies exist for one paired camera and for a camera pool; the NAS manifest does not create those private policies.
 
-Protect expects each AI Port identity at HTTPS port 443 on its own LAN address. The number of instances follows camera resolution and source capacity, not one port per camera. A Linux macvlan network can assign each container a distinct IP and MAC on the NAS LAN. Docker's [macvlan documentation](https://docs.docker.com/engine/network/drivers/macvlan/) requires a real parent interface and warns that the NAS host cannot directly reach its macvlan containers without an additional network path. This mode has been tested on a UGREEN NAS with three concurrently running AI Port instances; that test does not establish feature parity.
+Protect expects each AI Port identity at HTTPS port 443 on its own LAN address. The number of instances follows camera resolution and source capacity, not one port per camera. A Linux macvlan network can assign each container a distinct IP and MAC on the NAS LAN. Docker's [macvlan documentation](https://docs.docker.com/engine/network/drivers/macvlan/) requires a real parent interface and warns that the NAS host cannot directly reach its macvlan containers without an additional network path. Native observations of this network mode are version-specific; they do not establish feature parity or qualify every NAS.
 
-Before generating a manifest, confirm the NAS has Docker Engine/Compose with macvlan support, identify the physical parent interface and subnet/gateway, and reserve each AI Port IP outside DHCP or through the router. Do not treat an unanswered ping as proof an address is free. The existing AI Key IP, NAS IP, gateway, controller IP, and camera IPs cannot be reused. The 24 September lab inventory selected nine connected G3–G5/legacy cameras across four conservatively sized AI Port instances. Three NAS slots were later addressed and started; the existing Mac slot remained separate. Actual stream dimensions still matter to the capacity plan.
+Before generating a manifest, confirm the NAS has Docker Engine/Compose with macvlan support, identify the physical parent interface and subnet/gateway, and reserve each AI Port IP outside DHCP or through the router. Do not treat an unanswered ping as proof an address is free. The existing AI Key IP, NAS IP, gateway, controller IP, and camera IPs cannot be reused. Plan only the cameras and addresses in your installation. Actual stream dimensions determine capacity; a display label alone is insufficient.
 
 Create a fresh, saved `local-aiport-plan` result with an address for every slot selected in this NAS manifest. Other planned slots can wait for their reservations. Preserve the prior plan when adding slots so that an adopted identity does not silently move. Provision each selected NAS slot with `local-aiport-provision` in a private, persistent directory owned by the intended non-root container UID/GID. The generator verifies the stored MAC, device certificate, controller pin, fixed IP, and file ownership; it will not create or rotate identities. An already-running Mac slot can be excluded while later slots are prepared for the NAS:
 
@@ -23,7 +26,7 @@ local-aiport-nas-compose \
 
 The output is mode 600 and never overwritten if it differs. Compose gets one service per selected slot, a static LAN IP and the slot's stored MAC, fixed HTTPS 443 inside the container, a writable private state mount, a read-only root filesystem, dropped Linux capabilities, and a namespaced unprivileged-port sysctl. It publishes no host ports. A separately armed stream diagnostic opens TCP 7447 on that same container IP; no extra host port is needed. [Docker Compose network attributes](https://docs.docker.com/reference/compose-file/services/#networks) and [network IPAM](https://docs.docker.com/reference/compose-file/networks/#ipam) support this layout. The NAS runtime must still prove that its kernel accepts the sysctl and that each service can bind 443 as the selected non-root user.
 
-Apple `container image save` emits an OCI archive. Before using the UGREEN Docker GUI's image import path, convert that local archive to a Docker archive with `skopeo copy --format v2s2 oci-archive:SOURCE.tar docker-archive:DEST.tar:IMAGE_TAG`, then inspect the resulting `manifest.json` for the intended tag and `linux/amd64` image configuration. A `.docker.tar` filename alone does not establish its format. The converted image was imported through the UGREEN Docker GUI and used by a running NAS slot on 24 September.
+Apple `container image save` emits an OCI archive. Before using the NAS vendor Docker GUI's image import path, convert that local archive to a Docker archive with `skopeo copy --format v2s2 oci-archive:SOURCE.tar docker-archive:DEST.tar:IMAGE_TAG`, then inspect the resulting `manifest.json` for the intended tag and `linux/amd64` image configuration. A `.docker.tar` filename alone does not establish its format. The converted image was imported through the NAS vendor Docker GUI and used by a running NAS slot on 24 September.
 
 If the NAS already has a suitable macvlan, add `--external-network EXISTING_NETWORK_NAME` to both generation and reconciliation commands. The manifest then joins that network instead of creating a second one on the same LAN. Before reading or starting containers, reconciliation inspects the existing Docker network and requires the declared macvlan driver, parent interface, subnet and gateway. It also checks that each container is attached to the named network at its planned IP and MAC. The NAS Docker UI may show a friendly network-card label; use the actual parent interface reported by `docker network inspect` for `--parent`. This check does not reserve an IP in the router or prove that Protect can reach the container.
 
@@ -116,15 +119,10 @@ The command cannot prove that a router reservation exists, that the NAS kernel a
 
 An existing slot may contain a valid camera and detector policy. Host-side identity and Compose checks validate the Linux decoder path without requiring that executable on the host. Before starting a selected slot, reconciliation matches every configured camera MAC to that slot's fresh Protect inventory assignment and requires its Protect stream source to be the configured controller. It allows a partially configured slot but rejects a camera assigned to another slot.
 
-The 24 September isolated NAS probes verified that the exported ONNX model is readable by the non-root candidate after its model file was changed from UID 1000/GID 10, mode 0770 to UID 1000/GID 10001, mode 0640. They also verified CPU execution of three synthetic frames, with warm calls taking 0.288 s and 0.434 s. OpenVINO GPU initialization failed with `GPU is not available` despite render-node access. The GPU image lacks an Intel OpenCL compute runtime; its installation and an actual GPU inference pass remain open. Neither probe started the staged NAS AI Port slot, paired a camera, or changed the existing Mac candidate.
-
-Automatic DHCP reservation, native detection persistence, and sustained model operation remain open. The 24 September lab run adopted three NAS instances in Protect and paired two cameras to each. Protect showed all three online with the intended assignments. After the startup-probe image was deployed to all three, UGREEN reported each service running that image and each pinned health endpoint reported a connected control channel, two active streams, and two streams decoding frames. Three of the six camera policies were accepted. Slot `.136` rejected both policies as `unsupported_smart_feature:types`; slot `.138` rejected one as `unsupported_smart_feature:regions`. These rejection categories do not reveal the requested types or region contents.
-
-Separately, the Mac ran `ApiObjectDetector` against OpenAI `gpt-6-luna` using two generated 64×64 blank JPEGs and the existing private provider key; the endpoint returned a valid empty detection result. With separate operator approval, one recorded 640×360 legacy-camera test frame returned one Person observation at or above the configured 0.8 score threshold. These tests do not prove that Protect accepts a native event.
-
-An offline replay of the two saved Flur frames found that the previous motion gate skipped the first frame and saw no qualifying change in the second. The detector now makes two startup observations per active camera, still subject to its durable 12-request-per-camera rolling-hour cap. Replaying those frames with a synthetic Person response produced two observations and one tracker `enter` candidate without contacting a provider. The new image was deployed on all three NAS instances. A pinned post-deploy health read showed the two accepted `.137` camera policies each at 10 of 12 vision requests remaining, and the accepted `.138` policy at 8 of 12. It reported no API failures, accepted object observations, emitted smart events, or snapshot uploads. The budget counters evidence admitted provider requests, but they do not prove a particular response or native Protect event.
-
-No real smart event from these six cameras has yet been shown to persist on a Protect timeline. The next protocol work is to identify the unsupported type and region *shapes* without retaining private policy contents, then implement only settings the detector can actually enforce. A live frame containing a target object is still needed to test the accepted policies end to end. This is evidence of adoption, pairing, stream ingress, bounded provider requests, and specific policy blockers, not AI Port feature parity. The existing Mac instance remained paired to three other legacy cameras in Protect, but its stream health was not reverified in this run.
+Platform/model observations remain in the [dated evidence records](evidence/README.md).
+Do not infer GPU availability from device-node access or a model file's presence.
+Verify the actual runtime, file permissions and model backend in isolation first.
+Then qualify adoption, pairing and a saved native event separately.
 
 ## Slot allowlist diff against Protect pairings
 
@@ -185,15 +183,15 @@ The rollout file is private (mode 600):
  "new_slots": {"target": "nas", "label_prefix": "nas-slot-", "state_parent": "/…/aiport-slots",
                "addresses": [], "health_port": 443, "template": "nas-slot-2"},
  "compose": {"path": "/…/aiport-slots/compose-live.yaml", "template": "aiport_slot_2",
-             "state_parent": "/home/olli/aiport-deployment", "health_timeout_seconds": 1800,
-             "live_image": "local-aiport:nas-amd64-ai-port-plates-r25-20260926"}}
+             "state_parent": "/srv/aikey-deployment", "health_timeout_seconds": 1800,
+             "live_image": "local-aiport:reviewed-source"}}
 ```
 
 `new_slots.reserved_addresses` lists addresses a new slot may never take: the controller, the AI Key, the NAS and every Protect camera.
 
 **Steps that still need a person.** The rollout never adopts, pairs, unpairs, redeploys or reserves addresses:
 1. **Address:** reserve a LAN address outside DHCP in UniFi Network, then add it to `new_slots.addresses`.
-2. **NAS:** upload the new slot's state directory (or an edited `config.json`) and the Compose copy through the UGREEN app, redeploy `local-aiport-nas`, or restart the one slot, without pulling images.
+2. **NAS:** upload the new slot's state directory (or an edited `config.json`) and the Compose copy through the NAS management interface, redeploy `local-aiport-nas`, or restart the one slot, without pulling images.
 3. **Adoption:** adopt the new AI Port in Protect (Devices, then the pending AI Port, then Adopt).
 4. **Pairing:** pair each camera with that AI Port in Protect. A camera is never moved between AI Ports automatically, because the native pairing and rollback contract (#6) is not proven.
 5. **Verify:** run `--verify`, and confirm in Protect that the AI Port is `CONNECTED` with its intended cameras.
@@ -225,23 +223,10 @@ A NAS slot's canonical config (`state/aiport-slots/slot-N/config.json`) is what 
 
 **Always manual:** reserving an address, uploading slot state, redeploying the NAS project, adopting the AI Port in Protect, and pairing cameras.
 
-**Live state on 27 Sep:**
-- the nine-camera, four-slot plan is a no-op (revision `3ff9bd41d50a`);
-- a hypothetical extra camera needs an address first;
-- with one, `nas-slot-5` is planned entirely manual, because `nas-slot-2` has no verified `deployed_config` yet.
+## Verify your own deployment
 
-**nas-slot-2 deployed copy (27 Sep 2026): needs_evidence.**
-- **Why it isn't read:** the NAS file cannot be read without a UGREEN NAS sign-in, and both Chrome profiles show the login page.
-- **Corroboration (not verification):**
-  - The upload staging copy (`aiport-deployment/slot-2/config.json` in the iCloud Drive of the `claw` Mac, over SMB) is byte-identical to the canonical config. Its slot 3 and 4 copies match the deployed r25 configs.
-  - Slot 2's pinned health agrees on 2 streams, `live_pool` on the vision API, no request cap, and an event budget.
-- **Decision:** Olli chose to leave `deployed_config` unset, so new NAS slots from this template stay manual (`template_deployed_config_unset`).
-- **To verify:** sign in to the NAS, read `slot-2/config.json` read-only, compare its hash with the canonical copy, and only then set `deployed_config`.
-
-### r26 build context (staged 27 Sep 2026, not deployed)
-- **Contents:** `state/aiport-nas-build-r26/` holds a Dockerfile `FROM local-aiport:nas-amd64-ai-port-plates-r25-20260926` plus `aiport_api_detection.py` (d26c3e4). The r25 image already carries HEAD's copy of every other AI Port module.
-- **The only change:** fixed-category counts of rejected model kinds and labels (#79).
-- **To deploy (owner):**
-  1. Upload both files to the NAS build context.
-  2. Change only the image tags in Compose to r26, and redeploy without pulling.
-  3. Point `compose.live_image` and each slot's `deployed_config` at the r26 copies, then run the rollout dry run to confirm a no-op.
+After any deployment, compare the exact deployed configuration with the copy
+used by the planner. Confirm image/source identity, private ownership, expected
+streams and native Protect pairings. Do not substitute an old staging directory,
+upload receipt or health count for deployed-file verification. Keep unresolved
+drift manual and retain prior images/state until native acceptance is complete.

@@ -38,21 +38,21 @@ The Key now derives these flags from what it is configured to serve. An explicit
 ## Readback after the reconnect (16:52)
 
 - **Protect `aiprocessors` flags:** `supportTts` true, `supportFaceRecognition` true, `supportRecognizeAnything` true, `supportImageSearch` true, `supportLicensePlateRecognition` false.
-- **Settings and pairings:** unchanged (speech: Wohnzimmer; face: Wohnzimmer; plates: disabled).
+- **Settings and pairings:** unchanged (speech: Camera J; face: Camera J; plates: disabled).
 - **Camera Coverage tooltip:** Computer Vision Enhancement **10**, Speech to Text **1** (was Off), License Plate Recognition **Off**, Face Recognition **0** (was Off).
 
-**Why face shows 0.** The face line counts *legacy* cameras under Legacy Camera Enhancement, which admits only unpaired G4/G5 and Doorbell Lite models (`isFaceDetectionSupportedViaAiprocessor`). The only such camera here is "Wohnzimmer alt": offline, and not selected. The Wohnzimmer G6 is not counted because it reports `face` itself. The Key's face results on its person regions are still saved as native face thumbnails (#20).
+**Why face shows 0.** The face line counts *legacy* cameras under Legacy Camera Enhancement, which admits only unpaired G4/G5 and Doorbell Lite models (`isFaceDetectionSupportedViaAiprocessor`). The only such camera here is "Camera J alt": offline, and not selected. The Camera J G6 is not counted because it reports `face` itself. The Key's face results on its person regions are still saved as native face thumbnails (#20).
 
 **Plate recognition through the AI Key is blocked by eligibility, not code.**
 - `isLprDetectionSupportedViaAiprocessor` requires an unpaired G4/G5 or Doorbell Lite. Every connected G4/G5 is paired to an AI Port, and the G6 is not on the list.
-- Paired cameras get plates from the AI Port instead: the native `licensePlate` on an Einfahrt track, #19.
-- Unblocking would need Olli to unpair a G4/G5 camera, or to reconnect "Wohnzimmer alt" and select it. Only then would an AI Key plate reader be worth enabling and verifying.
+- Paired cameras get plates from the AI Port instead: the native `licensePlate` on an Camera F track, #19.
+- Unblocking would need the operator to unpair a G4/G5 camera, or to reconnect "Camera J alt" and select it. Only then would an AI Key plate reader be worth enabling and verifying.
 
 ## Fresh native results after the fix (backlog)
 
-- **Object indexing:** fresh after the fix. Three Garage vehicle search snapshots at 17:16:36 are searchable in Protect, and "a car" ranks them above "person" and "an animal".
-- **Speech and faces:** Protect sent no Wohnzimmer speech or person tasks between 16:52 and 17:55, and Olli reports the household is away. A **fresh** indoor transcript and a fresh AI Key face after the flag change are `needs_evidence` (backlog), as is re-reading the Camera Coverage tooltip after such events. Earlier native transcripts (#15) and AI Key faces (#20) stand.
-- **Names and plate accuracy:** stay `needs_evidence` until Olli validates them.
+- **Object indexing:** fresh after the fix. Three Camera H vehicle search snapshots at 17:16:36 are searchable in Protect, and "a car" ranks them above "person" and "an animal".
+- **Speech and faces:** Protect sent no Camera J speech or person tasks between 16:52 and 17:55, and the operator reports the household is away. A **fresh** indoor transcript and a fresh AI Key face after the flag change are `needs_evidence` (backlog), as is re-reading the Camera Coverage tooltip after such events. Earlier native transcripts (#15) and AI Key faces (#20) stand.
+- **Names and plate accuracy:** stay `needs_evidence` until the operator validates them.
 
 ## Fresh native speech results after the fix (read back 27 Sep 2026)
 
@@ -62,13 +62,13 @@ Read-only, from Protect's API (the private API in a signed-in console session). 
   - flags: `supportTts` true, `supportFaceRecognition` true, `supportRecognizeAnything` true, `supportImageSearch` true, `supportRetroactiveProcessing` true, `supportLicensePlateRecognition` false;
   - `speechToTextSettings` enabled for 1 camera;
   - `recentProcessedSTTTasks` is 226.
-- **Events since 20 Sep:** 226 audio events with speech state `done`, all on Wohnzimmer (the configured speech camera), and 124 `failed`.
+- **Events since 20 Sep:** 226 audio events with speech state `done`, all on Camera J (the configured speech camera), and 124 `failed`.
 - **Persisted transcripts after the fix:** the newest 60 done events all ended after the 16:52 local status change. On a fresh API read, **40 of them return stored transcript segments** (up to 31 per event, fields `start`, `end`, `text`, `id`). The newest with segments ended 26 Sep 21:42 UTC.
 - **Backlog:** this closes the backlogged "fresh indoor transcript after the flag change" item.
 - **Still open:**
   - a fresh AI Key face result after the fix;
   - re-reading the Camera Coverage tooltip in the UI;
-  - names and plate accuracy (Olli).
+  - names and plate accuracy (the operator).
 - **Reverification:** Protect's `reverificationSettings` is enabled for all cameras. The Key's `find_anything.reverification` opt-in stays off, so it refuses reverification tasks and events keep their type. That is the N13 boundary, and nothing was changed.
 
 ## Face detection, grouping and the tooltip's zero (#20, 27 Sep 2026)
@@ -77,10 +77,10 @@ Read-only from Protect 7.3.68. Only counts were read; group IDs were compared in
 
 **The tooltip's 0 is eligibility, not behavior.**
 - The face line counts *legacy* cameras that can use the Key's face recognition (`isFaceDetectionSupportedViaAiprocessor`: unpaired G4/G5/Doorbell Lite).
-- The Wohnzimmer G6 is excluded because it detects faces itself: `face` is both a hardware smart type and enabled in its inventory.
+- The Camera J G6 is excluded because it detects faces itself: `face` is both a hardware smart type and enabled in its inventory.
 - The Key's face setting still covers it, so Protect sent the Key face tasks for it.
 
-**What happened on Wohnzimmer (smart events since the 26 Sep 16:52 local fix).**
+**What happened on Camera J (smart events since the 26 Sep 16:52 local fix).**
 - **Events:** 93 smart events.
 - **Camera faces:** 93, clustered by Protect into 42 groups.
 - **AI Key faces:** 65, 0 named. They landed in **65 distinct groups**:
@@ -99,7 +99,7 @@ Read-only from Protect 7.3.68. Only counts were read; group IDs were compared in
   - The Key recognizes 1 native-face camera.
 
 **needs_evidence.**
-- **Fresh readback:** new Wohnzimmer events with camera faces and no new AI Key faces, plus the Key's `skipped_native_face_camera` counter. Wohnzimmer has had no smart events since 23:05 UTC, and the household is away.
+- **Fresh readback:** new Camera J events with camera faces and no new AI Key faces, plus the Key's `skipped_native_face_camera` counter. Camera J has had no smart events since 23:05 UTC, and the household is away.
 - **Existing groups:** the 65 singleton groups made earlier stay in Protect. Removing them is a face-gallery action for the owner.
 - **Named recognition:** it still requires an owner-named group on a camera the Key may serve. No such legacy camera is eligible today.
 
@@ -109,20 +109,20 @@ Read-only from Protect 7.3.68. Counts only; no plate text or images.
 
 - **AI Key LPR is Off by eligibility.**
   - `supportLicensePlateRecognition` is false and `licensePlateRecognitionSettings.enabled` is false.
-  - `isLprDetectionSupportedViaAiprocessor` admits only unpaired G4/G5/Doorbell Lite cameras. Every connected G4/G5 is paired to an AI Port; the only unpaired G4 ("Wohnzimmer alt") is offline.
-  - The one camera with plate hardware, the Wohnzimmer G6, is unpaired, indoors and not an AI Key candidate.
+  - `isLprDetectionSupportedViaAiprocessor` admits only unpaired G4/G5/Doorbell Lite cameras. Every connected G4/G5 is paired to an AI Port; the only unpaired G4 ("Camera J alt") is offline.
+  - The one camera with plate hardware, the Camera J G6, is unpaired, indoors and not an AI Key candidate.
 - **AI Port plates.**
-  - In 7 days there is 1 native plate event: Einfahrt, 26 Sep 13:58 UTC.
+  - In 7 days there is 1 native plate event: Camera F, 26 Sep 13:58 UTC.
   - It carries `licensePlate` in the event's smart types and a plate on the vehicle thumbnail, and no separate `licensePlate` thumbnail.
-  - Since then Einfahrt had 8 vehicle events and Garage 13, all between 16:00 and 22:00 local, most after dark, and **0 plate events**.
+  - Since then Camera F had 8 vehicle events and Camera H 13, all between 16:00 and 22:00 local, most after dark, and **0 plate events**.
 - **Gap fixed: config drift.** The canonical slot 3 and 4 configs lacked the `plate_cameras` that the deployed r25 configs carry. Any allowlist or provider edit uploaded from them would have silently turned plate reading off.
   - The planner now reports `slot_config_drift` and blocks automated edits on a drifted slot.
   - The canonical copies were re-synced from the deployed ones (backups `config.bak-before-plate-sync-20260927.json`).
   - The live dry run went from a no-op, to a drift report with `deployed_config` set, back to a no-op with the original plan revision.
   - Nothing was uploaded to the NAS, and no pairing changed.
 - **needs_evidence.**
-  - **Transport:** a fresh native plate event on Einfahrt or Garage, on the original camera timeline (a daytime vehicle with a legible plate).
-  - **Plate accuracy:** needs Olli's ground truth.
+  - **Transport:** a fresh native plate event on Camera F or Camera H, on the original camera timeline (a daytime vehicle with a legible plate).
+  - **Plate accuracy:** needs the operator's ground truth.
 
 ## Transcript search on Protect 7.3.68 (#15, 27 Sep 2026)
 
@@ -133,9 +133,9 @@ Read-only, in a signed-in console session. Only counts, event-ID match status an
 - **Web UI (7.3.68 code, loaded on the Find Anything page):** it has a per-event transcript viewer (`getTranscriptions` → `GET events/{id}/transcriptions?camera=`, `TranscriptText`) and `hasTranscript` (the event labels include `transcript`). No route searches transcript text.
 
 **Native test.**
-- **Target:** a stored Wohnzimmer `smartAudioDetect` (`alrmSpeak`) event with `sttSearchable: true`. A common 6-letter word from its stored transcript was picked in the page from a fixed stopword list and never printed. The control was a nonsense token.
+- **Target:** a stored Camera J `smartAudioDetect` (`alrmSpeak`) event with `sttSearchable: true`. A common 6-letter word from its stored transcript was picked in the page from a fixed stopword list and never printed. The control was a nonsense token.
 - **`detection-nls`:** 200 with 50 image objects for both term and control. The target event was **not** returned. It searches `ramDetections` object vectors only.
-- **`GET events` (Wohnzimmer, target window ±1 min):** 3 events for every variant, identical to the window alone:
+- **`GET events` (Camera J, target window ±1 min):** 3 events for every variant, identical to the window alone:
   - `searchText` with the term, and with the control;
   - `keyword` with the control;
   - `labels` set to `transcript`, and to a bogus label;
@@ -175,7 +175,7 @@ Read-only, in a signed-in console session. Only counts, event-ID match status an
 
 **Live acceptance (28 Sep 2026, 13:33 UTC onward).**
 - **Cause of the earlier failures:** Protect's `ds.log` (support file) logged `invalid type: floating point 0.906, expected u8`. The detection service parses `faceMask.confidence` and `qualityScore` as u8 (0..100) and dropped the whole event message (ce31675).
-- **Büro, after the fix:** the event 13:33–13:37 UTC was saved as `face+person`, with face objects in the track. It has a face thumbnail assigned to a face group, the person linked through `associatedFaceTrackerID`, and all four snapshots uploaded.
-- **Grouping:** since then there are 4 face thumbnails on paired cameras (Büro 3, Haustür 1) in 3 distinct groups, so one group holds two thumbnails. Whether those came from separate visits was not established; the Büro thumbnails may belong to one event.
+- **Camera C, after the fix:** the event 13:33–13:37 UTC was saved as `face+person`, with face objects in the track. It has a face thumbnail assigned to a face group, the person linked through `associatedFaceTrackerID`, and all four snapshots uploaded.
+- **Grouping:** since then there are 4 face thumbnails on paired cameras (Camera C 3, Camera E 1) in 3 distinct groups, so one group holds two thumbnails. Whether those came from separate visits was not established; the Camera C thumbnails may belong to one event.
 - **Rollout:** Face is on for all nine paired cameras. NAS runs `local-aiport:nas-amd64-face-r32-20260928`; the Mac AI Port runs `local-aiport:face5-arm64-20260928` with `max_events_per_hour` 30 (owner-approved).
 - **Still `needs_evidence`:** a repeat visit joining an existing group, naming a group, and later recognition by name.

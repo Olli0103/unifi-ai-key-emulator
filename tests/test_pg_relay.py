@@ -43,7 +43,7 @@ async def test_an_allowed_peer_reaches_postgres_and_bytes_pass_unchanged(tmp_pat
 
 async def test_other_sources_are_refused_before_any_upstream_connection(tmp_path):
     upstream, upstream_port = await echo_server()
-    relay, server, port = await relay_on(upstream_port, ["192.168.0.1/32"], tmp_path)
+    relay, server, port = await relay_on(upstream_port, ["10.77.0.1/32"], tmp_path)
     try:
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
         assert await reader.read(10) == b""
@@ -75,12 +75,12 @@ async def test_capacity_and_upstream_failures_are_counted(tmp_path):
 
 
 def test_admission_is_exact():
-    relay = Relay(("127.0.0.1", 1), ("127.0.0.1", 2), ["192.168.0.1/32", "192.168.64.0/24"])
-    assert relay.admits("192.168.0.1") and relay.admits("192.168.64.125")
-    assert relay.admits("::ffff:192.168.0.1")
-    for peer in ("192.168.0.2", "192.168.65.1", "10.0.0.1", "not-an-ip", ""):
+    relay = Relay(("127.0.0.1", 1), ("127.0.0.1", 2), ["10.77.0.1/32", "192.168.64.0/24"])
+    assert relay.admits("10.77.0.1") and relay.admits("192.168.64.125")
+    assert relay.admits("::ffff:10.77.0.1")
+    for peer in ("10.77.0.2", "192.168.65.1", "10.0.0.1", "not-an-ip", ""):
         assert not relay.admits(peer)
-    for allowed in ([], ["192.168.0.0/16"], ["192.168.0.1/24"]):
+    for allowed in ([], ["192.168.0.0/16"], ["10.77.0.1/24"]):
         with pytest.raises(ValueError):
             Relay(("127.0.0.1", 1), ("127.0.0.1", 2), allowed)
 
@@ -88,10 +88,10 @@ def test_admission_is_exact():
 def test_the_launch_agent_keeps_exactly_these_arguments_running():
     import plistlib
     from aikey.pg_relay import launch_agent
-    args = ["--listen", "192.168.0.98:5432", "--target", "192.168.64.1:55432",
-            "--allow", "192.168.0.1/32", "--status", "/private/state/relay status.json"]
+    args = ["--listen", "10.77.0.98:5432", "--target", "192.168.64.1:55432",
+            "--allow", "10.77.0.1/32", "--status", "/private/state/relay status.json"]
     agent = plistlib.loads(launch_agent(args).encode())
-    assert agent["Label"] == "com.olli.local-aikey-pg-relay"
+    assert agent["Label"] == "org.local.aikey-pg-relay"
     assert agent["ProgramArguments"][0] == "/usr/bin/python3"
     assert agent["ProgramArguments"][1].endswith("pg_relay.py")
     assert agent["ProgramArguments"][2:] == args

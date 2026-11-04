@@ -441,7 +441,7 @@ def release(state_dir: Path, name: str) -> None:
         _release_locked(directory, name)
 
 
-def launch_agent(state_dir: Path, python: str, label: str = "com.olli.local-apple-supervise") -> str:
+def launch_agent(state_dir: Path, python: str, label: str = "org.local.aikey-supervise") -> str:
     """launchd agent XML running one ``tick`` a minute and at login."""
     from xml.sax.saxutils import escape
     args = [python, "-m", "aikey.apple_supervisor", "tick", "--state-dir", str(state_dir)]

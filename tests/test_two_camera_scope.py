@@ -106,7 +106,7 @@ async def test_each_camera_spends_only_its_own_permit_and_replays_after_restart(
 
 
 def test_description_only_scope_is_refused_because_protect_7_3_does_not_save_it(tmp_path):
-    # Wohnzimmer (G6), 23 Sep: the description-only callback was accepted,
+    # Camera J (G6), 23 Sep: the description-only callback was accepted,
     # ramState became "done", but ramDescription stayed empty.
     config = defaults(tmp_path / "state", "020000000001")
     config["worker"]["test_scopes"] = [

@@ -10,14 +10,14 @@ body:
     id: commit
     attributes:
       label: Emulator commit or image tag
-      placeholder: e.g. 41d5840 or local-aikey:findanything17
+      placeholder: Exact full source commit SHA or image digest
     validations:
       required: true
   - type: input
     id: protect
     attributes:
       label: Protect version
-      placeholder: e.g. 7.3.68
+      placeholder: Exact installed version, e.g. 7.3.74
     validations:
       required: true
   - type: dropdown

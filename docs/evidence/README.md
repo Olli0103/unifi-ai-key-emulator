@@ -1,5 +1,11 @@
 # Research provenance
 
+Public records use anonymized camera labels and infrastructure examples. Their
+original dates, failure outcomes and acceptance limits remain historical facts.
+They are not literal deployment manifests, private network inventories or proof
+that anonymized example addresses were tested. Start with the
+[deployment guide](../deployment.md) for current installation instructions.
+
 These records describe the interface observations used by the implementation. They contain package references and hashes. They are not proof of permission to analyze firmware, a complete code-origin audit, or an organizationally separate clean-room process. Those questions remain open in the [provenance record](../legal/provenance.md).
 
 - [Adoption investigation](adoption-evidence.md)

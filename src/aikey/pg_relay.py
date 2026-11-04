@@ -149,7 +149,7 @@ def _endpoint(value):
     return host, port
 
 
-def launch_agent(argv, python="/usr/bin/python3", label="com.olli.local-aikey-pg-relay"):
+def launch_agent(argv, python="/usr/bin/python3", label="org.local.aikey-pg-relay"):
     """launchd agent XML that keeps this relay running from login on.
 
     KeepAlive restarts it after an exit, including a failed bind while the
@@ -175,8 +175,8 @@ def launch_agent(argv, python="/usr/bin/python3", label="com.olli.local-aikey-pg
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="aikey-pg-relay")
-    parser.add_argument("--listen", required=True, help="AI Key address and port, e.g. 192.168.0.98:5432")
-    parser.add_argument("--target", required=True, help="host-only PostgreSQL, e.g. 192.168.64.1:55432")
+    parser.add_argument("--listen", required=True, help="AI Key address and port, e.g. 192.0.2.10:5432")
+    parser.add_argument("--target", required=True, help="host-only PostgreSQL, e.g. 192.0.2.20:55432")
     parser.add_argument("--allow", action="append", required=True,
                         help="allowed source network; repeat (console /32, container bridge /24)")
     parser.add_argument("--max-connections", type=int, default=32)

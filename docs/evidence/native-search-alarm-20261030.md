@@ -139,7 +139,7 @@ player verification is recorded separately with the Port routing evidence.
 
 ## Remaining acceptance
 
-Issues #6/#14/#21/#26/#79 remain open. Controlled Flur recovery confirmation,
+Issues #6/#14/#21/#26/#79 remain open. Controlled Camera A recovery confirmation,
 outside-zone/nonmatch controls, query-alarm outage/recovery, image-search quality,
 representative relevance and comparative quality are not inferred from these
 observations. No capability flag or compatibility status was broadened.

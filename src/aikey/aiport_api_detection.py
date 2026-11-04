@@ -46,7 +46,7 @@ _DNS_RETRY_SECONDS = 60
 # about); matches the motion stop hold in aiport_motion.
 _FRESH_QUIET_SECONDS = 8.0
 # With an optional request cap, the share of each camera's hourly cap kept
-# for new scenes. Without it people moving through Flur spent 16 of 20
+# for new scenes. Without it people moving through Camera A spent 16 of 20
 # requests in one visit and left the camera blind for 12 motion events.
 _FRESH_RESERVE_DIVISOR = 3
 # Without a request cap, provider failures (HTTP errors, timeouts, invalid
@@ -75,7 +75,7 @@ _PROMPT = (
     "Box values are fractions of image width and height in left, top, right, bottom order. "
     "Use kind person, vehicle, animal or package. Valid labels are person; bicycle, car, "
     "motorcycle, bus, truck; bird, cat, dog, horse, sheep, cow; package. "
-    # A cat sitting in Flur's night-IR frame came back as package and
+    # A cat sitting in Camera A's night-IR frame came back as package and
     # person, never animal (25 Sep 2026, user-confirmed ground truth).
     "Frames are often grayscale night infrared from indoor cameras, where pets are common. "
     "A person has a human body shape: head, torso and limbs. A cat or dog, even curled up, "
@@ -371,7 +371,7 @@ def _frame_mode(frame: bytes) -> str:
 
 # The detection schema allows 20 compact detections (~30-35 tokens each), so
 # a reply needs up to ~700 output tokens. A smaller configured budget made
-# busy scenes (Garage, ~5 vehicles per reply) end "incomplete" and fail.
+# busy scenes (Camera H, ~5 vehicles per reply) end "incomplete" and fail.
 _DETECTION_OUTPUT_TOKENS = 1024
 # Fixed, content-free categories for a refused reply.
 _FAILURE_REASONS = (
@@ -385,7 +385,7 @@ _PLATE_CROP_KEYS = ("requests", "read", "complete", "improved", "reused", "no_pl
                     "failed", "budget_denied", "full_resolution", "recently_read", "conflicts")
 # Real confidences from a local COCO detector (YOLOX-S on the NAS NPU). The
 # vision model reports 0.98-0.99 for everything, so Protect's second-stage
-# window never saw a track (two Büro trials, 1 Oct). The vision model still
+# window never saw a track (two Camera C trials, 1 Oct). The vision model still
 # decides what exists; the score detector only says how sure that is.
 SCORE_KINDS = frozenset({"person", "vehicle", "animal"})
 SCORE_UNCONFIRMED = 0.5
@@ -1297,7 +1297,7 @@ class ApiObjectDetector:
                         item: ObjectObservation) -> ObjectObservation | None:
         """Second-stage check of one package on a close-up crop.
 
-        A cat sitting in Flur's night-IR frame was reported as a package, even
+        A cat sitting in Camera A's night-IR frame was reported as a package, even
         with pet guidance in the prompt. A package is kept only when a crop of
         its box is again classified as a package; a pet becomes an animal and
         anything else, or a failed check, is dropped rather than published.

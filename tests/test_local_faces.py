@@ -268,7 +268,7 @@ async def test_the_face_server_returns_boxes_and_embeddings_only():
 
 async def test_without_face_regions_the_face_is_searched_in_person_regions_and_linked(
         controller, tmp_path):
-    # Wohnzimmer, 26 Sep: recognition tasks carried personMeta but no faceMeta.
+    # Camera J, 26 Sep: recognition tasks carried personMeta but no faceMeta.
     FaceStore(tmp_path).enroll("Synthetic Alice", ALICE, embedding_space='a' * 64)
     command = task(face_meta=False)
     command["payload"]["personMeta"] = [
