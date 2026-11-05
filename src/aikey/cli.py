@@ -33,6 +33,12 @@ def _parser():
     setup.add_argument("--pin-only-hostname", action="store_true", help="Disable hostname matching, requiring the explicit pin")
     setup.add_argument("--request-mp4-exports", action="store_true")
     setup.add_argument("--ffmpeg-path", type=Path, help="Absolute path in the eventual runtime")
+    setup.add_argument("--worker-timeout-seconds", type=int,
+                       help="Explicit worker request budget, 1–600 seconds; default unchanged")
+    setup.add_argument("--caption-timeout-seconds", type=int,
+                       help="Explicit automatic-caption budget, 1–600 seconds, bounded by worker timeout")
+    setup.add_argument("--max-images", type=int,
+                       help="Explicit sampled-image limit per request, 1–16; default unchanged")
     setup.add_argument("--factory-enrollment-seconds", type=int, default=0,
                        help="Opt in to factory adoption for 1–600 seconds from preparation; requires the verified controller pin")
     setup.add_argument("--linux-discovery", action="store_true",

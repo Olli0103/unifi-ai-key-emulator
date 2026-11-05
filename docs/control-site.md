@@ -460,6 +460,14 @@ local-aikey-control init --state-dir /private/admin-state
 
 For unattended installation, add `--generate`. This writes a mode-600 `admin-bootstrap-password` file and prints only its path. Move the password into your password manager and delete the plaintext bootstrap file after signing in; keep the password record and signing key. No API key or administrator password is printed by the site.
 
+Initialize this separate administrator state before `run`; creating a Key does
+not initialize administrator credentials. Some NAS filesystems override the
+requested directory mode. If `init` refuses a newly created, owned, empty admin
+directory, verify that exact directory and set its mode to700 before retrying
+`init`. Never reset a directory that already contains administrator files. The
+refusal occurs before credentials are written; do not relax the private-directory
+check or apply recursive permission changes to existing state.
+
 For an AI-Key-only installation, no placeholder AI Port config or device is needed:
 
 ```sh
