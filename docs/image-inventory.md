@@ -98,6 +98,11 @@ size skip is disabled: an individual notice above 2 MiB or a complete report
 above 32 MiB refuses publication instead. The disposable CI job remains the
 scanner's process/memory/disk containment boundary. Known matching native file
 records and installed Python RECORD entries must have captured contents.
+Direct notice symlinks are resolved through a bounded graph of the scanned
+image's own metadata to an already captured allowlisted notice; their effective
+bytes are retained at the alias path too. Missing/cyclic/private targets fail.
+Empty notices require a regular-file size-zero record and the scanner's actual
+SHA-256 of empty bytes; they remain visibly empty, not an inferred license grant.
 Finalization validates the original file bytes again, and release preparation
 refuses notice additions/removals/content changes against the qualified build.
 These selected paths are not proof that every dependency ships all required

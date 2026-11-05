@@ -867,3 +867,78 @@ def test_incomplete_file_catalog_cannot_be_published(selection):
     native['descriptor']['configuration']['files']['selection'] = selection
     with pytest.raises(check.CheckError, match='full_file_metadata_required'):
         check.validate(native, cdx, identity, expected, converted=converted)
+
+
+def notice_link_inventory():
+    _, _, native, _, _, _ = inventory()
+    target = '/usr/share/doc/fictional-runtime/copyright'
+    alias = '/usr/share/doc/fictional-alias/copyright'
+    native['files'] = [
+        {'location': {'path': target}, 'metadata': {'type': 'RegularFile', 'size': 7},
+         'contents': base64.b64encode(b'fiction').decode(),
+         'digests': [{'algorithm': 'sha256', 'value': check.digest(b'fiction')}]},
+        {'location': {'path': alias}, 'metadata': {'type': 'SymbolicLink',
+         'linkDestination': '../fictional-runtime/copyright', 'size': 0}},
+    ]
+    return native, target, alias
+
+
+def test_actual_notice_symlink_is_bound_to_captured_image_target_bytes():
+    native, target, alias = notice_link_inventory()
+    result = {r['path']: r for r in check.notice_files(native)}
+    assert set(result) == {target, alias}
+    assert result[alias] == dict(result[target], path=alias)
+    # A directory alias can participate in the recorded image link chain.
+    native['files'][1]['metadata']['linkDestination'] = '../directory-alias/copyright'
+    native['files'].append({'location': {'path': '/usr/share/doc/directory-alias'},
+                           'metadata': {'type': 'SymbolicLink',
+                                        'linkDestination': 'fictional-runtime'}})
+    assert check.notice_files(native) == sorted(result.values(), key=lambda r: r['path'])
+
+
+@pytest.mark.parametrize('fault', ['broken', 'cycle', 'private', 'directory', 'no_destination',
+                                   'nonstring', 'control', 'target_contents_missing'])
+def test_notice_links_cannot_invent_contents_or_read_outside_image_notice_scope(fault):
+    native, target, alias = notice_link_inventory()
+    metadata = native['files'][1]['metadata']
+    if fault == 'broken':
+        metadata['linkDestination'] = '../missing/copyright'
+    elif fault == 'cycle':
+        metadata['linkDestination'] = alias
+    elif fault == 'private':
+        metadata['linkDestination'] = '/state/LICENSE'
+    elif fault == 'directory':
+        metadata['linkDestination'] = '/usr/share/doc'
+    elif fault == 'no_destination':
+        del metadata['linkDestination']
+    elif fault == 'nonstring':
+        metadata['linkDestination'] = 3
+    elif fault == 'control':
+        metadata['linkDestination'] = '\x00' + target
+    else:
+        del native['files'][0]['contents']
+    with pytest.raises(check.CheckError, match='notice_link_refused|notice_content_missing'):
+        check.notice_files(native)
+
+
+@pytest.mark.parametrize('fault', [None, 'size', 'hash', 'missing_hash', 'type'])
+def test_empty_notice_requires_actual_empty_regular_file_hash(fault):
+    _, _, native, _, _, _ = inventory()
+    path = '/usr/share/doc/fictional-empty/copyright'
+    row = {'location': {'path': path}, 'metadata': {'type': 'RegularFile', 'size': 0},
+           'digests': [{'algorithm': 'sha256', 'value': check.digest(b'')}]}
+    native['files'] = [row]
+    if fault == 'size':
+        row['metadata']['size'] = 1
+    elif fault == 'hash':
+        row['digests'][0]['value'] = '0' * 64
+    elif fault == 'missing_hash':
+        row['digests'] = []
+    elif fault == 'type':
+        row['metadata']['type'] = 'FIFONode'
+    if fault:
+        with pytest.raises(check.CheckError, match='notice_content_missing'):
+            check.notice_files(native)
+    else:
+        assert check.notice_files(native) == [
+            {'path': path, 'sha256': check.digest(b''), 'size': 0, 'base64': ''}]
