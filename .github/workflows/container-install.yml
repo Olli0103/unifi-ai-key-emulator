@@ -62,5 +62,7 @@ jobs:
             ${{ runner.temp }}/container-results/image-inventory.json
             ${{ runner.temp }}/container-results/aikey-sbom.cdx.json
             ${{ runner.temp }}/container-results/aiport-sbom.cdx.json
+            ${{ runner.temp }}/container-results/aikey-licenses.json
+            ${{ runner.temp }}/container-results/aiport-licenses.json
           if-no-files-found: error
           retention-days: 14

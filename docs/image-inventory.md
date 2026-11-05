@@ -42,7 +42,14 @@ third-party Node action, signing key or publishing permission.
 
 Scanning uses squashed installed-image scope. Remote license enrichment, local
 Go/Maven home caches, update checks and persistent scanner cache are disabled;
-the scanner receives only the minimal host environment. The owned temporary
+the scanner receives only the minimal host environment. License content is
+requested with Syft's `license.content: all`. Its pinned CycloneDX converter
+does not carry those original texts, so a separate allowlisted package/license
+companion retains available UTF-8 content, deduplicated by SHA-256. A hash-named
+license must have exact matching text; missing or changed content refuses
+collection. Declared license names may have no original text and remain visibly
+distinct from retained text. No SPDX alias or distribution approval is invented.
+The owned temporary
 native report/configuration is removed after the scan. A child scan has a
 five-minute deadline; the disposable VM and job deadline remain the hard
 process/disk containment boundary, not a new general-purpose supervisor.
@@ -53,8 +60,22 @@ Each architecture's existing `container-install-*` artifact contains exactly:
 
 - `summary.json`: the complete original install/cleanup result;
 - `image-inventory.json`: source, image IDs, architecture/profile, scanner
-  version, package counts, missing-SPDX/PURL counts, SBOM hashes and cleanup binding;
-- `aikey-sbom.cdx.json` and `aiport-sbom.cdx.json`: the standard image inventories.
+  version, package counts, missing-SPDX/PURL counts, SBOM/license-attachment hashes,
+  retained text counts/bytes and cleanup binding;
+- `aikey-sbom.cdx.json` and `aiport-sbom.cdx.json`: the standard image inventories;
+- `aikey-licenses.json` and `aiport-licenses.json`: the selected package declarations
+  and available original license texts, bound to source, image, native-report
+  digest, architecture, run, profile and matching CycloneDX digest.
+
+Inventory and summary receipts use schema version 2; old text-free receipts
+are not silently accepted as evidence for this new handoff. Finalization reads
+the attachments back and verifies bytes, subject, content hashes and references.
+Release-candidate preparation also compares the package/text catalogue against
+the qualified installation artifact before admitting a rebuilt image. This is
+evidence preservation, not completion of the maintainer's license review.
+The [pinned-tool reproduction](evidence/image-license-text-20261105.md) records
+why the companion is needed and separates synthetic qualification from real
+image review.
 
 No raw native scanner report (which includes image environment/history), image
 archive, fixture state, keys, camera media or private logs are uploaded. Only

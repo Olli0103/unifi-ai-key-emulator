@@ -1,7 +1,7 @@
 """Catalogue local immutable images with pinned Syft; never grant release approval.
 
-Only CycloneDX and sanitized subject/count receipts are public outputs. Syft's
-native intermediate includes image configuration/history and stays temporary.
+Only CycloneDX, selected package-license evidence and sanitized subject/count
+receipts are public outputs. Native image configuration/history stays temporary.
 """
 from __future__ import annotations
 
@@ -31,7 +31,8 @@ ARCHIVES = {
     'arm64': 'ace61b9397ae28189c674ae332d67a8074dafd71e87724dfb8b22412d8253bb5',
 }
 IMAGE_ID = re.compile(r'sha256:[0-9a-f]{64}')
-RECEIPT = 'aikey-image-inventory/1'
+RECEIPT = 'aikey-image-inventory/2'
+LICENSE_REVIEW = 'aikey-image-license-review/1'
 LIMIT = 32 * 1024 * 1024
 OFFLINE_CONFIG = '''check-for-app-update: false
 parallelism: 2
@@ -39,7 +40,7 @@ cache:
   dir: ''
   ttl: 0s
 license:
-  content: none
+  content: all
 golang:
   search-local-mod-cache-licenses: false
   search-local-vendor-licenses: false
@@ -288,6 +289,102 @@ def validate(native, cdx, identity, expected, *, converted):
             'conversion_verified': True, 'licenses_reviewed': False, 'release_approved': False}
 
 
+def license_review(native, identity, *, native_sha256, sbom_sha256):
+    """Keep exact available texts without publishing native image configuration.
+
+    Syft 1.56's CycloneDX conversion omits license contents even when the
+    scanner retained them. This companion is evidence, never a legal verdict.
+    Declared SPDX names can still have no original text; retain that distinction.
+    """
+    require(native['descriptor']['configuration'].get('licenses', {}).get('include-content') == 'all',
+            'image_inventory_license_content_disabled')
+    texts, packages = {}, []
+    for artifact in native['artifacts']:
+        licenses = artifact.get('licenses', [])
+        require(isinstance(licenses, list) and len(licenses) <= 256,
+                'image_inventory_license_records_refused')
+        records = []
+        for item in licenses:
+            require(isinstance(item, dict), 'image_inventory_license_records_refused')
+            value, expression = item.get('value'), item.get('spdxExpression', '')
+            kind, content = item.get('type'), item.get('contents')
+            require(isinstance(value, str) and 0 < len(value) <= 65536
+                    and isinstance(expression, str) and len(expression) <= 65536
+                    and kind in {'declared', 'concluded'}
+                    and (content is None or isinstance(content, str) and 0 < len(content.encode()) <= LIMIT),
+                    'image_inventory_license_records_refused')
+            text_hash = digest(content.encode()) if content is not None else None
+            if value.startswith('sha256:'):
+                require(text_hash is not None and value == 'sha256:' + text_hash,
+                        'image_inventory_license_text_missing_or_changed')
+            if text_hash is not None:
+                texts[text_hash] = content
+            records.append({'value': value, 'spdx_expression': expression,
+                            'type': kind, 'text_sha256': text_hash})
+        packages.append({'name': artifact['name'], 'version': artifact['version'],
+                         'type': artifact['type'], 'purl': artifact.get('purl') or None,
+                         'licenses': records})
+    result = {'schema': LICENSE_REVIEW, **identity, 'native_report_sha256': native_sha256,
+              'sbom_sha256': sbom_sha256, 'packages': packages, 'texts': texts,
+              'licenses_reviewed': False, 'release_approved': False}
+    require(len(json.dumps(result, ensure_ascii=True).encode()) <= LIMIT,
+            'image_inventory_license_review_too_large')
+    return result
+
+
+def read_license_review(path, receipt):
+    raw = read(path, LIMIT)
+    require(digest(raw) == receipt['license_review_sha256'], 'image_inventory_saved_licenses_changed')
+    value = json_bytes(raw)
+    subject = ('image_id', 'revision', 'architecture', 'nonce', 'profile')
+    require(set(value) == {'schema', *subject, 'native_report_sha256', 'sbom_sha256',
+                          'packages', 'texts', 'licenses_reviewed', 'release_approved'}
+            and value['schema'] == LICENSE_REVIEW and value['licenses_reviewed'] is False
+            and value['release_approved'] is False and value['sbom_sha256'] == receipt['sbom_sha256']
+            and all(value[key] == receipt[key] for key in subject)
+            and re.fullmatch('[0-9a-f]{64}', value['native_report_sha256'])
+            and len(value['packages']) == receipt['package_count']
+            and type(receipt['license_texts_retained']) is int
+            and len(value['texts']) == receipt['license_texts_retained']
+            and type(receipt['license_text_bytes']) is int
+            and sum(len(text.encode()) for text in value['texts'].values()) == receipt['license_text_bytes']
+            and all(digest(text.encode()) == sha for sha, text in value['texts'].items()),
+            'image_inventory_saved_license_review_refused')
+    references = set()
+    for package in value['packages']:
+        require(set(package) == {'name', 'version', 'type', 'purl', 'licenses'},
+                'image_inventory_saved_license_review_refused')
+        for item in package['licenses']:
+            require(set(item) == {'value', 'spdx_expression', 'type', 'text_sha256'}
+                    and item['type'] in {'declared', 'concluded'},
+                    'image_inventory_saved_license_review_refused')
+            sha = item['text_sha256']
+            if sha is not None:
+                require(sha in value['texts'], 'image_inventory_license_reference_missing')
+                references.add(sha)
+            if item['value'].startswith('sha256:'):
+                require(sha is not None and item['value'] == 'sha256:' + sha,
+                        'image_inventory_license_text_missing_or_changed')
+    require(references == set(value['texts']), 'image_inventory_license_text_unreferenced')
+    return value
+
+
+def publish_catalog(path, raw):
+    """Create-only bounded inventory bytes; small control receipts keep their own limit."""
+    require(isinstance(raw, bytes) and 0 < len(raw) <= LIMIT, 'image_inventory_publication_too_large')
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'wb') as output:
+        output.write(raw)
+        output.flush()
+        os.fsync(output.fileno())
+    fd = os.open(Path(path).parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    require(read(path, LIMIT) == raw, 'image_inventory_publication_uncertain')
+
+
 def collect(args):
     git_context(args.repository, args.revision, args.nonce)
     expected = expected_python(args.source)
@@ -320,18 +417,21 @@ def collect(args):
         # and must reproduce the full public report except fresh UUID/time.
         command([str(tool), 'convert', str(native), '--config', str(config), '--quiet',
                  '--output', 'cyclonedx-json=' + str(converted)], env=env, limit=65536, timeout=60)
-        public = json_file(cdx)
-        receipt = validate(json_file(native), public, identity, expected, converted=json_file(converted))
+        public, native_data = json_file(cdx), json_file(native)
+        receipt = validate(native_data, public, identity, expected, converted=json_file(converted))
         target = Path(args.results) / (args.profile + '-sbom.cdx.json')
-        # Publish full standard metadata only after validating both outputs.
         raw = read(cdx, LIMIT)
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, 'wb') as output:
-            output.write(raw)
-            output.flush()
-            os.fsync(output.fileno())
-        require(read(target, LIMIT) == raw, 'image_inventory_publication_uncertain')
-        publish(Path(args.results) / (args.profile + '-inventory.json'), receipt | {'sbom_sha256': digest(raw)})
+        review = license_review(native_data, identity, native_sha256=digest(read(native, LIMIT)),
+                                sbom_sha256=digest(raw))
+        # Publish full standard metadata only after validating both outputs.
+        publish_catalog(target, raw)
+        review_path = Path(args.results) / (args.profile + '-licenses.json')
+        publish_catalog(review_path, (json.dumps(review, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode())
+        require(json_file(review_path) == review, 'image_inventory_publication_uncertain')
+        publish(Path(args.results) / (args.profile + '-inventory.json'), receipt | {
+            'sbom_sha256': digest(raw), 'license_review_sha256': digest(read(review_path, LIMIT)),
+            'license_texts_retained': len(review['texts']),
+            'license_text_bytes': sum(len(text.encode()) for text in review['texts'].values())})
 
 
 def finalize(results, revision, architecture, nonce):
@@ -347,7 +447,8 @@ def finalize(results, revision, architecture, nonce):
         fields = {'schema', 'image_id', 'revision', 'architecture', 'nonce', 'profile', 'scanner', 'scanner_version',
                   'package_count', 'package_types', 'packages_without_spdx_expression',
                   'runtime_lock_packages_verified', 'licenses_reviewed', 'release_approved', 'sbom_sha256',
-                  'operating_system', 'packages_without_purl', 'conversion_verified'}
+                  'operating_system', 'packages_without_purl', 'conversion_verified',
+                  'license_review_sha256', 'license_texts_retained', 'license_text_bytes'}
         require(set(value) == fields and value['schema'] == RECEIPT and value['revision'] == revision
                 and value['architecture'] == architecture and value['nonce'] == nonce and value['profile'] == profile
                 and IMAGE_ID.fullmatch(value['image_id']) and value['scanner'] == 'syft'
@@ -371,9 +472,10 @@ def finalize(results, revision, architecture, nonce):
                 and 0 < value['runtime_lock_packages_verified'] <= counts['python'], 'image_inventory_saved_counts_refused')
         raw = read(results / (profile + '-sbom.cdx.json'), LIMIT)
         require(digest(raw) == value['sbom_sha256'], 'image_inventory_saved_sbom_changed')
+        read_license_review(results / (profile + '-licenses.json'), value)
         records[profile] = value
     require(records['aikey']['image_id'] != records['aiport']['image_id'], 'image_inventory_cross_profile_image')
-    return {'schema': 'aikey-image-inventory-summary/1', 'revision': revision, 'architecture': architecture,
+    return {'schema': 'aikey-image-inventory-summary/2', 'revision': revision, 'architecture': architecture,
             'nonce': nonce, 'profiles': records, 'install_cases_finished': install_summary['cases_finished'],
             'cleanup_verified': True, 'licenses_reviewed': False, 'release_approved': False}
 
