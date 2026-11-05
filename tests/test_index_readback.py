@@ -27,7 +27,7 @@ class Native:
         self.conditions = {}
         self.negative_rows = []
 
-    async def search(self, text, *, min_similarity):
+    async def search(self, text, *, min_similarity, **scope):
         self.calls.append(('search', text, min_similarity))
         return {'detections': deepcopy(self.rows if text == 'a red toy car' else self.negative_rows),
                 'searchCondition': dict(self.conditions)}

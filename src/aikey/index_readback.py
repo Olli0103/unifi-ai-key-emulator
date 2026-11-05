@@ -150,7 +150,8 @@ async def native_readback(plan: NativeReadbackPlan, native, *, runtime):
     await runtime_check()
     outcomes = []
     for query in plan.value['queries']:
-        response = await native.search(query['text'], min_similarity=query['min_similarity'])
+        scope = {k: query[k] for k in ('camera_id', 'start_ms', 'end_ms') if query[k] is not None}
+        response = await native.search(query['text'], min_similarity=query['min_similarity'], **scope)
         if not isinstance(response, dict) or not isinstance(response.get('detections'), list):
             raise ReadbackError('The native search response is invalid')
         conditions = response.get('searchCondition')

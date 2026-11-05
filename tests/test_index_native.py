@@ -174,3 +174,20 @@ async def test_bad_object_references_are_refused_before_requests(tmp_path, monke
             with pytest.raises(NativeIndexError, match='admission is invalid'):
                 await native.search('unrelated', min_similarity=0)
         assert len(seen) == 3  # Login/bootstrap/logout, no attempted source/search read.
+
+
+async def test_frozen_native_scope_is_sent_to_actual_pinned_endpoint(tmp_path, monkeypatch):
+    async def search(request):
+        authorized(request)
+        assert dict(request.query) == {'searchText': 'a train', 'minSimilarity': '50',
+            'cameras': 'camera-a', 'start': '110', 'end': '130', 'ignoreTimeFilterFromText': 'true'}
+        return web.json_response({'detections': []})
+    async with controller(tmp_path, monkeypatch, additional_routes=[
+            web.get('/proxy/protect/api/detection-nls', search)]) as (reader, seen, _):
+        native = index_session(reader)
+        async with native:
+            assert await native.search('a train', min_similarity=50, camera_id='camera-a',
+                                       start_ms=110, end_ms=130) == {'detections': []}
+            with pytest.raises(NativeIndexError, match='scope'):
+                await native.search('a train', min_similarity=50, start_ms=110)
+        assert native.logout_acknowledged

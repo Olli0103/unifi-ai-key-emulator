@@ -189,13 +189,23 @@ class NativeIndexSession:
                     'end': str(end), 'cameras': self._id(camera_id), 'offset': str(offset),
                     'limit': str(limit), 'ignoreTimeFilterFromText': 'true'})
 
-    async def search(self, text, *, min_similarity):
+    async def search(self, text, *, min_similarity, camera_id=None, start_ms=None, end_ms=None):
         if (not isinstance(text, str) or not text.strip() or len(text) > 1024
                 or any(ord(c) < 32 for c in text)
                 or type(min_similarity) is not int or not 1 <= min_similarity <= 100):
             raise NativeIndexError('The fixed-threshold native search admission is invalid')
-        return await self._json('/proxy/protect/api/detection-nls', 2*1024*1024,
-            params={'searchText': text, 'minSimilarity': str(min_similarity)})
+        if ((camera_id is not None and (not isinstance(camera_id, str) or not _ID.fullmatch(camera_id)))
+                or (start_ms is None) != (end_ms is None)
+                or any(x is not None and (type(x) is not int or not 0 <= x <= 2**53-1)
+                       for x in (start_ms, end_ms))
+                or (start_ms is not None and start_ms > end_ms)):
+            raise NativeIndexError('The fixed native search scope is invalid')
+        params = {'searchText': text, 'minSimilarity': str(min_similarity)}
+        if camera_id is not None:
+            params['cameras'] = camera_id
+        if start_ms is not None:
+            params.update(start=str(start_ms), end=str(end_ms), ignoreTimeFilterFromText='true')
+        return await self._json('/proxy/protect/api/detection-nls', 2*1024*1024, params=params)
 
 
     async def search_sessions(self, text):
