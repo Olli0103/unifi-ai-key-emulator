@@ -72,8 +72,42 @@ package:
 '''
 # Zero disables Syft's silent size-based omission. Our bounded report reader
 # and per-file limit refuse oversized evidence instead of publishing a subset.
-OFFLINE_CONFIG += 'file:\n  content:\n    skip-files-above-size: 0\n    globs:\n' + ''.join(
+OFFLINE_CONFIG += ('file:\n  metadata:\n    selection: all\n'
+                   '  content:\n    skip-files-above-size: 0\n    globs:\n') + ''.join(
     '      - ' + json.dumps(pattern) + '\n' for pattern in NOTICE_GLOBS)
+
+
+def python_native_paths(native):
+    """Require actual image hashes, not just wheel RECORD claims.
+
+    Syft's default owned-by-package selection omits Python extension and
+    bundled-library bytes even when the Python cataloger lists them in RECORD.
+    File metadata is captured for the entire controlled image; file *contents*
+    remain limited to the existing notice allowlist.
+    """
+    paths = set()
+    for artifact in native['artifacts']:
+        if artifact.get('type') != 'python':
+            continue
+        metadata = artifact.get('metadata', {})
+        entries = metadata.get('files', [])
+        require(isinstance(entries, list) and len(entries) <= 100000,
+                'image_inventory_native_paths_refused')
+        for entry in entries:
+            require(isinstance(entry, dict) and isinstance(entry.get('path'), str),
+                    'image_inventory_native_paths_refused')
+            path = entry['path']
+            if not re.search(r'(?i)(?:\.so(?:\.[A-Za-z0-9_-]+)*|\.(?:dll|dylib|pyd|exe|a|lib))$', path):
+                continue
+            root = metadata.get('sitePackagesRootPath')
+            require(isinstance(root, str) and re.fullmatch(
+                r'/usr/local/lib/python[0-9.]+/site-packages', root)
+                and len(path) <= 4096 and not path.startswith('/')
+                and all(part not in ('', '.', '..') for part in path.split('/'))
+                and all(ord(char) >= 32 for char in path),
+                'image_inventory_native_paths_refused')
+            paths.add(root + '/' + path)
+    return paths
 
 
 def notice_path(path):
@@ -112,6 +146,8 @@ def validate_notices(rows):
 
 def notice_files(native):
     rows, expected = [], set()
+    items = {item.get('location', {}).get('path'): item for item in native.get('files', [])}
+    require(len(items) == len(native.get('files', [])), 'image_inventory_notice_paths_ambiguous')
     # Installed Python RECORD entries independently expose missing captures.
     # Do not invent required notices for packages whose metadata lists none.
     for artifact in native['artifacts']:
@@ -125,9 +161,17 @@ def notice_files(native):
                         expected.add(path)
     for item in native.get('files', []):
         path = item.get('location', {}).get('path')
-        if notice_path(path):
+        if notice_path(path) and item.get('metadata', {}).get('type') != 'Directory':
             expected.add(path)
         if 'contents' not in item:
+            # The real content cataloger omits empty regular files. Require
+            # the separate byte-reading hasher's exact empty-file witness.
+            metadata = item.get('metadata', {})
+            hashes = {entry['algorithm']: entry['value'] for entry in item.get('digests', [])}
+            if (notice_path(path) and metadata.get('type') == 'RegularFile'
+                    and type(metadata.get('size')) is int and metadata['size'] == 0
+                    and hashes.get('sha256') == digest(b'')):
+                rows.append({'path': path, 'sha256': digest(b''), 'size': 0, 'base64': ''})
             continue
         content = item['contents']
         require(notice_path(path) and isinstance(content, str)
@@ -140,6 +184,37 @@ def notice_files(native):
         require('sha256' not in hashes or hashes['sha256'] == digest(raw),
                 'image_inventory_notice_bytes_changed')
         rows.append({'path': path, 'sha256': digest(raw), 'size': len(raw), 'base64': content})
+    validate_notices(rows)
+    captured = {row['path']: row for row in rows}
+    for path in sorted(expected - captured.keys()):
+        # Full metadata also exposes direct copyright symlinks. Resolve only
+        # the image's own bounded metadata graph to an already captured notice;
+        # never open a host path or replace a missing regular file's contents.
+        if items.get(path, {}).get('metadata', {}).get('type') != 'SymbolicLink':
+            continue
+        target, seen = path, set()
+        for _ in range(32):
+            require(target not in seen, 'image_inventory_notice_link_refused')
+            seen.add(target)
+            parts = target.split('/')
+            links = ['/'.join(parts[:i]) for i in range(2, len(parts) + 1)
+                     if items.get('/'.join(parts[:i]), {}).get('metadata', {}).get('type') == 'SymbolicLink']
+            if not links:
+                require(notice_path(target) and target in captured,
+                        'image_inventory_notice_link_refused')
+                rows.append(dict(captured[target], path=path))
+                break
+            prefix = links[0]
+            destination = items[prefix]['metadata'].get('linkDestination')
+            require(isinstance(destination, str) and 0 < len(destination) <= 4096
+                    and all(ord(char) >= 32 for char in destination),
+                    'image_inventory_notice_link_refused')
+            target = posixpath.normpath(posixpath.join(
+                posixpath.dirname(prefix), destination) + target[len(prefix):])
+            require(target.startswith('/') and len(target) <= 4096,
+                    'image_inventory_notice_link_refused')
+        else:
+            raise CheckError('image_inventory_notice_link_refused')
     validate_notices(rows)
     require(expected == {row['path'] for row in rows}, 'image_inventory_notice_content_missing')
     return sorted(rows, key=lambda row: row['path'])
@@ -291,6 +366,8 @@ def validate(native, cdx, identity, expected, *, converted):
             and len(tools) == 1 and tools[0].get('name') == 'syft' and tools[0].get('version') == VERSION,
             'image_inventory_cyclonedx_subject_mismatch')
     artifacts, all_components = native['artifacts'], cdx['components']
+    require(native['descriptor']['configuration'].get('files', {}).get('selection') == 'all',
+            'image_inventory_full_file_metadata_required')
     require(isinstance(artifacts, list) and isinstance(all_components, list)
             and 1 <= len(artifacts) <= 10000 and len(all_components) <= 100000,
             'image_inventory_packages_refused')
@@ -305,6 +382,7 @@ def validate(native, cdx, identity, expected, *, converted):
             'image_inventory_os_formats_disagree')
     files = {row['id']: row for row in native.get('files', [])}
     seen = set()
+    hashed_paths = set()
     components = []
     for row in all_components:
         kind = row.get('type')
@@ -321,10 +399,13 @@ def validate(native, cdx, identity, expected, *, converted):
             require(isinstance(hashes.get('sha256'), str)
                     and re.fullmatch('[0-9a-f]{64}', hashes['sha256'])
                     and cdx_hashes.get('SHA-256') == hashes['sha256'], 'image_inventory_file_formats_disagree')
+            hashed_paths.add(row['name'])
         elif kind in ('library', 'application', 'framework'):
             components.append(row)
         else:
             require(kind == 'operating-system', 'image_inventory_component_type_refused')
+    require(python_native_paths(native) <= hashed_paths,
+            'image_inventory_native_payload_hash_missing')
     def key(row, origin):
         values = tuple(row.get(field) for field in ('name', 'version', 'purl'))
         name, version, purl = values

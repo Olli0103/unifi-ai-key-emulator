@@ -71,7 +71,8 @@ def inventory(profile="aikey"):
         "descriptor": {
             "name": "syft",
             "version": check.VERSION,
-            "configuration": {"search": {"scope": "squashed"}, "licenses": {"include-content": "all"}},
+            "configuration": {"search": {"scope": "squashed"}, "licenses": {"include-content": "all"},
+                              "files": {"selection": "all"}},
         },
         "schema": {"version": "16.1.12"},
         "distro": {"id": "debian", "versionID": "12"},
@@ -795,3 +796,149 @@ def test_notice_path_scope_accepts_original_license_names(path):
                                  '/usr/share/common-licenses/../private.env', '/usr/share/doc//copyright'])
 def test_notice_path_scope_excludes_private_and_ambiguous_paths(path):
     assert not check.notice_path(path)
+
+
+def native_payload_inventory(filename='fictional.libs/libexample.so.1.1.1k'):
+    _, identity, native, cdx, expected, _ = inventory()
+    root = '/usr/local/lib/python3.12/site-packages'
+    native['artifacts'][0]['metadata'] = {
+        'sitePackagesRootPath': root, 'files': [{'path': filename}]}
+    path = root + '/' + filename
+    sha = check.digest(b'fictional non-executable library bytes')
+    native['files'] = [{'id': 'native-payload', 'location': {'path': path},
+                        'digests': [{'algorithm': 'sha256', 'value': sha}]}]
+    cdx['components'].append({'type': 'file', 'bom-ref': 'native-payload',
+                              'name': path, 'hashes': [{'alg': 'SHA-256', 'content': sha}]})
+    return identity, native, cdx, expected
+
+
+@pytest.mark.parametrize('filename', [
+    'fictional.libs/libexample.so.1.1.1k', 'fictional/extension.so',
+    'fictional/native.DLL', 'fictional/native.dylib', 'fictional/native.pyd',
+    'fictional/launcher.exe', 'fictional/static.a', 'fictional/static.lib',
+])
+def test_native_python_payload_requires_read_hash_in_both_formats(filename):
+    identity, native, cdx, expected = native_payload_inventory(filename)
+    assert check.validate(native, cdx, identity, expected,
+                          converted=deepcopy(cdx))['package_count'] == 5
+    # Real Syft default: RECORD still claims this file, while BOTH outputs
+    # omit its bytes. Agreement between two incomplete formats is not enough.
+    native['files'] = []
+    cdx['components'].pop()
+    with pytest.raises(check.CheckError, match='native_payload_hash_missing'):
+        check.validate(native, cdx, identity, expected, converted=deepcopy(cdx))
+
+
+@pytest.mark.parametrize('fault', ['wrong_path', 'missing_cdx', 'no_digest', 'different_digest'])
+def test_native_python_payload_cannot_be_replaced_by_unrelated_file_evidence(fault):
+    identity, native, cdx, expected = native_payload_inventory()
+    if fault == 'wrong_path':
+        native['files'][0]['location']['path'] = '/unrelated.so'
+        cdx['components'][-1]['name'] = '/unrelated.so'
+    elif fault == 'missing_cdx':
+        cdx['components'].pop()
+    elif fault == 'no_digest':
+        native['files'][0]['digests'] = []
+    else:
+        cdx['components'][-1]['hashes'][0]['content'] = '0' * 64
+    with pytest.raises(check.CheckError, match='native_payload_hash_missing|file_formats_disagree'):
+        check.validate(native, cdx, identity, expected, converted=deepcopy(cdx))
+
+
+@pytest.mark.parametrize('path', ['../private.so', '/private.so', 'part//native.so',
+                                  'part/./native.so', 'part/../native.so', 'part/\x00native.so'])
+def test_native_record_paths_do_not_escape_or_alias_image_roots(path):
+    identity, native, cdx, expected = native_payload_inventory(path)
+    with pytest.raises(check.CheckError, match='native_paths_refused'):
+        check.validate(native, cdx, identity, expected, converted=deepcopy(cdx))
+
+
+def test_source_only_package_does_not_invent_native_payload_requirement():
+    identity, native, cdx, expected = native_payload_inventory('fictional/module.py')
+    native['files'] = []
+    cdx['components'].pop()
+    assert check.validate(native, cdx, identity, expected,
+                          converted=deepcopy(cdx))['package_count'] == 5
+
+
+@pytest.mark.parametrize('selection', [None, '', 'owned-by-package', 'none'])
+def test_incomplete_file_catalog_cannot_be_published(selection):
+    _, identity, native, cdx, expected, converted = inventory()
+    native['descriptor']['configuration']['files']['selection'] = selection
+    with pytest.raises(check.CheckError, match='full_file_metadata_required'):
+        check.validate(native, cdx, identity, expected, converted=converted)
+
+
+def notice_link_inventory():
+    _, _, native, _, _, _ = inventory()
+    target = '/usr/share/doc/fictional-runtime/copyright'
+    alias = '/usr/share/doc/fictional-alias/copyright'
+    native['files'] = [
+        {'location': {'path': target}, 'metadata': {'type': 'RegularFile', 'size': 7},
+         'contents': base64.b64encode(b'fiction').decode(),
+         'digests': [{'algorithm': 'sha256', 'value': check.digest(b'fiction')}]},
+        {'location': {'path': alias}, 'metadata': {'type': 'SymbolicLink',
+         'linkDestination': '../fictional-runtime/copyright', 'size': 0}},
+    ]
+    return native, target, alias
+
+
+def test_actual_notice_symlink_is_bound_to_captured_image_target_bytes():
+    native, target, alias = notice_link_inventory()
+    result = {r['path']: r for r in check.notice_files(native)}
+    assert set(result) == {target, alias}
+    assert result[alias] == dict(result[target], path=alias)
+    # A directory alias can participate in the recorded image link chain.
+    native['files'][1]['metadata']['linkDestination'] = '../directory-alias/copyright'
+    native['files'].append({'location': {'path': '/usr/share/doc/directory-alias'},
+                           'metadata': {'type': 'SymbolicLink',
+                                        'linkDestination': 'fictional-runtime'}})
+    assert check.notice_files(native) == sorted(result.values(), key=lambda r: r['path'])
+
+
+@pytest.mark.parametrize('fault', ['broken', 'cycle', 'private', 'directory', 'no_destination',
+                                   'nonstring', 'control', 'target_contents_missing'])
+def test_notice_links_cannot_invent_contents_or_read_outside_image_notice_scope(fault):
+    native, target, alias = notice_link_inventory()
+    metadata = native['files'][1]['metadata']
+    if fault == 'broken':
+        metadata['linkDestination'] = '../missing/copyright'
+    elif fault == 'cycle':
+        metadata['linkDestination'] = alias
+    elif fault == 'private':
+        metadata['linkDestination'] = '/state/LICENSE'
+    elif fault == 'directory':
+        metadata['linkDestination'] = '/usr/share/doc'
+    elif fault == 'no_destination':
+        del metadata['linkDestination']
+    elif fault == 'nonstring':
+        metadata['linkDestination'] = 3
+    elif fault == 'control':
+        metadata['linkDestination'] = '\x00' + target
+    else:
+        del native['files'][0]['contents']
+    with pytest.raises(check.CheckError, match='notice_link_refused|notice_content_missing'):
+        check.notice_files(native)
+
+
+@pytest.mark.parametrize('fault', [None, 'size', 'hash', 'missing_hash', 'type'])
+def test_empty_notice_requires_actual_empty_regular_file_hash(fault):
+    _, _, native, _, _, _ = inventory()
+    path = '/usr/share/doc/fictional-empty/copyright'
+    row = {'location': {'path': path}, 'metadata': {'type': 'RegularFile', 'size': 0},
+           'digests': [{'algorithm': 'sha256', 'value': check.digest(b'')}]}
+    native['files'] = [row]
+    if fault == 'size':
+        row['metadata']['size'] = 1
+    elif fault == 'hash':
+        row['digests'][0]['value'] = '0' * 64
+    elif fault == 'missing_hash':
+        row['digests'] = []
+    elif fault == 'type':
+        row['metadata']['type'] = 'FIFONode'
+    if fault:
+        with pytest.raises(check.CheckError, match='notice_content_missing'):
+            check.notice_files(native)
+    else:
+        assert check.notice_files(native) == [
+            {'path': path, 'sha256': check.digest(b''), 'size': 0, 'base64': ''}]
