@@ -5,6 +5,7 @@ An exclusive new directory is the admission marker. Partial failures deliberatel
 remain for inspection: never reuse, reset or repair a possibly adopted identity.
 """
 
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -59,6 +60,18 @@ def prepare(args, inference):
     config["controller"].update(host=args.controller, protect_version=args.protect_version,
                                 control_profile=args.control_profile)
     config["device"]["ip"] = args.device_ip
+    linux_discovery = getattr(args, "linux_discovery", False)
+    if linux_discovery:
+        try:
+            peers = [ipaddress.IPv4Address(value) for value in (args.controller, args.device_ip)]
+        except ipaddress.AddressValueError:
+            raise ConfigError("Linux discovery requires literal controller and device IPv4 addresses") from None
+        if any(ip.is_unspecified or ip.is_multicast or ip.is_loopback or ip.is_reserved
+               or not ip.is_private for ip in peers):
+            raise ConfigError("Linux discovery requires concrete private LAN IPv4 addresses")
+        config["discovery"].update(enabled=True, bind="0.0.0.0", port=10001,
+                                   multicast=True, interface_ip=str(peers[1]),
+                                   allowed_controller_ips=[str(peers[0])])
     if factory_seconds:
         config["device"]["factory_enrollment_until"] = int(time.time()) + factory_seconds
     config["runtime"].update(bind=args.bind or args.device_ip, https_port=args.https_port)
@@ -115,7 +128,8 @@ def prepare(args, inference):
             "operator_reported_version_evidence": evidence,
             "vision_destination": config["inference"]["base_url"],
             "media_policy": "Selected frames go to this endpoint only when inference is explicitly started; upstream forwarding and retention are not verified",
-            "additional_features_enabled": False,
+            "additional_features_enabled": linux_discovery,
+            "discovery_enabled": linux_discovery,
             "factory_enrollment_until": config["device"].get("factory_enrollment_until", 0),
             "next_steps": ["Provision the referenced private provider key if required",
                            "Import controller trust using an independently verified fingerprint",
