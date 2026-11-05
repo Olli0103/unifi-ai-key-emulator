@@ -25,6 +25,7 @@ cp examples/nas.env .env
 docker compose -f compose.first-run.yaml config --quiet
 docker compose -f compose.first-run.yaml build emulator
 mkdir -m 700 first-run-state
+chmod 700 first-run-state
 ```
 
 An existing `first-run-state` is not a fresh installation: inspect it rather
@@ -32,6 +33,8 @@ than deleting/reinitializing it. It is excluded from Git, Docker build context
 and source distributions. The parent mounts at `/state` for preparation and
 runtime; setup exclusively creates `/state/key` with config and nested private
 `state/`. Keep these mounts/paths unchanged.
+The explicit `chmod` handles hosts that override a requested creation mode;
+setup also hardens and verifies its new directory before creating an identity.
 
 ## Select a model and prepare
 

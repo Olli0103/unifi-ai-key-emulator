@@ -85,11 +85,24 @@ def prepare(args, inference):
         root.mkdir(mode=0o700)
     except FileExistsError as exc:
         raise ConfigError("Setup directory already exists; existing or partial installations are never reused") from exc
-    # Verify actual mode/owner rather than assuming mkdir's requested mode.
+    # Harden only this exclusively created directory, before any identity exists.
+    # Some NAS filesystems do not preserve the requested creation mode.
     info = root.lstat()
-    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
-            or stat.S_IMODE(info.st_mode) != 0o700):
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
         raise ConfigError("Setup directory must be owned by this user with mode 700; inspect retained directory")
+    descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+            raise ConfigError("Setup directory changed; inspect retained directory")
+        os.fchmod(descriptor, 0o700)
+        secured = os.fstat(descriptor)
+        current = root.lstat()
+        if (stat.S_IMODE(secured.st_mode) != 0o700
+                or (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino)):
+            raise ConfigError("Setup directory is not private; inspect retained directory")
+    finally:
+        os.close(descriptor)
     generated = initialize(config_path, state, controller_host=args.controller,
                            device_ip=args.device_ip)
     config["device"]["mac"] = generated["device"]["mac"]

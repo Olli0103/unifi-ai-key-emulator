@@ -156,6 +156,33 @@ def test_factory_window_is_opt_in_absolute_and_not_renewed_on_reload(tmp_path, m
     assert path.read_bytes() == original
 
 
+def test_new_directory_creation_mode_is_hardened_before_identity(tmp_path, monkeypatch):
+    from pathlib import Path
+    root = tmp_path / "fresh"
+    mkdir = Path.mkdir
+    def nas_mkdir(path, *args, **kwargs):
+        existed = path.exists()
+        result = mkdir(path, *args, **kwargs)
+        if path == root and not existed:
+            path.chmod(0o777)
+        return result
+    monkeypatch.setattr(Path, "mkdir", nas_mkdir)
+    assert main(arguments(root)) == 0
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+    assert (root / "state/identity.json").is_file()
+
+
+def test_directory_hardening_failure_keeps_empty_partial_without_identity(tmp_path, monkeypatch):
+    root = tmp_path / "fresh"
+    def refuse(*args):
+        raise PermissionError("fictional NAS refusal")
+    monkeypatch.setattr("aikey.first_run.os.fchmod", refuse)
+    assert main(arguments(root)) == 2
+    assert root.is_dir() and list(root.iterdir()) == []
+    assert main(arguments(root)) == 2
+    assert list(root.iterdir()) == []
+
+
 def test_repeat_and_racing_setup_do_not_replace_identity(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     root = tmp_path / "fresh"
