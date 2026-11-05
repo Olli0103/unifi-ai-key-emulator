@@ -84,7 +84,7 @@ def native_attempt(tmp_path, monkeypatch):
             **{key: receipt[key] for key in ('image_id', 'revision', 'architecture', 'nonce', 'profile')},
             'native_report_sha256': 'a' * 64, 'sbom_sha256': receipt['sbom_sha256'],
             'packages': [{'name': 'FICTIONAL-runtime', 'version': '1.0', 'type': 'python',
-                          'purl': None, 'licenses': []}], 'texts': {},
+                          'purl': None, 'licenses': []}], 'texts': {}, 'notice_files': [],
             'licenses_reviewed': False, 'release_approved': False,
         }
         license_bytes = json.dumps(review).encode()
@@ -579,6 +579,27 @@ def test_original_license_text_drift_cannot_hide_behind_unchanged_cyclonedx(nati
     receipt = json.loads(receipt_path.read_text())
     receipt.update(license_review_sha256=candidate.digest(path.read_bytes()),
                    license_texts_retained=1, license_text_bytes=len(text.encode()))
+    receipt_path.write_text(json.dumps(receipt))
+    destination = root.parent / 'intent.json'
+    with pytest.raises(ValueError, match='license_text_changed_since_qualification'):
+        candidate.image_intent(root, packet, results, 'amd64', destination,
+                               qualified=results.parent / 'qualified', run=docker)
+    assert not destination.exists() and calls == []
+
+
+def test_original_notice_file_drift_refuses_before_any_registry_action(native_attempt):
+    import base64
+    root, packet, results, _, calls, docker = native_attempt
+    path = results / 'aikey-licenses.json'
+    review = json.loads(path.read_text())
+    raw = b'FICTIONAL additional original notice\n'
+    review['notice_files'] = [{'path': '/usr/share/doc/fixture/copyright',
+                              'sha256': candidate.digest(raw), 'size': len(raw),
+                              'base64': base64.b64encode(raw).decode()}]
+    path.write_text(json.dumps(review))
+    receipt_path = results / 'aikey-inventory.json'
+    receipt = json.loads(receipt_path.read_text())
+    receipt['license_review_sha256'] = candidate.digest(path.read_bytes())
     receipt_path.write_text(json.dumps(receipt))
     destination = root.parent / 'intent.json'
     with pytest.raises(ValueError, match='license_text_changed_since_qualification'):
