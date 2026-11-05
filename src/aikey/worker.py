@@ -819,7 +819,7 @@ class JobProcessor:
                 record = json.loads(path.read_text())
                 if (not re.fullmatch(r"[0-9a-f]{64}", path.stem)
                         or record.get("jobId") != path.stem or record.get("state") not in {
-                    "callback_sending", "callback_uncertain", "completed", "failed"} or (
+                    "execution_started", "callback_sending", "callback_uncertain", "completed", "failed"} or (
                     not isinstance(record.get("fingerprint"), str)
                     or not re.fullmatch(r"[0-9a-f]{64}", record["fingerprint"])
                     or type(record.get("updatedAt")) not in {int, float}
@@ -940,6 +940,13 @@ class JobProcessor:
                 output.flush()
                 os.fsync(output.fileno())
             os.replace(temporary, path)
+            # Persist the directory entry as well as the temporary file. An
+            # execution marker must be durable before any model/callback I/O.
+            directory = os.open(self.state_dir, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
@@ -1907,6 +1914,8 @@ class JobProcessor:
         if previous:
             if previous["fingerprint"] != fingerprint:
                 raise WorkerError("Task identity reused with different input")
+            if previous["state"] == "execution_started":
+                raise WorkerError("Execution outcome is uncertain; review journal before retrying")
             if previous["state"] in {"callback_sending", "callback_uncertain"}:
                 raise WorkerError("Callback outcome is uncertain; review journal before retrying")
             if (previous["state"] == "failed" and (self.continuous or "schema" in previous)
@@ -2117,6 +2126,11 @@ class JobProcessor:
                         finally:
                             os.close(fd)
                 with _failure_boundary(self, "execution"):
+                    # A killed process may already have incurred a model call
+                    # without reaching callback_sending or a terminal record.
+                    # Neither an unmetered policy nor a missing callback proves
+                    # that replay is safe. Keep a non-archivable crash witness.
+                    self._record(job, "execution_started")
                     result = await self._execute(job)
             self._record(job, "completed", result=result)
             if job.operation == "indexImages":

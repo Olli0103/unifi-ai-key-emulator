@@ -116,6 +116,7 @@ _WORKER_REJECTION_REASONS = {
     "MP4 adaptation requires a literal format=ubv component": "mp4_format",
     "Task identity reused with different input": "job_identity_conflict",
     "Callback outcome is uncertain; review journal before retrying": "callback_uncertain",
+    "Execution outcome is uncertain; review journal before retrying": "execution_uncertain",
     "Test scope permit is already consumed; no further media or inference is allowed": "permit_consumed",
     "Test scope permit is already consumed": "permit_consumed",
     "Invalid test scope reservation; inspect it without resetting the permit": "permit_state",
@@ -208,6 +209,7 @@ _REQUEST_AI_REJECTION_REASONS = {
     "Invalid media path": "media_url",
     "Failed automatic job cannot be replayed": "replay_refused",
     "Callback outcome is uncertain; review journal before retrying": "callback_uncertain",
+    "Execution outcome is uncertain; review journal before retrying": "execution_uncertain",
     "Worker journal is full; archive reviewed entries": "journal_full",
     "Invalid or oversized RequestAI command": "payload_shape",
 }
@@ -221,7 +223,7 @@ _REQUEST_AI_TARGET_CLASSES = {
 
 _SPEECH_SHARED_REASONS = ("command_size_or_shape", "invalid_json", "job_failed", "callback_url",
                           "media_url", "http_origin", "callback_origin", "media_origin",
-                          "job_identity_conflict", "callback_uncertain", "queue_full",
+                          "job_identity_conflict", "callback_uncertain", "execution_uncertain", "queue_full",
                           "journal_full", "worker_stopped", "admission_expired",
                           "maintenance_unavailable", "maintenance_binding_changed")
 
