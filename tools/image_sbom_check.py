@@ -14,6 +14,7 @@ import io
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import subprocess
 import tarfile
@@ -32,8 +33,17 @@ ARCHIVES = {
 }
 IMAGE_ID = re.compile(r'sha256:[0-9a-f]{64}')
 RECEIPT = 'aikey-image-inventory/2'
-LICENSE_REVIEW = 'aikey-image-license-review/1'
+LICENSE_REVIEW = 'aikey-image-license-review/2'
 LIMIT = 32 * 1024 * 1024
+NOTICE_LIMIT = 2 * 1024 * 1024
+NOTICE_GLOBS = ['/app/LICENSE', '/usr/local/LICENSE',
+                '/usr/share/doc/**/copyright', '/usr/share/common-licenses/*'] + [
+    '/usr/local/lib/python*/site-packages/**/' + name + suffix
+    for name in ('[Ll][Ii][Cc][Ee][Nn][Ss][Ee]', '[Ll][Ii][Cc][Ee][Nn][Cc][Ee]',
+                 '[Nn][Oo][Tt][Ii][Cc][Ee]', '[Cc][Oo][Pp][Yy][Ii][Nn][Gg]',
+                 '[Cc][Oo][Pp][Yy][Rr][Ii][Gg][Hh][Tt]')
+    for suffix in ('', '.*')
+]
 OFFLINE_CONFIG = '''check-for-app-update: false
 parallelism: 2
 cache:
@@ -60,6 +70,78 @@ package:
   nested-archive-max-memory-bytes: 67108864
   nested-archive-max-disk-bytes: 0
 '''
+# Zero disables Syft's silent size-based omission. Our bounded report reader
+# and per-file limit refuse oversized evidence instead of publishing a subset.
+OFFLINE_CONFIG += 'file:\n  content:\n    skip-files-above-size: 0\n    globs:\n' + ''.join(
+    '      - ' + json.dumps(pattern) + '\n' for pattern in NOTICE_GLOBS)
+
+
+def notice_path(path):
+    if (not isinstance(path, str) or len(path) > 4096 or not path.startswith('/')
+            or any(part in ('', '.', '..') for part in path[1:].split('/'))
+            or any(ord(char) < 32 for char in path)):
+        return False
+    return bool(path in ('/app/LICENSE', '/usr/local/LICENSE')
+                or re.fullmatch(r'/usr/share/doc/(?:[^/]+/)+copyright', path)
+                or re.fullmatch(r'/usr/share/common-licenses/[^/]+', path)
+                or re.fullmatch(r'/usr/local/lib/python[0-9.]+/site-packages/(?:[^/]+/)*'
+                                r'(?i:licen[sc]e|notice|copying|copyright)(?:\.[^/]+)?', path))
+
+
+def validate_notices(rows):
+    require(isinstance(rows, list) and len(rows) <= 10000, 'image_inventory_notice_files_refused')
+    seen = set()
+    total = 0
+    for row in rows:
+        require(isinstance(row, dict) and set(row) == {'path', 'sha256', 'size', 'base64'}
+                and notice_path(row['path']) and row['path'] not in seen
+                and type(row['size']) is int and 0 <= row['size'] <= NOTICE_LIMIT
+                and isinstance(row['base64'], str) and len(row['base64']) <= (NOTICE_LIMIT + 2) // 3 * 4,
+                'image_inventory_notice_files_refused')
+        try:
+            raw = base64.b64decode(row['base64'], validate=True)
+        except ValueError:
+            raise CheckError('image_inventory_notice_encoding_refused') from None
+        require(base64.b64encode(raw).decode() == row['base64'] and len(raw) == row['size']
+                and digest(raw) == row['sha256'], 'image_inventory_notice_bytes_changed')
+        total += len(raw)
+        require(total <= LIMIT, 'image_inventory_notice_files_too_large')
+        seen.add(row['path'])
+
+
+def notice_files(native):
+    rows, expected = [], set()
+    # Installed Python RECORD entries independently expose missing captures.
+    # Do not invent required notices for packages whose metadata lists none.
+    for artifact in native['artifacts']:
+        metadata = artifact.get('metadata', {})
+        root = metadata.get('sitePackagesRootPath')
+        if artifact.get('type') == 'python' and isinstance(root, str):
+            for entry in metadata.get('files', []):
+                if isinstance(entry.get('path'), str):
+                    path = posixpath.normpath(posixpath.join(root, entry['path']))
+                    if notice_path(path):
+                        expected.add(path)
+    for item in native.get('files', []):
+        path = item.get('location', {}).get('path')
+        if notice_path(path):
+            expected.add(path)
+        if 'contents' not in item:
+            continue
+        content = item['contents']
+        require(notice_path(path) and isinstance(content, str)
+                and len(content) <= (NOTICE_LIMIT + 2) // 3 * 4, 'image_inventory_notice_files_refused')
+        try:
+            raw = base64.b64decode(content, validate=True)
+        except ValueError:
+            raise CheckError('image_inventory_notice_encoding_refused') from None
+        hashes = {entry['algorithm']: entry['value'] for entry in item.get('digests', [])}
+        require('sha256' not in hashes or hashes['sha256'] == digest(raw),
+                'image_inventory_notice_bytes_changed')
+        rows.append({'path': path, 'sha256': digest(raw), 'size': len(raw), 'base64': content})
+    validate_notices(rows)
+    require(expected == {row['path'] for row in rows}, 'image_inventory_notice_content_missing')
+    return sorted(rows, key=lambda row: row['path'])
 
 
 def json_bytes(raw):
@@ -326,6 +408,7 @@ def license_review(native, identity, *, native_sha256, sbom_sha256):
                          'licenses': records})
     result = {'schema': LICENSE_REVIEW, **identity, 'native_report_sha256': native_sha256,
               'sbom_sha256': sbom_sha256, 'packages': packages, 'texts': texts,
+              'notice_files': notice_files(native),
               'licenses_reviewed': False, 'release_approved': False}
     require(len(json.dumps(result, ensure_ascii=True).encode()) <= LIMIT,
             'image_inventory_license_review_too_large')
@@ -338,7 +421,7 @@ def read_license_review(path, receipt):
     value = json_bytes(raw)
     subject = ('image_id', 'revision', 'architecture', 'nonce', 'profile')
     require(set(value) == {'schema', *subject, 'native_report_sha256', 'sbom_sha256',
-                          'packages', 'texts', 'licenses_reviewed', 'release_approved'}
+                          'packages', 'texts', 'notice_files', 'licenses_reviewed', 'release_approved'}
             and value['schema'] == LICENSE_REVIEW and value['licenses_reviewed'] is False
             and value['release_approved'] is False and value['sbom_sha256'] == receipt['sbom_sha256']
             and all(value[key] == receipt[key] for key in subject)
@@ -366,6 +449,7 @@ def read_license_review(path, receipt):
                 require(sha is not None and item['value'] == 'sha256:' + sha,
                         'image_inventory_license_text_missing_or_changed')
     require(references == set(value['texts']), 'image_inventory_license_text_unreferenced')
+    validate_notices(value['notice_files'])
     return value
 
 

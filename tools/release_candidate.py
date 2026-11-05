@@ -166,6 +166,8 @@ def image_intent(root, plan, results, architecture, destination, *, qualified=No
         qualified_licenses = inventory.read_license_review(Path(qualified) / (profile + '-licenses.json'), qualified_profile)
         require(
             current_licenses['texts'] == qualified_licenses['texts']
+            and sorted(current_licenses['notice_files'], key=lambda row: row['path'])
+            == sorted(qualified_licenses['notice_files'], key=lambda row: row['path'])
             and sorted(json.dumps(p, sort_keys=True) for p in current_licenses['packages'])
             == sorted(json.dumps(p, sort_keys=True) for p in qualified_licenses['packages']),
             'release_image_license_text_changed_since_qualification',

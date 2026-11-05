@@ -64,7 +64,7 @@ Each architecture's existing `container-install-*` artifact contains exactly:
   retained text counts/bytes and cleanup binding;
 - `aikey-sbom.cdx.json` and `aiport-sbom.cdx.json`: the standard image inventories;
 - `aikey-licenses.json` and `aiport-licenses.json`: the selected package declarations
-  and available original license texts, bound to source, image, native-report
+  and available original license texts/files, bound to source, image, native-report
   digest, architecture, run, profile and matching CycloneDX digest.
 
 Inventory and summary receipts use schema version 2; old text-free receipts
@@ -73,6 +73,25 @@ the attachments back and verifies bytes, subject, content hashes and references.
 Release-candidate preparation also compares the package/text catalogue against
 the qualified installation artifact before admitting a rebuilt image. This is
 evidence preservation, not completion of the maintainer's license review.
+The license companion now uses schema version 2. Its `notice_files` array retains
+exact original bytes (canonical base64, size, SHA-256 and absolute image path),
+including non-UTF-8 notices that cannot be represented as license-text strings.
+The pinned scanner selects `/app/LICENSE`, `/usr/local/LICENSE`, Debian
+`copyright`/common-license files and Python
+site-packages files named LICENSE, LICENCE, NOTICE, COPYING or COPYRIGHT (case
+insensitive, optionally with a dot suffix). This includes nested wheel/vendor
+license directories, not arbitrary filesystem or state paths. Syft's silent
+size skip is disabled: an individual notice above 2 MiB or a complete report
+above 32 MiB refuses publication instead. The disposable CI job remains the
+scanner's process/memory/disk containment boundary. Known matching native file
+records and installed Python RECORD entries must have captured contents.
+Finalization validates the original file bytes again, and release preparation
+refuses notice additions/removals/content changes against the qualified build.
+These selected paths are not proof that every dependency ships all required
+notices, nor a corresponding-source or redistribution clearance. Packages
+with missing notices and nonstandard paths still require human review.
+The [original-file qualification](evidence/image-notice-files-20261105.md)
+records the separate pinned-tool controls.
 The [pinned-tool reproduction](evidence/image-license-text-20261105.md) records
 why the companion is needed and separates synthetic qualification from real
 image review.

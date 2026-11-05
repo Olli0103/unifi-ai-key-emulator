@@ -710,3 +710,86 @@ def test_full_conversion_comparison_rejects_other_changes(fault):
         converted["dependencies"] = [{"ref": "foreign-reference"}]
     with pytest.raises(ValueError):
         check.conversion_equal(cdx, converted)
+
+
+def test_notice_bytes_survive_even_when_spdx_conversion_has_no_original_text(tmp_path):
+    _, identity, native, _, _, _ = inventory()
+    raw = b'Fictional copyright.\r\nNon-UTF8 original: \xff\n'
+    path = '/usr/local/lib/python3.12/site-packages/fixture-1.dist-info/licenses/LICENSE'
+    native['files'] = [{'location': {'path': path}, 'contents': base64.b64encode(raw).decode()}]
+    native['artifacts'][0]['licenses'] = [{'value': 'MIT', 'spdxExpression': 'MIT', 'type': 'declared'}]
+    review = check.license_review(native, identity, native_sha256='a' * 64, sbom_sha256='b' * 64)
+    assert review['texts'] == {}
+    assert review['notice_files'] == [{'path': path, 'sha256': check.digest(raw),
+                                      'size': len(raw), 'base64': base64.b64encode(raw).decode()}]
+    output = tmp_path / 'review.json'
+    check.publish_catalog(output, json.dumps(review).encode())
+    receipt = dict(identity, sbom_sha256='b' * 64, package_count=5,
+                   license_review_sha256=check.digest(output.read_bytes()),
+                   license_texts_retained=0, license_text_bytes=0)
+    assert check.read_license_review(output, receipt) == review
+
+
+@pytest.mark.parametrize('fault', ['private', 'traversal', 'invalid_base64', 'duplicate',
+                                   'oversized', 'digest', 'missing_file', 'missing_record'])
+def test_notice_capture_refuses_missing_corrupt_or_private_evidence(fault):
+    _, _, native, _, _, _ = inventory()
+    path = '/usr/local/lib/python3.12/site-packages/fixture-1.dist-info/LICENSE.txt'
+    row = {'location': {'path': path}, 'contents': base64.b64encode(b'Fictional notice').decode()}
+    native['files'] = [row]
+    if fault == 'private':
+        row['location']['path'] = '/state/LICENSE'
+    elif fault == 'traversal':
+        row['location']['path'] = '/usr/share/doc/../../state/copyright'
+    elif fault == 'invalid_base64':
+        row['contents'] = '%not-base64'
+    elif fault == 'duplicate':
+        native['files'].append(deepcopy(row))
+    elif fault == 'oversized':
+        row['contents'] = base64.b64encode(b'x' * (check.NOTICE_LIMIT + 1)).decode()
+    elif fault == 'digest':
+        row['digests'] = [{'algorithm': 'sha256', 'value': '0' * 64}]
+    elif fault == 'missing_file':
+        del row['contents']
+    elif fault == 'missing_record':
+        native['files'] = []
+        native['artifacts'][0]['metadata'] = {
+            'sitePackagesRootPath': '/usr/local/lib/python3.12/site-packages',
+            'files': [{'path': 'fixture-1.dist-info/LICENSE.txt'}]}
+    with pytest.raises(ValueError, match='image_inventory_notice_'):
+        check.notice_files(native)
+
+
+@pytest.mark.parametrize('fault', ['hash', 'size', 'noncanonical', 'extra_field', 'private'])
+def test_saved_notice_bytes_are_independently_validated(fault):
+    row = {'path': '/usr/share/common-licenses/MIT', 'sha256': check.digest(b'f'),
+           'size': 1, 'base64': 'Zg=='}
+    if fault == 'hash':
+        row['sha256'] = '0' * 64
+    elif fault == 'size':
+        row['size'] = 2
+    elif fault == 'noncanonical':
+        row['base64'] = 'Zh=='
+    elif fault == 'extra_field':
+        row['private'] = 'must-not-escape'
+    else:
+        row['path'] = '/private/LICENSE'
+    with pytest.raises(ValueError, match='image_inventory_notice_'):
+        check.validate_notices([row])
+
+
+@pytest.mark.parametrize('path', [
+    '/app/LICENSE', '/usr/local/LICENSE',
+    '/usr/share/doc/fixture/copyright', '/usr/share/common-licenses/GPL-2',
+    '/usr/local/lib/python3.12/site-packages/pkg/NOTICE',
+    '/usr/local/lib/python3.12/site-packages/pkg/licenses/License.Apache',
+    '/usr/local/lib/python3.12/site-packages/pkg/COPYING.BSD',
+])
+def test_notice_path_scope_accepts_original_license_names(path):
+    assert check.notice_path(path)
+
+
+@pytest.mark.parametrize('path', ['/state/LICENSE', '/usr/local/lib/python3.12/site-packages/p/private.env',
+                                 '/usr/share/common-licenses/../private.env', '/usr/share/doc//copyright'])
+def test_notice_path_scope_excludes_private_and_ambiguous_paths(path):
+    assert not check.notice_path(path)
