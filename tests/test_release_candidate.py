@@ -79,6 +79,19 @@ def native_attempt(tmp_path, monkeypatch):
             "sbom_sha256": candidate.digest(raw),
             "image_id": image_id,
         }
+        review = {
+            'schema': candidate.inventory.LICENSE_REVIEW,
+            **{key: receipt[key] for key in ('image_id', 'revision', 'architecture', 'nonce', 'profile')},
+            'native_report_sha256': 'a' * 64, 'sbom_sha256': receipt['sbom_sha256'],
+            'packages': [{'name': 'FICTIONAL-runtime', 'version': '1.0', 'type': 'python',
+                          'purl': None, 'licenses': []}], 'texts': {},
+            'licenses_reviewed': False, 'release_approved': False,
+        }
+        license_bytes = json.dumps(review).encode()
+        for directory in (results, qualified):
+            (directory / (profile + '-licenses.json')).write_bytes(license_bytes)
+        receipt.update(package_count=1, license_review_sha256=candidate.digest(license_bytes),
+                       license_texts_retained=0, license_text_bytes=0)
         (results / (profile + "-inventory.json")).write_text(json.dumps(receipt))
         qualified_profiles[profile] = receipt
         (qualified / (profile + "-sbom.cdx.json")).write_bytes(raw)
@@ -117,7 +130,7 @@ def native_attempt(tmp_path, monkeypatch):
     (qualified / "image-inventory.json").write_text(
         json.dumps(
             {
-                "schema": "aikey-image-inventory-summary/1",
+                "schema": "aikey-image-inventory-summary/2",
                 "revision": packet["source_revision"],
                 "architecture": arch,
                 "cleanup_verified": True,
@@ -532,6 +545,11 @@ def test_qualified_catalog_drift_refuses_before_intent_or_registry_mutation(nati
     receipt_path = results / "aikey-inventory.json"
     receipt = json.loads(receipt_path.read_text())
     receipt["sbom_sha256"] = candidate.digest(path.read_bytes())
+    review_path = results / 'aikey-licenses.json'
+    review = json.loads(review_path.read_text())
+    review['sbom_sha256'] = receipt['sbom_sha256']
+    review_path.write_text(json.dumps(review))
+    receipt['license_review_sha256'] = candidate.digest(review_path.read_bytes())
     receipt_path.write_text(json.dumps(receipt))
     destination = root.parent / "intent.json"
     with pytest.raises(ValueError, match="catalog_changed"):
@@ -544,4 +562,26 @@ def test_qualified_catalog_drift_refuses_before_intent_or_registry_mutation(nati
             qualified=results.parent / "qualified",
             run=docker,
         )
+    assert not destination.exists() and calls == []
+
+
+def test_original_license_text_drift_cannot_hide_behind_unchanged_cyclonedx(native_attempt):
+    root, packet, results, _, calls, docker = native_attempt
+    path = results / 'aikey-licenses.json'
+    review = json.loads(path.read_text())
+    text = 'FICTIONAL changed notice, not a legal grant.\n'
+    sha = candidate.digest(text.encode())
+    review['texts'] = {sha: text}
+    review['packages'][0]['licenses'] = [{'value': 'sha256:' + sha, 'spdx_expression': '',
+                                         'type': 'concluded', 'text_sha256': sha}]
+    path.write_text(json.dumps(review))
+    receipt_path = results / 'aikey-inventory.json'
+    receipt = json.loads(receipt_path.read_text())
+    receipt.update(license_review_sha256=candidate.digest(path.read_bytes()),
+                   license_texts_retained=1, license_text_bytes=len(text.encode()))
+    receipt_path.write_text(json.dumps(receipt))
+    destination = root.parent / 'intent.json'
+    with pytest.raises(ValueError, match='license_text_changed_since_qualification'):
+        candidate.image_intent(root, packet, results, 'amd64', destination,
+                               qualified=results.parent / 'qualified', run=docker)
     assert not destination.exists() and calls == []

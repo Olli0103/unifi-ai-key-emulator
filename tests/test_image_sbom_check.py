@@ -71,7 +71,7 @@ def inventory(profile="aikey"):
         "descriptor": {
             "name": "syft",
             "version": check.VERSION,
-            "configuration": {"search": {"scope": "squashed"}},
+            "configuration": {"search": {"scope": "squashed"}, "licenses": {"include-content": "all"}},
         },
         "schema": {"version": "16.1.12"},
         "distro": {"id": "debian", "versionID": "12"},
@@ -251,6 +251,12 @@ def saved_inventories(tmp_path):
         value = check.validate(native, cdx, identity, expected, converted=converted) | {
             "sbom_sha256": check.digest(path.read_bytes())
         }
+        review = check.license_review(native, identity, native_sha256=check.digest(json.dumps(native).encode()),
+                                      sbom_sha256=value['sbom_sha256'])
+        review_path = tmp_path / (profile + '-licenses.json')
+        check.publish(review_path, review)
+        value.update(license_review_sha256=check.digest(review_path.read_bytes()),
+                     license_texts_retained=0, license_text_bytes=0)
         check.publish(tmp_path / (profile + "-inventory.json"), value)
 
 
@@ -269,6 +275,8 @@ def test_finalization_requires_both_subjects_install_phases_and_cleanup(tmp_path
         "stale_revision",
         "swapped_profile",
         "changed_sbom",
+        "missing_licenses",
+        "changed_licenses",
         "extra_field",
         "approval",
         "bool_count",
@@ -307,6 +315,10 @@ def test_finalization_never_accepts_partial_stale_or_changed_evidence(tmp_path, 
         path.unlink()
     if fault == "changed_sbom":
         (tmp_path / "aiport-sbom.cdx.json").write_text("{}")
+    if fault == "missing_licenses":
+        (tmp_path / "aiport-licenses.json").unlink()
+    if fault == "changed_licenses":
+        (tmp_path / "aiport-licenses.json").write_text('{}')
     if fault == "missing_phase":
         (tmp_path / "aikey-reopen.json").unlink()
     if fault == "missing_cleanup":
@@ -423,6 +435,53 @@ def test_license_metadata_must_agree_without_turning_it_into_legal_approval():
         check.validate(native, cdx, identity, expected, converted=converted)
 
 
+def test_license_attachment_retains_deduplicated_original_bytes_without_native_private_fields(tmp_path):
+    _, identity, native, _, _, _ = inventory()
+    text = 'Fictional license notice.\nRetain exact newlines and ünicode.\n'
+    sha = check.digest(text.encode())
+    native['source']['metadata']['private-canary'] = 'must-not-be-published'
+    item = {'value': 'sha256:' + sha, 'spdxExpression': '', 'type': 'concluded', 'contents': text}
+    native['artifacts'][0]['licenses'] = [item]
+    native['artifacts'][1]['licenses'] = [dict(item)]
+    review = check.license_review(native, identity, native_sha256='a' * 64, sbom_sha256='b' * 64)
+    assert review['texts'] == {sha: text}
+    assert review['packages'][2]['licenses'] == []  # Missing is not approval or a fabricated license.
+    assert 'must-not-be-published' not in json.dumps(review)
+    assert not review['licenses_reviewed'] and not review['release_approved']
+    path = tmp_path / 'review.json'
+    check.publish(path, review)
+    receipt = dict(identity, sbom_sha256='b' * 64, package_count=5,
+                   license_review_sha256=check.digest(path.read_bytes()),
+                   license_texts_retained=1, license_text_bytes=len(text.encode()))
+    assert check.read_license_review(path, receipt) == review
+    review['texts'][sha] += 'changed'
+    path.write_text(json.dumps(review))
+    receipt['license_review_sha256'] = check.digest(path.read_bytes())
+    with pytest.raises(ValueError, match='saved_license_review_refused'):
+        check.read_license_review(path, receipt)
+
+
+@pytest.mark.parametrize('content', [None, '', 'different content'])
+def test_hash_named_license_cannot_be_retained_without_the_exact_text(content):
+    _, identity, native, _, _, _ = inventory()
+    native['artifacts'][0]['licenses'] = [{'value': 'sha256:' + check.digest(b'original'),
+                                           'spdxExpression': '', 'type': 'concluded', 'contents': content}]
+    with pytest.raises(ValueError):
+        check.license_review(native, identity, native_sha256='a' * 64, sbom_sha256='b' * 64)
+
+
+def test_large_license_catalogue_is_not_limited_to_small_control_receipts(tmp_path):
+    raw = json.dumps({'fictional_notice': 'x' * (300 * 1024)}).encode()
+    path = tmp_path / 'licenses.json'
+    check.publish_catalog(path, raw)
+    assert path.read_bytes() == raw and path.stat().st_mode & 0o777 == 0o600
+    with pytest.raises(FileExistsError):
+        check.publish_catalog(path, b'{}')
+    with pytest.raises(ValueError, match='publication_too_large'):
+        check.publish_catalog(tmp_path / 'oversized.json', b'x' * (check.LIMIT + 1))
+    assert not (tmp_path / 'oversized.json').exists()
+
+
 @pytest.mark.parametrize(
     "fault", ["none", "changed_file", "foreign_file", "wrong_os", "unknown_type"]
 )
@@ -470,12 +529,19 @@ def test_nonpackage_components_match_their_real_native_producer(fault):
         "changed_tool",
         "partial_output",
         "converted_changed",
+        "license_content_disabled",
+        "license_text_missing",
     ],
 )
 def test_actual_collect_entrypoint_with_owned_fake_daemon_and_scanner(tmp_path, fault):
     image, _, native, cdx, _, _ = inventory()
     canary = "synthetic-private-native-report-canary"
     native["private_fixture_canary"] = canary
+    if fault == 'license_content_disabled':
+        native['descriptor']['configuration']['licenses']['include-content'] = 'none'
+    if fault == 'license_text_missing':
+        native['artifacts'][0]['licenses'] = [{'value': 'sha256:' + 'a' * 64,
+                                              'type': 'concluded', 'spdxExpression': ''}]
     source = tmp_path / "source"
     source.mkdir()
     (source / "pyproject.toml").write_text('[project]\nversion="0.1.0"\n')
@@ -578,6 +644,9 @@ def test_actual_collect_entrypoint_with_owned_fake_daemon_and_scanner(tmp_path, 
         assert canary not in (results / "aikey-sbom.cdx.json").read_text() + receipt.read_text()
         saved = check.load(receipt)
         assert saved["sbom_sha256"] == check.digest((results / "aikey-sbom.cdx.json").read_bytes())
+        review_path = results / 'aikey-licenses.json'
+        assert canary not in review_path.read_text()
+        assert check.read_license_review(review_path, saved)['licenses_reviewed'] is False
     else:
         assert outcome.returncode == 2 and not receipt.exists() and not list(results.iterdir())
     if fault in ("foreign_image", "changed_tool"):

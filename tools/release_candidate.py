@@ -145,7 +145,7 @@ def image_intent(root, plan, results, architecture, destination, *, qualified=No
     qualified_inventory = gate.load(gate.read(Path(qualified) / "image-inventory.json", 128 * 1024))
     qualified_install = gate.load(gate.read(Path(qualified) / "summary.json", 128 * 1024))
     require(
-        qualified_inventory.get("schema") == "aikey-image-inventory-summary/1"
+        qualified_inventory.get("schema") == "aikey-image-inventory-summary/2"
         and qualified_inventory.get("revision") == plan["source_revision"]
         and qualified_inventory.get("architecture") == architecture
         and qualified_inventory.get("cleanup_verified") is True
@@ -162,6 +162,14 @@ def image_intent(root, plan, results, architecture, destination, *, qualified=No
         raw = gate.read(Path(results) / (profile + "-sbom.cdx.json"), 32 * 1024 * 1024)
         qualified_raw = gate.read(Path(qualified) / (profile + "-sbom.cdx.json"), 16 * 1024 * 1024)
         qualified_profile = qualified_inventory["profiles"][profile]
+        current_licenses = inventory.read_license_review(Path(results) / (profile + '-licenses.json'), receipt)
+        qualified_licenses = inventory.read_license_review(Path(qualified) / (profile + '-licenses.json'), qualified_profile)
+        require(
+            current_licenses['texts'] == qualified_licenses['texts']
+            and sorted(json.dumps(p, sort_keys=True) for p in current_licenses['packages'])
+            == sorted(json.dumps(p, sort_keys=True) for p in qualified_licenses['packages']),
+            'release_image_license_text_changed_since_qualification',
+        )
         require(
             qualified_profile.get("sbom_sha256") == digest(qualified_raw)
             and qualified_profile.get("revision") == plan["source_revision"]
