@@ -300,7 +300,9 @@ def test_package_observation_requires_exact_class_label_and_bounded_box():
     assert rejected == {"label:package": 1}
 
 
-def test_continuous_motion_has_one_empty_recovery_until_three_quiet_frames(tmp_path):
+def test_continuous_motion_has_one_empty_recovery_until_three_quiet_frames(tmp_path, monkeypatch):
+    now = [100.]
+    monkeypatch.setattr("aikey.aiport_api_detection.time.monotonic", lambda: now[0])
     calls = []
 
     def transport(*_args):
@@ -311,6 +313,7 @@ def test_continuous_motion_has_one_empty_recovery_until_three_quiet_frames(tmp_p
                                  max_requests_per_hour=4, transport=transport)
     detector.detect_for_camera(FIRST, STILL)
     detector.detect_for_camera(FIRST, FRAME)
+    now[0] += 2
     detector.detect_for_camera(FIRST, STILL)
     for image in (FRAME, STILL) * 5:
         detector.detect_for_camera(FIRST, image)

@@ -202,7 +202,11 @@ class FairInference:
                 if self._closed:
                     return
                 detect_for_camera = getattr(self._model, "detect_for_camera", None)
-                if callable(detect_for_camera):
+                detect_observed = getattr(self._model, "detect_observed_for_camera", None)
+                if callable(detect_observed) and captured_monotonic_ms is not None:
+                    result = await self._call_in_thread(
+                        detect_observed, camera, frame, captured_monotonic_ms)
+                elif callable(detect_for_camera):
                     result = await self._call_in_thread(detect_for_camera, camera, frame)
                 else:
                     result = await self._call_in_thread(self._model.detect, frame)
