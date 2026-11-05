@@ -43,9 +43,13 @@ quality gate returned the expected hallway object and no train result in the
 original fixed interval. After the atomic swap and runtime restart, pinned
 HTTPS reported the target full encoder identity. Authenticated Protect queries
 then returned that same object (including an exact-event reload) and no train
-result. This is evidence for that fixed case, not all-corpus relevance. The
-separate fresh-session MFA/logout finalizer remains pending; the migration
-journal correctly remains `awaiting_native_readback`.
+result. This is evidence for that fixed case, not all-corpus relevance. A subsequent fresh-session MFA readback passed both frozen native queries,
+confirmed identical runtime identity before/after, and acknowledged logout.
+The independent persisted receipt and generation journal agree on `cut_over`
+and `native_verified=true`; the disposable readback container is absent.
+No export, staging or cutover writer was repeated for that finalizer.
+This completes the bounded migration, not representative all-history quality
+or the separate native UI auto-broadening behavior.
 
 Operational corrections found on this path:
 
