@@ -75,12 +75,13 @@ def test_store_exact_initial_policy_full_budget_and_history_preserved(tmp_path):
     rev = s.snapshot().revision
     cameras = [{"id": "b" * 24, "model": "Fictional B"}, {"id": "a" * 24, "model": "Fictional A"}]
     p = s.preview_caption_setup(rev, binding(), cameras)
-    assert p.changed_fields == ("worker.continuous",) and p.restart_required
+    assert p.changed_fields == ("device.feature_flags", "worker.continuous") and p.restart_required
     assert path.read_bytes() == original and not s.history_dir.exists()
     saved = s.apply_caption_setup(rev, binding(), cameras)
     assert saved.revision == p.resulting_revision
     data = json.loads(path.read_bytes())
     policy = data["worker"].pop("continuous")
+    assert data["device"].pop("feature_flags") == {"supportAiSummary": {"enabled": True, "version": "v1"}}
     assert data == raw
     assert policy == dict(
         enabled=True,
@@ -98,6 +99,40 @@ def test_store_exact_initial_policy_full_budget_and_history_preserved(tmp_path):
         s.apply_caption_setup(rev, binding(), cameras)
     with pytest.raises(UnsafeConfigurationChange):
         s.apply_caption_setup(saved.revision, binding(), cameras)
+
+
+@pytest.mark.parametrize("previous", [None, False, True])
+def test_saved_initial_captions_advertise_summary_without_enabling_other_features(tmp_path, previous):
+    from aikey.config import hydrate_secrets, load_config
+    from aikey.device import DeviceService
+
+    s, path = store(tmp_path)
+    raw = initial(path)
+    decoder = tmp_path / "fictional-decoder"
+    decoder.write_text("fixture, never executed")
+    raw["worker"]["ffmpeg_path"] = str(decoder)
+    flags = {"supportImageSearch": {"enabled": False, "version": "v1"}}
+    if previous is not None:
+        flags["supportAiSummary"] = {"enabled": previous, "version": "v1"}
+    raw["device"]["feature_flags"] = flags
+    path.write_text(json.dumps(raw))
+    before = path.read_bytes()
+    cameras = [{"id": "a" * 24, "model": "Fictional A"}]
+    previewed = s.preview_caption_setup(s.snapshot().revision, binding(), cameras)
+    assert path.read_bytes() == before
+    s.apply_caption_setup(previewed.current_revision, binding(), cameras)
+    saved = json.loads(path.read_bytes())
+    assert saved["device"]["feature_flags"] == {
+        "supportImageSearch": {"enabled": False, "version": "v1"},
+        "supportAiSummary": {"enabled": True, "version": "v1"},
+    }
+    config = hydrate_secrets(load_config(path))
+    device = DeviceService(config, tmp_path / "state", lambda job: None, camera_registry=object())
+    advertised = device.get_info()["featureFlags"]
+    assert advertised["supportAiSummary"]["enabled"] is True
+    assert advertised["supportImageSearch"]["enabled"] is False
+    assert saved["worker"]["continuous"]["camera_ids"] == ["a" * 24]
+    assert (s.history_dir / (previewed.current_revision + ".json")).read_bytes() == before
 
 
 @pytest.mark.parametrize(
@@ -178,6 +213,7 @@ async def test_named_unchecked_review_exact_apply_and_one_use(tmp_path):
         before, port = path.read_bytes(), site.aiport.path.read_bytes()
         grant, page = await preview(site, client)
         assert " checked" not in page and "12 caption reservations" in page
+        assert "will advertise AI summaries to Protect" in page
         assert "Fictional new camera" in page and "local-only" in page
         assert all(
             s not in page for s in [rows[2]["id"], rows[2]["mac"], "PRIVATE-", "acknowledge_bypass"]

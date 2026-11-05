@@ -195,7 +195,7 @@ async def scenario(output, name, viewport, executable):
                     await confirm.click()
                     assert posts == ["/login", "/caption-setup/preview"]
                     approval = page.get_by_role(
-                        "checkbox", name="Save this initial policy only", exact=False
+                        "checkbox", name="Save this initial policy and AI summary capability", exact=False
                     )
                     await approval.focus()
                     await page.keyboard.press("Space")

@@ -42,7 +42,13 @@ feature permissions/costs remain separate.
 
 ## Transaction and failure boundary
 
-Only raw `worker.continuous` is added. All other raw fields/omitted defaults
+The original October 31 implementation added only raw `worker.continuous`.
+A fresh native installation on November 5 exposed the missing summary advertisement:
+the camera policy was saved, but Protect still saw AI summaries as unsupported.
+Initial setup now also explicitly enables `device.feature_flags.supportAiSummary`
+in the reviewed saved configuration. The confirmation explains that the separate
+restart will advertise summaries; it does not activate the running service or
+change native camera permissions. All unrelated raw fields and feature flags
 are preserved. The existing lock/OCC/old-byte history/identity/search-profile/
 credential-route guards apply. Preview is read-only. Expiring ten-minute
 monotonic one-use grants are bounded to32 without evicting valid grants and

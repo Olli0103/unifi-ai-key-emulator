@@ -100,6 +100,11 @@ model and authorize a bounded camera scope. Preparation itself enables no
 continuous processing. Verify a real result on its original native event after
 reload; a setup receipt or callback acknowledgement is not that result.
 
+The initial caption form saves both the selected camera policy and the AI-summary
+capability that Protect needs to discover the feature. After its separately
+controlled restart, check that the new device advertises AI summaries as well as
+being connected. Other AI features and existing camera permissions are unchanged.
+
 Stop the foreground process with Ctrl-C or explicitly stop this project:
 
 ```sh
