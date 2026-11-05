@@ -780,6 +780,8 @@ def test_saved_notice_bytes_are_independently_validated(fault):
 
 @pytest.mark.parametrize('path', [
     '/app/LICENSE', '/usr/local/LICENSE',
+    '/usr/local/lib/python3.12/LICENSE.txt',
+    '/usr/local/lib/python3.12/site-packages/pip-25.0.1.dist-info/AUTHORS.txt',
     '/usr/share/doc/fixture/copyright', '/usr/share/common-licenses/GPL-2',
     '/usr/local/lib/python3.12/site-packages/pkg/NOTICE',
     '/usr/local/lib/python3.12/site-packages/pkg/licenses/License.Apache',

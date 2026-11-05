@@ -76,9 +76,10 @@ evidence preservation, not completion of the maintainer's license review.
 The license companion now uses schema version 2. Its `notice_files` array retains
 exact original bytes (canonical base64, size, SHA-256 and absolute image path),
 including non-UTF-8 notices that cannot be represented as license-text strings.
-The pinned scanner selects `/app/LICENSE`, `/usr/local/LICENSE`, Debian
+The pinned scanner selects `/app/LICENSE`, `/usr/local/LICENSE`, the standard
+`/usr/local/lib/python*/LICENSE.txt` interpreter notice, Debian
 `copyright`/common-license files and Python
-site-packages files named LICENSE, LICENCE, NOTICE, COPYING or COPYRIGHT (case
+site-packages files named LICENSE, LICENCE, NOTICE, COPYING, COPYRIGHT or AUTHORS (case
 insensitive, optionally with a dot suffix). This includes nested wheel/vendor
 license directories, not arbitrary filesystem or state paths. Syft's silent
 size skip is disabled: an individual notice above 2 MiB or a complete report

@@ -48,6 +48,25 @@ Local verification: 984 relevant tests passed before adding the two exact root
 paths; the final focused group passed 145 tests, including those paths. Ruff and
 diff-whitespace checks passed. These are distinct test runs, not additive totals.
 
+## First real image review and attribution correction
+
+Native installation run `42126473380` passed both architectures at head
+`0d5e83a780aa83c2e4d7ba932c9a803473b32eb1`. Independent artifact SHA-256,
+six-file membership, source/merge-tree, install/cleanup receipts, companion
+byte validation and existing CycloneDX file-hash comparisons passed. Each
+AMD64 profile retained 348 notices; each ARM64 profile retained 345. The exact
+root project license matched the checkout; all four images retained 40 Python
+notice files, including nested setuptools vendor notices.
+
+The official-wheel comparison exposed a remaining selection omission:
+pip's MIT notice explicitly refers to AUTHORS.txt, which was not selected.
+The correction adds AUTHORS names and the standard Python interpreter notice
+path, `/usr/local/lib/python*/LICENSE.txt`. A fresh real-scanner fictional
+control retained all seven expected notices; native report SHA-256
+`05830d19f6725cca7aa204801067513401cb9d0cbd1b20775e7be6e12084df10`.
+The final focused plus documentation group passed 778 tests. Fresh image CI
+is required for this corrected source; the first build is not relabeled.
+
 ## Scope and limitations
 
 The companion changes to version 2; old companions cannot pass as original-file

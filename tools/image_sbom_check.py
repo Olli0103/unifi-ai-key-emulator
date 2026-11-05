@@ -36,12 +36,12 @@ RECEIPT = 'aikey-image-inventory/2'
 LICENSE_REVIEW = 'aikey-image-license-review/2'
 LIMIT = 32 * 1024 * 1024
 NOTICE_LIMIT = 2 * 1024 * 1024
-NOTICE_GLOBS = ['/app/LICENSE', '/usr/local/LICENSE',
+NOTICE_GLOBS = ['/app/LICENSE', '/usr/local/LICENSE', '/usr/local/lib/python*/LICENSE.txt',
                 '/usr/share/doc/**/copyright', '/usr/share/common-licenses/*'] + [
     '/usr/local/lib/python*/site-packages/**/' + name + suffix
     for name in ('[Ll][Ii][Cc][Ee][Nn][Ss][Ee]', '[Ll][Ii][Cc][Ee][Nn][Cc][Ee]',
                  '[Nn][Oo][Tt][Ii][Cc][Ee]', '[Cc][Oo][Pp][Yy][Ii][Nn][Gg]',
-                 '[Cc][Oo][Pp][Yy][Rr][Ii][Gg][Hh][Tt]')
+                 '[Cc][Oo][Pp][Yy][Rr][Ii][Gg][Hh][Tt]', '[Aa][Uu][Tt][Hh][Oo][Rr][Ss]')
     for suffix in ('', '.*')
 ]
 OFFLINE_CONFIG = '''check-for-app-update: false
@@ -82,10 +82,11 @@ def notice_path(path):
             or any(ord(char) < 32 for char in path)):
         return False
     return bool(path in ('/app/LICENSE', '/usr/local/LICENSE')
+                or re.fullmatch(r'/usr/local/lib/python[0-9.]+/LICENSE\.txt', path)
                 or re.fullmatch(r'/usr/share/doc/(?:[^/]+/)+copyright', path)
                 or re.fullmatch(r'/usr/share/common-licenses/[^/]+', path)
                 or re.fullmatch(r'/usr/local/lib/python[0-9.]+/site-packages/(?:[^/]+/)*'
-                                r'(?i:licen[sc]e|notice|copying|copyright)(?:\.[^/]+)?', path))
+                                r'(?i:licen[sc]e|notice|copying|copyright|authors)(?:\.[^/]+)?', path))
 
 
 def validate_notices(rows):
