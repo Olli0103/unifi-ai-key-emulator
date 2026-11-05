@@ -1033,9 +1033,9 @@ class CandidateService:
                                 or "live_detector" in config else None))
         elif "paired_streams" in config:
             self.ingress = AiPortIngressPool(
-                config["paired_streams"],
+                config["paired_streams"], timed_frame_observer=True,
                 frame_observer_factory=lambda camera: (
-                    lambda frame: self._observe_pool_frame(camera, frame)),
+                    lambda frame, **clock: self._observe_pool_frame(camera, frame, **clock)),
                 audio_observer_factory=lambda camera: (
                     (lambda pcm: self._observe_pool_audio(camera, pcm))
                     if camera in self._speech else None),
@@ -1050,9 +1050,9 @@ class CandidateService:
                                     if "diagnostic_detector" in config else None))
             elif "diagnostic_streams" in config:
                 self.ingress = AiPortIngressPool(
-                    config["diagnostic_streams"],
+                    config["diagnostic_streams"], timed_frame_observer=True,
                     frame_observer_factory=(
-                        (lambda camera: lambda frame: self._observe_pool_frame(camera, frame))
+                        (lambda camera: lambda frame, **clock: self._observe_pool_frame(camera, frame, **clock))
                         if self._inference is not None else None))
 
     def _pool_event_enabled(self) -> bool:
@@ -1064,7 +1064,9 @@ class CandidateService:
         policy = engine.current_policy(camera_mac) if engine is not None else None
         return policy is not None and policy.package_scope == "second_lens"
 
-    async def _observe_pool_frame(self, camera_mac: str, frame: bytes) -> None:
+    async def _observe_pool_frame(self, camera_mac: str, frame: bytes, *,
+                                  captured_ms: int | None = None,
+                                  captured_monotonic_ms: int | None = None) -> None:
         if self._held_followup.tracking(camera_mac):
             await self._follow_held_packages(camera_mac, frame)
         detector = self._pool_motion.get(camera_mac)
@@ -1084,7 +1086,10 @@ class CandidateService:
                 or not engine.has_policy(camera_mac)):
             return
         await inference.observe(
-            camera_mac, frame, generation=engine.policy_generation(camera_mac))
+            camera_mac, frame, generation=engine.policy_generation(camera_mac),
+            **({"captured_ms": captured_ms} if captured_ms is not None else {}),
+            **({"captured_monotonic_ms": captured_monotonic_ms}
+               if captured_monotonic_ms is not None else {}))
 
     async def _publish_motion_edges(self, camera_mac: str, edges: tuple) -> None:
         ws = self._current_ws
@@ -1309,7 +1314,9 @@ class CandidateService:
 
     async def _observe_pool_result(self, camera_mac: str,
                                    observations: tuple[ObjectObservation, ...],
-                                   generation: int, frame: bytes | None = None) -> None:
+                                   generation: int, frame: bytes | None = None, *,
+                                   captured_ms: int | None = None,
+                                  captured_monotonic_ms: int | None = None) -> None:
         engine = self._camera_engine
         if (engine is None
                 or not self._pool_event_enabled()
@@ -1337,7 +1344,8 @@ class CandidateService:
         if (observations and self._inference is not None
                 and not engine.needs_confirmation(camera_mac)):
             self._inference.skip_confirmation(camera_mac)
-        await self._publish_pool_candidates(candidates, frame=frame)
+        await self._publish_pool_candidates(candidates, frame=frame, captured_ms=captured_ms,
+                                            captured_monotonic_ms=captured_monotonic_ms)
         # A person who stays still sends no further track changes; retry the
         # face on later frames of the open event (bounded in _schedule_face).
         session = self._pool_sessions.get(camera_mac)
@@ -1372,7 +1380,8 @@ class CandidateService:
 
     async def _publish_pool_candidates(
             self, candidates: tuple[CameraEventCandidate, ...],
-            *, frame: bytes | None = None) -> None:
+            *, frame: bytes | None = None, captured_ms: int | None = None,
+                                  captured_monotonic_ms: int | None = None) -> None:
         self._prune_snapshots()
         ws = self._current_ws
         if (ws is None or not self._params_agreed
@@ -1405,8 +1414,10 @@ class CandidateService:
                             change.kind, change.score))
                         session["snapshots"].append(await asyncio.to_thread(
                             functools.partial(
-                                make_smart_snapshot, frame, change, int(time.time() * 1000),
+                                make_smart_snapshot, frame, change,
+                                captured_ms if captured_ms is not None else int(time.time() * 1000),
                                 filename_track_id=self._pool_snapshot_number,
+                                monotonic_ms=captured_monotonic_ms,
                                 reverify_eligible=eligible)))
                         self._count_reverify_snapshot(
                             camera, change.kind, "flagged" if eligible else "unflagged")
@@ -1436,7 +1447,9 @@ class CandidateService:
                 self._schedule_face(camera, session, change, frame)
             try:
                 payload = camera_event_payload(
-                    camera, edge, tracks, clock_wall_ms=int(time.time() * 1000))
+                    camera, edge, tracks,
+                    clock_wall_ms=(captured_ms if captured_ms is not None
+                                   and edge != "leave" else int(time.time() * 1000)))
             except SmartEventError:
                 continue
             self._add_faces(payload, session, edge, tracks, camera)
