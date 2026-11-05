@@ -2242,9 +2242,10 @@ class JobProcessor:
         if len(data) < 12 or data[4:8] != b"ftyp":
             raise WorkerError("Only MP4 video is supported; UBV requires a separate verified converter")
         offset = 0.0
-        # A key moment at the interval end is the export's last frame: seeking
-        # to the very end yields no frame, so decode the final second instead.
-        # Protect ends a reverification export at its last thumbnail.
+        # A task's end is not necessarily the export's last frame: exports
+        # may include padding. Seek the requested timestamp first. Only an
+        # empty successful decode at the task end permits the EOF fallback.
+        # Protect can end a reverification export at its last thumbnail.
         end = job.payload.get("_end" if job.operation == "reverify" else "end")
         at_end = (job.operation in {"recognizeKeyFrames", "recognizeFaces", "indexKeyFrames", "reverify"}
                   and timestamp is not None and timestamp == end)
@@ -2268,23 +2269,32 @@ class JobProcessor:
         with tempfile.TemporaryDirectory(prefix="aikey-video-", dir=self.state_dir) as temporary:
             source, output = Path(temporary) / "input.mp4", Path(temporary) / "frame.jpg"
             source.write_bytes(data)
-            seek = ["-sseof", "-1"] if at_end else ["-ss", str(offset)]
-            frames = ["-update", "1"] if at_end else ["-frames:v", "1"]
-            process = await asyncio.create_subprocess_exec(
-                executable, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-                "-protocol_whitelist", "file,pipe", "-f", "mp4", *seek,
-                "-i", str(source), "-an", *frames, "-vf", "scale=1280:1280:force_original_aspect_ratio=decrease",
-                "-c:v", "mjpeg", "-fs", str(self.max_bytes), str(output),
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-            try:
-                await process.wait()
-            except BaseException:
-                if process.returncode is None:
-                    process.kill()
+            for attempt in range(2 if at_end else 1):
+                seek = ["-ss", str(offset)] if attempt == 0 else ["-sseof", "-1"]
+                frames = ["-frames:v", "1"] if attempt == 0 else ["-update", "1"]
+                process = await asyncio.create_subprocess_exec(
+                    executable, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                    "-protocol_whitelist", "file,pipe", "-f", "mp4", *seek,
+                    "-i", str(source), "-an", *frames, "-vf", "scale=1280:1280:force_original_aspect_ratio=decrease",
+                    # Pin a JPEG-compatible range even when no frame reaches
+                    # the encoder at EOF; otherwise FFmpeg can fail encoder
+                    # initialization instead of reporting an empty decode.
+                    "-c:v", "mjpeg", "-pix_fmt", "yuvj420p", "-fs", str(self.max_bytes), str(output),
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                try:
                     await process.wait()
-                raise
-            if process.returncode != 0 or not output.is_file() or output.stat().st_size > self.max_bytes:
-                raise WorkerError("ffmpeg could not extract a bounded video frame")
+                except BaseException:
+                    if process.returncode is None:
+                        process.kill()
+                        await process.wait()
+                    raise
+                size = output.stat().st_size if output.is_file() else 0
+                if process.returncode != 0 or size > self.max_bytes:
+                    raise WorkerError("ffmpeg could not extract a bounded video frame")
+                if size:
+                    break
+                if not at_end or attempt != 0:
+                    raise WorkerError("ffmpeg could not extract a bounded video frame")
             result = output.read_bytes()
             self._image_type(result)
             return result
