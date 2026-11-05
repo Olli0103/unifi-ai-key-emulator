@@ -425,13 +425,19 @@ class ConfigurationStore:
             raise UnsafeConfigurationChange("Initial caption setup prerequisites unavailable") from exc
         candidate = deepcopy(raw)
         candidate["worker"]["continuous"] = policy
+        flags = candidate["device"].setdefault("feature_flags", {})
+        summary = flags.setdefault("supportAiSummary", {"enabled": False, "version": "v1"})
+        summary["enabled"] = True
         checked = self._validate(candidate)
         self._assert_immutable(current, checked)
         self._assert_search_profile(checked, current)
         self._assert_credential_routes(current, checked)
         changes = tuple(_changed(raw, candidate))
-        if changes != ("worker.continuous",):
-            raise UnsafeConfigurationChange("Initial captions may only add the reviewed policy")
+        allowed = {"worker.continuous", "device.feature_flags",
+                   "device.feature_flags.supportAiSummary",
+                   "device.feature_flags.supportAiSummary.enabled"}
+        if "worker.continuous" not in changes or not set(changes) <= allowed:
+            raise UnsafeConfigurationChange("Initial captions may only add the reviewed policy and summary capability")
         encoded = self._encode(candidate)
         if len(encoded) > _MAX_CONFIG_BYTES:
             raise UnsafeConfigurationChange("Caption configuration is too large")

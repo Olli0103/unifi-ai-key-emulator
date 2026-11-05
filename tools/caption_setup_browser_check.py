@@ -195,7 +195,7 @@ async def scenario(output, name, viewport, executable):
                     await confirm.click()
                     assert posts == ["/login", "/caption-setup/preview"]
                     approval = page.get_by_role(
-                        "checkbox", name="Save this initial policy only", exact=False
+                        "checkbox", name="Save this initial policy and AI summary capability", exact=False
                     )
                     await approval.focus()
                     await page.keyboard.press("Space")
@@ -205,6 +205,9 @@ async def scenario(output, name, viewport, executable):
                         page.get_by_role("heading", name="Initial captions saved", exact=True)
                     ).to_be_visible()
                     expected = json.loads(json.dumps(raw))
+                    expected["device"].setdefault("feature_flags", {})["supportAiSummary"] = {
+                        "enabled": True, "version": "v1"
+                    }
                     expected["worker"]["continuous"] = dict(
                         enabled=True,
                         api_key_file="/state/CANARY-key",

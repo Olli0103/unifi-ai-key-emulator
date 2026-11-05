@@ -205,6 +205,8 @@ class CaptionSetupControl(CaptionScopeControl):
             "<h1>Review initial captions</h1><p>Nothing saved. "
             "Allow only these cameras; same-family cameras added later are not included:</p>"
             f"<ul>{names}</ul>"
+            "<p>After the separate restart, this Key will advertise AI summaries to Protect. "
+            "Only the cameras reviewed here may be processed; other AI features stay unchanged.</p>"
             + _NOTICE
             + self._route(status)
             + "<form method='post' action='/caption-setup/apply'>"
@@ -212,7 +214,7 @@ class CaptionSetupControl(CaptionScopeControl):
             + "<label><input type='checkbox' name='acknowledge_processing' value='yes' required>"
             "I allow automatic image/video caption processing of these cameras by the reviewed "
             "provider under the shared rolling reservation limit and accept possible costs.</label>"
-            "<label><input type='checkbox' name='confirm' value='yes' required>Save this initial policy only; "
+            "<label><input type='checkbox' name='confirm' value='yes' required>Save this initial policy and AI summary capability; "
             "no running service or native permission is changed.</label>"
             "<button>Confirm initial caption setup</button></form><p><a href='/caption-setup'>Cancel</a></p>",
         )
