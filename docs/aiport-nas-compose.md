@@ -86,6 +86,29 @@ vendor Compose file, or authorize repacking adopted camera assignments.
 See the [30 October namespace verification](evidence/compose-project-fencing-20261030.md)
 for the native status reproduction and isolated lifecycle check.
 
+### Stopped containers and retained network bindings
+
+Docker clears an exited container's runtime IP and MAC fields. The reconciler
+does not treat those empty values as a matching identity. A successful apply
+with no starts now saves the already verified container IDs in its private host
+intent. A later start can reuse that binding only for the same container and
+the exact manifest/configuration/identity revision. Newly created endpoints
+must expose their explicitly requested MAC. Unknown exited containers without
+that prior evidence remain blocked; do not fabricate or edit an intent to
+admit them.
+
+Inactive endpoints must retain the exact configured IPAM address for both the
+LAN and optional health network. After start, live IP and MAC checks are
+mandatory again, before successful completion. This is not a claim that Docker
+exposes the inactive MAC, or protection against a privileged daemon operator
+rewriting network endpoints between observations. Existing uncertain-operation,
+health, state-mount and namespace guards remain in force.
+
+When running the host reconciler inside a dedicated operator container, use
+Docker's `--init` so its Python owner is not PID 1. The command guardian refuses
+PID 1 as a watched parent. This does not change application container identity,
+adoption or ordinary native-host CLI operation.
+
 ### Explicit existing NAS runtime layout
 
 The default remains one state bind, one LAN network and the supplied image for

@@ -208,9 +208,15 @@ class LayoutDocker(FakeDocker):
             value = {
                 self.manifest["name"] + "_aiport_lan": {
                     "IPAddress": lan["ipv4_address"],
+                    "IPAMConfig": {"IPv4Address": lan["ipv4_address"]},
                     "MacAddress": lan["mac_address"],
                 },
-                health["name"]: {"IPAddress": service["networks"]["aiport_health"]["ipv4_address"]},
+                health["name"]: {
+                    "IPAddress": service["networks"]["aiport_health"]["ipv4_address"],
+                    "IPAMConfig": {
+                        "IPv4Address": service["networks"]["aiport_health"]["ipv4_address"]
+                    },
+                },
             }
             if self.mutation == "health_ip":
                 value[health["name"]]["IPAddress"] = "172.27.1.24"

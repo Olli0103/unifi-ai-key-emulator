@@ -64,6 +64,7 @@ def read(directory):
                 or not isinstance(row, dict) or row.get('Service') != name
                 or row.get('State') not in ('running', 'created', 'exited')
                 or row.get('State') == 'running' and row.get('Readiness') not in ('connected', 'awaiting_adoption')
+                or 'NetworkVerified' in row and row['NetworkVerified'] is not True
                 or not isinstance(row.get('ID'), str) or not re.fullmatch('[0-9a-fA-F]{12,64}', row['ID'])):
             raise ReconcileError('nas_intent_invalid')
     for action in value['actions']:
@@ -178,8 +179,20 @@ def execute(manifest_path, manifest, states, *, host_state, verify, run=None,
         command(compose('config', '--quiet'))
         nas._verify_external_network(command, manifest)
         health_network = nas._verify_health_network(command, manifest)
+        verified_bindings = {}
+        if old is not None and old['revision'] == revision and (
+                old['phase'] in ('completed', 'reconciled') or settle):
+            for name, row in old['before'].items():
+                if row.get('NetworkVerified') is True or row['State'] == 'running':
+                    verified_bindings[name] = row['ID']
+            for action in old['actions']:
+                if action['state'] == 'observed' and action['action'] in ('create', 'start'):
+                    verified_bindings[action['name']] = action['id']
         def inspect(name, row):
-            nas._inspect(command, row, manifest['services'][name], network, health_network)
+            nas._inspect(command, row, manifest['services'][name], network, health_network,
+                         verified_stopped_id=verified_bindings.get(name))
+            verified_bindings[name] = row['ID']
+            row['NetworkVerified'] = True
         def health(name):
             row = rows().get(name)
             if not row or row['State'] != 'running':
@@ -289,6 +302,11 @@ def execute(manifest_path, manifest, states, *, host_state, verify, run=None,
             before[name]['Readiness'] = nas._readiness(health(name))
         preserved()
         if not pending:
+            # Preserve actual checked bindings, so a later stopped-container
+            # start does not have to invent missing Docker runtime IP/MACs.
+            current()
+            receipt['phase'] = 'completed'
+            publish(directory, receipt)
             return {'mode': 'applied', 'preserved': running, 'started': []}
         # Only new starts require the durable startup-byte reservation contract.
         # Existing older images are observed, never silently upgraded.

@@ -346,7 +346,8 @@ def _verify_health_network(run: Callable[[list[str], int], str],
 
 
 def _inspect(run: Callable[[list[str], int], str], row: dict, service: dict,
-             network_name: str, health_network_name: str | None = None) -> None:
+             network_name: str, health_network_name: str | None = None,
+             *, verified_stopped_id: str | None = None) -> None:
     container_id = row.get("ID")
     if not isinstance(container_id, str) or not _CONTAINER_ID.fullmatch(container_id):
         raise ReconcileError("Docker Compose did not identify its container")
@@ -391,16 +392,33 @@ def _inspect(run: Callable[[list[str], int], str], row: dict, service: dict,
                 or found[0].get("Source") != volume["source"]
                 or found[0].get("RW") is not (not volume.get("read_only", False))):
             raise ReconcileError("Docker container user, isolation or state mount differs from the manifest")
+    def address_matches(actual, expected):
+        if not isinstance(actual, dict):
+            return False
+        # Docker clears runtime addresses on stop. Only an inactive endpoint's
+        # explicit saved IPAM assignment can stand in for that missing field.
+        if row.get('State') in ('created', 'exited'):
+            return (actual.get('IPAddress') in ('', expected)
+                    and isinstance(actual.get('IPAMConfig'), dict)
+                    and actual['IPAMConfig'].get('IPv4Address') == expected)
+        return actual.get('IPAddress') == expected
+
     actual = networks.get(network_name)
-    if (not isinstance(actual, dict)
-            or network_name not in networks
-            or actual.get("IPAddress") != selected["ipv4_address"]
-            or str(actual.get("MacAddress", "")).lower() != selected["mac_address"].lower()):
+    mac_matches = (isinstance(actual, dict)
+                   and str(actual.get('MacAddress', '')).lower() == selected['mac_address'].lower())
+    # An exited container also loses its runtime MAC. Never infer its former
+    # binding from an empty field: the actor must supply the same immutable ID
+    # from a prior verified intent bound to the exact manifest/config/identity.
+    # Created endpoints still expose their requested MAC and need no exception.
+    if (not mac_matches and isinstance(actual, dict)
+            and row.get('State') == 'exited' and actual.get('MacAddress') == ''
+            and verified_stopped_id == container_id):
+        mac_matches = True
+    if not address_matches(actual, selected['ipv4_address']) or not mac_matches:
         raise ReconcileError("Docker container network, IP or MAC differs from the planned identity")
     if health_network_name is not None:
         health = networks.get(health_network_name)
-        if (not isinstance(health, dict)
-                or health.get("IPAddress") != service["networks"]["aiport_health"]["ipv4_address"]):
+        if not address_matches(health, service['networks']['aiport_health']['ipv4_address']):
             raise ReconcileError("Docker container health address differs from the reviewed identity")
 
 
