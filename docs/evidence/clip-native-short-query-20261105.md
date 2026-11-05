@@ -68,3 +68,27 @@ Operational corrections found on this path:
   `searchCondition`. The pinned client records the actual outgoing camera
   scope separately; readback never fabricates a server acknowledgment and
   still rejects conflicting echoes and every wrong-camera/wrong-time row.
+
+## Expanded native negative check: still fails
+
+A subsequent native UI search for the same train query on the same camera,
+without the original narrow date interval, returned **45 results at fixed
+similarity 50**, with native scores 50–58. The request log records one UI GET;
+one separate identical read confirmed all 45 associations and scores. No
+automatic broadening to zero occurred in this observation. The rendered
+leading results and decoded top archived original show low-detail indoor
+crops, not a train; not every returned image was independently labeled.
+
+All 45 object/event/camera associations match the frozen original-image
+archive, and their current stored vectors match the precomputed target vectors
+(maximum component difference 4.15e-8). This read-only check made no new model
+calls. It supplies no evidence of a bad index swap or wrong image association.
+Native scores are not raw cosine percentages; a diagnostic assumed scaling
+was discarded, not used as an acceptance rule.
+
+The original synthetic development corpus meets its predeclared MRR/nDCG
+floors (both at least 0.5), negative rejection (at least 0.75), and complete
+valid coverage at unchanged cosine 0.25/k5. That does **not** override the
+expanded native failure, turn reused development data into an independent
+holdout, or justify higher thresholds, hidden query-specific exclusions or
+whole-issue closure. Broader native relevance remains open in #21.
