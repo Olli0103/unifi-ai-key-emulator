@@ -53,6 +53,7 @@ async def controller(
     monkeypatch,
     *,
     login_status=200,
+    login_hook=None,
     logout_status=204,
     native_status=200,
     payload=None,
@@ -70,6 +71,8 @@ async def controller(
 
     async def login(request):
         seen.append((request.method, request.path))
+        if login_hook is not None:
+            return await login_hook(request)
         assert await request.json() == {
             "username": "fictional-user",
             "password": "fictional-password",

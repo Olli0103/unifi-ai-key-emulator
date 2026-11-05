@@ -18,6 +18,25 @@ def authorized(request):
     assert request.headers.get('X-CSRF-Token') == 'FICTIONAL-CSRF'
 
 
+async def test_source_lookup_uses_pinned_session_and_exact_bounded_read_parameters(tmp_path, monkeypatch):
+    async def search(request):
+        authorized(request)
+        assert dict(request.query) == {'searchText': 'image', 'minSimilarity': '0',
+            'start': '940000', 'end': '1065000', 'cameras': 'camera-a',
+            'offset': '0', 'limit': '1000', 'ignoreTimeFilterFromText': 'true'}
+        return web.json_response({'detections': [{'objectId': 'object-a', 'eventId': 'event-a',
+            'cameraId': 'camera-a', 'thumbnailId': 'original-a'}]})
+    async with controller(tmp_path, monkeypatch, additional_routes=[
+            web.get('/proxy/protect/api/detection-nls', search)]) as (reader, seen, _):
+        native = index_session(reader)
+        async with native:
+            result = await native.source_object(
+                {'object_id': 'object-a', 'event_id': 'event-a', 'camera_id': 'camera-a'},
+                {'id': 'event-a', 'camera': 'camera-a', 'start': 1000000, 'end': 1005000})
+            assert result['croppedId'] == 'original-a'
+        assert native.logout_acknowledged
+
+
 async def test_fixed_native_paths_json_crops_and_threshold_are_not_rewritten(tmp_path, monkeypatch):
     reads = []
     async def event(request):

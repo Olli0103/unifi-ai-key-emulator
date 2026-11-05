@@ -109,6 +109,7 @@ def _check_vector(values: Any, dimensions=DIMENSIONS) -> list[float]:
 def _atomic_bytes(path: Path, value: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor, temporary = tempfile.mkstemp(prefix=".rebuild-", dir=path.parent)
+    os.fchmod(descriptor, 0o600)
     try:
         with os.fdopen(descriptor, "wb") as output:
             output.write(value)
@@ -659,6 +660,7 @@ def _atomic_cancel_json(directory_fd, value):
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                          0o600, dir_fd=directory_fd)
     try:
+        os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "wb") as stream:
             stream.write((json.dumps(value, indent=2, sort_keys=True) + "\n").encode())
             stream.flush()

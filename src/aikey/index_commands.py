@@ -84,9 +84,11 @@ def _config(args):
 def _native(args):
     _require(args, 'native_host', 'native_username_file', 'native_password_file',
              'native_trust_file', 'native_cert_file')
+    from .index_mfa import prompt_token
     return NativeIndexSession(args.native_host, username_file=args.native_username_file,
         password_file=args.native_password_file, trust_file=args.native_trust_file,
-        cert_file=args.native_cert_file)
+        cert_file=args.native_cert_file, mfa_method=getattr(args, "native_mfa", None),
+        token_provider=prompt_token if getattr(args, "native_mfa", None) else None)
 
 
 def _plan(args):
@@ -283,6 +285,8 @@ def add_arguments(parser):
     parser.add_argument('--max-batches', type=int)
     parser.add_argument('--max-export-bytes', type=int, default=512*1024*1024)
     parser.add_argument('--timeout', type=int, default=600)
+    parser.add_argument('--native-mfa', choices=['totp', 'push', 'email', 'sms'],
+                        help='Explicit interactive MFA; code only from hidden TTY, never argv')
     parser.add_argument('--native-host')
     parser.add_argument('--native-username-file', type=Path)
     parser.add_argument('--native-password-file', type=Path)
