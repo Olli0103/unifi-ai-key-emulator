@@ -123,6 +123,8 @@ Existing configurations retain their explicit username. If an older configuratio
 Apple `container` has no restart policy. After a Mac reboot, a crash, or a stopped `container` system service, the AI Key and a Mac AI Port stay down until someone starts them. `local-apple-supervise` fills that gap. It runs from a launchd agent once a minute and at login, and it only ever *starts* an exact pinned container. It never stops, recreates or restarts a running container, so it cannot interrupt a caption request or create a second device identity.
 
 For a fresh installation, pin each running service once, then install the agent.
+Replace `AIKEY_CONTAINER_NAME` and `AIPORT_CONTAINER_NAME` below with the exact
+existing container names before running the commands.
 The generated label is now `org.local.aikey-supervise`. Existing installations
 may have an older label: inspect the currently loaded LaunchAgent and boot it out
 by its actual label before installing a replacement. Do not install a second
@@ -132,8 +134,8 @@ rule. Changing source does not rename or unload an already installed agent.
 
 
 ```bash
-local-apple-supervise pin aikey-mac <aikey-container> --state-dir state/supervisor
-local-apple-supervise pin aiport-mac <aiport-container> --state-dir state/supervisor
+local-apple-supervise pin aikey-mac AIKEY_CONTAINER_NAME --state-dir state/supervisor
+local-apple-supervise pin aiport-mac AIPORT_CONTAINER_NAME --state-dir state/supervisor
 local-apple-supervise plist --state-dir state/supervisor > ~/Library/LaunchAgents/org.local.aikey-supervise.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.local.aikey-supervise.plist
 ```
@@ -154,12 +156,15 @@ For a manual redeploy, run `hold <service> --minutes 20` first. Once the new con
 
 `local-apple-upgrade` replaces one pinned container with a container from a new image on the same host. It takes the run settings from the live container, never from hand-typed flags: user, read-only root, tmpfs, CPUs, memory, DNS, published address and port, bind-mounted state, entrypoint and arguments.
 
+Replace `NEW_CONTAINER_NAME` and `NEW_IMAGE_REFERENCE` with the unused candidate
+name and the intended image reference before running these examples.
+
 ```bash
-local-apple-upgrade plan --state-dir state/supervisor --service aiport-mac --new-name <new-container> --image <new-image>
+local-apple-upgrade plan --state-dir state/supervisor --service aiport-mac --new-name NEW_CONTAINER_NAME --image NEW_IMAGE_REFERENCE
 ```
 
 ```bash
-local-apple-upgrade swap --state-dir state/supervisor --service aiport-mac --new-name <new-container> --image <new-image> --kind aiport --slot-state state/aiport-mac --health-port 8443 --streams 3
+local-apple-upgrade swap --state-dir state/supervisor --service aiport-mac --new-name NEW_CONTAINER_NAME --image NEW_IMAGE_REFERENCE --kind aiport --slot-state state/aiport-mac --health-port 8443 --streams 3
 ```
 
 `plan` is read-only. It checks the live pin, unused candidate name, image
