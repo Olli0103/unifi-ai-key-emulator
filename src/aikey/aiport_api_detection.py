@@ -222,6 +222,8 @@ class _MotionGate:
         self._fresh: dict[str, bool] = {}
         self._near_retry_used: set[str] = set()
         self._empty_motion_until: dict[str, float] = {}
+        self._empty_motion_after: dict[str, float] = {}
+        self._observed_at: dict[str, float] = {}
         self.empty_motion_recoveries: dict[str, int] = {}
         # The last frame's changed-cell count (None for a baseline frame), for
         # the per-minute gate history (#6). Never pixel data.
@@ -238,6 +240,7 @@ class _MotionGate:
         self._fresh.pop(camera, None)
         self._near_retry_used.discard(camera)
         self._empty_motion_until.pop(camera, None)
+        self._empty_motion_after.pop(camera, None)
 
     def wait_for_motion(self, camera: str) -> None:
         """After a full budget, preserve the scene but cancel automatic probes.
@@ -251,10 +254,12 @@ class _MotionGate:
         self._armed[camera] = True
         self._startup_probe.discard(camera)
         self._empty_motion_until.pop(camera, None)
+        self._empty_motion_after.pop(camera, None)
 
     def cancel_confirmation(self, camera: str) -> bool:
         """Drop a pending confirming request; the scene stays disarmed."""
         self._empty_motion_until.pop(camera, None)
+        self._empty_motion_after.pop(camera, None)
         return self._pending.pop(camera, 0) > 0
 
     def is_refresh(self, camera: str) -> bool:
@@ -269,6 +274,7 @@ class _MotionGate:
         """Skip a refresh pair; motion rearms after the scene quiets."""
         self._pending.pop(camera, None)
         self._empty_motion_until.pop(camera, None)
+        self._empty_motion_after.pop(camera, None)
 
     def sample_result(self, camera: str, *, found_object: bool,
                       near_threshold: bool = False, empty_reply: bool = False) -> bool:
@@ -293,8 +299,11 @@ class _MotionGate:
                 and camera not in self._near_retry_used
                 and self._fresh.get(camera, False)):
             self._empty_motion_until[camera] = time.monotonic() + 10
+            # Space the one recovery by image observation time, not API latency.
+            self._empty_motion_after[camera] = self._observed_at[camera] + 2.0
         else:
             self._empty_motion_until.pop(camera, None)
+            self._empty_motion_after.pop(camera, None)
         if retry:
             self._near_retry_used.add(camera)
             self._pending[camera] = 2
@@ -311,7 +320,8 @@ class _MotionGate:
         return camera in self._previous
 
     def should_request(self, camera: str, frame: bytes, *,
-                       allow_startup_probe: bool = True) -> bool:
+                       allow_startup_probe: bool = True,
+                       captured_monotonic_ms: int | None = None) -> bool:
         try:
             with Image.open(BytesIO(frame)) as image:
                 width, height = image.size
@@ -323,6 +333,9 @@ class _MotionGate:
         except (OSError, ValueError, UnidentifiedImageError) as exc:
             raise ApiDetectionError("invalid_api_detection_frame") from exc
         now = time.monotonic()
+        observed_at = (now if captured_monotonic_ms is None
+                       else captured_monotonic_ms / 1000)
+        self._observed_at[camera] = observed_at
         previous = self._previous.get(camera)
         self._previous[camera] = thumbnail
         if previous is None:
@@ -347,24 +360,29 @@ class _MotionGate:
                 if self._quiet[camera] == 3:
                     self._armed[camera] = True
                     self._empty_motion_until.pop(camera, None)
+                    self._empty_motion_after.pop(camera, None)
             else:
                 self._quiet[camera] = 0
             recovery_until = self._empty_motion_until.get(camera, 0)
             if recovery_until <= now:
                 self._empty_motion_until.pop(camera, None)
+                self._empty_motion_after.pop(camera, None)
             if (changed >= _MOTION_CHANGED_CELLS
                     and self._armed.get(camera, True)
                     and self._pending.get(camera, 0) == 0):
                 self._pending[camera] = 2
                 self._empty_motion_until.pop(camera, None)
+                self._empty_motion_after.pop(camera, None)
                 self._near_retry_used.discard(camera)
                 self._armed[camera] = False
                 last = self._last_change.get(camera)
                 self._fresh[camera] = (last is None
                                        or now - last >= _FRESH_QUIET_SECONDS)
             elif (changed >= _MOTION_CHANGED_CELLS and recovery_until > now
+                    and observed_at >= self._empty_motion_after.get(camera, float("inf"))
                     and self._pending.get(camera, 0) == 0):
                 self._empty_motion_until.pop(camera, None)
+                self._empty_motion_after.pop(camera, None)
                 self._pending[camera] = 2
                 self._near_retry_used.add(camera)
                 self.empty_motion_recoveries[camera] = self.empty_motion_recoveries.get(camera, 0) + 1
@@ -911,8 +929,17 @@ class ApiObjectDetector:
             raise ApiDetectionError("api_detection_address_refused") from None
         self._dns_ok_until = now + _DNS_RETRY_SECONDS
 
+    def detect_observed_for_camera(self, camera_mac: str, frame: bytes,
+                                   captured_monotonic_ms: int) -> tuple[ObjectObservation, ...]:
+        """Use decoder observation time to space delayed empty-motion recovery."""
+        if type(captured_monotonic_ms) is not int or captured_monotonic_ms < 0:
+            raise ApiDetectionError("invalid_api_detection_frame")
+        return self.detect_for_camera(camera_mac, frame,
+                                      captured_monotonic_ms=captured_monotonic_ms)
+
     def detect_for_camera(self, camera_mac: str,
-                          frame: bytes) -> tuple[ObjectObservation, ...]:
+                          frame: bytes, *,
+                          captured_monotonic_ms: int | None = None) -> tuple[ObjectObservation, ...]:
         if not isinstance(frame, bytes) or not 0 < len(frame) <= _MAX_FRAME_BYTES:
             raise ApiDetectionError("invalid_api_detection_frame")
         try:
@@ -925,7 +952,8 @@ class ApiObjectDetector:
         allow_startup_probe = (self.budget is None or self.motion.has_baseline(camera_mac)
                                or self.budget.remaining(camera_mac) == self.budget.limit)
         opened = self.motion.should_request(camera_mac, frame,
-                                            allow_startup_probe=allow_startup_probe)
+                                            allow_startup_probe=allow_startup_probe,
+                                            captured_monotonic_ms=captured_monotonic_ms)
         gate = self._gate(camera_mac)
         gate.count("frames")
         changed = self.motion.last_changed.get(camera_mac)

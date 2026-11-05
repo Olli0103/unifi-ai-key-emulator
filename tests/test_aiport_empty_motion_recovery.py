@@ -43,18 +43,26 @@ def detector(tmp_path, replies, *, cap=None):
         max_requests_per_hour=cap, transport=transport), calls
 
 
+@pytest.fixture
+def clock(monkeypatch):
+    now = [100.]
+    monkeypatch.setattr("aikey.aiport_api_detection.time.monotonic", lambda: now[0])
+    return now
+
+
 def quiet_start(d):
     for _ in range(4):
         assert d.detect_for_camera(CAMERA, STILL) == ()
 
 
-def test_empty_first_motion_then_new_motion_needs_two_fresh_positives(tmp_path):
+def test_empty_first_motion_then_new_motion_needs_two_fresh_positives(tmp_path, clock):
     d, calls = detector(tmp_path, [EMPTY, EMPTY, POSITIVE, POSITIVE])
     quiet_start(d)
     tracker = TemporalTracker(max_gap_seconds=20)
     assert tracker.update(d.detect_for_camera(CAMERA, EARLY), now=1) == ()
     # The identical frame must not spend the recovery allowance.
     assert d.detect_for_camera(CAMERA, EARLY) == ()
+    clock[0] += 2
     first = d.detect_for_camera(CAMERA, LATER)
     assert len(first) == 1
     assert tracker.update(first, now=2) == ()
@@ -66,11 +74,12 @@ def test_empty_first_motion_then_new_motion_needs_two_fresh_positives(tmp_path):
 
 
 @pytest.mark.parametrize('recovery', [EMPTY, 'not JSON', POSITIVE.replace('.92', '.6')])
-def test_recovery_cannot_start_another_recovery_or_near_threshold_extension(tmp_path, recovery):
+def test_recovery_cannot_start_another_recovery_or_near_threshold_extension(tmp_path, recovery, clock):
     # json.dumps emits 0.92; replace the suffix, keeping the leading zero.
     d, calls = detector(tmp_path, [EMPTY, EMPTY, recovery])
     quiet_start(d)
     assert d.detect_for_camera(CAMERA, EARLY) == ()
+    clock[0] += 2
     if recovery == 'not JSON':
         with pytest.raises(ApiDetectionError):
             d.detect_for_camera(CAMERA, LATER)
@@ -81,11 +90,12 @@ def test_recovery_cannot_start_another_recovery_or_near_threshold_extension(tmp_
     assert len(calls) == 3
 
 
-def test_empty_positive_empty_never_confirms_or_extends(tmp_path):
+def test_empty_positive_empty_never_confirms_or_extends(tmp_path, clock):
     d, calls = detector(tmp_path, [EMPTY, EMPTY, POSITIVE, EMPTY])
     quiet_start(d)
     tracker = TemporalTracker(max_gap_seconds=20)
     for n, image in enumerate([EARLY, LATER, LATER, EARLY, LATER]):
+        clock[0] += 2
         assert tracker.update(d.detect_for_camera(CAMERA, image), now=n) == ()
     assert len(calls) == 4
 
@@ -104,11 +114,12 @@ def test_recovery_expires_and_does_not_cross_camera(tmp_path, monkeypatch):
     assert len(calls) == 3
 
 
-def test_recovery_respects_original_hourly_budget(tmp_path):
+def test_recovery_respects_original_hourly_budget(tmp_path, clock):
     d, calls = detector(tmp_path, [EMPTY, EMPTY, POSITIVE], cap=3)
     quiet_start(d)
     tracker = TemporalTracker(max_gap_seconds=20)
     for n, image in enumerate([EARLY, LATER, LATER, EARLY, LATER]):
+        clock[0] += 2
         assert tracker.update(d.detect_for_camera(CAMERA, image), now=n) == ()
     assert len(calls) == 3
     assert d.budget.remaining(CAMERA) == 0
@@ -129,10 +140,11 @@ def test_invalid_and_rejected_first_results_do_not_create_recovery(tmp_path, fir
     assert len(calls) == 2
 
 
-def test_provider_backoff_cancels_recovery(tmp_path):
+def test_provider_backoff_cancels_recovery(tmp_path, clock):
     d, calls = detector(tmp_path, [EMPTY, EMPTY])
     quiet_start(d)
     assert d.detect_for_camera(CAMERA, EARLY) == ()
+    clock[0] += 2
     d._provider_retry_at = float('inf')
     assert d.detect_for_camera(CAMERA, LATER) == ()
     assert d.backoff_skips == 1
@@ -142,11 +154,12 @@ def test_provider_backoff_cancels_recovery(tmp_path):
     assert len(calls) == 2
 
 
-def test_other_camera_cannot_spend_or_remove_recovery(tmp_path):
+def test_other_camera_cannot_spend_or_remove_recovery(tmp_path, clock):
     d, calls = detector(tmp_path, [EMPTY, EMPTY, EMPTY, POSITIVE, POSITIVE])
     quiet_start(d)
     assert d.detect_for_camera(CAMERA, EARLY) == ()
     assert d.detect_for_camera(OTHER, STILL) == ()
+    clock[0] += 2
     assert len(d.detect_for_camera(CAMERA, LATER)) == 1
     assert len(d.detect_for_camera(CAMERA, LATER)) == 1
     assert len(calls) == 5
