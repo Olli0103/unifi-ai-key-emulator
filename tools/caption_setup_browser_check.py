@@ -205,6 +205,9 @@ async def scenario(output, name, viewport, executable):
                         page.get_by_role("heading", name="Initial captions saved", exact=True)
                     ).to_be_visible()
                     expected = json.loads(json.dumps(raw))
+                    expected["device"].setdefault("feature_flags", {})["supportAiSummary"] = {
+                        "enabled": True, "version": "v1"
+                    }
                     expected["worker"]["continuous"] = dict(
                         enabled=True,
                         api_key_file="/state/CANARY-key",
