@@ -33,6 +33,8 @@ def _parser():
     setup.add_argument("--pin-only-hostname", action="store_true", help="Disable hostname matching, requiring the explicit pin")
     setup.add_argument("--request-mp4-exports", action="store_true")
     setup.add_argument("--ffmpeg-path", type=Path, help="Absolute path in the eventual runtime")
+    setup.add_argument("--factory-enrollment-seconds", type=int, default=0,
+                       help="Opt in to factory adoption for 1–600 seconds from preparation; requires the verified controller pin")
     setup.add_argument("--provider", dest="name", required=True,
                        choices=("openai", "anthropic", "ollama", "openai-compatible"))
     _provider_arguments(setup)

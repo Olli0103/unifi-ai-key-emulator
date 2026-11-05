@@ -5,6 +5,7 @@ __pycache__
 .pytest_cache
 .ruff_cache
 state
+first-run-state
 secrets
 dist
 build

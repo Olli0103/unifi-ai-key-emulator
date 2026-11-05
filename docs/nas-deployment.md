@@ -6,6 +6,12 @@ Port instances. For Ports, use [their network/Compose guide](aiport-nas-compose.
 Read [deployment requirements](deployment.md) and [compatibility limits](compatibility.md)
 first. No stable release or official prebuilt project image is available.
 
+For a **fresh Key without editing JSON**, use the separate
+[first-run Compose recipe](nas-first-run.md). It prepares a new child directory
+through `setup`, selects the model explicitly and can prepare the bounded
+factory-adoption window. It does not reuse the lower-level layout below or
+enable search. Keep an existing installation on its existing recipe and paths.
+
 ## Network and storage
 
 The root [compose.yaml](../compose.yaml) uses Linux host networking. Management

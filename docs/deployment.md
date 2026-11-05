@@ -10,7 +10,8 @@ package or pull a similarly named image as a substitute.
 | Host / goal | Follow |
 | --- | --- |
 | Trusted Linux host, one AI Key, no search initially | Host installation below |
-| Linux server or NAS with Docker Engine | [AI Key Compose guide](nas-deployment.md) |
+| Linux server or NAS with Docker Engine, fresh Key | [First-run Compose guide](nas-first-run.md) |
+| Linux server or NAS, existing/lower-level Key or optional search | [AI Key Compose guide](nas-deployment.md) |
 | Linux server or NAS, one or more AI Ports | [AI Port Linux installation](aiport-install.md) |
 | Apple silicon Mac | [Apple AI Key guide](apple-container.md) or [AI Port runtime and relay limits](aiport-candidate.md), with [instance reconciliation](aiport-apple-reconcile.md) |
 | Interface preview, no controller or models | [Synthetic demo](synthetic-demo.md) |

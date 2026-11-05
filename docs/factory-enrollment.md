@@ -2,7 +2,13 @@
 
 Factory enrollment is off by default. It supports the Protect adoption flow that submits the public factory credentials `ui` / `ui` without a custom-password field. That flow was observed on Protect 7.3.56 and completed native adoption using Apple container 1.4.1. It does not replace the generated private management password.
 
-To enable a bounded attempt, set `device.factory_enrollment_until` to an integer Unix timestamp at most ten minutes ahead and restart the emulator. The controller must have an explicit trusted SHA-256 fingerprint in `controller.expected_fingerprint`. The configured management username must be `ui` for factory credentials to work. A missing field or zero disables factory enrollment; an expired timestamp stays inactive and does not prevent startup.
+For a fresh identity, the [offline setup command](first-run.md) accepts
+`--factory-enrollment-seconds 600` together with the independently verified
+controller fingerprint. It writes the same bounded deadline without a manual
+JSON edit. The clock starts during preparation; setup does not start or adopt
+the device. This is not a renewal command for existing/adopted directories.
+
+To enable a bounded attempt in the lower-level recipe, set `device.factory_enrollment_until` to an integer Unix timestamp at most ten minutes ahead and restart the emulator. The controller must have an explicit trusted SHA-256 fingerprint in `controller.expected_fingerprint`. The configured management username must be `ui` for factory credentials to work. A missing field or zero disables factory enrollment; an expired timestamp stays inactive and does not prevent startup.
 
 Print a deadline without changing configuration:
 

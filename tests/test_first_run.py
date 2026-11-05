@@ -39,6 +39,7 @@ def test_prepares_config_identity_and_safe_next_steps(tmp_path, capsys):
     assert report["adoption"] == "not_started"
     assert report["model_availability"] == "not_tested"
     assert report["additional_features_enabled"] is False
+    assert report["factory_enrollment_until"] == 0
     assert "cost" in report["next_steps"][-1]
     assert config["controller"]["host"] == "192.0.2.1"
     assert config["device"]["ip"] == config["runtime"]["bind"] == "192.0.2.110"
@@ -95,6 +96,8 @@ def test_explicit_nat_pin_mp4_and_hosted_key_reference_without_read(tmp_path, ca
     ["--controller-fingerprint", ""], ["--search-fingerprint", ""],
     ["--controller-fingerprint", "z" * 64], ["--controller-fingerprint", "ab"],
     ["--ffmpeg-path", "relative/ffmpeg"], ["--model", " "],
+    ["--factory-enrollment-seconds", "-1"], ["--factory-enrollment-seconds", "601"],
+    ["--factory-enrollment-seconds", "600"],
     ["--provider", "openai"], ["--provider", "openai-compatible"],
     ["--provider", "openai", "--api-key-file", "missing", "--base-url", "https://wrong.invalid/v1"],
     ["--base-url", "http://remote.invalid"],
@@ -129,6 +132,28 @@ def test_existing_targets_never_reused_or_modified(tmp_path, kind):
     assert before == after
     if kind in {"symlink", "dangling"}:
         assert root.is_symlink()
+
+
+def test_factory_window_is_opt_in_absolute_and_not_renewed_on_reload(tmp_path, monkeypatch, capsys):
+    import time
+    started = int(time.time())
+    monkeypatch.setattr("aikey.first_run.time.time", lambda: started)
+    root = tmp_path / "fresh"
+    assert main(arguments(root, "--factory-enrollment-seconds", "600",
+                          "--controller-fingerprint", "ab" * 32)) == 0
+    report = json.loads(capsys.readouterr().out)
+    path = root / "config.json"
+    original = path.read_bytes()
+    assert report["factory_enrollment_until"] == started + 600
+    assert load_config(path)["device"]["factory_enrollment_until"] == started + 600
+    # The existing runtime accepts an expired configuration, but cannot extend
+    # its saved window just by loading/restarting it later.
+    monkeypatch.setattr("aikey.first_run.time.time", lambda: started + 601)
+    assert load_config(path)["device"]["factory_enrollment_until"] < time.time()
+    assert path.read_bytes() == original
+    assert main(arguments(root, "--factory-enrollment-seconds", "600",
+                          "--controller-fingerprint", "ab" * 32)) == 2
+    assert path.read_bytes() == original
 
 
 def test_repeat_and_racing_setup_do_not_replace_identity(tmp_path):

@@ -1,0 +1,18 @@
+# Fresh Key only. Do not use with an existing adopted state directory.
+name: local-aikey-first-run
+services:
+  emulator:
+    build: .
+    image: local-aikey-first-run:0.1.0
+    user: "${AIKEY_UID:-10001}:${AIKEY_GID:-10001}"
+    init: true
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,nosuid,noexec,size=256m
+    volumes:
+      - ./first-run-state:/state
+    command: ["run", "--config", "/state/key/config.json"]
+    restart: "no"
