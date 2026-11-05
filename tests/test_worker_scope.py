@@ -182,7 +182,7 @@ async def test_reserved_job_cannot_resume_after_crash_before_callback(services, 
     count = len(services.model)
     restarted = processor(services, tmp_path, monkeypatch)
     try:
-        with pytest.raises(WorkerError, match="consumed"):
+        with pytest.raises(WorkerError, match="Execution outcome is uncertain"):
             await restarted.submit(command())
         assert len(services.model) == count == 1
         assert services.callbacks == []
