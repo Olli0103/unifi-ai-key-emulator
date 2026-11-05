@@ -55,8 +55,14 @@ Output identifies the selected endpoint and untested model availability. No medi
 is sent by setup. Once real inference is explicitly started, selected camera
 frames go to that endpoint; upstream retention, forwarding and charges must be
 reviewed separately. OpenAI uses `store=false`, which is not a blanket deletion
-or zero-retention guarantee. No fallback, search/database, discovery, continuous
-camera policy, named recognition, audio or migration is enabled by this command.
+or zero-retention guarantee. No fallback, search/database, continuous camera
+policy, named recognition, audio or migration is enabled by this command.
+Discovery is disabled by default. For a Linux LAN runtime, explicitly adding
+`--linux-discovery` prepares UDP 10001 and multicast on the advertised device
+interface, with replies allowlisted to the specified controller. Both controller
+and device must be literal private non-loopback unicast IPv4 addresses; setup
+does not resolve names or open a socket. The existing Linux runtime guard remains
+in force. This does not opt into factory enrollment or perform native adoption.
 
 ## Trust and start remain explicit
 

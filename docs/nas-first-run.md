@@ -49,7 +49,7 @@ docker compose -f compose.first-run.yaml run --rm --no-deps emulator setup \
   --protect-version YOUR_PROTECT_VERSION --control-profile device-service \
   --controller-fingerprint VERIFIED_SHA256 \
   --provider ollama --model INSTALLED_VISION_MODEL \
-  --ffmpeg-path /usr/bin/ffmpeg --request-mp4-exports
+  --ffmpeg-path /usr/bin/ffmpeg --request-mp4-exports --linux-discovery
 ```
 
 For another provider, use the existing [provider flags](first-run.md). A remote
@@ -57,6 +57,16 @@ endpoint requires explicit `--allow-remote`; remote plaintext HTTP additionally
 requires `--allow-insecure-http`. A private endpoint may forward data elsewhere;
 review its actual destination, retention and cost before enabling inference.
 Keys remain private mounted file references, never command-line values.
+
+`--linux-discovery` prepares the existing Linux responder on UDP 10001, with
+multicast membership on the advertised device interface and responses restricted
+to the single literal controller IPv4 address. Setup itself opens no socket.
+The port must be unused on the host, and the controller must reach the advertised
+management address. Without discovery, an unadopted control connection can create
+a native candidate without a management address; an adoption HTTP 200 alone is
+not successful adoption. This flag does not enable factory credentials, search,
+camera processing or automatic adoption, and does not relax the macOS runtime
+guard. Linux NAS discovery/adoption still requires the actual native check.
 
 If the certificate does not cover the chosen address, explicitly add
 `--pin-only-hostname` with the independently verified pin. If the console's

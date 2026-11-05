@@ -35,6 +35,8 @@ def _parser():
     setup.add_argument("--ffmpeg-path", type=Path, help="Absolute path in the eventual runtime")
     setup.add_argument("--factory-enrollment-seconds", type=int, default=0,
                        help="Opt in to factory adoption for 1–600 seconds from preparation; requires the verified controller pin")
+    setup.add_argument("--linux-discovery", action="store_true",
+                       help="Prepare controller-allowlisted UDP discovery for a Linux LAN runtime; requires literal controller/device IPv4 addresses")
     setup.add_argument("--provider", dest="name", required=True,
                        choices=("openai", "anthropic", "ollama", "openai-compatible"))
     _provider_arguments(setup)

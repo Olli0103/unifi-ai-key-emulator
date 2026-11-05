@@ -18,6 +18,8 @@ def forbid_network_and_runtime(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", forbidden)
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
+    monkeypatch.setattr(socket.socket, "bind", forbidden)
+    monkeypatch.setattr(socket.socket, "sendto", forbidden)
     monkeypatch.setattr("aikey.cli._run", forbidden)
     monkeypatch.setattr("aikey.tls.import_controller_trust", forbidden)
 
@@ -86,6 +88,38 @@ def test_explicit_nat_pin_mp4_and_hosted_key_reference_without_read(tmp_path, ca
     report = json.loads(capsys.readouterr().out)
     assert report["vision_destination"] == "https://api.openai.com/v1"
     assert "not verified" in report["media_policy"]
+
+
+def test_linux_discovery_is_prepared_offline_and_scoped_to_controller(tmp_path, capsys):
+    root = tmp_path / "fresh"
+    assert main(arguments(root, "--linux-discovery")) == 0
+    report = json.loads(capsys.readouterr().out)
+    config = load_config(root / "config.json")
+    assert report["discovery_enabled"] is report["additional_features_enabled"] is True
+    assert report["network_contacted"] is report["service_started"] is False
+    assert report["adoption"] == "not_started"
+    assert config["discovery"] == {
+        "enabled": True, "bind": "0.0.0.0", "port": 10001,
+        "multicast": True, "interface_ip": "192.0.2.110",
+        "allowed_controller_ips": ["192.0.2.1"],
+    }
+    assert not config["database"]["enabled"] and not config["search"]["enabled"]
+    assert "factory_enrollment_until" not in config["device"]
+    assert "continuous" not in config["worker"]
+
+
+@pytest.mark.parametrize("option,value", [
+    ("--controller", "controller.invalid"), ("--controller", "::1"),
+    ("--controller", "0.0.0.0"), ("--controller", "239.1.1.1"),
+    ("--controller", "127.0.0.1"), ("--controller", "8.8.8.8"),
+    ("--device-ip", "0.0.0.0"), ("--device-ip", "127.0.0.1"),
+    ("--device-ip", "239.1.1.1"), ("--device-ip", "::1"),
+    ("--device-ip", "255.255.255.255"),
+])
+def test_discovery_invalid_address_refused_before_identity(tmp_path, option, value):
+    root = tmp_path / "fresh"
+    assert main(arguments(root, "--linux-discovery", option, value)) == 2
+    assert not root.exists()
 
 
 @pytest.mark.parametrize("extra", [
