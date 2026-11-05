@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 import re
 import secrets
-import stat
 import time
 from urllib.parse import urlsplit
 
@@ -54,15 +53,6 @@ def atomic_private(path: Path, content: str | bytes) -> None:
     try:
         fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(fd, "wb") as handle:
-            # Harden this new regular file before writing private bytes. NAS
-            # creation modes can differ from the requested mode; never chmod
-            # the later directory-fsync descriptor or an existing destination.
-            info = os.fstat(handle.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
-                raise ConfigError("Private temporary file is not owned by this user")
-            os.fchmod(handle.fileno(), 0o600)
-            if stat.S_IMODE(os.fstat(handle.fileno()).st_mode) != 0o600:
-                raise ConfigError("Private temporary file permissions could not be enforced")
             handle.write(content.encode() if isinstance(content, str) else content)
             handle.flush()
             os.fsync(handle.fileno())
