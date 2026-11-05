@@ -1,4 +1,4 @@
-"""Export exact authorized original native object crops, without inference.
+"""Export exact authorized original native object crops, without image inference.
 
 The caller supplies an immutable read-only index projection and an authenticated
 native reader. Only exact native event/object/camera joins are accepted. A
@@ -26,6 +26,7 @@ class SourceExportError(RuntimeError):
 def _write(root, name, data):
     descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                          0o600, dir_fd=root)
+    os.fchmod(descriptor, 0o600)
     with os.fdopen(descriptor, 'wb') as stream:
         stream.write(data)
         stream.flush()
@@ -49,7 +50,7 @@ def _jpeg(raw):
 async def export_crop_archive(destination: Path, rows: list[dict], native, *,
                               authorized_cameras: frozenset[str], max_bytes=512*1024*1024,
                               timeout=600, clock=time.monotonic):
-    """Read only named events/crops; no scanning, fallback, retry or camera grant.
+    """Read named events/crops and bounded native search-snapshot associations.
 
     ``native.event`` and ``native.crop`` may return None only for a definitive
     not-found result. Authentication, transport, malformed data or mismatched
@@ -78,6 +79,7 @@ async def export_crop_archive(destination: Path, rows: list[dict], native, *,
     selected.sort(key=lambda x: x['object_id'])
     # Admission and full projection validation precede filesystem and network effects.
     destination.mkdir(mode=0o700, parents=False, exist_ok=False)
+    destination.chmod(0o700)
     directory = images = None
     deadline = clock() + timeout
     counters = {'indexed': len(rows), 'authorized': len(selected), 'exported': 0,
@@ -87,6 +89,7 @@ async def export_crop_archive(destination: Path, rows: list[dict], native, *,
         _private(os.fstat(directory), directory=True)
         os.mkdir('images', 0o700, dir_fd=directory)
         images = os.open('images', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+        os.fchmod(images, 0o700)
         _private(os.fstat(images), directory=True)
         result = []
         saved = set()
@@ -105,6 +108,14 @@ async def export_crop_archive(destination: Path, rows: list[dict], native, *,
                     raise SourceExportError('The native event association is invalid')
                 matches = [x for x in event['metadata']['detectedThumbnails']
                            if isinstance(x, dict) and x.get('objectId') == row['object_id']]
+                if not matches and hasattr(native, 'source_object'):
+                    match = await native.source_object(row, event)
+                    if match is not None:
+                        if (not isinstance(match, dict) or match.get('objectId') != row['object_id']
+                                or match.get('eventId') != row['event_id']
+                                or match.get('cameraId') != row['camera_id']):
+                            raise SourceExportError('The native search-snapshot association is invalid')
+                        matches = [match]
                 if not matches:
                     counters['no_source'] += 1
                     continue

@@ -210,7 +210,7 @@ class ApiDetectionError(ValueError):
 
 
 class _MotionGate:
-    """Sample in pairs; one doubtful first reply may use one extra sample."""
+    """Bounded pairs, with one recovery for an early doubtful/empty reply."""
 
     def __init__(self):
         self._previous: dict[str, bytes] = {}
@@ -221,6 +221,8 @@ class _MotionGate:
         self._last_change: dict[str, float] = {}
         self._fresh: dict[str, bool] = {}
         self._near_retry_used: set[str] = set()
+        self._empty_motion_until: dict[str, float] = {}
+        self.empty_motion_recoveries: dict[str, int] = {}
         # The last frame's changed-cell count (None for a baseline frame), for
         # the per-minute gate history (#6). Never pixel data.
         self.last_changed: dict[str, int | None] = {}
@@ -235,6 +237,7 @@ class _MotionGate:
         self._last_change.pop(camera, None)
         self._fresh.pop(camera, None)
         self._near_retry_used.discard(camera)
+        self._empty_motion_until.pop(camera, None)
 
     def wait_for_motion(self, camera: str) -> None:
         """After a full budget, preserve the scene but cancel automatic probes.
@@ -247,9 +250,11 @@ class _MotionGate:
         self._quiet[camera] = 0
         self._armed[camera] = True
         self._startup_probe.discard(camera)
+        self._empty_motion_until.pop(camera, None)
 
     def cancel_confirmation(self, camera: str) -> bool:
         """Drop a pending confirming request; the scene stays disarmed."""
+        self._empty_motion_until.pop(camera, None)
         return self._pending.pop(camera, 0) > 0
 
     def is_refresh(self, camera: str) -> bool:
@@ -263,9 +268,10 @@ class _MotionGate:
     def defer(self, camera: str) -> None:
         """Skip a refresh pair; motion rearms after the scene quiets."""
         self._pending.pop(camera, None)
+        self._empty_motion_until.pop(camera, None)
 
     def sample_result(self, camera: str, *, found_object: bool,
-                      near_threshold: bool = False) -> bool:
+                      near_threshold: bool = False, empty_reply: bool = False) -> bool:
         """Keep confirmation only for a positive or one doubtful first reply.
 
         The doubtful reply itself never reaches tracking. Reserve at most two
@@ -277,6 +283,18 @@ class _MotionGate:
         retry = (not found_object and near_threshold
                  and self._pending.get(camera, 0) == 1
                  and camera not in self._near_retry_used)
+        # A clean empty first motion frame may precede the actual arrival.
+        # Do not repeat it or poll a static scene: retain one short allowance
+        # that only a subsequent changed frame can consume. Startup, rejected
+        # objects, failures and confirmation/recovery replies never qualify.
+        if (empty_reply and not found_object and not near_threshold
+                and self._pending.get(camera, 0) == 1
+                and camera not in self._startup_probe
+                and camera not in self._near_retry_used
+                and self._fresh.get(camera, False)):
+            self._empty_motion_until[camera] = time.monotonic() + 10
+        else:
+            self._empty_motion_until.pop(camera, None)
         if retry:
             self._near_retry_used.add(camera)
             self._pending[camera] = 2
@@ -328,17 +346,28 @@ class _MotionGate:
                 self._quiet[camera] = min(3, self._quiet.get(camera, 0) + 1)
                 if self._quiet[camera] == 3:
                     self._armed[camera] = True
+                    self._empty_motion_until.pop(camera, None)
             else:
                 self._quiet[camera] = 0
+            recovery_until = self._empty_motion_until.get(camera, 0)
+            if recovery_until <= now:
+                self._empty_motion_until.pop(camera, None)
             if (changed >= _MOTION_CHANGED_CELLS
                     and self._armed.get(camera, True)
                     and self._pending.get(camera, 0) == 0):
                 self._pending[camera] = 2
+                self._empty_motion_until.pop(camera, None)
                 self._near_retry_used.discard(camera)
                 self._armed[camera] = False
                 last = self._last_change.get(camera)
                 self._fresh[camera] = (last is None
                                        or now - last >= _FRESH_QUIET_SECONDS)
+            elif (changed >= _MOTION_CHANGED_CELLS and recovery_until > now
+                    and self._pending.get(camera, 0) == 0):
+                self._empty_motion_until.pop(camera, None)
+                self._pending[camera] = 2
+                self._near_retry_used.add(camera)
+                self.empty_motion_recoveries[camera] = self.empty_motion_recoveries.get(camera, 0) + 1
             if changed >= _MOTION_CHANGED_CELLS:
                 self._last_change[camera] = now
         if self._pending.get(camera, 0):
@@ -1062,6 +1091,7 @@ class ApiObjectDetector:
                         read["plates_partial"] += item.plate is not None and "?" in item.plate
             retry = self.motion.sample_result(
                 camera_mac, found_object=bool(accepted),
+                empty_reply=not reported and not rejected,
                 near_threshold=any(item.kind in SCORE_KINDS
                                    and .5 <= item.score < threshold for item in reported))
             if retry:
@@ -1403,6 +1433,8 @@ class ApiObjectDetector:
             "responses": 0, "empty_responses": 0,
             "below_threshold": 0, "accepted_objects": 0,
         }))
+        if self.motion.empty_motion_recoveries.get(camera_mac):
+            result['empty_motion_recoveries'] = self.motion.empty_motion_recoveries[camera_mac]
         kinds = self._kind_counts.get(camera_mac, {
             "below_threshold": dict.fromkeys(_LABELS, 0),
             "near_threshold": dict.fromkeys(_LABELS, 0),

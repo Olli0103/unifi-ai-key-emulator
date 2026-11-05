@@ -18,6 +18,25 @@ def authorized(request):
     assert request.headers.get('X-CSRF-Token') == 'FICTIONAL-CSRF'
 
 
+async def test_source_lookup_uses_pinned_session_and_exact_bounded_read_parameters(tmp_path, monkeypatch):
+    async def search(request):
+        authorized(request)
+        assert dict(request.query) == {'searchText': 'image', 'minSimilarity': '0',
+            'start': '940000', 'end': '1065000', 'cameras': 'camera-a',
+            'offset': '0', 'limit': '1000', 'ignoreTimeFilterFromText': 'true'}
+        return web.json_response({'detections': [{'objectId': 'object-a', 'eventId': 'event-a',
+            'cameraId': 'camera-a', 'thumbnailId': 'original-a'}]})
+    async with controller(tmp_path, monkeypatch, additional_routes=[
+            web.get('/proxy/protect/api/detection-nls', search)]) as (reader, seen, _):
+        native = index_session(reader)
+        async with native:
+            result = await native.source_object(
+                {'object_id': 'object-a', 'event_id': 'event-a', 'camera_id': 'camera-a'},
+                {'id': 'event-a', 'camera': 'camera-a', 'start': 1000000, 'end': 1005000})
+            assert result['croppedId'] == 'original-a'
+        assert native.logout_acknowledged
+
+
 async def test_fixed_native_paths_json_crops_and_threshold_are_not_rewritten(tmp_path, monkeypatch):
     reads = []
     async def event(request):
@@ -155,3 +174,21 @@ async def test_bad_object_references_are_refused_before_requests(tmp_path, monke
             with pytest.raises(NativeIndexError, match='admission is invalid'):
                 await native.search('unrelated', min_similarity=0)
         assert len(seen) == 3  # Login/bootstrap/logout, no attempted source/search read.
+
+
+async def test_frozen_native_scope_is_sent_to_actual_pinned_endpoint(tmp_path, monkeypatch):
+    async def search(request):
+        authorized(request)
+        assert dict(request.query) == {'searchText': 'a train', 'minSimilarity': '50',
+            'cameras': 'camera-a', 'start': '110', 'end': '130', 'ignoreTimeFilterFromText': 'true'}
+        return web.json_response({'detections': []})
+    async with controller(tmp_path, monkeypatch, additional_routes=[
+            web.get('/proxy/protect/api/detection-nls', search)]) as (reader, seen, _):
+        native = index_session(reader)
+        async with native:
+            assert await native.search('a train', min_similarity=50, camera_id='camera-a',
+                                       start_ms=110, end_ms=130) == {'detections': [], '_aikey_request_scope': {
+                                           'camera_id': 'camera-a', 'start_ms': 110, 'end_ms': 130}}
+            with pytest.raises(NativeIndexError, match='scope'):
+                await native.search('a train', min_similarity=50, start_ms=110)
+        assert native.logout_acknowledged

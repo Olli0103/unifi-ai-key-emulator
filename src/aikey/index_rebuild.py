@@ -109,6 +109,7 @@ def _check_vector(values: Any, dimensions=DIMENSIONS) -> list[float]:
 def _atomic_bytes(path: Path, value: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor, temporary = tempfile.mkstemp(prefix=".rebuild-", dir=path.parent)
+    os.fchmod(descriptor, 0o600)
     try:
         with os.fdopen(descriptor, "wb") as output:
             output.write(value)
@@ -180,9 +181,15 @@ class Rebuild:
     allow_unversioned_source = False
 
     def __init__(self, store: IndexStore, state_dir: Path, *, target_revision: str, target_source: str,
-                 now: Callable[[], float] = time.time, generation: str | None = None):
+                 now: Callable[[], float] = time.time, generation: str | None = None,
+                 target_encoding: dict | None = None):
         if not isinstance(target_revision, str) or not _REVISION.fullmatch(target_revision):
             raise RebuildError("The target revision must be a 64-digit hex digest")
+        if target_encoding is not None:
+            from .encoding_identity import clip_encoding, CLIP_TEXT_POLICIES
+            if self.profile_kind != 'clip-basic-v1' or target_encoding not in [clip_encoding(p) for p in CLIP_TEXT_POLICIES]:
+                raise RebuildError('Unsupported target encoding contract')
+            self.target_encoding = dict(target_encoding)
         self.store, self.now = store, now
         self.target_revision, self.target_source = target_revision, target_source
         self.state_dir = Path(state_dir)
@@ -305,7 +312,8 @@ class Rebuild:
     def _mutation(self):
         with _generation_lock(self.state_dir, self.tag) as state_fd:
             fresh = type(self)(self.store, self.state_dir, target_revision=self.target_revision,
-                            target_source=self.target_source, now=self.now, generation=self.tag)
+                            target_source=self.target_source, now=self.now, generation=self.tag,
+                            **({'target_encoding': self.target_encoding} if self.profile_kind == 'clip-basic-v1' else {}))
             self.journal, self.target_profile = fresh.journal, fresh.target_profile
             self._state_fd = state_fd
             try:
@@ -326,7 +334,11 @@ class Rebuild:
         if expected is not None and expected != self.store.source_identity():
             raise RebuildError("The frozen index source changed; export a fresh source and use a new generation")
 
-    async def _check_embedder(self, embedder: Embedder, revision: str) -> None:
+    async def _check_embedder(self, embedder: Embedder, revision: str, *, target=True) -> None:
+        if (target and self.profile_kind == 'clip-basic-v1' and revision == self.target_revision
+                and self.target_encoding != CLIP_ENCODING
+                and getattr(embedder, 'encoding_identity', None) != self.target_encoding):
+            raise MixedRevisionError('The staging encoder does not serve the target text policy')
         served = await embedder.revision()
         if served != revision:
             raise MixedRevisionError("The staging encoder does not serve the expected revision")
@@ -610,7 +622,7 @@ class Rebuild:
                 if (any(v is None for v in expected_encoding.values())
                         or getattr(previous_embedder, "encoding_identity", None) != expected_encoding):
                     raise RebuildError("The retained previous encoder must match the full prior encoding contract")
-            await self._check_embedder(previous_embedder, previous["revision"])
+            await self._check_embedder(previous_embedder, previous["revision"], target=False)
             for object_id in added:
                 image = await source(object_id)
                 if image is None:
@@ -648,6 +660,7 @@ def _atomic_cancel_json(directory_fd, value):
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                          0o600, dir_fd=directory_fd)
     try:
+        os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "wb") as stream:
             stream.write((json.dumps(value, indent=2, sort_keys=True) + "\n").encode())
             stream.flush()

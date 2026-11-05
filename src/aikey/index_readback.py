@@ -150,7 +150,8 @@ async def native_readback(plan: NativeReadbackPlan, native, *, runtime):
     await runtime_check()
     outcomes = []
     for query in plan.value['queries']:
-        response = await native.search(query['text'], min_similarity=query['min_similarity'])
+        scope = {k: query[k] for k in ('camera_id', 'start_ms', 'end_ms') if query[k] is not None}
+        response = await native.search(query['text'], min_similarity=query['min_similarity'], **scope)
         if not isinstance(response, dict) or not isinstance(response.get('detections'), list):
             raise ReadbackError('The native search response is invalid')
         conditions = response.get('searchCondition')
@@ -158,9 +159,13 @@ async def native_readback(plan: NativeReadbackPlan, native, *, runtime):
                 or conditions.get('startTime') != query['start_ms']
                 or conditions.get('endTime') != query['end_ms']):
             raise ReadbackError('The native date filter does not match the frozen plan')
-        if query['camera_id'] is not None and (not isinstance(conditions, dict)
-                or conditions.get('cameraIds') != [query['camera_id']]):
-            raise ReadbackError('The native camera filter does not match the frozen plan')
+        if query['camera_id'] is not None:
+            echoed = conditions.get('cameraIds') if isinstance(conditions, dict) else None
+            requested = response.get('_aikey_request_scope')
+            if ((echoed is not None and echoed != [query['camera_id']])
+                    or (echoed is None and requested != {k: query[k]
+                        for k in ('camera_id', 'start_ms', 'end_ms')})):
+                raise ReadbackError('The native camera filter does not match the frozen plan')
         rows = []
         for row in response['detections']:
             if not isinstance(row, dict):

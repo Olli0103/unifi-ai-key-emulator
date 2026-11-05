@@ -181,3 +181,20 @@ The synthetic SQL/TLS lifecycle is not a production migration, a hardware/model
 quality result, power-loss qualification or proof of current controller UI.
 Native rollout remains with the integration owner under the issue's handoff
 boundary. No code path silently upgrades a live model or grants camera access.
+
+## Native short-query CLIP policy
+
+The CLIP server defaults to the existing `literal` policy. Opt-in
+`--text-policy native-short-photo` implements the documented AI Key 2.2.8
+short-query rule: prepend `a photo of ` to a query containing fewer than three
+whitespace-separated words. It does not change image preprocessing or scores.
+The server reports a distinct tokenizer contract in health and vector replies.
+
+Use `--target-text-policy native-short-photo` consistently for all migration
+commands selecting that generation. Set `find_anything.text_policy` to
+`native-short-photo` only as part of the matching profile/endpoint handoff.
+The existing literal default, full source-coverage gate, fixed quality plan,
+backup, rollback and native readback requirements remain. Changing this policy
+through ordinary config administration against a pinned old index is refused.
+A policy change is not evidence that a checkpoint qualifies; evaluate the
+actual paired model and fixed queries before cutover.
