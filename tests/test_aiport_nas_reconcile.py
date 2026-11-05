@@ -265,6 +265,7 @@ class FakeDocker:
             if self.unsafe_network == "attachment":
                 network_name = "wrong"
             return json.dumps({network_name: {
+                "IPAMConfig": {"IPv4Address": network["ipv4_address"]},
                 "IPAddress": "192.168.10.200" if self.wrong_ip else network["ipv4_address"],
                 "MacAddress": network["mac_address"]}})
         if "exec" in argv:
