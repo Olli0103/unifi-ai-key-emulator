@@ -76,6 +76,16 @@ of hostname matching, never disables certificate verification. Additional
 deployment-specific policies remain separate work; setup does not promise every
 network layout is ready without further configuration.
 
+If the console requires [factory enrollment](factory-enrollment.md), supply
+`--factory-enrollment-seconds 600` and the verified `--controller-fingerprint`
+to the original `setup` command. This explicit opt-in saves one absolute
+deadline, at most ten minutes **from preparation**, not from later startup.
+The default is zero/off. No password is replaced, no service starts, and
+loading/restarting the saved configuration cannot renew the deadline. Existing
+directories remain refused. Complete trust import and the adoption attempt
+within that window; an expired preparation is retained for inspection, not
+automatically reset or reinitialized.
+
 Select `--control-profile device-service` when following the separately documented
 device-service protocol recipe; the default is `ucp4`. The device-service choice
 requires `--controller-fingerprint` and is validated before identity creation.

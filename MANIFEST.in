@@ -1,6 +1,7 @@
 include LICENSE README.md CONTRIBUTING.md PLAN.md BUILD-RESULT.md Dockerfile compose.yaml requirements-runtime.lock .dockerignore
 include CHANGELOG.md
 include Dockerfile.aiport-candidate requirements-build.lock
+include compose.first-run.yaml
 recursive-include docs *.md
 recursive-include deployment *.sh *.sql Dockerfile *.md
 recursive-include examples *
@@ -13,6 +14,7 @@ include THIRD_PARTY_NOTICES.txt CORRESPONDING_SOURCE.json
 prune research
 prune private
 prune state
+prune first-run-state
 prune secrets
 global-exclude *.key *.pem *.p12 *.pfx *.deb *.bin *.elf *.pth *.pt *.onnx *.safetensors *.gguf *.jpg *.jpeg *.png *.wav *.mp4 *.ubv
 global-exclude *.tar *.tgz *.gz *.xz *.zip *.7z *.so *.dylib *.dll *.exe *.tflite *.pb *.h5 *.ckpt *.gif *.webp *.mov *.mp3 *.mkv
