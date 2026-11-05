@@ -300,7 +300,7 @@ def test_package_observation_requires_exact_class_label_and_bounded_box():
     assert rejected == {"label:package": 1}
 
 
-def test_continuous_motion_is_one_burst_until_three_quiet_frames(tmp_path):
+def test_continuous_motion_has_one_empty_recovery_until_three_quiet_frames(tmp_path):
     calls = []
 
     def transport(*_args):
@@ -314,11 +314,12 @@ def test_continuous_motion_is_one_burst_until_three_quiet_frames(tmp_path):
     detector.detect_for_camera(FIRST, STILL)
     for image in (FRAME, STILL) * 5:
         detector.detect_for_camera(FIRST, image)
-    assert len(calls) == 2
+    assert len(calls) == 3  # startup, empty motion, one changed-frame recovery
     for _ in range(3):
         detector.detect_for_camera(FIRST, STILL)
     detector.detect_for_camera(FIRST, FRAME)
-    assert len(calls) == 3
+    assert len(calls) == 3  # The original fresh-motion reserve still defers refresh.
+    assert detector.diagnostic_counts(FIRST)['refreshes_deferred'] == 1
 
 
 def test_http_error_exposes_only_status_class(monkeypatch):
