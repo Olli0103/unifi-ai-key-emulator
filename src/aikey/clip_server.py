@@ -21,7 +21,8 @@ from aiohttp import BodyPartReader, web
 from aiohttp.http_exceptions import BadHttpMessage
 
 from .clip import DIMENSIONS, MODEL, ClipError, normalize
-from .encoding_identity import CLIP_ENCODING
+from .encoding_identity import CLIP_ENCODING as CLIP_ENCODING
+from .encoding_identity import CLIP_TEXT_POLICIES, clip_encoding, clip_query
 from .multipart_input import read_part
 
 
@@ -139,14 +140,15 @@ def onnx_encoders(model_dir: str, *, threads: int = 4) -> tuple[TextEncoder, Ima
 
 
 def build_app(encode_text: TextEncoder, encode_image: ImageEncoder, *,
-              revision: str | None = None) -> web.Application:
+              revision: str | None = None, text_policy: str = 'literal') -> web.Application:
+    encoding = clip_encoding(text_policy)
     lock = asyncio.Lock()
     operations = set()
     counters = {"text_requests": 0, "image_requests": 0, "texts": 0, "regions": 0,
                 "rejected": 0, "failed": 0}
 
     def reply(vectors):
-        return web.json_response({"model": MODEL, "dim": DIMENSIONS, "encoding": dict(CLIP_ENCODING),
+        return web.json_response({"model": MODEL, "dim": DIMENSIONS, "encoding": dict(encoding),
                                   **({"revision": revision} if revision else {}),
                                   "embeddings": [[round(v, 7) for v in normalize(vector)]
                                                  for vector in vectors]})
@@ -193,7 +195,7 @@ def build_app(encode_text: TextEncoder, encode_image: ImageEncoder, *,
         except (InputError, ValueError):
             counters["rejected"] += 1
             return web.json_response({"error": "invalid_request"}, status=400)
-        vectors, error = await run(request, encode_text, [t.strip() for t in texts])
+        vectors, error = await run(request, encode_text, [clip_query(t.strip(), text_policy) for t in texts])
         if error is not None:
             return error
         counters["texts"] += len(texts)
@@ -229,7 +231,7 @@ def build_app(encode_text: TextEncoder, encode_image: ImageEncoder, *,
 
     async def health(_request: web.Request) -> web.Response:
         return web.json_response({"status": "ok", "model": MODEL, "dim": DIMENSIONS,
-                                  "encoding": dict(CLIP_ENCODING),
+                                  "encoding": dict(encoding),
                                   **({"revision": revision} if revision else {}), **counters})
 
     app = web.Application(client_max_size=_MAX_IMAGE_BYTES + 131072)
@@ -246,9 +248,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8180)
     parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument('--text-policy', choices=CLIP_TEXT_POLICIES, default='literal')
     args = parser.parse_args(argv)
     app = build_app(*onnx_encoders(args.models, threads=args.threads),
-                    revision=weights_revision(args.models))
+                    revision=weights_revision(args.models), text_policy=args.text_policy)
     web.run_app(app, host=args.host, port=args.port, access_log=None, print=None)
     return 0
 

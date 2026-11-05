@@ -45,7 +45,11 @@ async def _body(response, limit):
 
 
 class NativeIndexSession:
-    def __init__(self, host, *, username_file, password_file, trust_file, cert_file):
+    def __init__(self, host, *, username_file, password_file, trust_file, cert_file,
+                 mfa_method=None, token_provider=None):
+        if mfa_method not in {None, "totp", "push", "email", "sms"}:
+            raise NativeIndexError("Unsupported native MFA method")
+        self.mfa_method, self.token_provider = mfa_method, token_provider
         self.host = _host(host)
         self.username_file, self.password_file = username_file, password_file
         self.trust_file, self.cert_file = trust_file, cert_file
@@ -69,23 +73,16 @@ class NativeIndexSession:
                 cookie_jar=aiohttp.CookieJar(unsafe=True), trust_env=False,
                 timeout=aiohttp.ClientTimeout(total=12, connect=4, sock_read=8),
                 headers={'Origin': self._origin, 'Accept': 'application/json'})
+            payload = {'username': username, 'password': password, 'rememberMe': False}
+            status, raw = await self._login_post('/api/auth/login', payload)
+            if status == 499:
+                from .index_mfa import authenticate
+                status = await authenticate(self, raw, payload)
+            if status != 200 or not self._session.cookie_jar:
+                if 400 <= status < 500 and not self._session.cookie_jar:
+                    self._attempted = False
+                raise NativeIndexError('Native index authentication was refused')
             async with asyncio.timeout(15):
-                self._attempted = True
-                async with self._session.post(self._origin+'/api/auth/login', allow_redirects=False,
-                        json={'username': username, 'password': password,
-                              'rememberMe': False}) as response:
-                    await _body(response, 262144)
-                    if 400 <= response.status < 500:
-                        if not self._session.cookie_jar:
-                            self._attempted = False
-                        raise NativeIndexError('Native index authentication was refused')
-                    if response.status != 200 or not self._session.cookie_jar:
-                        raise NativeIndexError('The native index session is unavailable')
-                    csrf = response.headers.get('X-CSRF-Token')
-                    if csrf:
-                        if len(csrf) > 4096 or any(ord(c) < 32 for c in csrf):
-                            raise NativeIndexError('The native index session is unavailable')
-                        self._session.headers['X-CSRF-Token'] = csrf
                 bootstrap = await self._json('/proxy/protect/api/bootstrap', 2*1024*1024)
                 if (not isinstance(bootstrap, dict) or not isinstance(bootstrap.get('nvr'), dict)
                         or not inventory.is_supported_protect_version(bootstrap['nvr'].get('version'))):
@@ -97,6 +94,22 @@ class NativeIndexSession:
             if isinstance(exc, (NativeIndexError, asyncio.CancelledError)):
                 raise
             raise NativeIndexError('The native index session is unavailable') from None
+
+    async def _login_post(self, path, payload):
+        # All authentication requests share the approved pinned connector and RAM-only jar.
+        self._attempted = True
+        async with asyncio.timeout(15):
+            async with self._session.post(self._origin+path, allow_redirects=False,
+                                          json=payload) as response:
+                raw = await _body(response, 262144)
+                csrf = response.headers.get('X-CSRF-Token')
+                if csrf:
+                    if len(csrf) > 4096 or any(ord(c) < 32 for c in csrf):
+                        raise NativeIndexError('The native index session is unavailable')
+                    self._session.headers['X-CSRF-Token'] = csrf
+                if 400 <= response.status < 500 and not self._session.cookie_jar:
+                    self._attempted = False
+                return response.status, raw
 
     async def __aexit__(self, *args):
         session, self._session = self._session, None
@@ -161,13 +174,49 @@ class NativeIndexSession:
         return await self._get('/proxy/protect/api/thumbnails/'+self._id(crop_id),
                                MAX_IMAGE, 'image/jpeg', missing=True)
 
-    async def search(self, text, *, min_similarity):
+    async def source_object(self, row, event):
+        from .index_source_lookup import lookup_source_object
+        return await lookup_source_object(self, row, event)
+
+    async def source_detections(self, term, *, start, end, camera_id, offset, limit):
+        from .index_source_lookup import MAX_PAGES, PAGE_SIZE, TERMS
+        if (term not in TERMS or any(type(x) is not int for x in (start, end, offset, limit))
+                or not 0 <= start <= end <= 2**53-1 or end-start > 86520000
+                or limit != PAGE_SIZE or offset not in range(0, MAX_PAGES*PAGE_SIZE, PAGE_SIZE)):
+            raise NativeIndexError('The source lookup admission is invalid')
+        return await self._json('/proxy/protect/api/detection-nls', 8*1024*1024,
+            params={'searchText': term, 'minSimilarity': '0', 'start': str(start),
+                    'end': str(end), 'cameras': self._id(camera_id), 'offset': str(offset),
+                    'limit': str(limit), 'ignoreTimeFilterFromText': 'true'})
+
+    async def search(self, text, *, min_similarity, camera_id=None, start_ms=None, end_ms=None):
         if (not isinstance(text, str) or not text.strip() or len(text) > 1024
                 or any(ord(c) < 32 for c in text)
                 or type(min_similarity) is not int or not 1 <= min_similarity <= 100):
             raise NativeIndexError('The fixed-threshold native search admission is invalid')
-        return await self._json('/proxy/protect/api/detection-nls', 2*1024*1024,
-            params={'searchText': text, 'minSimilarity': str(min_similarity)})
+        if ((camera_id is not None and (not isinstance(camera_id, str) or not _ID.fullmatch(camera_id)))
+                or (start_ms is None) != (end_ms is None)
+                or any(x is not None and (type(x) is not int or not 0 <= x <= 2**53-1)
+                       for x in (start_ms, end_ms))
+                or (start_ms is not None and start_ms > end_ms)):
+            raise NativeIndexError('The fixed native search scope is invalid')
+        params = {'searchText': text, 'minSimilarity': str(min_similarity)}
+        if camera_id is not None:
+            params['cameras'] = camera_id
+        if start_ms is not None:
+            params.update(start=str(start_ms), end=str(end_ms), ignoreTimeFilterFromText='true')
+        response = await self._json('/proxy/protect/api/detection-nls', 2*1024*1024, params=params)
+        if not isinstance(response, dict):
+            raise NativeIndexError('The native search response is invalid')
+        # Protect 7.3.74 echoes explicit time bounds but omits explicit cameras
+        # from searchCondition. Record our actual pinned request, not a forged
+        # server acknowledgment; readback still checks every returned camera.
+        if camera_id is not None:
+            response['_aikey_request_scope'] = {'camera_id': camera_id,
+                'start_ms': start_ms, 'end_ms': end_ms}
+        else:
+            response.pop('_aikey_request_scope', None)
+        return response
 
 
     async def search_sessions(self, text):

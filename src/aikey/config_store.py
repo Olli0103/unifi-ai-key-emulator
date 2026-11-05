@@ -1221,7 +1221,7 @@ class ConfigurationStore:
                     raise ValueError
                 return stored
             stored = read_identity(profile)
-            from .encoding_identity import CLIP_ENCODING, UPGRADABLE_ENCODING
+            from .encoding_identity import clip_encoding, UPGRADABLE_ENCODING
             from . import clip
             from .search import EmbeddingService
             embedding_identity = EmbeddingService(candidate["embeddings"]).identity
@@ -1243,7 +1243,11 @@ class ConfigurationStore:
                     if not isinstance(revision, str) or not _REVISION.fullmatch(revision):
                         raise ValueError
                     expected["revision"] = revision
-                expected.update({k:v for k,v in CLIP_ENCODING.items() if k in stored})
+                if (candidate['find_anything'].get('text_policy', 'literal') != 'literal'
+                        and 'tokenizer' not in stored):
+                    raise ValueError
+                expected.update({k:v for k,v in clip_encoding(
+                    candidate['find_anything'].get('text_policy', 'literal')).items() if k in stored})
                 if "encoding_required" in stored:
                     if stored["encoding_required"] is not True:
                         raise ValueError

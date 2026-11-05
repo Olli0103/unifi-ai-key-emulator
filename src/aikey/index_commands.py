@@ -38,9 +38,11 @@ def _connection(args):
         import psycopg
     except ImportError:
         raise IndexCommandError('Install the optional database dependency') from None
+    # Atomic full-index swaps maintain vector indexes and can exceed read-query budgets.
+    statement_timeout = 300000 if getattr(args, 'command', None) in {'cutover', 'rollback'} else 15000
     options = {'dbname': args.database_name, 'user': args.database_user,
                'connect_timeout': 5, 'application_name': 'aikey-index-migration',
-               'options': '-c statement_timeout=15000 -c lock_timeout=5000'}
+               'options': f'-c statement_timeout={statement_timeout} -c lock_timeout=5000'}
     if args.database_socket is not None:
         if not args.database_socket.is_absolute() or args.database_host is not None:
             raise IndexCommandError('Supply one explicit database transport')
@@ -84,9 +86,11 @@ def _config(args):
 def _native(args):
     _require(args, 'native_host', 'native_username_file', 'native_password_file',
              'native_trust_file', 'native_cert_file')
+    from .index_mfa import prompt_token
     return NativeIndexSession(args.native_host, username_file=args.native_username_file,
         password_file=args.native_password_file, trust_file=args.native_trust_file,
-        cert_file=args.native_cert_file)
+        cert_file=args.native_cert_file, mfa_method=getattr(args, "native_mfa", None),
+        token_provider=prompt_token if getattr(args, "native_mfa", None) else None)
 
 
 def _plan(args):
@@ -162,8 +166,12 @@ def _backup(args, run, *, clock=time.monotonic):
 
 async def run(args):
     # Validate argument-dependent authority before any database/native/model call.
-    from .encoding_identity import CLIP_ENCODING, TEXT_ENCODING
+    from .encoding_identity import clip_encoding, TEXT_ENCODING
     text_space = getattr(args, 'space', 'clip-basic-v1') == 'e5-session-v1'
+    policy = getattr(args, 'target_text_policy', 'literal')
+    if text_space and policy != 'literal':
+        raise IndexCommandError('CLIP text policy cannot be used for E5')
+    encoding = TEXT_ENCODING if text_space else clip_encoding(policy)
     if args.command == 'export':
         _require(args, 'output')
         _, cameras = _config(args)
@@ -204,14 +212,16 @@ async def run(args):
     if args.command == 'stage' and generation is None:
         generation = hashlib.sha256((args.target_revision+'\0'+target_source+'\0'
             +args.source_manifest_sha256+'\0'+args.space+'\0'+json.dumps(
-                TEXT_ENCODING if text_space else CLIP_ENCODING, sort_keys=True)).encode()).hexdigest()[:12]
+                encoding, sort_keys=True)).encode()).hexdigest()[:12]
     migration = (SessionRebuild if text_space else Rebuild)(store,
         args.state_dir/'session-search' if text_space else args.state_dir,
-        target_revision=args.target_revision, target_source=target_source, generation=generation)
+        target_revision=args.target_revision, target_source=target_source, generation=generation,
+        **({} if text_space else {"target_encoding": encoding}))
     if args.command == 'verify':
         return migration.verify()
     if args.command in {'stage', 'qualify'}:
-        encoder = (TextEmbedder if text_space else ClipEmbedder)(target_source, args.target_revision)
+        encoder = (TextEmbedder if text_space else ClipEmbedder)(target_source, args.target_revision,
+            **({} if text_space else {"encoding_identity": encoding}))
         try:
             if args.command == 'qualify':
                 return await migration.qualify(encoder, plan)
@@ -267,6 +277,8 @@ def add_arguments(parser):
     parser.add_argument('--database-password-file', type=Path)
     parser.add_argument('--target-revision')
     parser.add_argument('--target-server')
+    from .encoding_identity import CLIP_TEXT_POLICIES
+    parser.add_argument('--target-text-policy', choices=CLIP_TEXT_POLICIES, default='literal')
     parser.add_argument('--source-archive', type=Path)
     parser.add_argument('--source-manifest-sha256')
     parser.add_argument('--readback-plan', type=Path)
@@ -275,6 +287,8 @@ def add_arguments(parser):
     parser.add_argument('--max-batches', type=int)
     parser.add_argument('--max-export-bytes', type=int, default=512*1024*1024)
     parser.add_argument('--timeout', type=int, default=600)
+    parser.add_argument('--native-mfa', choices=['totp', 'push', 'email', 'sms'],
+                        help='Explicit interactive MFA; code only from hidden TTY, never argv')
     parser.add_argument('--native-host')
     parser.add_argument('--native-username-file', type=Path)
     parser.add_argument('--native-password-file', type=Path)
