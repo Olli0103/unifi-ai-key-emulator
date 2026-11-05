@@ -136,3 +136,7 @@ Search and unattended operation require their own preparation/acceptance.
 
 This is the no-JSON preparation/deployment path; a complete fresh
 install/adopt/model/native-result observation must still be recorded separately.
+
+The integration-owner [5 November acceptance](evidence/first-install-acceptance-20261105.md)
+records a fresh installation through a persisted native result, with the explicit
+CPU profile above. Its limits and retained failed attempts are part of that record.
