@@ -84,6 +84,7 @@ th, td { padding: .65rem; text-align: left; border-bottom: 1px solid #d9e2eb; }
 .face-identity, .face-confirmation { overflow-wrap: anywhere; }
 .device-workflow { overflow-wrap: anywhere; }
 .device-workflow fieldset { min-width: 0; }
+.backup-preflight p { overflow-wrap: anywhere; }
 """
 
 
@@ -357,7 +358,8 @@ class ControlSite:
                 "A provider's retention terms depend on its account and service; they are not "
                 "verified here. File permissions are not encryption. Protect, model servers, "
                 "host logs, snapshots and backups require separate deletion/expiry checks.</p>"
-                "<div class='scroll'><table><tr><th>Data</th><th>Local copy</th><th>Protect copy</th>"
+                "<div class='scroll' role='region' aria-label='Data flow and retention' tabindex='0'>"
+                "<table><tr><th>Data</th><th>Local copy</th><th>Protect copy</th>"
                 "<th>Other destinations</th><th>Product defaults (not current activation)</th>"
                 "<th>Current expiry</th><th>Retention owner</th><th>Live count</th>"
                 "<th>Operator decision</th></tr>" + rows + "</table></div>")
@@ -460,16 +462,18 @@ class ControlSite:
             codes = ", ".join(f"<code>{_safe(code)}</code>" for code in item["problems"]) or "none"
             rows.append(f"<tr><td>{_safe(label)}</td><td>{_safe(item['kind'])}</td>"
                         f"<td>{counts}</td><td>{codes}</td></tr>")
-        body = ("<h1>Backup and restore preflight</h1><p><a href='/'>Settings</a></p>"
+        body = ("<div class='backup-preflight'><h1>Backup and restore preflight</h1>"
+                "<p><a href='/'>Settings</a></p>"
                 "<p class='muted'>Read-only. Lists whether each profile's config, adopted identity, "
                 "TLS key, controller trust, referenced secrets and journals are in place for a safe "
                 "backup. Counts and reason codes only; nothing is exported, restored or changed.</p>"
                 f"<p><strong>Ready for backup: {'yes' if report['ready_for_backup'] else 'no'}</strong></p>"
+                "<div class='scroll' role='region' aria-label='Backup readiness by profile' tabindex='0'>"
                 "<table><tr><th>Profile</th><th>Kind</th><th>Present</th><th>Problems</th></tr>"
-                + "".join(rows) + "</table>"
+                + "".join(rows) + "</table></div>"
                 "<p class='muted'>A candidate backup is checked with "
                 "<code>aikey.state_backup_preflight.validate</code> for identity, stale revision, "
-                "missing secrets, partial archive and cross-slot contamination.</p>")
+                "missing secrets, partial archive and cross-slot contamination.</p></div>")
         return _page("Backup preflight", body)
 
     async def index_migration(self, request: web.Request) -> web.Response:
@@ -811,7 +815,8 @@ class ControlSite:
                 "<p class='muted'>Protect pairing and stream health are separate. "
                 "Configured means the camera is in a local instance allowlist. "
                 "Protect-reported smart types may reflect AI Port processing.</p>"
-                "<div class='scroll'><table><thead><tr><th>Camera</th><th>Model</th>"
+                "<div class='scroll' role='region' aria-label='Protect cameras' tabindex='0'>"
+                "<table><thead><tr><th>Camera</th><th>Model</th>"
                 "<th>State</th><th>AI Port scope</th><th>Instance</th>"
                 "<th>Protect-reported smart types</th></tr></thead><tbody>"
                 + "".join(rows) + "</tbody></table></div>")

@@ -153,6 +153,12 @@ widgets, forced colors, zoom/reflow, real mobile browsers and keyboard/screen
 reader use still require direct acceptance. No browser test is claimed from
 these source/HTML checks.
 
+The subsequent [5 November browser acceptance](evidence/first-install-acceptance-20261105.md)
+adds actual keyboard scrolling, computed axe checks and Chromium accessibility
+tree inspection, including camera/retention scroll-region and mobile backup
+fixes. Its stated coverage supersedes the earlier source-only evidence boundary;
+it is not a WCAG certification or human assistive-technology test.
+
 English remains the implemented page language. Further localization is not
 provided. The complete first-run/feature-control source workflow and its
 isolated browser boundary are documented in [device workflows](device-workflows.md).

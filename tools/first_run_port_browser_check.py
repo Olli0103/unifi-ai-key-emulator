@@ -30,6 +30,7 @@ async def capture(page, path, *, keep_focus=False):
     await page.evaluate("""() => {
         let b=document.getElementById('fictional-port-banner');
         if(!b){b=document.createElement('div');b.id='fictional-port-banner';document.body.prepend(b);}
+        b.setAttribute('role','banner');
         b.textContent='FICTIONAL OFFLINE TEST — no real cameras or controller';
         b.style='padding:12px;background:#fff2b3;color:#17202a;font-weight:bold';
     }""")
@@ -139,6 +140,7 @@ async def scenario(output, name, viewport, executable):
                     await context.add_init_script("""addEventListener('DOMContentLoaded', () => {
                         if(document.getElementById('fictional-port-banner'))return;
                         const b=document.createElement('div');b.id='fictional-port-banner';
+                        b.setAttribute('role','banner');
                         b.textContent='FICTIONAL OFFLINE TEST — no real cameras or controller';
                         b.style='padding:12px;background:#fff2b3;color:#17202a;font-weight:bold';
                         document.body.prepend(b);
