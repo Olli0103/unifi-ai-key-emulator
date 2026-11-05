@@ -183,7 +183,8 @@ def _stream_spec(payload: object, *, camera_mac: str, source_ip: str) -> StreamS
 class _Session:
     def __init__(self, spec: StreamSpec, ffmpeg_path: str,
                  frame_observer: Callable[[bytes], Awaitable[None]] | None = None,
-                 full_frames: bool = False, full_max_width: int = _FULL_MAX_WIDTH):
+                 full_frames: bool = False, full_max_width: int = _FULL_MAX_WIDTH,
+                 timed_frame_observer: bool = False):
         self.spec = spec
         self.full_frames = full_frames
         self.full_max_width = full_max_width
@@ -210,8 +211,9 @@ class _Session:
         self.last_frame_at = 0.0
         self.failure: str | None = None
         self.frame_observer = frame_observer
+        self.timed_frame_observer = timed_frame_observer
         self.observer_task: asyncio.Task | None = None
-        self._observer_frames: asyncio.Queue[bytes] = asyncio.Queue(maxsize=1)
+        self._observer_frames: asyncio.Queue[tuple[bytes, int, int]] = asyncio.Queue(maxsize=1)
         self.frames_observed = 0
         self.frames_skipped = 0
         self.observer_failed = False
@@ -319,7 +321,9 @@ class _Session:
                 self.first_frame.set()
                 if self.frame_observer is not None and not self.observer_failed:
                     try:
-                        self._observer_frames.put_nowait(frame)
+                        # Receive time, not camera PTS. Bind it before any observer/model wait.
+                        self._observer_frames.put_nowait((frame, int(time.time() * 1000),
+                                                        int(time.monotonic() * 1000)))
                     except asyncio.QueueFull:
                         self.frames_skipped += 1
         except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
@@ -379,9 +383,11 @@ class _Session:
         assert self.frame_observer is not None
         try:
             while True:
-                frame = await self._observer_frames.get()
+                frame, captured_ms, captured_monotonic_ms = await self._observer_frames.get()
                 try:
-                    await self.frame_observer(frame)
+                    await self.frame_observer(frame, **({"captured_ms": captured_ms,
+                                                          "captured_monotonic_ms": captured_monotonic_ms}
+                                                       if self.timed_frame_observer else {}))
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -529,7 +535,8 @@ class AiPortIngress:
                  start_timeout: float = 7,
                  frame_observer: Callable[[bytes], Awaitable[None]] | None = None,
                  audio_observer: Callable[[bytes], Awaitable[None]] | None = None,
-                 full_frames: bool = False, full_max_width: int = _FULL_MAX_WIDTH):
+                 full_frames: bool = False, full_max_width: int = _FULL_MAX_WIDTH,
+                 timed_frame_observer: bool = False):
         self.camera_mac = normalize_mac(camera_mac)
         self.full_frames = full_frames
         self.full_max_width = full_max_width
@@ -539,6 +546,7 @@ class AiPortIngress:
             raise IngressError("invalid_start_timeout")
         self.start_timeout = start_timeout
         self.frame_observer = frame_observer
+        self.timed_frame_observer = timed_frame_observer
         self._session: _Session | None = None
         self._desired_spec: StreamSpec | None = None
         self._restart_task: asyncio.Task | None = None
@@ -597,7 +605,7 @@ class AiPortIngress:
                 await self._close_locked()
             self._desired_spec = None
             session = _Session(spec, self.ffmpeg_path, self.frame_observer, self.full_frames,
-                               self.full_max_width)
+                               self.full_max_width, timed_frame_observer=self.timed_frame_observer)
             try:
                 await session.start(self.start_timeout)
             except (OSError, IngressError) as exc:
@@ -657,7 +665,7 @@ class AiPortIngress:
                     self.restart_observed_states[state] += 1
                 await self._close_locked()
                 session = _Session(spec, self.ffmpeg_path, self.frame_observer, self.full_frames,
-                               self.full_max_width)
+                               self.full_max_width, timed_frame_observer=self.timed_frame_observer)
                 self.restart_attempts += 1
                 try:
                     await session.start(self.start_timeout)
@@ -820,7 +828,8 @@ class AiPortIngressPool:
                  audio_observer_factory: Callable[
                      [str], Callable[[bytes], Awaitable[None]] | None] | None = None,
                  full_frame_cameras: frozenset[str] = frozenset(),
-                 native_frame_cameras: frozenset[str] = frozenset()):
+                 native_frame_cameras: frozenset[str] = frozenset(),
+                 timed_frame_observer: bool = False):
         if not isinstance(policies, list) or not 1 <= len(policies) <= 5:
             raise IngressError("invalid_camera_pool")
         self._ingresses: dict[str, AiPortIngress] = {}
@@ -838,6 +847,7 @@ class AiPortIngressPool:
             self._ingresses[camera_mac] = AiPortIngress(
                 camera_mac=camera_mac, source_ip=policy["source_ip"],
                 ffmpeg_path=policy["ffmpeg_path"], frame_observer=observer,
+                **({"timed_frame_observer": True} if timed_frame_observer else {}),
                 **({"full_frames": True} if camera_mac in full_frame_cameras | native_frame_cameras
                    else {}),
                 **({"full_max_width": NATIVE_MAX_WIDTH} if camera_mac in native_frame_cameras else {}),

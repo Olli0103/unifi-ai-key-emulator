@@ -74,8 +74,8 @@ class FairInference:
         self._preserve_first_pending = preserve_first_pending
         self._work_fence = work_fence
         self._model: Detector | None = None
-        self._pending: dict[str, tuple[bytes, int]] = {}
-        self._latest_pending: dict[str, tuple[bytes, int]] = {}
+        self._pending: dict[str, tuple[bytes, int, int | None, int | None]] = {}
+        self._latest_pending: dict[str, tuple[bytes, int, int | None, int | None]] = {}
         self._disabled: set[str] = set()
         self._attempts = dict.fromkeys(cameras, 0)
         self._successes = dict.fromkeys(cameras, 0)
@@ -97,12 +97,19 @@ class FairInference:
         self._api_failures_by_camera = dict.fromkeys(cameras, 0)
         self._last_api_error_by_camera: dict[str, str | None] = dict.fromkeys(cameras)
 
-    async def observe(self, camera_mac: str, frame: bytes, *, generation: int) -> None:
+    async def observe(self, camera_mac: str, frame: bytes, *, generation: int,
+                      captured_ms: int | None = None,
+                      captured_monotonic_ms: int | None = None) -> None:
         camera = normalize_mac(camera_mac)
         if camera not in self._allowed:
             raise IngressError("camera_not_authorized")
         if type(frame) is not bytes or not 4 <= len(frame) <= 1024 * 1024:
             raise IngressError("invalid_decoded_frame")
+        if captured_ms is not None and (type(captured_ms) is not int or captured_ms <= 0):
+            raise IngressError("invalid_frame_timestamp")
+        if captured_monotonic_ms is not None and (captured_ms is None
+                or type(captured_monotonic_ms) is not int or captured_monotonic_ms < 0):
+            raise IngressError("invalid_frame_timestamp")
         if type(generation) is not int or generation < 0:
             raise IngressError("invalid_policy_generation")
         if (self._closed or self._global_failure or camera in self._disabled
@@ -114,12 +121,12 @@ class FairInference:
             if self._preserve_first_pending:
                 if camera in self._latest_pending:
                     self.dropped_frames += 1
-                self._latest_pending[camera] = (frame, generation)
+                self._latest_pending[camera] = (frame, generation, captured_ms, captured_monotonic_ms)
             else:
                 self.dropped_frames += 1
-                self._pending[camera] = (frame, generation)
+                self._pending[camera] = (frame, generation, captured_ms, captured_monotonic_ms)
         else:
-            self._pending[camera] = (frame, generation)
+            self._pending[camera] = (frame, generation, captured_ms, captured_monotonic_ms)
         if self._worker is None or self._worker.done():
             self._worker = asyncio.create_task(self._run(), name="aiport-fair-inference")
 
@@ -170,7 +177,7 @@ class FairInference:
     async def _run(self) -> None:
         while self._pending and not self._closed and not self._global_failure:
             camera = self._next_camera()
-            frame, generation = self._pending.pop(camera)
+            frame, generation, captured_ms, captured_monotonic_ms = self._pending.pop(camera)
             if camera in self._latest_pending:
                 self._pending[camera] = self._latest_pending.pop(camera)
             self._attempts[camera] += 1
@@ -207,7 +214,11 @@ class FairInference:
                     return
                 for observation in result:
                     self._observations[camera][observation.kind] += 1
-                await self._on_result(camera, result, generation, frame)
+                await self._on_result(camera, result, generation, frame,
+                                      **({"captured_ms": captured_ms}
+                                         if captured_ms is not None else {}),
+                                      **({"captured_monotonic_ms": captured_monotonic_ms}
+                                         if captured_monotonic_ms is not None else {}))
                 if (self._preserve_first_pending and result
                         and camera in self._pending and self._consecutive_turns < 2):
                     self._confirmation_camera = camera
