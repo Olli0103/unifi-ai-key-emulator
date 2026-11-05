@@ -79,6 +79,23 @@ state if an attempt expires or its outcome is uncertain.
 
 ## Trust, start and obtain the native result
 
+Choose the processing budget for the selected model before creating the new
+identity. `setup` accepts `--worker-timeout-seconds` (1–600),
+`--caption-timeout-seconds` (1–600, no greater than the worker budget), and
+`--max-images` (1–16). Omitting them preserves the existing 120-second worker,
+30-second automatic-caption and four-image defaults. These are request limits,
+not throughput guarantees; they do not enable processing or increase the
+12-per-hour caption reservation limit.
+
+A CPU model that needs longer than 30 seconds can be prepared with the explicit
+options `--worker-timeout-seconds 300 --caption-timeout-seconds 240 --max-images 1`
+added to the preceding setup command. This matches the measured deployment's
+configuration, not a promise that another CPU/model will finish in time. The
+native first-install trial with the default 30-second caption budget timed out;
+the longer-budget fresh-install acceptance is still pending. Queue waiting and
+media fetch are included in a request's budget. Use a new directory for a fresh
+setup, never rerun setup against an existing identity.
+
 ```sh
 docker compose -f compose.first-run.yaml run --rm --no-deps emulator trust \
   --config /state/key/config.json --channel control --fingerprint VERIFIED_SHA256

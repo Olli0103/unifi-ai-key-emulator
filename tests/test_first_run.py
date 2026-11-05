@@ -30,6 +30,18 @@ def arguments(root, *extra):
             "--provider", "ollama", "--model", "fictional-vision", *extra]
 
 
+@pytest.mark.parametrize("worker,caption,images", [(300, 240, 1), (600, 600, 16), (1, 1, 1)])
+def test_explicit_caption_runtime_limits_persist_without_enabling_processing(tmp_path, worker, caption, images):
+    root = tmp_path / "fresh"
+    assert main(arguments(root, "--worker-timeout-seconds", str(worker),
+                          "--caption-timeout-seconds", str(caption), "--max-images", str(images))) == 0
+    config = load_config(root / "config.json")
+    assert {key: config["worker"][key] for key in ("timeout_s", "caption_timeout_s", "max_images")} == {
+        "timeout_s": worker, "caption_timeout_s": caption, "max_images": images}
+    assert config["worker"]["max_queue"] == 8 and config["worker"]["max_concurrency"] == 1
+    assert "continuous" not in config["worker"] and "feature_flags" not in config["device"]
+
+
 def test_prepares_config_identity_and_safe_next_steps(tmp_path, capsys):
     root = tmp_path / "fresh"
     assert main(arguments(root)) == 0
@@ -50,6 +62,8 @@ def test_prepares_config_identity_and_safe_next_steps(tmp_path, capsys):
     assert config["inference"]["provider"] == "ollama"
     assert config["inference"]["model"] == "fictional-vision"
     assert not config["worker"]["request_mp4_exports"]
+    assert config["worker"]["timeout_s"] == 120
+    assert "caption_timeout_s" not in config["worker"] and "max_images" not in config["worker"]
     assert not any(key in config["worker"] for key in ("continuous", "test_scope", "test_scopes"))
     assert all(config[key]["enabled"] is False for key in ("discovery", "database", "search"))
     assert "speech_to_text" not in config
@@ -132,6 +146,10 @@ def test_discovery_invalid_address_refused_before_identity(tmp_path, option, val
     ["--ffmpeg-path", "relative/ffmpeg"], ["--model", " "],
     ["--factory-enrollment-seconds", "-1"], ["--factory-enrollment-seconds", "601"],
     ["--factory-enrollment-seconds", "600"],
+    ["--worker-timeout-seconds", "0"], ["--worker-timeout-seconds", "601"],
+    ["--caption-timeout-seconds", "0"], ["--caption-timeout-seconds", "601"],
+    ["--caption-timeout-seconds", "121"], ["--worker-timeout-seconds", "29"],
+    ["--max-images", "0"], ["--max-images", "17"],
     ["--provider", "openai"], ["--provider", "openai-compatible"],
     ["--provider", "openai", "--api-key-file", "missing", "--base-url", "https://wrong.invalid/v1"],
     ["--base-url", "http://remote.invalid"],

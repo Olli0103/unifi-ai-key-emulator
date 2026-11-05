@@ -92,6 +92,16 @@ def prepare(args, inference):
     if args.ffmpeg_path is not None:
         config["worker"]["ffmpeg_path"] = str(args.ffmpeg_path)
     config["worker"]["request_mp4_exports"] = args.request_mp4_exports
+    for argument, field, maximum in (("worker_timeout_seconds", "timeout_s", 600),
+                                    ("caption_timeout_seconds", "caption_timeout_s", 600),
+                                    ("max_images", "max_images", 16)):
+        value = getattr(args, argument, None)
+        if value is not None:
+            if type(value) is not int or not 1 <= value <= maximum:
+                raise ConfigError(f"{argument} must be an integer from 1 to {maximum}")
+            config["worker"][field] = value
+    if config["worker"].get("caption_timeout_s", 30) > config["worker"]["timeout_s"]:
+        raise ConfigError("Caption timeout must not exceed worker timeout")
     config = validate_config(config, base=root)
     validate_inference_config(config["inference"], lab=False, require_api_key=False)
     try:
