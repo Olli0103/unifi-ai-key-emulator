@@ -187,7 +187,8 @@ async def test_frozen_native_scope_is_sent_to_actual_pinned_endpoint(tmp_path, m
         native = index_session(reader)
         async with native:
             assert await native.search('a train', min_similarity=50, camera_id='camera-a',
-                                       start_ms=110, end_ms=130) == {'detections': []}
+                                       start_ms=110, end_ms=130) == {'detections': [], '_aikey_request_scope': {
+                                           'camera_id': 'camera-a', 'start_ms': 110, 'end_ms': 130}}
             with pytest.raises(NativeIndexError, match='scope'):
                 await native.search('a train', min_similarity=50, start_ms=110)
         assert native.logout_acknowledged

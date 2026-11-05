@@ -34,3 +34,33 @@ or media skips. A subsequent same-weight rollback check and affected groups
 passed 62 tests. These are local CPU checks, not substitutes for the remaining
 native rollout. Production routes, profiles and vectors were not changed by
 these source/sidecar tests.
+
+## Private deployment follow-through
+
+A subsequent owner-authorized deployment replaced 9,655 real image vectors.
+The frozen original-image archive was fully covered; the actual staged SQL
+quality gate returned the expected hallway object and no train result in the
+original fixed interval. After the atomic swap and runtime restart, pinned
+HTTPS reported the target full encoder identity. Authenticated Protect queries
+then returned that same object (including an exact-event reload) and no train
+result. This is evidence for that fixed case, not all-corpus relevance. The
+separate fresh-session MFA/logout finalizer remains pending; the migration
+journal correctly remains `awaiting_native_readback`.
+
+Operational corrections found on this path:
+
+- PostgreSQL sharing the Key container's network namespace loses network
+  interfaces when the namespace owner is stopped. Prepare a non-writing
+  namespace holder, preserve the original database volume, and recreate the
+  namespace-dependent database with its new owner. Restore the ordinary
+  application entrypoint after the swap; never leave `sleep` as the runtime.
+- Atomic vector updates maintain indexes and need a different statement budget
+  from reads. The first 15-second attempt rolled back. Cutover/rollback now
+  have a bounded 300-second statement budget; lock timeout and transactional
+  coverage/identity guards are unchanged. Reconcile profile, journal, and
+  snapshot existence before a retry.
+- Frozen camera/time filters must be sent to the native endpoint. Protect
+  7.3.74 echoed explicit time bounds but omitted `cameraIds` in
+  `searchCondition`. The pinned client records the actual outgoing camera
+  scope separately; readback never fabricates a server acknowledgment and
+  still rejects conflicting echoes and every wrong-camera/wrong-time row.

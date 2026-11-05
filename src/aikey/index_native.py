@@ -205,7 +205,18 @@ class NativeIndexSession:
             params['cameras'] = camera_id
         if start_ms is not None:
             params.update(start=str(start_ms), end=str(end_ms), ignoreTimeFilterFromText='true')
-        return await self._json('/proxy/protect/api/detection-nls', 2*1024*1024, params=params)
+        response = await self._json('/proxy/protect/api/detection-nls', 2*1024*1024, params=params)
+        if not isinstance(response, dict):
+            raise NativeIndexError('The native search response is invalid')
+        # Protect 7.3.74 echoes explicit time bounds but omits explicit cameras
+        # from searchCondition. Record our actual pinned request, not a forged
+        # server acknowledgment; readback still checks every returned camera.
+        if camera_id is not None:
+            response['_aikey_request_scope'] = {'camera_id': camera_id,
+                'start_ms': start_ms, 'end_ms': end_ms}
+        else:
+            response.pop('_aikey_request_scope', None)
+        return response
 
 
     async def search_sessions(self, text):

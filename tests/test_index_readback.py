@@ -179,3 +179,24 @@ async def test_same_weight_readback_also_requires_runtime_full_profile_identity(
             raise AssertionError('No query with the wrong full runtime identity')
     with pytest.raises(ReadbackError, match='running query encoder'):
         await native_readback(plan, Never(), runtime=runtime)
+
+
+async def test_explicit_camera_request_evidence_does_not_fabricate_server_echo_or_hide_wrong_rows():
+    value = specification()
+    value['queries'][0]['camera_id'] = 'camera-a'
+    class Explicit(Native):
+        async def search(self, text, *, min_similarity, **scope):
+            result = await super().search(text, min_similarity=min_similarity, **scope)
+            if scope:
+                result['_aikey_request_scope'] = dict(camera_id=scope.get('camera_id'),
+                    start_ms=scope.get('start_ms'), end_ms=scope.get('end_ms'))
+            return result
+    native = Explicit()
+    assert (await native_readback(NativeReadbackPlan(value), native, runtime=runtime))['passed']
+    native.conditions = {'cameraIds': ['camera-b']}
+    with pytest.raises(ReadbackError, match='camera filter'):
+        await native_readback(NativeReadbackPlan(value), native, runtime=runtime)
+    native.conditions = {}
+    native.rows[0]['cameraId'] = 'camera-b'
+    with pytest.raises(ReadbackError, match='camera or date filter'):
+        await native_readback(NativeReadbackPlan(value), native, runtime=runtime)
