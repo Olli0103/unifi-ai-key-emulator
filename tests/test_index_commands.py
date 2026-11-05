@@ -131,3 +131,14 @@ def test_unsafe_database_transport_cannot_downgrade_tls_or_use_password_argv(tmp
     with pytest.raises(index_commands.IndexCommandError):
         index_commands._connection(args)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize('command,timeout', [('stage', 15000), ('cutover', 300000), ('rollback', 300000)])
+def test_atomic_swap_has_bounded_larger_statement_budget(command, timeout, monkeypatch):
+    calls = []
+    import types
+    monkeypatch.setitem(sys.modules, 'psycopg', types.SimpleNamespace(connect=lambda **kw: calls.append(kw)))
+    args = Namespace(command=command, database_name='unifi-protect', database_user='unifi-protect',
+                     database_socket=Path('/run/postgresql'), database_host=None)
+    index_commands._connection(args)()
+    assert calls[0]['options'] == f'-c statement_timeout={timeout} -c lock_timeout=5000'

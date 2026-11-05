@@ -38,9 +38,11 @@ def _connection(args):
         import psycopg
     except ImportError:
         raise IndexCommandError('Install the optional database dependency') from None
+    # Atomic full-index swaps maintain vector indexes and can exceed read-query budgets.
+    statement_timeout = 300000 if getattr(args, 'command', None) in {'cutover', 'rollback'} else 15000
     options = {'dbname': args.database_name, 'user': args.database_user,
                'connect_timeout': 5, 'application_name': 'aikey-index-migration',
-               'options': '-c statement_timeout=15000 -c lock_timeout=5000'}
+               'options': f'-c statement_timeout={statement_timeout} -c lock_timeout=5000'}
     if args.database_socket is not None:
         if not args.database_socket.is_absolute() or args.database_host is not None:
             raise IndexCommandError('Supply one explicit database transport')
