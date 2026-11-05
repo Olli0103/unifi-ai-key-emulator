@@ -71,7 +71,8 @@ def inventory(profile="aikey"):
         "descriptor": {
             "name": "syft",
             "version": check.VERSION,
-            "configuration": {"search": {"scope": "squashed"}, "licenses": {"include-content": "all"}},
+            "configuration": {"search": {"scope": "squashed"}, "licenses": {"include-content": "all"},
+                              "files": {"selection": "all"}},
         },
         "schema": {"version": "16.1.12"},
         "distro": {"id": "debian", "versionID": "12"},
@@ -795,3 +796,74 @@ def test_notice_path_scope_accepts_original_license_names(path):
                                  '/usr/share/common-licenses/../private.env', '/usr/share/doc//copyright'])
 def test_notice_path_scope_excludes_private_and_ambiguous_paths(path):
     assert not check.notice_path(path)
+
+
+def native_payload_inventory(filename='fictional.libs/libexample.so.1.1.1k'):
+    _, identity, native, cdx, expected, _ = inventory()
+    root = '/usr/local/lib/python3.12/site-packages'
+    native['artifacts'][0]['metadata'] = {
+        'sitePackagesRootPath': root, 'files': [{'path': filename}]}
+    path = root + '/' + filename
+    sha = check.digest(b'fictional non-executable library bytes')
+    native['files'] = [{'id': 'native-payload', 'location': {'path': path},
+                        'digests': [{'algorithm': 'sha256', 'value': sha}]}]
+    cdx['components'].append({'type': 'file', 'bom-ref': 'native-payload',
+                              'name': path, 'hashes': [{'alg': 'SHA-256', 'content': sha}]})
+    return identity, native, cdx, expected
+
+
+@pytest.mark.parametrize('filename', [
+    'fictional.libs/libexample.so.1.1.1k', 'fictional/extension.so',
+    'fictional/native.DLL', 'fictional/native.dylib', 'fictional/native.pyd',
+    'fictional/launcher.exe', 'fictional/static.a', 'fictional/static.lib',
+])
+def test_native_python_payload_requires_read_hash_in_both_formats(filename):
+    identity, native, cdx, expected = native_payload_inventory(filename)
+    assert check.validate(native, cdx, identity, expected,
+                          converted=deepcopy(cdx))['package_count'] == 5
+    # Real Syft default: RECORD still claims this file, while BOTH outputs
+    # omit its bytes. Agreement between two incomplete formats is not enough.
+    native['files'] = []
+    cdx['components'].pop()
+    with pytest.raises(check.CheckError, match='native_payload_hash_missing'):
+        check.validate(native, cdx, identity, expected, converted=deepcopy(cdx))
+
+
+@pytest.mark.parametrize('fault', ['wrong_path', 'missing_cdx', 'no_digest', 'different_digest'])
+def test_native_python_payload_cannot_be_replaced_by_unrelated_file_evidence(fault):
+    identity, native, cdx, expected = native_payload_inventory()
+    if fault == 'wrong_path':
+        native['files'][0]['location']['path'] = '/unrelated.so'
+        cdx['components'][-1]['name'] = '/unrelated.so'
+    elif fault == 'missing_cdx':
+        cdx['components'].pop()
+    elif fault == 'no_digest':
+        native['files'][0]['digests'] = []
+    else:
+        cdx['components'][-1]['hashes'][0]['content'] = '0' * 64
+    with pytest.raises(check.CheckError, match='native_payload_hash_missing|file_formats_disagree'):
+        check.validate(native, cdx, identity, expected, converted=deepcopy(cdx))
+
+
+@pytest.mark.parametrize('path', ['../private.so', '/private.so', 'part//native.so',
+                                  'part/./native.so', 'part/../native.so', 'part/\x00native.so'])
+def test_native_record_paths_do_not_escape_or_alias_image_roots(path):
+    identity, native, cdx, expected = native_payload_inventory(path)
+    with pytest.raises(check.CheckError, match='native_paths_refused'):
+        check.validate(native, cdx, identity, expected, converted=deepcopy(cdx))
+
+
+def test_source_only_package_does_not_invent_native_payload_requirement():
+    identity, native, cdx, expected = native_payload_inventory('fictional/module.py')
+    native['files'] = []
+    cdx['components'].pop()
+    assert check.validate(native, cdx, identity, expected,
+                          converted=deepcopy(cdx))['package_count'] == 5
+
+
+@pytest.mark.parametrize('selection', [None, '', 'owned-by-package', 'none'])
+def test_incomplete_file_catalog_cannot_be_published(selection):
+    _, identity, native, cdx, expected, converted = inventory()
+    native['descriptor']['configuration']['files']['selection'] = selection
+    with pytest.raises(check.CheckError, match='full_file_metadata_required'):
+        check.validate(native, cdx, identity, expected, converted=converted)

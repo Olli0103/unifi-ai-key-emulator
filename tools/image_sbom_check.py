@@ -72,8 +72,42 @@ package:
 '''
 # Zero disables Syft's silent size-based omission. Our bounded report reader
 # and per-file limit refuse oversized evidence instead of publishing a subset.
-OFFLINE_CONFIG += 'file:\n  content:\n    skip-files-above-size: 0\n    globs:\n' + ''.join(
+OFFLINE_CONFIG += ('file:\n  metadata:\n    selection: all\n'
+                   '  content:\n    skip-files-above-size: 0\n    globs:\n') + ''.join(
     '      - ' + json.dumps(pattern) + '\n' for pattern in NOTICE_GLOBS)
+
+
+def python_native_paths(native):
+    """Require actual image hashes, not just wheel RECORD claims.
+
+    Syft's default owned-by-package selection omits Python extension and
+    bundled-library bytes even when the Python cataloger lists them in RECORD.
+    File metadata is captured for the entire controlled image; file *contents*
+    remain limited to the existing notice allowlist.
+    """
+    paths = set()
+    for artifact in native['artifacts']:
+        if artifact.get('type') != 'python':
+            continue
+        metadata = artifact.get('metadata', {})
+        entries = metadata.get('files', [])
+        require(isinstance(entries, list) and len(entries) <= 100000,
+                'image_inventory_native_paths_refused')
+        for entry in entries:
+            require(isinstance(entry, dict) and isinstance(entry.get('path'), str),
+                    'image_inventory_native_paths_refused')
+            path = entry['path']
+            if not re.search(r'(?i)(?:\.so(?:\.[A-Za-z0-9_-]+)*|\.(?:dll|dylib|pyd|exe|a|lib))$', path):
+                continue
+            root = metadata.get('sitePackagesRootPath')
+            require(isinstance(root, str) and re.fullmatch(
+                r'/usr/local/lib/python[0-9.]+/site-packages', root)
+                and len(path) <= 4096 and not path.startswith('/')
+                and all(part not in ('', '.', '..') for part in path.split('/'))
+                and all(ord(char) >= 32 for char in path),
+                'image_inventory_native_paths_refused')
+            paths.add(root + '/' + path)
+    return paths
 
 
 def notice_path(path):
@@ -291,6 +325,8 @@ def validate(native, cdx, identity, expected, *, converted):
             and len(tools) == 1 and tools[0].get('name') == 'syft' and tools[0].get('version') == VERSION,
             'image_inventory_cyclonedx_subject_mismatch')
     artifacts, all_components = native['artifacts'], cdx['components']
+    require(native['descriptor']['configuration'].get('files', {}).get('selection') == 'all',
+            'image_inventory_full_file_metadata_required')
     require(isinstance(artifacts, list) and isinstance(all_components, list)
             and 1 <= len(artifacts) <= 10000 and len(all_components) <= 100000,
             'image_inventory_packages_refused')
@@ -305,6 +341,7 @@ def validate(native, cdx, identity, expected, *, converted):
             'image_inventory_os_formats_disagree')
     files = {row['id']: row for row in native.get('files', [])}
     seen = set()
+    hashed_paths = set()
     components = []
     for row in all_components:
         kind = row.get('type')
@@ -321,10 +358,13 @@ def validate(native, cdx, identity, expected, *, converted):
             require(isinstance(hashes.get('sha256'), str)
                     and re.fullmatch('[0-9a-f]{64}', hashes['sha256'])
                     and cdx_hashes.get('SHA-256') == hashes['sha256'], 'image_inventory_file_formats_disagree')
+            hashed_paths.add(row['name'])
         elif kind in ('library', 'application', 'framework'):
             components.append(row)
         else:
             require(kind == 'operating-system', 'image_inventory_component_type_refused')
+    require(python_native_paths(native) <= hashed_paths,
+            'image_inventory_native_payload_hash_missing')
     def key(row, origin):
         values = tuple(row.get(field) for field in ('name', 'version', 'purl'))
         name, version, purl = values

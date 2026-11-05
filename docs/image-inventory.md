@@ -32,6 +32,11 @@ third-party Node action, signing key or publishing permission.
    OS entries must agree with the native Debian distribution record. File
    entries must reference a native file with matching path and SHA-256; unknown
    component types, duplicate references and missing/extra packages fail.
+   File metadata selection is explicitly **all**, not Syft's default
+   `owned-by-package`: the latter omits Python extensions and bundled native
+   libraries even when their package RECORD lists them. Every native payload
+   listed by the Python cataloger must have a matching actual file hash in both
+   formats. A declared RECORD hash alone is not a read-back of installed bytes.
 5. All exact runtime/build-lock Python versions and the local distribution must
    be present without contradictory versions. The OS inventory must contain
    FFmpeg, OpenSSL and CA certificates. Missing packages cannot become zero counts.
@@ -49,6 +54,13 @@ companion retains available UTF-8 content, deduplicated by SHA-256. A hash-named
 license must have exact matching text; missing or changed content refuses
 collection. Declared license names may have no original text and remain visibly
 distinct from retained text. No SPDX alias or distribution approval is invented.
+Full file metadata includes image paths and digests, not arbitrary file content.
+Only the existing notice allowlist below requests original contents. These are
+controlled clean build images, scanned before private state is mounted; a
+production device filesystem is not an authorized input to this public workflow.
+Native-payload hashes enable exact wheel/image comparisons, but do not identify
+the corresponding source version, establish reproducible upstream builds or
+resolve missing license notices by themselves.
 The owned temporary
 native report/configuration is removed after the scan. A child scan has a
 five-minute deadline; the disposable VM and job deadline remain the hard
