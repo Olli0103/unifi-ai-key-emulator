@@ -162,8 +162,12 @@ def _backup(args, run, *, clock=time.monotonic):
 
 async def run(args):
     # Validate argument-dependent authority before any database/native/model call.
-    from .encoding_identity import CLIP_ENCODING, TEXT_ENCODING
+    from .encoding_identity import clip_encoding, TEXT_ENCODING
     text_space = getattr(args, 'space', 'clip-basic-v1') == 'e5-session-v1'
+    policy = getattr(args, 'target_text_policy', 'literal')
+    if text_space and policy != 'literal':
+        raise IndexCommandError('CLIP text policy cannot be used for E5')
+    encoding = TEXT_ENCODING if text_space else clip_encoding(policy)
     if args.command == 'export':
         _require(args, 'output')
         _, cameras = _config(args)
@@ -204,14 +208,16 @@ async def run(args):
     if args.command == 'stage' and generation is None:
         generation = hashlib.sha256((args.target_revision+'\0'+target_source+'\0'
             +args.source_manifest_sha256+'\0'+args.space+'\0'+json.dumps(
-                TEXT_ENCODING if text_space else CLIP_ENCODING, sort_keys=True)).encode()).hexdigest()[:12]
+                encoding, sort_keys=True)).encode()).hexdigest()[:12]
     migration = (SessionRebuild if text_space else Rebuild)(store,
         args.state_dir/'session-search' if text_space else args.state_dir,
-        target_revision=args.target_revision, target_source=target_source, generation=generation)
+        target_revision=args.target_revision, target_source=target_source, generation=generation,
+        **({} if text_space else {"target_encoding": encoding}))
     if args.command == 'verify':
         return migration.verify()
     if args.command in {'stage', 'qualify'}:
-        encoder = (TextEmbedder if text_space else ClipEmbedder)(target_source, args.target_revision)
+        encoder = (TextEmbedder if text_space else ClipEmbedder)(target_source, args.target_revision,
+            **({} if text_space else {"encoding_identity": encoding}))
         try:
             if args.command == 'qualify':
                 return await migration.qualify(encoder, plan)
@@ -267,6 +273,8 @@ def add_arguments(parser):
     parser.add_argument('--database-password-file', type=Path)
     parser.add_argument('--target-revision')
     parser.add_argument('--target-server')
+    from .encoding_identity import CLIP_TEXT_POLICIES
+    parser.add_argument('--target-text-policy', choices=CLIP_TEXT_POLICIES, default='literal')
     parser.add_argument('--source-archive', type=Path)
     parser.add_argument('--source-manifest-sha256')
     parser.add_argument('--readback-plan', type=Path)

@@ -28,7 +28,7 @@ from .provider_network import ProviderAddressError, ProviderConnector, validate_
 from .protocol import ContractError, decode_message, encode_message
 from .device import VerifiedConnector
 from .embedding_profile import EmbeddingProfileError, ensure_embedding_profile, pinned_value
-from .encoding_identity import CLIP_ENCODING, TEXT_ENCODING, UPGRADABLE_ENCODING
+from .encoding_identity import TEXT_ENCODING, UPGRADABLE_ENCODING
 from .secret_files import SecretFileError, read_secret
 
 
@@ -392,6 +392,10 @@ class SearchService:
         self.clip: clip.ClipClient | None = None
         if self.profile == clip.PROFILE and config.get("search", {}).get("enabled") is True:
             try:
+                if (config.get('find_anything', {}).get('text_policy', 'literal') != 'literal'
+                        and (self.state_dir / 'search-profile.json').exists()
+                        and pinned_value(self.state_dir, 'tokenizer') is None):
+                    raise clip.ClipError('Text policy changes require an explicit index migration')
                 self.clip = clip.ClipClient(config.get("find_anything"),
                     require_encoding=pinned_value(self.state_dir, "encoding_required") is True)
             except clip.ClipError as exc:
@@ -489,7 +493,7 @@ class SearchService:
     def _identity(self, revision: str | None = None) -> dict[str, Any]:
         if self.clip is not None:
             identity = {"profile": clip.PROFILE, "model": clip.MODEL, "dimensions": clip.DIMENSIONS,
-                        "backend": "local-clip-onnx", "source": self.clip.base, **CLIP_ENCODING}
+                        "backend": "local-clip-onnx", "source": self.clip.base, **self.clip.expected_encoding}
             if pinned_value(self.state_dir, "encoding_required") is True:
                 identity["encoding_required"] = True
             revision = revision or pinned_value(self.state_dir, "revision")

@@ -31,7 +31,7 @@ from urllib.parse import urlsplit
 import aiohttp
 
 from .provider_network import ProviderConnector
-from .encoding_identity import CLIP_ENCODING
+from .encoding_identity import CLIP_ENCODING, clip_encoding
 
 
 MODEL = "clip-ViT-L-14"
@@ -61,12 +61,16 @@ def validate_find_anything_config(value: Any) -> dict:
     """Return a normalized copy of ``find_anything`` or raise ClipError."""
     if (not isinstance(value, dict)
             or set(value) - {"clip_server", "index_camera_ids", "max_objects", "retroactive",
-                             "reverification", "tag_server"}
+                             "reverification", "tag_server", "text_policy"}
             or "clip_server" not in value):
         raise ClipError("find_anything needs clip_server and optional index_camera_ids, max_objects, retroactive")
     for flag in ("retroactive", "reverification"):
         if type(value.get(flag, False)) is not bool:
             raise ClipError(f"find_anything.{flag} must be a JSON boolean")
+    try:
+        clip_encoding(value.get('text_policy', 'literal'))
+    except ValueError as exc:
+        raise ClipError(str(exc)) from exc
     server = value["clip_server"]
     if not _local_server(server):
         # Query text and frames stay on this host or its container network.
@@ -86,7 +90,8 @@ def validate_find_anything_config(value: Any) -> dict:
     return {"clip_server": server.rstrip("/"), "index_camera_ids": list(cameras), "max_objects": limit,
             "retroactive": value.get("retroactive", False),
             "reverification": value.get("reverification", False),
-            **({"tag_server": tag_server.rstrip("/")} if tag_server is not None else {})}
+            **({"tag_server": tag_server.rstrip("/")} if tag_server is not None else {}),
+            **({"text_policy": value["text_policy"]} if "text_policy" in value else {})}
 
 
 def _local_server(server: Any) -> bool:
@@ -115,7 +120,7 @@ class ClipClient:
         # refused, so an index never mixes vectors from two encoders (#18).
         self.expected_revision = expected_revision
         self.require_encoding = require_encoding
-        self.expected_encoding = dict(CLIP_ENCODING if expected_encoding is None else expected_encoding)
+        self.expected_encoding = dict(clip_encoding(self.config.get('text_policy', 'literal')) if expected_encoding is None else expected_encoding)
         if (set(self.expected_encoding) != set(CLIP_ENCODING)
                 or self.expected_encoding.get('modality') != 'image-text'
                 or self.expected_encoding.get('distance_metric') != 'cosine'

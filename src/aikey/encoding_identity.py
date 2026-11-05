@@ -12,6 +12,25 @@ CLIP_ENCODING = {
     'preprocessing': 'clip-rgb-shortest224-bicubic-center224-meanstd-v1',
     'tokenizer': 'checkpoint-tokenizer-json-lowercase-context77-v1',
 }
+CLIP_TEXT_POLICIES = ('literal', 'native-short-photo')
+
+
+def clip_encoding(text_policy='literal'):
+    """Explicit query algorithm; never silently reinterpret an existing index."""
+    if text_policy not in CLIP_TEXT_POLICIES:
+        raise ValueError('Unsupported CLIP text policy')
+    result = dict(CLIP_ENCODING)
+    if text_policy == 'native-short-photo':
+        result['tokenizer'] = 'checkpoint-tokenizer-json-native-short-photo-lowercase-context77-v1'
+    return result
+
+
+def clip_query(text, text_policy='literal'):
+    clip_encoding(text_policy)
+    # AI Key 2.2.8 slm_server.py:246-254; retain the actual query words.
+    return 'a photo of ' + text if text_policy == 'native-short-photo' and len(text.split()) < 3 else text
+
+
 TEXT_ENCODING = {
     'modality': 'text',
     'distance_metric': 'cosine',
