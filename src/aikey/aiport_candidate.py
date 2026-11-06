@@ -831,6 +831,10 @@ class CandidateService:
         self._sound_classifier: SoundClassifier | None = None
         self._sounds: dict[str, SoundEvents] = {}
         self._audio_flags: dict[str, dict[str, bool]] = {}
+        self._audio_generation: dict[str, int] = {}
+        self._audio_locks: dict[str, asyncio.Lock] = {}
+        self._sound_work: dict[str, asyncio.Task] = {}
+        self._sound_reset_pending: set[str] = set()
         self._sound_enter_times: dict[tuple[str, bool], list[float]] = {}
         self.sound_events_entered: dict[str, int] = {}
         self.sound_events_left = 0
@@ -1113,6 +1117,12 @@ class CandidateService:
         ws = self._current_ws
         if detector is None or ws is None or not self._params_agreed:
             return
+        generation = self._audio_generation.get(camera_mac, 0)
+
+        def current() -> bool:
+            return (self._current_ws is ws and self._params_agreed
+                    and self._audio_generation.get(camera_mac, 0) == generation)
+
         now = time.monotonic()
         if camera_mac not in self._speech_announced:
             # Audio is flowing: tell Protect so it pushes this camera's
@@ -1143,6 +1153,8 @@ class CandidateService:
             await self._send_stream_status(ws, streaming=True, camera_mac=camera_mac,
                                            audio_ready=False)
             await self._send_stream_status(ws, streaming=True, camera_mac=camera_mac)
+        if not current():
+            return
         started = self._audio_started.get(camera_mac)
         if started is not None and now - started >= MAX_EVENT_S:
             # Overlapping types must not chain one event past the export
@@ -1150,6 +1162,8 @@ class CandidateService:
             await self._close_audio_event(ws, camera_mac, -120.0)
             self.audio_events_capped += 1
         for edge in detector.feed(pcm):
+            if not current():
+                return
             if edge.edge == "enter" and (not self._speech_enabled.get(camera_mac)
                                          or self._open_sounds(camera_mac)):
                 # The presence detector cannot tell a siren or a bark from a
@@ -1168,22 +1182,42 @@ class CandidateService:
                 self._speech_enter_times[camera_mac] = recent + [now]
             if edge.edge == "leave" and not self._audio_is_open(camera_mac, SPEECH):
                 continue
-            await self._send_audio_edge(ws, camera_mac, SPEECH, edge.edge, edge.level_db)
+            await self._send_audio_edge(ws, camera_mac, SPEECH, edge.edge, edge.level_db,
+                                        generation=generation)
         sounds = self._sounds.get(camera_mac)
-        if sounds is None:
+        if sounds is None or not current() or camera_mac in self._sound_work:
             return
+        work = asyncio.create_task(asyncio.to_thread(sounds.feed, pcm))
+        self._sound_work[camera_mac] = work
+
+        def finished(task: asyncio.Task) -> None:
+            self._sound_work.pop(camera_mac, None)
+            if not task.cancelled():
+                task.exception()  # also retrieve failures after observer cancellation
+            if camera_mac in self._sound_reset_pending:
+                self._sound_reset_pending.discard(camera_mac)
+                sounds.reset()
+
+        work.add_done_callback(finished)
         try:
             # The classifier runs off the event loop; one camera's chunks
-            # arrive in order, so its detector is never fed concurrently.
-            edges = await asyncio.to_thread(sounds.feed, pcm)
+            # arrive in order. Keep ownership if the audio reader is cancelled:
+            # cancellation cannot stop a thread or allow another feed/reset.
+            edges = await asyncio.shield(work)
         except (SoundError, RuntimeError, ValueError) as exc:
             code = str(exc) if isinstance(exc, SoundError) else "sound_classifier_failed"
             self.sound_errors[code] = self.sound_errors.get(code, 0) + 1
             return
         for edge in edges:
+            if not current():
+                return
             if edge.edge == "leave":
                 if self._audio_is_open(camera_mac, edge.kind):
-                    await self._send_audio_edge(ws, camera_mac, edge.kind, "leave", edge.level_db)
+                    await self._send_audio_edge(ws, camera_mac, edge.kind, "leave", edge.level_db,
+                                                generation=generation)
+                continue
+            if not self._sound_enabled(camera_mac, edge.kind):
+                sounds.close(edge.kind)
                 continue
             # Smoke and CO alarms have their own budget, four times the other
             # sounds', so a barking dog never uses up the alarms' share.
@@ -1199,7 +1233,8 @@ class CandidateService:
             if self._audio_is_open(camera_mac, SPEECH):
                 # Speech and a sound at once: one event with both types.
                 self.sound_joined_speech += 1
-            await self._send_audio_edge(ws, camera_mac, edge.kind, "enter", edge.level_db)
+            await self._send_audio_edge(ws, camera_mac, edge.kind, "enter", edge.level_db,
+                                        generation=generation)
 
     def _audio_is_open(self, camera_mac: str, kind: str) -> bool:
         return kind in self._audio_open.get(camera_mac, {})
@@ -1208,43 +1243,83 @@ class CandidateService:
         return [kind for kind in self._audio_open.get(camera_mac, {}) if kind != SPEECH]
 
     async def _send_audio_edge(self, ws: aiohttp.ClientWebSocketResponse, camera_mac: str,
-                               kind: str, edge: str, level_db: float) -> None:
+                               kind: str, edge: str, level_db: float, *,
+                               generation: int | None = None) -> None:
         """One type enters or leaves the camera's audio event; the others stay open."""
-        open_kinds = self._audio_open.get(camera_mac, {})
-        if (edge == "enter") == (kind in open_kinds):
-            return
-        states = dict.fromkeys(open_kinds, "moving")
-        states[kind] = edge
-        await self._send_control_event(ws, "EventSmartAudio", audio_state_payload(
-            camera_mac, states, clock_wall_ms=int(time.time() * 1000), level_db=level_db))
-        if edge == "enter":
-            if not open_kinds:
-                self._audio_started[camera_mac] = time.monotonic()
-            elif len(open_kinds) == 1:
-                self.audio_combined_events += 1
-            self._audio_open.setdefault(camera_mac, {})[kind] = time.monotonic()
-        else:
-            del open_kinds[kind]
-            if not open_kinds:
-                self._audio_open.pop(camera_mac, None)
-                self._audio_started.pop(camera_mac, None)
-        self._count_audio_edge(camera_mac, kind, edge)
+        async with self._audio_locks.setdefault(camera_mac, asyncio.Lock()):
+            if generation is not None and (
+                    self._audio_generation.get(camera_mac, 0) != generation
+                    or self._current_ws is not ws or not self._params_agreed):
+                return
+            if edge == "enter" and not (
+                    self._speech_enabled.get(camera_mac) if kind == SPEECH
+                    else self._sound_enabled(camera_mac, kind)):
+                return
+            open_kinds = self._audio_open.get(camera_mac, {})
+            if (edge == "enter") == (kind in open_kinds):
+                return
+            states = dict.fromkeys(open_kinds, "moving")
+            states[kind] = edge
+            await self._send_control_event(ws, "EventSmartAudio", audio_state_payload(
+                camera_mac, states, clock_wall_ms=int(time.time() * 1000), level_db=level_db))
+            if self._current_ws is not ws:
+                return
+            if edge == "enter":
+                if not open_kinds:
+                    self._audio_started[camera_mac] = time.monotonic()
+                elif len(open_kinds) == 1:
+                    self.audio_combined_events += 1
+                self._audio_open.setdefault(camera_mac, {})[kind] = time.monotonic()
+            else:
+                del open_kinds[kind]
+                if not open_kinds:
+                    self._audio_open.pop(camera_mac, None)
+                    self._audio_started.pop(camera_mac, None)
+            self._count_audio_edge(camera_mac, kind, edge)
 
     async def _close_audio_event(self, ws: aiohttp.ClientWebSocketResponse, camera_mac: str,
                                  level_db: float) -> None:
         """End the camera's audio event: every open type leaves in one message."""
-        open_kinds = self._audio_open.pop(camera_mac, {})
-        self._audio_started.pop(camera_mac, None)
-        if open_kinds:
-            await self._send_control_event(ws, "EventSmartAudio", audio_state_payload(
-                camera_mac, dict.fromkeys(open_kinds, "leave"),
-                clock_wall_ms=int(time.time() * 1000), level_db=level_db))
-            for kind in open_kinds:
-                self._count_audio_edge(camera_mac, kind, "leave")
+        async with self._audio_locks.setdefault(camera_mac, asyncio.Lock()):
+            open_kinds = self._audio_open.pop(camera_mac, {})
+            self._audio_started.pop(camera_mac, None)
+            if open_kinds:
+                await self._send_control_event(ws, "EventSmartAudio", audio_state_payload(
+                    camera_mac, dict.fromkeys(open_kinds, "leave"),
+                    clock_wall_ms=int(time.time() * 1000), level_db=level_db))
+                for kind in open_kinds:
+                    self._count_audio_edge(camera_mac, kind, "leave")
+            if camera_mac in self._speech:
+                self._speech[camera_mac].reset()
+            if camera_mac in self._sounds:
+                if camera_mac in self._sound_work:
+                    self._sound_reset_pending.add(camera_mac)
+                else:
+                    self._sounds[camera_mac].close()
+
+    def _revoke_audio_policy(self, camera_mac: str, *, disconnected: bool = False) -> None:
+        """A new stream/control lifetime needs a fresh controller grant."""
+        if camera_mac not in self._speech:
+            return
+        self._audio_generation[camera_mac] = self._audio_generation.get(camera_mac, 0) + 1
+        self._speech_enabled.pop(camera_mac, None)
+        self._audio_flags.pop(camera_mac, None)
+        self._speech_settings_seen.discard(camera_mac)
+        self._speech_announced.discard(camera_mac)
+        self._speech_announced_at.pop(camera_mac, None)
+        self._speech_reannounces.pop(camera_mac, None)
         if camera_mac in self._speech:
             self._speech[camera_mac].reset()
         if camera_mac in self._sounds:
-            self._sounds[camera_mac].close()
+            if camera_mac in self._sound_work:
+                self._sound_reset_pending.add(camera_mac)
+            else:
+                self._sounds[camera_mac].reset()
+        if disconnected:
+            # The dead socket cannot deliver terminal edges. Do not replay
+            # old open events into the next controller session.
+            self._audio_open.pop(camera_mac, None)
+            self._audio_started.pop(camera_mac, None)
 
     def _count_audio_edge(self, camera_mac: str, kind: str, edge: str) -> None:
         if kind == SPEECH and edge == "enter":
@@ -2604,6 +2679,8 @@ class CandidateService:
         self._next_message_id = 2
         self._hello_agreed = False
         self._params_agreed = False
+        for camera_mac in self._speech:
+            self._revoke_audio_policy(camera_mac, disconnected=True)
         message = {"from": "ubnt_avclient", "to": "UniFiVideo",
                    "responseExpected": True, "functionName": "ubnt_avclient_hello",
                    "messageId": 1, "inResponseTo": 0,
@@ -2653,6 +2730,8 @@ class CandidateService:
             camera_mac = getattr(self.ingress, "camera_mac", None)
             if camera_mac is None:
                 raise CandidateError("Camera identity required for multi-camera status")
+        if not streaming:
+            self._revoke_audio_policy(camera_mac)
         # Smart readiness requires an explicitly configured detector. Passive
         # pairing remains available without claiming an AI capability.
         smart_ready = (streaming and (
@@ -2695,10 +2774,7 @@ class CandidateService:
                  and self.ingress.audio_ready(camera_mac)
                  and audio_ready is not False)})
         if not streaming:
-            self._speech_announced.discard(camera_mac)
             await self._close_audio_event(ws, camera_mac, -120.0)
-            if camera_mac in self._sounds:
-                self._sounds[camera_mac].reset()
         self.stream_status_events_sent += 1
 
     async def _handle_diagnostic_frame(self, ws: aiohttp.ClientWebSocketResponse,
@@ -2769,6 +2845,8 @@ class CandidateService:
                                           {"description": "invalid_reset_command"})
                 self.stream_resets_rejected += 1
                 return
+            for camera_mac in self._speech:
+                self._revoke_audio_policy(camera_mac)
             if self.ingress is not None:
                 streams = self.ingress.list_streams()
                 if isinstance(self.ingress, AiPortIngress):
@@ -3011,6 +3089,13 @@ class CandidateService:
                     key = exc.code if exc.code in reasons or len(reasons) < 12 else "other"
                     reasons[key] = reasons.get(key, 0) + 1
                 else:
+                    if result["status"] == "stopped":
+                        payload = message.get("payload")
+                        stopped_camera = (normalize_mac(payload["deviceID"])
+                                          if isinstance(payload, dict) and "deviceID" in payload
+                                          else getattr(self.ingress, "camera_mac", None))
+                        if stopped_camera is not None:
+                            self._revoke_audio_policy(stopped_camera)
                     if (result["status"] == "stopped"
                             and isinstance(self.ingress, AiPortIngress)):
                         await self._revoke_single_policy(ws)
@@ -3422,6 +3507,9 @@ class CandidateService:
                                         break
                             finally:
                                 self._current_ws = None
+                                self._params_agreed = False
+                                for camera_mac in self._speech:
+                                    self._revoke_audio_policy(camera_mac, disconnected=True)
                                 if isinstance(self.ingress, AiPortIngress):
                                     await self._revoke_single_policy(ws)
                                 elif isinstance(self.ingress, AiPortIngressPool):
