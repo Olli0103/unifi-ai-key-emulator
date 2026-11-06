@@ -519,7 +519,8 @@ def test_complete_index_handoff_uses_real_archives_and_standard_verifier_contrac
     observed = candidate.publication.checked_assets(destination, packet)
     assert observed["source_revision"] == packet["source_revision"]
     assert set(observed["images"]) == {"aikey", "aiport"}
-    assert len(observed["files"]) == 20
+    assert len(observed["files"]) == 21
+    assert (destination / "THIRD_PARTY_NOTICES.txt").read_bytes() == (root / "THIRD_PARTY_NOTICES.txt").read_bytes()
 
 
 def test_index_creation_cannot_start_when_upstream_signature_check_fails(assembly, monkeypatch):

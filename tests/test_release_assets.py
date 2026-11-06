@@ -289,6 +289,12 @@ def real_packages(tagged_source, tmp_path):  # noqa: F811 -- imported pytest fix
     (root / "requirements-runtime.lock").write_text(
         "# FICTIONAL fixture: no runtime dependencies\n"
     )
+    (root / "pyproject.toml").write_text(
+        (root / "pyproject.toml").read_text().replace(
+            'license-files=["LICENSE"]', 'license-files=["LICENSE", "THIRD_PARTY_NOTICES.txt"]'
+        )
+    )
+    (root / "THIRD_PARTY_NOTICES.txt").write_bytes(b"FICTIONAL attribution only\n" * 12000)
 
     def git(*args):
         return (
@@ -332,7 +338,8 @@ def real_packages(tagged_source, tmp_path):  # noqa: F811 -- imported pytest fix
     return root, packet, directory
 
 
-def make_packages(root, packet, directory, *, changed_module=False, extra=None, owner=0):
+def make_packages(root, packet, directory, *, changed_module=False, extra=None, owner=0,
+                  notice_fault=None):
     version = packet["version"]
     with zipfile.ZipFile(
         directory / ("local_aikey-" + version + "-py3-none-any.whl"), "w"
@@ -345,6 +352,12 @@ def make_packages(root, packet, directory, *, changed_module=False, extra=None, 
             "local_aikey-" + version + ".dist-info/licenses/LICENSE",
             (root / "LICENSE").read_bytes(),
         )
+        if notice_fault != "wheel_missing":
+            raw = (root / "THIRD_PARTY_NOTICES.txt").read_bytes()
+            wheel.writestr(
+                "local_aikey-" + version + ".dist-info/licenses/THIRD_PARTY_NOTICES.txt",
+                raw[:-1] + b"!" if notice_fault == "wheel_modified" else raw,
+            )
         wheel.writestr(
             "local_aikey-" + version + ".dist-info/METADATA",
             "Metadata-Version: 2.4\nName: local-aikey\nVersion: " + version + "\n",
@@ -368,6 +381,8 @@ def make_packages(root, packet, directory, *, changed_module=False, extra=None, 
         writer.writerow((prefix + "RECORD", "", ""))
         wheel.writestr(prefix + "RECORD", records.getvalue())
     originals = ["LICENSE", "pyproject.toml", "src/aikey/__init__.py"]
+    if notice_fault != "sdist_missing":
+        originals.append("THIRD_PARTY_NOTICES.txt")
     entries = {name: (root / name).read_bytes() for name in originals}
     if extra:
         entries[extra] = b"FICTIONAL unexpected payload"
@@ -383,6 +398,26 @@ def test_real_archive_consumer_uses_non_audit_legal_gate_and_exact_source(real_p
     before = {path.name: sha(path.read_bytes()) for path in directory.iterdir()}
     publication.verify_packages(root, packet, directory)
     assert before == {path.name: sha(path.read_bytes()) for path in directory.iterdir()}
+
+
+@pytest.mark.parametrize("fault", ["wheel_missing", "wheel_modified", "sdist_missing"])
+def test_declared_notice_is_required_in_both_archives_even_with_consistent_record(real_packages, fault):
+    root, packet, directory = real_packages
+    make_packages(root, packet, directory, notice_fault=fault)
+    with pytest.raises(publication.PublicationError, match="release_(wheel_license_mismatch|sdist_source_modules_missing)"):
+        publication.verify_packages(root, packet, directory)
+
+
+@pytest.mark.parametrize("names", [[], ["THIRD_PARTY_NOTICES.txt"], ["LICENSE", "LICENSE"],
+                                   ["LICENSE", "../private"], ["LICENSE", "UNTRACKED.txt"]])
+def test_release_notice_declaration_must_be_exact_tracked_root_names(real_packages, names):
+    root, packet, directory = real_packages
+    path = root / "pyproject.toml"
+    path.write_text(path.read_text().replace(
+        'license-files=["LICENSE", "THIRD_PARTY_NOTICES.txt"]',
+        "license-files=" + json.dumps(names)))
+    with pytest.raises(publication.PublicationError, match="release_package_declared_licenses_refused"):
+        publication.verify_packages(root, packet, directory)
 
 
 @pytest.mark.parametrize(

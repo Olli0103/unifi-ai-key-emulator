@@ -426,6 +426,15 @@ def verify_packages(root, plan, directory, *, run=gate.command):
         if name.startswith("src/aikey/") and name.endswith(".py")
     }
     require(modules, "release_package_source_modules_missing")
+    declared_licenses = tomllib.loads(gate.read(root / "pyproject.toml").decode())["project"].get("license-files")
+    require(
+        isinstance(declared_licenses, list) and "LICENSE" in declared_licenses
+        and 1 <= len(declared_licenses) <= 32
+        and all(isinstance(name, str) and re.fullmatch(r"[A-Z][A-Za-z0-9_.-]{0,127}", name)
+                and name in tracked for name in declared_licenses)
+        and len(set(declared_licenses)) == len(declared_licenses),
+        "release_package_declared_licenses_refused",
+    )
     wheel = directory / ("local_aikey-" + plan["version"] + "-py3-none-any.whl")
     sdist = directory / ("local_aikey-" + plan["version"] + ".tar.gz")
     try:
@@ -500,9 +509,8 @@ def verify_packages(root, plan, directory, *, run=gate.command):
                     "RECORD",
                     "entry_points.txt",
                     "top_level.txt",
-                    "licenses/LICENSE",
                 )
-            }
+            } | {metadata_root + "licenses/" + name for name in declared_licenses}
             require(
                 len(names) == len(set(names))
                 and set(names) <= set(modules) | generated
@@ -516,9 +524,11 @@ def verify_packages(root, plan, directory, *, run=gate.command):
                     == gate.read(root / source_name, 2 * 1024 * 1024, allow_empty=True),
                     "release_wheel_source_bytes_mismatch",
                 )
-            licenses = [name for name in names if name.endswith(".dist-info/licenses/LICENSE")]
             require(
-                len(licenses) == 1 and package.read(licenses[0]) == gate.read(root / "LICENSE"),
+                all(metadata_root + "licenses/" + name in names
+                    and package.read(metadata_root + "licenses/" + name)
+                    == gate.read(root / name, 2 * 1024 * 1024)
+                    for name in declared_licenses),
                 "release_wheel_license_mismatch",
             )
             metadata = [name for name in names if name.endswith(".dist-info/METADATA")]
@@ -632,7 +642,7 @@ def verify_packages(root, plan, directory, *, run=gate.command):
                             "release_sdist_generated_config_refused",
                         )
             require(
-                {"LICENSE", "pyproject.toml", *modules.values()} <= set(originals),
+                {*declared_licenses, "pyproject.toml", *modules.values()} <= set(originals),
                 "release_sdist_source_modules_missing",
             )
         spec = importlib.util.spec_from_file_location(
