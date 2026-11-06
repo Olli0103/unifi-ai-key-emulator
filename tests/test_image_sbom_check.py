@@ -942,3 +942,17 @@ def test_empty_notice_requires_actual_empty_regular_file_hash(fault):
     else:
         assert check.notice_files(native) == [
             {'path': path, 'sha256': check.digest(b''), 'size': 0, 'base64': ''}]
+
+
+@pytest.mark.parametrize('path',['/app/THIRD_PARTY_NOTICES.txt',
+    '/usr/local/lib/python3.12/site-packages/local_aikey-0.1.0.dist-info/licenses/THIRD_PARTY_NOTICES.txt'])
+def test_project_third_party_notice_is_an_explicit_content_path(path):
+    assert check.notice_path(path)
+
+
+@pytest.mark.parametrize('path',['/app/private/THIRD_PARTY_NOTICES.txt',
+    '/app/THIRD_PARTY_NOTICES.txt.secret',
+    '/usr/local/lib/python3.12/site-packages/other-1.dist-info/licenses/THIRD_PARTY_NOTICES.txt',
+    '/usr/local/lib/python3.12/site-packages/local_aikey-0.1.0.dist-info/licenses/../private.txt'])
+def test_project_notice_does_not_expand_arbitrary_content_capture(path):
+    assert not check.notice_path(path)

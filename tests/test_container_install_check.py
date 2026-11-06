@@ -22,8 +22,9 @@ def source_fixture(tmp_path):
     (root/'src/aikey/__init__.py').write_text('VALUE = 1\n')
     (root/'tools').mkdir()
     (root/'tools/container_install_check.py').write_bytes(ENTRY.read_bytes())
-    (root/'pyproject.toml').write_text('[project]\nversion="0.1.0"\n')
+    (root/'pyproject.toml').write_text('[project]\nversion="0.1.0"\nlicense-files=["LICENSE", "THIRD_PARTY_NOTICES.txt"]\n')
     (root/'LICENSE').write_text('Synthetic license fixture\n')
+    (root/'THIRD_PARTY_NOTICES.txt').write_text('Synthetic third-party attribution\n')
     return root,check.manifest(root,REV)
 
 
@@ -35,9 +36,11 @@ def installed_fixture(tmp_path,monkeypatch):
     name=Path('local_aikey-0.1.0.dist-info/licenses/LICENSE')
     (purelib/name).parent.mkdir(parents=True)
     (purelib/name).write_bytes((root/'LICENSE').read_bytes())
+    notice=name.with_name('THIRD_PARTY_NOTICES.txt')
+    (purelib/notice).write_bytes((root/'THIRD_PARTY_NOTICES.txt').read_bytes())
     monkeypatch.setattr(check.sysconfig,'get_path',lambda _:str(purelib))
     monkeypatch.setattr(check.importlib.util,'find_spec',lambda _:SimpleNamespace(origin=str(purelib/'aikey/__init__.py')))
-    dist=SimpleNamespace(version='0.1.0',files=[name],locate_file=lambda item:purelib/item)
+    dist=SimpleNamespace(version='0.1.0',files=[name,notice],locate_file=lambda item:purelib/item)
     monkeypatch.setattr(check.importlib.metadata,'distribution',lambda _:dist)
     return value,purelib,dist
 
@@ -101,7 +104,7 @@ def test_source_metadata_rejects_structural_and_path_ambiguity(tmp_path,fault):
     elif fault=='revision':
         value['revision']=int('1'*40)
     elif fault=='hash':
-        value['license_sha256']='a'*64+'\n'
+        value['license_files']['LICENSE']='a'*64+'\n'
     else:
         value['modules']=True
     with pytest.raises(check.CheckError):
@@ -267,3 +270,35 @@ def test_actual_cli_unknown_errors_do_not_print_paths_or_payloads(tmp_path):
         cwd=tmp_path,env={},capture_output=True,text=True,timeout=10)
     assert result.returncode==2 and not result.stderr and str(secret_path) not in result.stdout
     assert json.loads(result.stdout)['error']=='container_install_check_refused'
+
+
+@pytest.mark.parametrize('fault',['missing','modified','unlisted','duplicate'])
+def test_declared_third_party_notice_must_survive_actual_install(tmp_path,monkeypatch,fault):
+    value,purelib,dist=installed_fixture(tmp_path,monkeypatch)
+    notice=dist.files[1]
+    if fault=='missing':
+        dist.locate_file(notice).unlink()
+        dist.files.remove(notice)
+    elif fault=='modified':
+        dist.locate_file(notice).write_text('Missing original attribution\n')
+    elif fault=='unlisted':
+        dist.files.remove(notice)
+    else:
+        dist.files.append(notice)
+    with pytest.raises((check.CheckError,OSError)):
+        check.installed(value)
+
+
+@pytest.mark.parametrize('names',[[],['LICENSE','LICENSE'],['../LICENSE'],['/LICENSE'],
+    ['LICENSE*'],['LICENSE\n'],[True],'LICENSE'])
+def test_declared_license_paths_are_exact_bounded_root_names(tmp_path,names):
+    root,_=source_fixture(tmp_path)
+    import tomllib
+    original=check.tomllib.loads
+    def project(raw):
+        value=original(raw)
+        value['project']['license-files']=names
+        return value
+    from unittest.mock import patch
+    with patch.object(tomllib,'loads',project), pytest.raises(check.CheckError):
+        check.manifest(root,REV)

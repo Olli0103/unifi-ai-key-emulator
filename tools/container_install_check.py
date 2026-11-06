@@ -22,7 +22,7 @@ import stat
 import sysconfig
 import tomllib
 
-SOURCE='aikey-container-install-source/1'
+SOURCE='aikey-container-install-source/2'
 PHASE='aikey-container-install-phase/1'
 RECORD='aikey-container-install-record/1'
 SUMMARY='aikey-container-install-summary/1'
@@ -103,14 +103,20 @@ def publish(path,value):
 
 
 def checked_source(value):
-    fields={'schema','revision','version','modules','license_sha256','probe_sha256'}
+    fields={'schema','revision','version','modules','license_files','probe_sha256'}
     require(set(value)==fields and value['schema']==SOURCE,'container_source_schema_refused')
     require(isinstance(value['revision'],str) and REVISION.fullmatch(value['revision']),
             'container_source_revision_refused')
     require(isinstance(value['version'],str) and re.fullmatch('[0-9A-Za-z.+!-]{1,64}',value['version']),
             'container_source_version_refused')
-    for key in ('license_sha256','probe_sha256'):
+    for key in ('probe_sha256',):
         require(isinstance(value[key],str) and HASH.fullmatch(value[key]),'container_source_digest_refused')
+    licenses=value['license_files']
+    require(isinstance(licenses,dict) and 1<=len(licenses)<=32,
+            'container_source_licenses_refused')
+    require(all(isinstance(name,str) and re.fullmatch(r'[A-Z][A-Za-z0-9_.-]{0,127}',name)
+                and isinstance(sha,str) and HASH.fullmatch(sha)
+                for name,sha in licenses.items()),'container_source_licenses_refused')
     modules=value['modules']
     require(isinstance(modules,dict) and 1<=len(modules)<=512,'container_source_modules_refused')
     require(all(isinstance(name,str) and MODULE.fullmatch(name) and isinstance(sha,str) and HASH.fullmatch(sha)
@@ -126,8 +132,14 @@ def manifest(root,revision):
         require(not path.is_symlink(),'container_source_symlink_refused')
         modules[path.relative_to(root/'src').as_posix()]=digest(read(path,2*1024*1024))
     project=tomllib.loads(read(root/'pyproject.toml').decode())['project']
+    names=project.get('license-files')
+    require(isinstance(names,list) and 1<=len(names)<=32
+            and all(isinstance(name,str) and re.fullmatch(r'[A-Z][A-Za-z0-9_.-]{0,127}',name)
+                    for name in names) and len(names)==len(set(names)),
+            'container_source_licenses_refused')
+    licenses={name:digest(read(root/name)) for name in names}
     return checked_source({'schema':SOURCE,'revision':revision,'version':project['version'],
-        'modules':modules,'license_sha256':digest(read(root/'LICENSE')),
+        'modules':modules,'license_files':licenses,
         'probe_sha256':digest(read(root/'tools/container_install_check.py'))})
 
 
@@ -148,9 +160,13 @@ def installed(value):
     require(actual==value['modules'],'container_installed_source_mismatch')
     distribution=importlib.metadata.distribution('local-aikey')
     require(distribution.version==value['version'],'container_installed_version_mismatch')
-    licenses=[path for path in distribution.files or () if str(path).endswith('.dist-info/licenses/LICENSE')]
-    require(len(licenses)==1 and digest(read(distribution.locate_file(licenses[0])))==value['license_sha256'],
+    licenses=[path for path in distribution.files or ()
+              if re.fullmatch(r'local_aikey-[0-9A-Za-z.+!-]+\.dist-info/licenses/[A-Z][A-Za-z0-9_.-]{0,127}',str(path))]
+    require(len(licenses)==len(value['license_files'])
+            and {Path(path).name for path in licenses}==set(value['license_files']),
             'container_installed_license_mismatch')
+    require(all(digest(read(distribution.locate_file(path)))==value['license_files'][Path(path).name]
+                for path in licenses),'container_installed_license_mismatch')
     return len(actual)
 
 
