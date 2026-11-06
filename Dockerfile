@@ -7,7 +7,7 @@ RUN apt-get update \
     && groupadd --gid 10001 aikey \
     && useradd --uid 10001 --gid 10001 --create-home aikey
 WORKDIR /app
-COPY pyproject.toml LICENSE /app/
+COPY pyproject.toml LICENSE THIRD_PARTY_NOTICES.txt /app/
 COPY requirements-runtime.lock /app/
 COPY requirements-build.lock /app/
 COPY src /app/src

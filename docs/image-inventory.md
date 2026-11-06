@@ -167,3 +167,22 @@ python -m ruff check tools/image_sbom_check.py tests/test_image_sbom_check.py
 Synthetic metadata/owned fake executables test refusal and finalization; they
 are not real image execution. Actual platform inventories require completed
 native CI jobs and read-back of their exact-commit artifacts.
+
+## Declared project license files
+
+Both Docker build contexts copy the root `LICENSE` and
+`THIRD_PARTY_NOTICES.txt`. The latter contains the existing Silero VAD
+attribution; it is not a certificate of complete third-party clearance.
+The source manifest uses schema `aikey-container-install-source/2` and records
+every explicit root filename declared by `project.license-files`, with its
+SHA-256. Missing, duplicate, globbed or escaping declarations are refused; the existing
+main `LICENSE` remains mandatory.
+Before importing the application, the installed-package probe checks the exact
+set of installed license files and their original bytes, not just `LICENSE`.
+Older version-1 source receipts remain historical and are not upgraded in place.
+
+The image-content allowlist explicitly includes this root attribution file and
+its `local_aikey` dist-info license copy. It does not admit arbitrary files
+merely because their names contain the word "notice". This repairs a concrete
+Docker COPY omission introduced when the VAD attribution was declared; it does
+not establish corresponding sources or redistribution approval for other code.
