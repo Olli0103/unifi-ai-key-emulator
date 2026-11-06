@@ -289,7 +289,7 @@ def test_declared_third_party_notice_must_survive_actual_install(tmp_path,monkey
         check.installed(value)
 
 
-@pytest.mark.parametrize('names',[[],['LICENSE','LICENSE'],['../LICENSE'],['/LICENSE'],
+@pytest.mark.parametrize('names',[[],['THIRD_PARTY_NOTICES.txt'],['LICENSE','LICENSE'],['../LICENSE'],['/LICENSE'],
     ['LICENSE*'],['LICENSE\n'],[True],'LICENSE'])
 def test_declared_license_paths_are_exact_bounded_root_names(tmp_path,names):
     root,_=source_fixture(tmp_path)
@@ -302,3 +302,10 @@ def test_declared_license_paths_are_exact_bounded_root_names(tmp_path,names):
     from unittest.mock import patch
     with patch.object(tomllib,'loads',project), pytest.raises(check.CheckError):
         check.manifest(root,REV)
+
+
+def test_source_manifest_cannot_silently_drop_existing_main_license(tmp_path):
+    _,value=source_fixture(tmp_path)
+    value['license_files'].pop('LICENSE')
+    with pytest.raises(check.CheckError):
+        check.checked_source(value)

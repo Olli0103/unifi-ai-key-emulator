@@ -112,7 +112,7 @@ def checked_source(value):
     for key in ('probe_sha256',):
         require(isinstance(value[key],str) and HASH.fullmatch(value[key]),'container_source_digest_refused')
     licenses=value['license_files']
-    require(isinstance(licenses,dict) and 1<=len(licenses)<=32,
+    require(isinstance(licenses,dict) and 'LICENSE' in licenses and 1<=len(licenses)<=32,
             'container_source_licenses_refused')
     require(all(isinstance(name,str) and re.fullmatch(r'[A-Z][A-Za-z0-9_.-]{0,127}',name)
                 and isinstance(sha,str) and HASH.fullmatch(sha)
@@ -133,7 +133,7 @@ def manifest(root,revision):
         modules[path.relative_to(root/'src').as_posix()]=digest(read(path,2*1024*1024))
     project=tomllib.loads(read(root/'pyproject.toml').decode())['project']
     names=project.get('license-files')
-    require(isinstance(names,list) and 1<=len(names)<=32
+    require(isinstance(names,list) and 'LICENSE' in names and 1<=len(names)<=32
             and all(isinstance(name,str) and re.fullmatch(r'[A-Z][A-Za-z0-9_.-]{0,127}',name)
                     for name in names) and len(names)==len(set(names)),
             'container_source_licenses_refused')

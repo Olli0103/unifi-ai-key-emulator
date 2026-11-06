@@ -175,7 +175,8 @@ Both Docker build contexts copy the root `LICENSE` and
 attribution; it is not a certificate of complete third-party clearance.
 The source manifest uses schema `aikey-container-install-source/2` and records
 every explicit root filename declared by `project.license-files`, with its
-SHA-256. Missing, duplicate, globbed or escaping declarations are refused.
+SHA-256. Missing, duplicate, globbed or escaping declarations are refused; the existing
+main `LICENSE` remains mandatory.
 Before importing the application, the installed-package probe checks the exact
 set of installed license files and their original bytes, not just `LICENSE`.
 Older version-1 source receipts remain historical and are not upgraded in place.
