@@ -1,7 +1,9 @@
-"""Fictional PF/daemon responses; no root, sockets or host changes."""
+"""Fictional PF/daemon responses and loopback TLS; no root or host changes."""
 from copy import deepcopy
 import json
 import os
+from pathlib import Path
+import sys
 
 import pytest
 
@@ -9,7 +11,7 @@ from aikey.apple_pf_helper import Adapter, Refused, anchor, policy
 
 
 def fixture():
-    return {'uid': os.geteuid() or 501, 'container': '/usr/bin/true',
+    return {'uid': os.geteuid() or 501, 'container': str(Path(sys.executable).resolve()),
             'guest_network': '192.168.64.0/24', 'slots': [{
                 'name': 'fixture-port-1', 'host_ip': '192.168.10.135',
                 'controller_ip': '192.168.10.1', 'interface': 'en0',
@@ -185,6 +187,9 @@ def test_actual_loopback_tls_leaf_pin_accepts_exact_and_rejects_wrong_peer(tmp_p
 
     _, _, states, _ = profiles(tmp_path)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    # The pin-only client closes after reading the leaf; no session is resumed.
+    # Avoid post-handshake ticket writes racing that intentional close on Linux.
+    context.num_tickets = 0
     context.load_cert_chain(states[1] / 'device.crt', states[1] / 'device.key')
     pin = hashlib.sha256(ssl.PEM_cert_to_DER_cert((states[1] / 'device.crt').read_text())).hexdigest()
     listener = socket.socket()
@@ -193,13 +198,19 @@ def test_actual_loopback_tls_leaf_pin_accepts_exact_and_rejects_wrong_peer(tmp_p
     listener.settimeout(5)
     address = listener.getsockname()
     errors = []
+    handshakes = []
     def serve():
         try:
             for _ in range(2):
                 connection, _ = listener.accept()
                 with context.wrap_socket(connection, server_side=True) as tls:
+                    handshakes.append(True)
                     tls.settimeout(2)
-                    tls.recv(1)
+                    try:
+                        assert tls.recv(1) == b''
+                    except ConnectionResetError:
+                        # Either FIN or RST is valid after a pin-only handshake.
+                        pass
         except Exception as error:
             errors.append(type(error).__name__)
         finally:
@@ -217,7 +228,7 @@ def test_actual_loopback_tls_leaf_pin_accepts_exact_and_rejects_wrong_peer(tmp_p
             module.pinned_peer('192.168.64.3', 'f' * 64)
     finally:
         worker.join(6)
-    assert not worker.is_alive() and not errors
+    assert not worker.is_alive() and not errors and len(handshakes) == 2
 
 
 def test_wrong_guest_certificate_never_loads_a_rule_or_creates_a_journal():
