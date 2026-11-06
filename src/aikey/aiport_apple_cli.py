@@ -32,6 +32,7 @@ def parser():
         command.add_argument('--cpus',type=int,default=2)
         command.add_argument('--memory-mib',type=int,default=2048)
         command.add_argument('--name-prefix',default='local-aiport')
+        command.add_argument('--transport',choices=('apple-publish','pf-rdr'),default='apple-publish')
         command.add_argument('--models-dir',type=Path)
         command.add_argument('--aikey-state',type=Path)
         source=command.add_mutually_exclusive_group(required=True)
@@ -71,7 +72,7 @@ def _inputs(args):
             raise ApplePlanError('apple_unused_inventory_credentials_refused')
         report=_json_object(_private(args.inventory.expanduser().absolute(),2*1024*1024))
     options={name:getattr(args,name) for name in ('controller_ip','controller_pin','image','uid','gid','dns',
-        'cpus','memory_mib','name_prefix','models_dir','aikey_state')}
+        'cpus','memory_mib','name_prefix','models_dir','aikey_state','transport')}
     for name in ('models_dir','aikey_state'):
         if options[name] is not None:
             options[name]=options[name].expanduser().absolute()
@@ -155,12 +156,18 @@ def main(argv=None):
             if manifest!=expected:
                 raise AppleRuntimeError('apple_manifest_or_identity_changed')
             host_state=private_directory(args.state_dir.expanduser().absolute())
+            transport=None
+            extras={}
+            if args.transport=='pf-rdr':
+                from .aiport_apple_transport import PFTransport
+                transport=PFTransport(args.controller_ip)
+                extras={'transport':transport,'probe':transport.probe}
             if args.reconcile:
-                result=settle(manifest,plan,report,states,options,host_state)
+                result=settle(manifest,plan,report,states,options,host_state,**extras)
             else:
-                checks=HostPreflight(args.controller_ip)
+                checks=transport if transport is not None else HostPreflight(args.controller_ip)
                 result=reconcile(manifest,plan,report,states,options,host_state,apply=args.apply,
-                    host_check=checks,timeout=args.timeout)
+                    host_check=checks,timeout=args.timeout,**extras)
                 blocked=[]
                 if not args.apply:
                     for instance in manifest['instances']:
