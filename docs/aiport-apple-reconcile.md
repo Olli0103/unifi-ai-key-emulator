@@ -165,3 +165,90 @@ inference, inspect recordings or establish sustained lifecycle behavior.
 Every started instance and paired camera set needs fresh native Protect
 verification. Keep the original five acceptance items open until that actual
 end-to-end evidence exists.
+
+## Explicit source-preserving PF transport (candidate)
+
+The native 1.6.1 experiment established that Apple's TCP published-port proxy
+opens a new backend connection. Privileged-port availability alone therefore
+does not qualify controller-peer authentication. Do not broaden the controller
+allowlist or use an HTTP forwarded-address header to work around this.
+
+`--transport pf-rdr` on **both** `plan` and `run` selects a different immutable
+manifest. It creates no Apple published ports. It is opt-in; existing manifests
+and published-port instances are not rewritten or recreated. The original
+manifest/runtime comparison refuses mixing those modes.
+
+The ordinary actor journals `transport_apply` after positively observing its
+own container start and before declaring health. On health failure it journals
+and removes only its own verified mapping before stopping its own new starts.
+A lost helper acknowledgement retains the existing startup reservation and
+uncertain journal. `--reconcile` positively verifies the exact running target,
+pinned health and the root-owned transport record, then settles records without
+repeating a PF or container mutation. An uncertain removal remains fenced for
+privileged inspection; absence alone never authorizes a replay.
+
+### Separate administrator provisioning, not an automatic install
+
+The adapter is deliberately unavailable until a host administrator reviews and
+installs the standard-library-only `src/aikey/apple_pf_helper.py` as a regular
+root-owned, non-user-writable file at:
+
+`/Library/PrivilegedHelperTools/local-aiport-pf.py`
+
+All ancestor directories must also be root-owned and non-group/world-writable.
+The client invokes exactly `/usr/bin/sudo -n /usr/bin/python3 -I` followed by that
+fixed path. It never prompts, writes sudoers, runs the checkout as root or grants
+a general shell/Python privilege. The administrator must separately authorize
+that **exact argument vector**, not `/usr/bin/python3` or a wildcard command.
+No automated installer or sudo policy change is supplied by this candidate.
+
+The private root-owned policy is
+`/Library/Application Support/LocalAIPortPF/policy.json`; root-only journals and
+a pre-created private regular `.lock` file are in its `state` sibling directory.
+The policy permits only a bounded set of names, explicit LAN addresses,
+controller addresses, Ethernet interfaces and certificate pins. Example values
+below are fictional, not a usable deployment plan:
+
+```json
+{
+  "uid": 501,
+  "container": "/usr/local/bin/container",
+  "guest_network": "192.168.64.0/24",
+  "slots": [{
+    "name": "example-port-slot-1",
+    "host_ip": "192.168.10.135",
+    "controller_ip": "192.168.10.1",
+    "interface": "en0",
+    "certificate_sha256": "REPLACE_WITH_ACTUAL_64_HEX_DER_LEAF_SHA256"
+  }]
+}
+```
+
+The helper runs the selected container inspection only **after dropping to the
+policy's ordinary user/XPC session**. It requires the named running container,
+matching identity label, no published ports/sockets, default guest network,
+and a guest address inside the explicit network, excluding network/gateway/
+broadcast. It independently pins the actual target TLS leaf before installing
+rules; user-daemon labels alone cannot authorize another service's target.
+Normal health still verifies the own CA and exact leaf, using the guest address
+because host-originated requests do not traverse inbound LAN redirect rules.
+
+Preconditions are an already assigned distinct LAN address, matching physical
+controller route, available exact TCP 443, existing forwarding, enabled PF,
+and Apple's existing wildcard redirect anchor. Enabled/unknown application
+firewall policy is refused, not disabled. The helper only modifies its dedicated
+`com.apple/local-aiport-<name-digest>` child translation anchor. It refuses foreign
+rules, filter rules or subanchors there, and checks the main translation/filter
+rules unchanged. It never assigns addresses, enables/disables PF, changes sysctl,
+loads the main ruleset, installs a daemon, pairs a camera or changes a credential.
+
+A stopped instance's guest address may change on restart. The root record allows
+refresh of only the same authorized slot after fresh daemon and TLS checks;
+its write-ahead receipt retains uncertainty on any failed/unknown outcome. Do
+not hand-edit/delete those journals to bypass the gate.
+
+**Qualification:** offline actor/helper tests are not native source-operator
+acceptance. The earlier separately authorized PF adoption/restart experiment is
+not proof that this candidate is installed or qualified. Native installation,
+source-operator lifecycle, negative/recovery matrix and the original new-slot/
+removal criteria remain pending. No issue acceptance is inferred from fixtures.

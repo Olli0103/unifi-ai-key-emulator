@@ -143,7 +143,8 @@ def inspect_selected(entry,instance,manifest,image):
         'readOnly':True,'resources':{'cpus':manifest['cpus'],'memoryInBytes':manifest['memory_mib']<<20},
         'networks':[{'network':'default','options':{}}],
         'dns':{'nameservers':[manifest['dns']]},
-        'publishedPorts':[{'hostAddress':instance['host_ip'],'hostPort':443,'containerPort':8443,'proto':'tcp','count':1}],
+        'publishedPorts':([] if manifest.get('transport')=='pf-rdr' else
+            [{'hostAddress':instance['host_ip'],'hostPort':443,'containerPort':8443,'proto':'tcp','count':1}]),
         'mounts':[{'destination':'/tmp','source':'tmpfs','type':{'tmpfs':{}},
             'options':['rw','noexec','nosuid','size=64m']}]+[
             {'source':row['source'],'destination':row['destination'],'type':{'virtiofs':{}},
@@ -264,7 +265,7 @@ def read_receipt(directory):
             or value['phase'] not in ('prepared','completed','rolled_back','uncertain','reconciled')
             or not isinstance(value['before'],dict) or not isinstance(value['baseline_readiness'],dict)
             or not isinstance(value['actions'],list)
-            or len(value['actions'])>64
+            or len(value['actions'])>128
             or value['failure'] not in (None,'operation_failed','recovery_incomplete')):
         raise AppleRuntimeError('apple_reconcile_receipt_unavailable')
     for name,state in value['before'].items():
@@ -275,7 +276,7 @@ def read_receipt(directory):
         raise AppleRuntimeError('apple_reconcile_receipt_unavailable')
     for action in value['actions']:
         if (not isinstance(action,dict) or set(action)!={'name','action','state'}
-                or action['name'] not in value['before'] or action['action'] not in ('create','start','stop')
+                or action['name'] not in value['before'] or action['action'] not in ('create','start','stop','transport_apply','transport_remove')
                 or action['state'] not in ('requested','acknowledged','observed')):
             raise AppleRuntimeError('apple_reconcile_receipt_unavailable')
     if value['phase'] in ('completed','rolled_back') and any(a['state']!='observed' for a in value['actions']):
@@ -309,14 +310,15 @@ def save_receipt(directory,value):
         raise AppleOutcomeUncertain('apple_receipt_publication_uncertain')
 
 
-def fresh_health(kind,instance):
+def fresh_health(kind,instance,*,host_ip=None,port=None):
     """Existing CA+exact-leaf reader, fresh cache, no cookie/provider secret."""
     import asyncio
     from .admin_runtime import RuntimeObserver
     directory=Path(instance['state_dir'])
-    port=8080 if kind=='aikey' else 443
+    port=port if port is not None else (8080 if kind=='aikey' else 443)
+    host_ip=host_ip or instance['host_ip']
     observer=RuntimeObserver({'profile':(kind,directory)},
-        {'profile':f"https://{instance['host_ip']}:{port}/healthz"})
+        {'profile':f"https://{host_ip}:{port}/healthz"})
     return asyncio.run(observer.read('profile'))
 
 
@@ -340,7 +342,7 @@ def readiness(observed,instance,*,key=False,require_activation=False):
 
 def reconcile(manifest,plan,report,states,options,host_state,*,apply=False,
               run=run_command,probe=fresh_health,host_check=None,clock=time.monotonic,
-              pause=time.sleep,timeout=600):
+              pause=time.sleep,timeout=600,transport=None):
     """No-op/dry-run or exact create/start, with owned-start-only rollback.
 
     ``host_check`` must be the CLI's concrete route/address/firewall preflight,
@@ -351,6 +353,8 @@ def reconcile(manifest,plan,report,states,options,host_state,*,apply=False,
         raise AppleRuntimeError('invalid_apple_reconcile_options')
     if build_manifest(plan,report,states,**options)!=manifest:
         raise AppleRuntimeError('apple_manifest_or_identity_changed')
+    if (manifest.get('transport')=='pf-rdr') != (transport is not None):
+        raise AppleRuntimeError('apple_transport_adapter_required')
     deadline=clock()+timeout
     def command(args,limit=15):
         bound()
@@ -419,7 +423,12 @@ def reconcile(manifest,plan,report,states,options,host_state,*,apply=False,
                 raise AppleRuntimeError('apple_reconcile_deadline')
             receipt['actions'].append({'name':name,'action':action,'state':'requested'})
             publish()
-            command(args,limit)
+            if action=='transport_apply':
+                transport.apply(instances[name],receipt['operation'])
+            elif action=='transport_remove':
+                transport.remove(instances[name],receipt['operation'])
+            else:
+                command(args,limit)
             receipt['actions'][-1]['state']='acknowledged'
             publish()
         def observed():
@@ -468,6 +477,10 @@ def reconcile(manifest,plan,report,states,options,host_state,*,apply=False,
                 if before[name]=='absent' and labels.get('org.aikey.operation')!=receipt['operation']:
                     raise AppleOutcomeUncertain('apple_started_instance_owner_changed')
                 observed()
+                if transport is not None:
+                    mutation(name,'transport_apply',None,90)
+                    transport.verify(instances[name],receipt['operation'])
+                    observed()
                 for attempt in range(12):
                     try:
                         statuses[name]=readiness(probe('aiport',instances[name]),instances[name],require_activation=True)
@@ -500,6 +513,10 @@ def reconcile(manifest,plan,report,states,options,host_state,*,apply=False,
                     labels=inspect_selected(rows[name],instances[name],manifest,image)
                     if before[name]=='absent' and labels.get('org.aikey.operation')!=receipt['operation']:
                         raise AppleOutcomeUncertain('apple_rollback_owner_changed')
+                    if transport is not None and any(a['name']==name and a['action']=='transport_apply'
+                            for a in receipt['actions']):
+                        mutation(name,'transport_remove',None,90)
+                        observed()
                     if rows[name]['status']['state']=='running':
                         mutation(name,'stop',['stop','--time','10',name],30)
                         after=observe()
@@ -523,7 +540,7 @@ def reconcile(manifest,plan,report,states,options,host_state,*,apply=False,
             raise AppleRuntimeError('apple_own_new_starts_rolled_back_state_retained') from None
 
 
-def _settle(manifest,plan,report,states,options,host_state,*,run,probe):
+def _settle(manifest,plan,report,states,options,host_state,*,run,probe,transport=None):
     """Explicit positive persisted-state observation, never daemon retry/stop.
 
     Absence cannot retire a possibly late create/start. Only a matching existing
@@ -532,6 +549,8 @@ def _settle(manifest,plan,report,states,options,host_state,*,run,probe):
     """
     if build_manifest(plan,report,states,**options)!=manifest:
         raise AppleOutcomeUncertain('apple_original_intent_and_manifest_required')
+    if (manifest.get('transport')=='pf-rdr') != (transport is not None):
+        raise AppleOutcomeUncertain('apple_transport_adapter_required')
     with authority(host_state,manifest,mutate=True) as (directory,bound):
         receipt=read_receipt(directory)
         if (receipt is None or receipt['phase'] not in ('prepared','uncertain','reconciled','completed','rolled_back')
@@ -579,6 +598,12 @@ def _settle(manifest,plan,report,states,options,host_state,*,run,probe):
                         or action['action']=='stop' and state=='running'):
                     raise AppleOutcomeUncertain('apple_requested_postcondition_not_observed')
             seen[name]=state
+            if transport is not None:
+                transport_actions=[a for a in actions if a['action'].startswith('transport_')]
+                if any(a['state']!='observed' and a['action']=='transport_remove' for a in transport_actions):
+                    raise AppleOutcomeUncertain('apple_transport_removal_requires_privileged_recovery')
+                if state=='running':
+                    transport.verify(instance,receipt['operation'] if transport_actions else '0'*32)
             if state=='running':
                 ready[name]=readiness(probe('aiport',instance),instance,require_activation=before!='running')
                 if receipt['baseline_readiness'].get(name)=='connected' and ready[name]!='connected':
@@ -590,6 +615,12 @@ def _settle(manifest,plan,report,states,options,host_state,*,run,probe):
         outcome=('all_running' if all(state=='running' for state in seen.values()) else
             'no_new_running' if not any(state=='running' and receipt['before'][name]!='running'
                                       for name,state in seen.items()) else 'partial_runtime_state')
+        if transport is not None:
+            for name,instance in instances.items():
+                if seen[name]=='running' and any(a['name']==name and a['action']=='transport_apply'
+                        for a in receipt['actions']):
+                    bound()
+                    transport.settle(instance,receipt['operation'])
         updated=deepcopy(receipt)
         updated.update(phase='reconciled',reconciliation={'outcome':outcome,'states':seen,'readiness':ready})
         bound()
@@ -603,10 +634,10 @@ def _settle(manifest,plan,report,states,options,host_state,*,run,probe):
             'original_failure_retained':updated['failure'] is not None}
 
 
-def settle(manifest,plan,report,states,options,host_state,*,run=run_command,probe=fresh_health):
+def settle(manifest,plan,report,states,options,host_state,*,run=run_command,probe=fresh_health,transport=None):
     """Keep failed reconciliation explicitly uncertain; never clear on error."""
     try:
-        return _settle(manifest,plan,report,states,options,host_state,run=run,probe=probe)
+        return _settle(manifest,plan,report,states,options,host_state,run=run,probe=probe,transport=transport)
     except AppleOutcomeUncertain:
         raise
     except (OSError,ValueError,RuntimeError,KeyError,TypeError):

@@ -84,7 +84,7 @@ def _profile(directory):
 
 def build_manifest(plan,report,states,*,controller_ip,controller_pin,image,uid,gid,dns,
                    cpus=2,memory_mib=2048,name_prefix='local-aiport',models_dir=None,
-                   aikey_state=None,now=None):
+                   aikey_state=None,now=None,transport="apple-publish"):
     """Generate the exact selected listener/configuration/identity contract.
 
     ``states`` selects existing slots, not new filesystem authority. Preparing
@@ -107,6 +107,8 @@ def build_manifest(plan,report,states,*,controller_ip,controller_pin,image,uid,g
             raise ValueError
     except (TypeError,ValueError):
         raise ApplePlanError('apple_dns_requires_explicit_private_ipv4') from None
+    if transport not in ('apple-publish','pf-rdr'):
+        raise ApplePlanError('invalid_apple_transport')
     states={slot:private_directory(path) for slot,path in states.items()}
     if len(set(states.values()))!=len(states):
         raise ApplePlanError('apple_state_directory_reused')
@@ -181,6 +183,8 @@ def build_manifest(plan,report,states,*,controller_ip,controller_pin,image,uid,g
         'dns':str(address),'cpus':cpus,'memory_mib':memory_mib,'instances':instances,'aikey':key,
         'native_pairing':'disabled','host_discovery_udp':'needs_evidence_not_published',
         'camera_stream_listeners':'needs_evidence_not_published','models_loaded':False}
+    if transport=='pf-rdr':
+        result['transport']='pf-rdr'
     result['revision']=digest(encode(result))
     return result
 
@@ -193,9 +197,11 @@ def create_arguments(manifest,instance,operation):
         '--user',f"{manifest['uid']}:{manifest['gid']}",
         '--read-only','--network','default','--tmpfs','/tmp:rw,noexec,nosuid,size=64m',
         '--cpus',str(manifest['cpus']),'--memory',str(manifest['memory_mib'])+'M',
-        '--dns',manifest['dns'],'--publish',f"{instance['host_ip']}:443:8443/tcp",
+        '--dns',manifest['dns'],
         '--label','org.aikey.instance='+instance['certificate_sha256'],
         '--label','org.aikey.operation='+operation,'--entrypoint','local-aiport-candidate']
+    if manifest.get('transport','apple-publish')=='apple-publish':
+        args+=['--publish',f"{instance['host_ip']}:443:8443/tcp"]
     for mount in instance['volumes']:
         args+=['--volume',mount['source']+':'+mount['destination']+(':ro' if mount['read_only'] else '')]
     return args+[manifest['image']]+instance['argv']
