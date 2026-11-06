@@ -224,7 +224,7 @@ def tagged_source(tmp_path):
         (project / "tools/community_release_check.py").read_bytes()
     )
     (root / "LICENSE").write_bytes((project / "LICENSE").read_bytes())
-    (root / "pyproject.toml").write_text('[project]\nname="local-aikey"\nversion="0.1.0rc1"\n')
+    (root / "pyproject.toml").write_text('[project]\nname="local-aikey"\nversion="0.1.0rc1"\nlicense-files=["LICENSE"]\n')
     (root / "README.md").write_text("FICTIONAL RELEASE FIXTURE ONLY. No real approval.\n")
     spec = importlib.util.spec_from_file_location(
         "fictional_community", root / "tools/community_release_check.py"

@@ -33,6 +33,9 @@ REVISION=re.compile('[0-9a-f]{40}\\Z')
 MODULE=re.compile(r'aikey/(?:[A-Za-z0-9_]+/)*[A-Za-z0-9_]+\.py\Z')
 PROFILES=('aikey','aiport')
 CASES=('create','reopen','wrong-source','wrong-arch')
+# Original native-library notices exceed the ordinary JSON/input bound. Keep
+# their own finite bound aligned with the image notice collector.
+LICENSE_LIMIT=2*1024*1024
 
 
 class CheckError(ValueError):
@@ -137,7 +140,7 @@ def manifest(root,revision):
             and all(isinstance(name,str) and re.fullmatch(r'[A-Z][A-Za-z0-9_.-]{0,127}',name)
                     for name in names) and len(names)==len(set(names)),
             'container_source_licenses_refused')
-    licenses={name:digest(read(root/name)) for name in names}
+    licenses={name:digest(read(root/name,LICENSE_LIMIT)) for name in names}
     return checked_source({'schema':SOURCE,'revision':revision,'version':project['version'],
         'modules':modules,'license_files':licenses,
         'probe_sha256':digest(read(root/'tools/container_install_check.py'))})
@@ -165,7 +168,7 @@ def installed(value):
     require(len(licenses)==len(value['license_files'])
             and {Path(path).name for path in licenses}==set(value['license_files']),
             'container_installed_license_mismatch')
-    require(all(digest(read(distribution.locate_file(path)))==value['license_files'][Path(path).name]
+    require(all(digest(read(distribution.locate_file(path),LICENSE_LIMIT))==value['license_files'][Path(path).name]
                 for path in licenses),'container_installed_license_mismatch')
     return len(actual)
 

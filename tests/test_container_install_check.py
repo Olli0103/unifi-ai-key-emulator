@@ -309,3 +309,31 @@ def test_source_manifest_cannot_silently_drop_existing_main_license(tmp_path):
     value['license_files'].pop('LICENSE')
     with pytest.raises(check.CheckError):
         check.checked_source(value)
+
+
+def test_large_notice_survives_source_and_install_but_changed_tail_is_refused(tmp_path,monkeypatch):
+    value,purelib,dist=installed_fixture(tmp_path,monkeypatch)
+    root=tmp_path/'source'
+    raw=b'Synthetic attribution\n'*20000
+    assert 256*1024<len(raw)<check.LICENSE_LIMIT
+    (root/'THIRD_PARTY_NOTICES.txt').write_bytes(raw)
+    value=check.manifest(root,REV)
+    target=dist.locate_file(dist.files[1])
+    target.write_bytes(raw)
+    assert check.installed(value)==1
+    target.write_bytes(raw[:-1]+b'!')
+    with pytest.raises(check.CheckError,match='container_installed_license_mismatch'):
+        check.installed(value)
+
+
+@pytest.mark.parametrize('boundary',['source','installed'])
+def test_license_size_bound_still_refuses_oversize_files(tmp_path,monkeypatch,boundary):
+    value,_,dist=installed_fixture(tmp_path,monkeypatch)
+    target=(tmp_path/'source/THIRD_PARTY_NOTICES.txt' if boundary=='source'
+            else dist.locate_file(dist.files[1]))
+    target.write_bytes(b'x'*(check.LICENSE_LIMIT+1))
+    with pytest.raises(check.CheckError,match='container_input_not_bounded_regular'):
+        if boundary=='source':
+            check.manifest(tmp_path/'source',REV)
+        else:
+            check.installed(value)

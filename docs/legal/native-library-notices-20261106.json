@@ -1,0 +1,555 @@
+{
+  "schema": "aikey-native-library-notice-provenance/1",
+  "bundle": "THIRD_PARTY_NOTICES.txt",
+  "bundle_sha256": "4e2fa08b987140c5a76d388481b3c742ad2b50e214e91c1322ba64ea3a04f851",
+  "original_silero_prefix_sha256": "6809e5136b524cd542b2dd406873b30a68c69489b278ef344d8da268359765b9",
+  "original_silero_prefix_size": 1293,
+  "source_files": 35,
+  "unique_originals": 26,
+  "entries": [
+    {
+      "sha256": "573b62290f3745835142337245599b5f3a38707b986d666fc97641f2846798ce",
+      "size": 1855,
+      "offset": 3138,
+      "sources": [
+        {
+          "component": "cyrus-sasl-lib-2.1.26-24.el7_9.x86_64.rpm",
+          "member": "./usr/share/doc/cyrus-sasl-lib-2.1.26/AUTHORS",
+          "sha256": "573b62290f3745835142337245599b5f3a38707b986d666fc97641f2846798ce",
+          "size": 1855,
+          "origin_url": "https://vault.centos.org/7.9.2009/updates/x86_64/Packages/cyrus-sasl-lib-2.1.26-24.el7_9.x86_64.rpm",
+          "origin_sha256": "e1d065bfaef705d407c6134352d1afc64ecf26a5970a0e5282f6dda745483db8",
+          "source_url": "https://vault.centos.org/7.9.2009/updates/Source/SPackages/cyrus-sasl-2.1.26-24.el7_9.src.rpm",
+          "source_sha256": "c49472bd08c6060f53a9dace005b81cf466836790d2dcb407a536820f6319e77",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        }
+      ]
+    },
+    {
+      "sha256": "9d6e5d1632140a6c135b251260953650d17d87cd1124f87aaf72192aa4580d4b",
+      "size": 1861,
+      "offset": 6297,
+      "sources": [
+        {
+          "component": "cyrus-sasl-lib-2.1.26-24.el7_9.x86_64.rpm",
+          "member": "./usr/share/doc/cyrus-sasl-lib-2.1.26/COPYING",
+          "sha256": "9d6e5d1632140a6c135b251260953650d17d87cd1124f87aaf72192aa4580d4b",
+          "size": 1861,
+          "origin_url": "https://vault.centos.org/7.9.2009/updates/x86_64/Packages/cyrus-sasl-lib-2.1.26-24.el7_9.x86_64.rpm",
+          "origin_sha256": "e1d065bfaef705d407c6134352d1afc64ecf26a5970a0e5282f6dda745483db8",
+          "source_url": "https://vault.centos.org/7.9.2009/updates/Source/SPackages/cyrus-sasl-2.1.26-24.el7_9.src.rpm",
+          "source_sha256": "c49472bd08c6060f53a9dace005b81cf466836790d2dcb407a536820f6319e77",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        },
+        {
+          "component": "cyrus-sasl-lib-2.1.27-6.el8_5.aarch64.rpm",
+          "member": "./usr/share/licenses/cyrus-sasl-lib/COPYING",
+          "sha256": "9d6e5d1632140a6c135b251260953650d17d87cd1124f87aaf72192aa4580d4b",
+          "size": 1861,
+          "origin_url": "https://repo.almalinux.org/almalinux/8/BaseOS/aarch64/os/Packages/cyrus-sasl-lib-2.1.27-6.el8_5.aarch64.rpm",
+          "origin_sha256": "f75d1b8631a9271be94a1d7cbdae9def711995cb5331aa7de223cf7473a0bb2d",
+          "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/cyrus-sasl-2.1.27-6.el8_5.src.rpm",
+          "source_sha256": "f388fd13b3b10aec374f61bc1753b19ae019b0ab4937bf9bd9cbdf0f445c079a",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        }
+      ]
+    },
+    {
+      "sha256": "4b5d24c7d184e16bddad18caf7860f62ffff62d74e07b279d5bcdaa9b18b730a",
+      "size": 2250,
+      "offset": 8886,
+      "sources": [
+        {
+          "component": "cyrus-sasl-lib-2.1.27-6.el8_5.aarch64.rpm",
+          "member": "./usr/share/doc/cyrus-sasl-lib/AUTHORS",
+          "sha256": "4b5d24c7d184e16bddad18caf7860f62ffff62d74e07b279d5bcdaa9b18b730a",
+          "size": 2250,
+          "origin_url": "https://repo.almalinux.org/almalinux/8/BaseOS/aarch64/os/Packages/cyrus-sasl-lib-2.1.27-6.el8_5.aarch64.rpm",
+          "origin_sha256": "f75d1b8631a9271be94a1d7cbdae9def711995cb5331aa7de223cf7473a0bb2d",
+          "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/cyrus-sasl-2.1.27-6.el8_5.src.rpm",
+          "source_sha256": "f388fd13b3b10aec374f61bc1753b19ae019b0ab4937bf9bd9cbdf0f445c079a",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        }
+      ]
+    },
+    {
+      "sha256": "0d15593e3a8ad90917f8509b5ac1e4b5e5d196434a68029aa9dc0858a4a4c521",
+      "size": 26450,
+      "offset": 12411,
+      "sources": [
+        {
+          "component": "keyutils-libs-1.5.10-9.el8.aarch64.rpm",
+          "member": "./usr/share/licenses/keyutils-libs/LICENCE.LGPL",
+          "sha256": "0d15593e3a8ad90917f8509b5ac1e4b5e5d196434a68029aa9dc0858a4a4c521",
+          "size": 26450,
+          "origin_url": "https://repo.almalinux.org/almalinux/8/BaseOS/aarch64/os/Packages/keyutils-libs-1.5.10-9.el8.aarch64.rpm",
+          "origin_sha256": "87e96ac645e1deb805d1314776cfb0bdd992e5c65c268b9ef65347f26094eba3",
+          "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/keyutils-1.5.10-9.el8.src.rpm",
+          "source_sha256": "13fec652f642858757755b64195189abef7c0ff8025e9807ddba467e4ad8fbb6",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        },
+        {
+          "component": "keyutils-libs-1.5.8-3.el7.x86_64.rpm",
+          "member": "./usr/share/doc/keyutils-libs-1.5.8/LICENCE.LGPL",
+          "sha256": "0d15593e3a8ad90917f8509b5ac1e4b5e5d196434a68029aa9dc0858a4a4c521",
+          "size": 26450,
+          "origin_url": "https://vault.centos.org/7.9.2009/os/x86_64/Packages/keyutils-libs-1.5.8-3.el7.x86_64.rpm",
+          "origin_sha256": "16c7cb17dd4eced77c44697bc431c0ac9eb012da78fc91abacd828d3aa8e5dd3",
+          "source_url": "https://vault.centos.org/7.9.2009/os/Source/SPackages/keyutils-1.5.8-3.el7.src.rpm",
+          "source_sha256": "eff16e16f707fd28436afe4cf7b7c2e34b9f827e7f6beacf3c6eecbf74e9f850",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        }
+      ]
+    },
+    {
+      "sha256": "f83512c49bc8cbc44ca6b8783e989a03b4051508b30563b3f9d7956eefae9151",
+      "size": 61301,
+      "offset": 40125,
+      "sources": [
+        {
+          "component": "krb5-libs-1.15.1-55.el7_9.x86_64.rpm",
+          "member": "./usr/share/doc/krb5-libs-1.15.1/NOTICE",
+          "sha256": "f83512c49bc8cbc44ca6b8783e989a03b4051508b30563b3f9d7956eefae9151",
+          "size": 61301,
+          "origin_url": "https://vault.centos.org/7.9.2009/updates/x86_64/Packages/krb5-libs-1.15.1-55.el7_9.x86_64.rpm",
+          "origin_sha256": "0b514834510f57ab09a2051d0b0c2be8a61777452ad125d1b3e5e90abeb6fa22",
+          "source_url": "https://vault.centos.org/7.9.2009/updates/Source/SPackages/krb5-1.15.1-55.el7_9.src.rpm",
+          "source_sha256": "d154824d46dff5aece0cdb8e4c9df299058bacadbaf7fb16be8d9163ca2814bb",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        },
+        {
+          "component": "krb5-libs-1.15.1-55.el7_9.x86_64.rpm",
+          "member": "./usr/share/licenses/krb5-libs-1.15.1/LICENSE",
+          "sha256": "f83512c49bc8cbc44ca6b8783e989a03b4051508b30563b3f9d7956eefae9151",
+          "size": 61301,
+          "origin_url": "https://vault.centos.org/7.9.2009/updates/x86_64/Packages/krb5-libs-1.15.1-55.el7_9.x86_64.rpm",
+          "origin_sha256": "0b514834510f57ab09a2051d0b0c2be8a61777452ad125d1b3e5e90abeb6fa22",
+          "source_url": "https://vault.centos.org/7.9.2009/updates/Source/SPackages/krb5-1.15.1-55.el7_9.src.rpm",
+          "source_sha256": "d154824d46dff5aece0cdb8e4c9df299058bacadbaf7fb16be8d9163ca2814bb",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        }
+      ]
+    },
+    {
+      "sha256": "b7a5f14a8719bce5e49a761998aa55438fc890fb40f71228d6a49546f6d5690d",
+      "size": 62857,
+      "offset": 102696,
+      "sources": [
+        {
+          "component": "krb5-libs-1.18.2-34.el8_10.aarch64.rpm",
+          "member": "./usr/share/doc/krb5-libs/NOTICE",
+          "sha256": "b7a5f14a8719bce5e49a761998aa55438fc890fb40f71228d6a49546f6d5690d",
+          "size": 62857,
+          "origin_url": "https://repo.almalinux.org/almalinux/8/BaseOS/aarch64/os/Packages/krb5-libs-1.18.2-34.el8_10.aarch64.rpm",
+          "origin_sha256": "9cfd712944f933cf49f7012af6dbd37cd8e9992326a265d6ef928d06bb8e62f1",
+          "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/krb5-1.18.2-34.el8_10.src.rpm",
+          "source_sha256": "2ac8306fe7f9dad151f96017465e5144bc25729257f84f4e4b81c629d0630ef7",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        },
+        {
+          "component": "krb5-libs-1.18.2-34.el8_10.aarch64.rpm",
+          "member": "./usr/share/licenses/krb5-libs/LICENSE",
+          "sha256": "b7a5f14a8719bce5e49a761998aa55438fc890fb40f71228d6a49546f6d5690d",
+          "size": 62857,
+          "origin_url": "https://repo.almalinux.org/almalinux/8/BaseOS/aarch64/os/Packages/krb5-libs-1.18.2-34.el8_10.aarch64.rpm",
+          "origin_sha256": "9cfd712944f933cf49f7012af6dbd37cd8e9992326a265d6ef928d06bb8e62f1",
+          "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/krb5-1.18.2-34.el8_10.src.rpm",
+          "source_sha256": "2ac8306fe7f9dad151f96017465e5144bc25729257f84f4e4b81c629d0630ef7",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        }
+      ]
+    },
+    {
+      "sha256": "680f852df303874fe9c722283a7da571ae9a0477768df8af1e363298e2adc51e",
+      "size": 44569,
+      "offset": 166255,
+      "sources": [
+        {
+          "component": "libcom_err-1.42.9-19.el7.x86_64.rpm",
+          "member": "./usr/share/doc/libcom_err-1.42.9/COPYING",
+          "sha256": "680f852df303874fe9c722283a7da571ae9a0477768df8af1e363298e2adc51e",
+          "size": 44569,
+          "origin_url": "https://vault.centos.org/7.9.2009/os/x86_64/Packages/libcom_err-1.42.9-19.el7.x86_64.rpm",
+          "origin_sha256": "b98e19c3bbf6de458697a895654db0d75e93e7738ef22bc1540e2c78fa91748b",
+          "source_url": "https://vault.centos.org/7.9.2009/os/Source/SPackages/e2fsprogs-1.42.9-19.el7.src.rpm",
+          "source_sha256": "718f64bd465d1770eaf6490157a861d3dba2846b4a636a67d27bd4d38e6b86cf",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        }
+      ]
+    },
+    {
+      "sha256": "5da5ef153e559c1d990d4c3eedbedd4442db892d37eae1f35fff069de8ec9020",
+      "size": 44585,
+      "offset": 211546,
+      "sources": [
+        {
+          "component": "libcom_err-1.45.6-7.el8_10.aarch64.rpm",
+          "member": "./usr/share/licenses/libcom_err/NOTICE",
+          "sha256": "5da5ef153e559c1d990d4c3eedbedd4442db892d37eae1f35fff069de8ec9020",
+          "size": 44585,
+          "origin_url": "https://repo.almalinux.org/almalinux/8/BaseOS/aarch64/os/Packages/libcom_err-1.45.6-7.el8_10.aarch64.rpm",
+          "origin_sha256": "be7f7c2c75976f72aa4d0bb6995aeb6dc3da292ae53f6aad3bbec8c53edbe24f",
+          "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/e2fsprogs-1.45.6-7.el8_10.src.rpm",
+          "source_sha256": "7042d97c138a6b6c8d5a9282bf9bb736f8d377d4055fe0da2e0d3f459141b2a0",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        }
+      ]
+    },
+    {
+      "sha256": "86657b4c0fe868d7cbd977cb04c63b6c667e08fa51595a7bc846ad4bed8fc364",
+      "size": 1034,
+      "offset": 257238,
+      "sources": [
+        {
+          "component": "libselinux-2.9-11.el8_10.aarch64.rpm",
+          "member": "./usr/share/licenses/libselinux/LICENSE",
+          "sha256": "86657b4c0fe868d7cbd977cb04c63b6c667e08fa51595a7bc846ad4bed8fc364",
+          "size": 1034,
+          "origin_url": "https://repo.almalinux.org/almalinux/8/BaseOS/aarch64/os/Packages/libselinux-2.9-11.el8_10.aarch64.rpm",
+          "origin_sha256": "14424d89f5a38204635d898251b5c1822664e583774c0da9468e086e4e99c207",
+          "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/libselinux-2.9-11.el8_10.src.rpm",
+          "source_sha256": "1a9f9af679cb4f57c4433012f829dccec9b38fe3ac749b63785f2b70f2875afd",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        },
+        {
+          "component": "libselinux-2.5-15.el7",
+          "member": "libselinux-2.5/LICENSE",
+          "sha256": "86657b4c0fe868d7cbd977cb04c63b6c667e08fa51595a7bc846ad4bed8fc364",
+          "size": 1034,
+          "origin_url": "https://vault.centos.org/7.9.2009/os/Source/SPackages/libselinux-2.5-15.el7.src.rpm",
+          "origin_sha256": "978ed00b9c7ca78a51e0aff48070c69ebe4fbfca0e64f618627ebdbe8786a089",
+          "source_archive_sha256": "94c9e97706280bedcc288f784f67f2b9d3d6136c192b2c9f812115edba58514f",
+          "basis": "original source package of matched binary RPM"
+        }
+      ]
+    },
+    {
+      "sha256": "46cfa431806b5fce8e9ea2736b1f4bbaa2a5f2048f18a3515a9e1f3925a83a2d",
+      "size": 1682,
+      "offset": 258980,
+      "sources": [
+        {
+          "component": "libxcrypt-4.1.1-6.el8.aarch64.rpm",
+          "member": "./usr/share/licenses/libxcrypt/AUTHORS",
+          "sha256": "46cfa431806b5fce8e9ea2736b1f4bbaa2a5f2048f18a3515a9e1f3925a83a2d",
+          "size": 1682,
+          "origin_url": "https://repo.almalinux.org/almalinux/8/BaseOS/aarch64/os/Packages/libxcrypt-4.1.1-6.el8.aarch64.rpm",
+          "origin_sha256": "b574668ace5378e9c18d278aa776e51c9e65961f1c796c4583783900c87d5bf7",
+          "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/libxcrypt-4.1.1-6.el8.src.rpm",
+          "source_sha256": "3c492b21903329f611e7945134ed851beb2f8a38a2909109fb94c5fa20ae08bb",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        }
+      ]
+    },
+    {
+      "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+      "size": 26530,
+      "offset": 261715,
+      "sources": [
+        {
+          "component": "libxcrypt-4.1.1-6.el8.aarch64.rpm",
+          "member": "./usr/share/licenses/libxcrypt/COPYING.LIB",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "size": 26530,
+          "origin_url": "https://repo.almalinux.org/almalinux/8/BaseOS/aarch64/os/Packages/libxcrypt-4.1.1-6.el8.aarch64.rpm",
+          "origin_sha256": "b574668ace5378e9c18d278aa776e51c9e65961f1c796c4583783900c87d5bf7",
+          "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/libxcrypt-4.1.1-6.el8.src.rpm",
+          "source_sha256": "3c492b21903329f611e7945134ed851beb2f8a38a2909109fb94c5fa20ae08bb",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        },
+        {
+          "component": "libxcrypt-4.5.2",
+          "member": "libxcrypt-4.5.2/COPYING.LIB",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+          "size": 26530,
+          "origin_url": "https://github.com/besser82/libxcrypt/releases/download/v4.5.2/libxcrypt-4.5.2.tar.xz",
+          "origin_sha256": "71513a31c01a428bccd5367a32fd95f115d6dac50fb5b60c779d5c7942aec071",
+          "basis": "historical manylinux library code/data match and original build script source digest"
+        }
+      ]
+    },
+    {
+      "sha256": "c32913b33252e71190af2066f08115c69bc9fddadf3bf29296e20c835389841c",
+      "size": 6121,
+      "offset": 289325,
+      "sources": [
+        {
+          "component": "openssl-libs-1.1.1k-17.el8_6.aarch64.rpm",
+          "member": "./usr/share/licenses/openssl-libs/LICENSE",
+          "sha256": "c32913b33252e71190af2066f08115c69bc9fddadf3bf29296e20c835389841c",
+          "size": 6121,
+          "origin_url": "https://repo.almalinux.org/almalinux/8/BaseOS/aarch64/os/Packages/openssl-libs-1.1.1k-17.el8_6.aarch64.rpm",
+          "origin_sha256": "2f48f2c552cd743799dfaddf60ef9ff0650c58ec8a86d599ea8db94ab47087c7",
+          "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/openssl-1.1.1k-17.el8_6.src.rpm",
+          "source_sha256": "e753a3f8b00aad6d0c6de762727203ca35fc9f6ab22d8811747b77a210437cb1",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        },
+        {
+          "component": "openssl/openssl OpenSSL_1_1_1k",
+          "member": "LICENSE",
+          "sha256": "c32913b33252e71190af2066f08115c69bc9fddadf3bf29296e20c835389841c",
+          "size": 6121,
+          "origin_url": "https://github.com/openssl/openssl/blob/fd78df59b0f656aefe96e39533130454aa957c00/LICENSE",
+          "git_blob_sha1": "9601ab43575f9719ca6d2731580ec31ca5dfb0e7",
+          "basis": "pinned upstream notice; source revision from original build recipes/static wheel version strings, not a reproducible build"
+        }
+      ]
+    },
+    {
+      "sha256": "00af90b59669091a96f7b23e784b69c79bf8041369dfbaaa84bec5c29aad97a7",
+      "size": 851,
+      "offset": 296117,
+      "sources": [
+        {
+          "component": "pcre-8.32-17.el7.x86_64.rpm",
+          "member": "./usr/share/doc/pcre-8.32/AUTHORS",
+          "sha256": "00af90b59669091a96f7b23e784b69c79bf8041369dfbaaa84bec5c29aad97a7",
+          "size": 851,
+          "origin_url": "https://vault.centos.org/7.9.2009/os/x86_64/Packages/pcre-8.32-17.el7.x86_64.rpm",
+          "origin_sha256": "cf2b84402e9a9fcf92c8a8a965c4e8d217e82e80c0945de2ce8d46c17131ad28",
+          "source_url": "https://vault.centos.org/7.9.2009/os/Source/SPackages/pcre-8.32-17.el7.src.rpm",
+          "source_sha256": "b96493d8ea6def2e9a40dade4feedcea2b4bbfe8ce4c13a3465e99f21ef2c43d",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        }
+      ]
+    },
+    {
+      "sha256": "17abe1dbb92b21ab173cf9757dd57b0b15cd8d863b2ccdef635fdbef03077fb0",
+      "size": 95,
+      "offset": 297639,
+      "sources": [
+        {
+          "component": "pcre-8.32-17.el7.x86_64.rpm",
+          "member": "./usr/share/doc/pcre-8.32/COPYING",
+          "sha256": "17abe1dbb92b21ab173cf9757dd57b0b15cd8d863b2ccdef635fdbef03077fb0",
+          "size": 95,
+          "origin_url": "https://vault.centos.org/7.9.2009/os/x86_64/Packages/pcre-8.32-17.el7.x86_64.rpm",
+          "origin_sha256": "cf2b84402e9a9fcf92c8a8a965c4e8d217e82e80c0945de2ce8d46c17131ad28",
+          "source_url": "https://vault.centos.org/7.9.2009/os/Source/SPackages/pcre-8.32-17.el7.src.rpm",
+          "source_sha256": "b96493d8ea6def2e9a40dade4feedcea2b4bbfe8ce4c13a3465e99f21ef2c43d",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        }
+      ]
+    },
+    {
+      "sha256": "9ccbdd877d602470f8ec02a47c32048887e49bd64b081c48132a32dcd6f46eed",
+      "size": 3099,
+      "offset": 298405,
+      "sources": [
+        {
+          "component": "pcre-8.32-17.el7.x86_64.rpm",
+          "member": "./usr/share/doc/pcre-8.32/LICENCE",
+          "sha256": "9ccbdd877d602470f8ec02a47c32048887e49bd64b081c48132a32dcd6f46eed",
+          "size": 3099,
+          "origin_url": "https://vault.centos.org/7.9.2009/os/x86_64/Packages/pcre-8.32-17.el7.x86_64.rpm",
+          "origin_sha256": "cf2b84402e9a9fcf92c8a8a965c4e8d217e82e80c0945de2ce8d46c17131ad28",
+          "source_url": "https://vault.centos.org/7.9.2009/os/Source/SPackages/pcre-8.32-17.el7.src.rpm",
+          "source_sha256": "b96493d8ea6def2e9a40dade4feedcea2b4bbfe8ce4c13a3465e99f21ef2c43d",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        }
+      ]
+    },
+    {
+      "sha256": "dc5a9ead0af68d7c8b8e1030d8b19d2cef289e1aafe9d6efdc90e9b13afd0d68",
+      "size": 728,
+      "offset": 302197,
+      "sources": [
+        {
+          "component": "pcre2-10.32-3.el8_6.aarch64.rpm",
+          "member": "./usr/share/doc/pcre2/AUTHORS",
+          "sha256": "dc5a9ead0af68d7c8b8e1030d8b19d2cef289e1aafe9d6efdc90e9b13afd0d68",
+          "size": 728,
+          "origin_url": "https://repo.almalinux.org/almalinux/8/BaseOS/aarch64/os/Packages/pcre2-10.32-3.el8_6.aarch64.rpm",
+          "origin_sha256": "0428a49605bb6b3c549cf8d58f1c336a902a48f875e0989de6ff62832f382930",
+          "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/pcre2-10.32-3.el8_6.src.rpm",
+          "source_sha256": "c995278b025eaa5598ceb2117a5710338210839fa5bca2a3b4a279e8afd25cb9",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        }
+      ]
+    },
+    {
+      "sha256": "99272c55f3dcfa07a8a7e15a5c1a33096e4727de74241d65fa049fccfdd59507",
+      "size": 97,
+      "offset": 303623,
+      "sources": [
+        {
+          "component": "pcre2-10.32-3.el8_6.aarch64.rpm",
+          "member": "./usr/share/licenses/pcre2/COPYING",
+          "sha256": "99272c55f3dcfa07a8a7e15a5c1a33096e4727de74241d65fa049fccfdd59507",
+          "size": 97,
+          "origin_url": "https://repo.almalinux.org/almalinux/8/BaseOS/aarch64/os/Packages/pcre2-10.32-3.el8_6.aarch64.rpm",
+          "origin_sha256": "0428a49605bb6b3c549cf8d58f1c336a902a48f875e0989de6ff62832f382930",
+          "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/pcre2-10.32-3.el8_6.src.rpm",
+          "source_sha256": "c995278b025eaa5598ceb2117a5710338210839fa5bca2a3b4a279e8afd25cb9",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        }
+      ]
+    },
+    {
+      "sha256": "c4a8b89cd38d6a7501d5b11a472fa15e71a051b66d6331c6cda364101389d6ee",
+      "size": 3456,
+      "offset": 304418,
+      "sources": [
+        {
+          "component": "pcre2-10.32-3.el8_6.aarch64.rpm",
+          "member": "./usr/share/licenses/pcre2/LICENCE",
+          "sha256": "c4a8b89cd38d6a7501d5b11a472fa15e71a051b66d6331c6cda364101389d6ee",
+          "size": 3456,
+          "origin_url": "https://repo.almalinux.org/almalinux/8/BaseOS/aarch64/os/Packages/pcre2-10.32-3.el8_6.aarch64.rpm",
+          "origin_sha256": "0428a49605bb6b3c549cf8d58f1c336a902a48f875e0989de6ff62832f382930",
+          "source_url": "https://vault.almalinux.org/8.10/BaseOS/Source/Packages/pcre2-10.32-3.el8_6.src.rpm",
+          "source_sha256": "c995278b025eaa5598ceb2117a5710338210839fa5bca2a3b4a279e8afd25cb9",
+          "basis": "original binary package; library code/data and GNU build ID comparison"
+        }
+      ]
+    },
+    {
+      "sha256": "6d1e45c055b6d9e9bf4e9521419eb3dee4ca42a02dd4d824beaaad476dacfdca",
+      "size": 1850,
+      "offset": 308371,
+      "sources": [
+        {
+          "component": "libxcrypt-4.5.2",
+          "member": "libxcrypt-4.5.2/AUTHORS",
+          "sha256": "6d1e45c055b6d9e9bf4e9521419eb3dee4ca42a02dd4d824beaaad476dacfdca",
+          "size": 1850,
+          "origin_url": "https://github.com/besser82/libxcrypt/releases/download/v4.5.2/libxcrypt-4.5.2.tar.xz",
+          "origin_sha256": "71513a31c01a428bccd5367a32fd95f115d6dac50fb5b60c779d5c7942aec071",
+          "basis": "historical manylinux library code/data match and original build script source digest"
+        }
+      ]
+    },
+    {
+      "sha256": "9144e66d8140feb84f0e4e344906ac425378896320032e0248567ef195cf0135",
+      "size": 5854,
+      "offset": 310720,
+      "sources": [
+        {
+          "component": "libxcrypt-4.5.2",
+          "member": "libxcrypt-4.5.2/LICENSING",
+          "sha256": "9144e66d8140feb84f0e4e344906ac425378896320032e0248567ef195cf0135",
+          "size": 5854,
+          "origin_url": "https://github.com/besser82/libxcrypt/releases/download/v4.5.2/libxcrypt-4.5.2.tar.xz",
+          "origin_sha256": "71513a31c01a428bccd5367a32fd95f115d6dac50fb5b60c779d5c7942aec071",
+          "basis": "historical manylinux library code/data match and original build script source digest"
+        }
+      ]
+    },
+    {
+      "sha256": "b9f638dfc06b59c2d3b808186c3b30f713805a5db390f5b77b1703ac58acb83e",
+      "size": 1022,
+      "offset": 317450,
+      "sources": [
+        {
+          "component": "openssl/openssl openssl-3.5.8",
+          "member": "AUTHORS.md",
+          "sha256": "b9f638dfc06b59c2d3b808186c3b30f713805a5db390f5b77b1703ac58acb83e",
+          "size": 1022,
+          "origin_url": "https://github.com/openssl/openssl/blob/f4dc4d58b48d346a8270183f89acf826d459b0ca/AUTHORS.md",
+          "git_blob_sha1": "5b036a0d8358167c87c7fa275cc671cd222dcce6",
+          "basis": "pinned upstream notice; source revision from original build recipes/static wheel version strings, not a reproducible build"
+        },
+        {
+          "component": "openssl/openssl openssl-4.0.2",
+          "member": "AUTHORS.md",
+          "sha256": "b9f638dfc06b59c2d3b808186c3b30f713805a5db390f5b77b1703ac58acb83e",
+          "size": 1022,
+          "origin_url": "https://github.com/openssl/openssl/blob/f089acdf4bc7ba94a79f4bf6eb7362c3e7d14aa9/AUTHORS.md",
+          "git_blob_sha1": "5b036a0d8358167c87c7fa275cc671cd222dcce6",
+          "basis": "pinned upstream notice; source revision from original build recipes/static wheel version strings, not a reproducible build"
+        }
+      ]
+    },
+    {
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "size": 10175,
+      "offset": 319352,
+      "sources": [
+        {
+          "component": "openssl/openssl openssl-3.5.8",
+          "member": "LICENSE.txt",
+          "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+          "size": 10175,
+          "origin_url": "https://github.com/openssl/openssl/blob/f4dc4d58b48d346a8270183f89acf826d459b0ca/LICENSE.txt",
+          "git_blob_sha1": "49cc83d2ee29d13453188217f0e4edd70c7f842f",
+          "basis": "pinned upstream notice; source revision from original build recipes/static wheel version strings, not a reproducible build"
+        },
+        {
+          "component": "openssl/openssl openssl-4.0.2",
+          "member": "LICENSE.txt",
+          "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+          "size": 10175,
+          "origin_url": "https://github.com/openssl/openssl/blob/f089acdf4bc7ba94a79f4bf6eb7362c3e7d14aa9/LICENSE.txt",
+          "git_blob_sha1": "49cc83d2ee29d13453188217f0e4edd70c7f842f",
+          "basis": "pinned upstream notice; source revision from original build recipes/static wheel version strings, not a reproducible build"
+        }
+      ]
+    },
+    {
+      "sha256": "698c66ee18f50ee7daf36e9a4566f9fecbaea4a5c6de94a42f66eb489adc83d8",
+      "size": 854,
+      "offset": 330040,
+      "sources": [
+        {
+          "component": "openssl/openssl OpenSSL_1_1_1k",
+          "member": "AUTHORS",
+          "sha256": "698c66ee18f50ee7daf36e9a4566f9fecbaea4a5c6de94a42f66eb489adc83d8",
+          "size": 854,
+          "origin_url": "https://github.com/openssl/openssl/blob/fd78df59b0f656aefe96e39533130454aa957c00/AUTHORS",
+          "git_blob_sha1": "dac46f8b7e08c02e40cbcebdf788edfedb29de5c",
+          "basis": "pinned upstream notice; source revision from original build recipes/static wheel version strings, not a reproducible build"
+        }
+      ]
+    },
+    {
+      "sha256": "3d6af92ff8a4c2cdf69afb1cf44edea727922f5cd0cf8b5f72b11cdecac8fdfd",
+      "size": 1198,
+      "offset": 331409,
+      "sources": [
+        {
+          "component": "postgres/postgres REL_18_6",
+          "member": "COPYRIGHT",
+          "sha256": "3d6af92ff8a4c2cdf69afb1cf44edea727922f5cd0cf8b5f72b11cdecac8fdfd",
+          "size": 1198,
+          "origin_url": "https://github.com/postgres/postgres/blob/724edf9bde9d356724ad384a2e196edc3c9f80f7/COPYRIGHT",
+          "git_blob_sha1": "0a397648dcd3c2177acc58bd7daecd11ad64be62",
+          "basis": "pinned upstream notice; source revision from original build recipes/static wheel version strings, not a reproducible build"
+        }
+      ]
+    },
+    {
+      "sha256": "5b4dfc20608c4d5d75573e899569b8ee0e06658ebcf14fa14566e309bcbab14c",
+      "size": 2345,
+      "offset": 333137,
+      "sources": [
+        {
+          "component": "openldap/openldap OPENLDAP_REL_ENG_2_6_14",
+          "member": "COPYRIGHT",
+          "sha256": "5b4dfc20608c4d5d75573e899569b8ee0e06658ebcf14fa14566e309bcbab14c",
+          "size": 2345,
+          "origin_url": "https://github.com/openldap/openldap/blob/ad7277264dd744eb2f294c7f0afffab4bd07c4a1/COPYRIGHT",
+          "git_blob_sha1": "1696cddca56d3d21ff628adedc3c262c7e3b7b37",
+          "basis": "pinned upstream notice; source revision from original build recipes/static wheel version strings, not a reproducible build"
+        }
+      ]
+    },
+    {
+      "sha256": "310fe25c858a9515fc8c8d7d1f24a67c9496f84a91e0a0e41ea9975b1371e569",
+      "size": 2214,
+      "offset": 336008,
+      "sources": [
+        {
+          "component": "openldap/openldap OPENLDAP_REL_ENG_2_6_14",
+          "member": "LICENSE",
+          "sha256": "310fe25c858a9515fc8c8d7d1f24a67c9496f84a91e0a0e41ea9975b1371e569",
+          "size": 2214,
+          "origin_url": "https://github.com/openldap/openldap/blob/ad7277264dd744eb2f294c7f0afffab4bd07c4a1/LICENSE",
+          "git_blob_sha1": "05ad7571e448b9d83ead5d4691274d9484574714",
+          "basis": "pinned upstream notice; source revision from original build recipes/static wheel version strings, not a reproducible build"
+        }
+      ]
+    }
+  ],
+  "complete_license_review": false,
+  "release_approved": false
+}

@@ -97,3 +97,24 @@ executable with a new empty profile; CI likewise records its installed Chrome
 version. No browser binary, profile or model is redistributed by the package.
 A separately downloaded Playwright Chromium remains a distinct artifact with
 its own exact version, sources and notice obligations if ever redistributed.
+
+## Exact-image source and supplemental notice checkpoint — 6 November 2026
+
+The historical gaps above are not the current engineering inventory. Four
+qualified AMD64/ARM64 images from PR305 now have complete selected OS/Python
+inventories and original notice-file evidence. Their 1,184 Debian package
+bindings resolve to 212 exact source versions; all 679 declared source files
+were retained and read-back verified. The 30 third-party Python versions have
+29 original published sdists plus the actual Psycopg binary build's Git archive.
+The pinned base interpreter source and selected bundled-library sources were
+also retained. These are acquisition/provenance results, not distribution
+approval or delivery of a complete corresponding-source offer to recipients.
+
+The [native-library notice supplement](../evidence/native-library-notice-delivery-20261106.md)
+now delivers 35 original notice/author files as 26 unique unchanged texts through
+the existing package/image notice path. Its
+[provenance and byte-range index](native-library-notices-20261106.json) keeps
+architecture/version distinctions and original source identities. It does not
+replace notices already installed by dependencies. Full optional-profile,
+model, compatibility, source-delivery and independent origin/release decisions
+remain open; release-evidence approval fields are unchanged.
