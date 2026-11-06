@@ -118,3 +118,13 @@ architecture/version distinctions and original source identities. It does not
 replace notices already installed by dependencies. Full optional-profile,
 model, compatibility, source-delivery and independent origin/release decisions
 remain open; release-evidence approval fields are unchanged.
+
+The subsequent [Cryptography Rust supplement](../evidence/cryptography-rust-notices-20261106.md)
+adds original notices from its 32 checksum-bound registry source packages. The
+combined bundle now represents 97 source files as 51 distinct original texts,
+while the complete prior supplement remains unchanged. Partial source-path
+markers bind a subset to actual Linux binaries; build/target-only source entries
+are not represented as a complete linked runtime inventory. License alternatives
+and compound Unicode/LLVM terms remain explicit. This closes the evidenced
+notice-delivery omission for the selected source inventory, not the broader
+release-clearance or full corresponding-source delivery work.
