@@ -215,10 +215,11 @@ async def test_manage_requires_rotation_and_expiring_adoption_window(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_token_bound_websocket_confirms_adoption_without_camera_access(tmp_path):
+@pytest.mark.parametrize("factory", [False, True])
+async def test_token_bound_websocket_confirms_adoption_without_camera_access(tmp_path, factory):
     config = fixture_state(tmp_path)
     config["controller_ip"] = "127.0.0.1"
-    config["diagnostic_adoption_until"] = int(time.time()) + 60
+    config["factory_enrollment_until" if factory else "diagnostic_adoption_until"] = int(time.time()) + 60
     token = "synthetic-token-123456"
     first_connected = asyncio.Event()
     adopted_connected = asyncio.Event()
@@ -241,15 +242,17 @@ async def test_token_bound_websocket_confirms_adoption_without_camera_access(tmp
     control = TestServer(app)
     await control.start_server(ssl=CandidateService(config, tmp_path)._server_context())
     service = CandidateService(config, tmp_path, control_port=control.port)
-    service.credentials.rotate({"username": "synthetic-user",
-                                "hashedPassword": synthetic_digest()})
+    if not factory:
+        service.credentials.rotate({"username": "synthetic-user",
+                                    "hashedPassword": synthetic_digest()})
     management = TestServer(service.app())
     await management.start_server(ssl=service._server_context())
     task = asyncio.create_task(service._connect_loop())
     try:
         await asyncio.wait_for(first_connected.wait(), 3)
         async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as client:
-            body = {"username": "synthetic-user", "password": "synthetic-password",
+            body = {"username": "ui" if factory else "synthetic-user",
+                    "password": "ui" if factory else "synthetic-password",
                     "mgmt": {"token": token,
                              "hosts": [f"127.0.0.1:{control.port}"], "protocol": "wss"}}
             response = await client.post(str(management.make_url("/api/1.2/manage")), json=body)
@@ -273,3 +276,51 @@ async def test_token_bound_websocket_confirms_adoption_without_camera_access(tmp
             await task
         await management.close()
         await control.close()
+
+
+@pytest.mark.parametrize("deadline", [True, -1, "600", 1.5, int(time.time()) + 900])
+def test_factory_deadline_is_bounded(tmp_path, deadline):
+    config = fixture_state(tmp_path)
+    config["factory_enrollment_until"] = deadline
+    private_file(tmp_path / "config.json", json.dumps(config).encode())
+    with pytest.raises(CandidateError):
+        load_config(tmp_path / "config.json")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refusal", ["off", "expired", "monotonic", "peer", "password",
+                                     "rotated", "pending", "adopted", "login"])
+async def test_factory_manage_refusal_boundaries(tmp_path, refusal):
+    config = fixture_state(tmp_path)
+    config["controller_ip"] = "127.0.0.1"
+    config["factory_enrollment_until"] = int(time.time()) + 60
+    if refusal == "off":
+        config.pop("factory_enrollment_until")
+    if refusal == "expired":
+        config["factory_enrollment_until"] = int(time.time()) - 1
+    if refusal == "peer":
+        config["controller_ip"] = "192.168.10.1"
+    service = CandidateService(config, tmp_path)
+    if refusal == "monotonic":
+        service._factory_monotonic_until = time.monotonic() - 1
+    if refusal == "rotated":
+        service.credentials.rotate({"username": "synthetic-user", "hashedPassword": synthetic_digest()})
+    if refusal in ("pending", "adopted"):
+        service.adoption.begin("existing-synthetic-token", int(time.time()) + 60)
+        if refusal == "adopted":
+            service.adoption.confirm()
+    before = service.adoption.state
+    server = TestServer(service.app())
+    await server.start_server(ssl=service._server_context())
+    try:
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as client:
+            body = {"username": "ui", "password": "wrong" if refusal == "password" else "ui",
+                    "mgmt": {"token": "new-synthetic-token-123", "protocol": "wss",
+                             "hosts": [config["controller_ip"] + ":7442"]}}
+            route = "/api/1.2/login" if refusal == "login" else "/api/1.2/manage"
+            response = await client.post(str(server.make_url(route)), json=body)
+            assert response.status in (401, 503)
+            assert service.adoption.state == before
+            assert not service.sessions
+    finally:
+        await server.close()
