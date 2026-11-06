@@ -195,7 +195,7 @@ def parse_config(raw: bytes, *, state_dir: Path, check_decoder_executable: bool 
                           "diagnostic_native_event_probe",
                           "diagnostic_recorded_event_probe",
                           "diagnostic_smart_type", "diagnostic_pool_smart_types",
-                          "diagnostic_adoption_until",
+                          "diagnostic_adoption_until", "factory_enrollment_until",
                           "diagnostic_function_fingerprints_until"}
     if not isinstance(value, dict) or not required <= set(value) or not set(value) <= allowed:
         raise CandidateError("Candidate configuration fields do not match the isolated profile")
@@ -504,6 +504,10 @@ def parse_config(raw: bytes, *, state_dir: Path, check_decoder_executable: bool 
         until = value["diagnostic_adoption_until"]
         if type(until) is not int or until < 0 or until > time.time() + 600:
             raise CandidateError("Diagnostic adoption must expire within ten minutes")
+    if "factory_enrollment_until" in value:
+        until = value["factory_enrollment_until"]
+        if type(until) is not int or until < 0 or until > time.time() + 600:
+            raise CandidateError("Factory enrollment must expire within ten minutes")
     if "diagnostic_function_fingerprints_until" in value:
         until = value["diagnostic_function_fingerprints_until"]
         if type(until) is not int or until < 0 or until > time.time() + 600:
@@ -1024,6 +1028,12 @@ class CandidateService:
         self.sessions: dict[str, float] = {}
         self._auth_failures: dict[str, list[float]] = {}
         self._auth_lock = asyncio.Lock()
+        self._factory_until = config.get("factory_enrollment_until", 0)
+        if (type(self._factory_until) is not int or self._factory_until < 0
+                or self._factory_until > time.time() + 600):
+            raise CandidateError("Factory enrollment must expire within ten minutes")
+        self._factory_monotonic_until = time.monotonic() + max(
+            0, self._factory_until - time.time())
         self.adoption = AdoptionStore(self.state_dir, config["controller_ip"],
                                      config["controller_pin"], control_port)
         self._current_ws: aiohttp.ClientWebSocketResponse | None = None
@@ -2570,8 +2580,13 @@ class CandidateService:
         self.last_disconnect_origin = (
             "diagnostic_expiry" if diagnostic_expired else "peer_or_transport")
 
+    def _factory_window_active(self) -> bool:
+        return (time.time() < self._factory_until
+                and time.monotonic() < self._factory_monotonic_until)
+
     def _control_enabled(self) -> bool:
-        return self.adoption.adopted or time.time() < self.config.get("diagnostic_hello_until", 0)
+        return (self.adoption.adopted or self._factory_window_active()
+                or time.time() < self.config.get("diagnostic_hello_until", 0))
 
     def _stream_control_enabled(self) -> bool:
         return ("paired_stream" in self.config or "paired_streams" in self.config
@@ -2588,18 +2603,19 @@ class CandidateService:
         except web.HTTPRequestEntityTooLarge:
             return web.json_response({"error": "Request too large"}, status=413)
         self.last_manage_shape = _object_shape(raw)
-        if self.credentials.credential is None:
+        if self.credentials.credential is None and not self._factory_window_active():
             return web.json_response({"error": "Adoption requires rotated credentials"}, status=503)
         try:
             body = _strict_json_object(raw)
         except (ValueError, UnicodeError, RecursionError):
             body = None
         if (not isinstance(body, dict) or not await self._verify_management(
-                request, body.get("username"), body.get("password"))):
+                request, body.get("username"), body.get("password"), allow_factory=True)):
             return web.json_response({"error": "Unauthorized"}, status=401)
         if self.adoption.adopted:
             return web.json_response({"error": "Already adopted"}, status=409)
-        until = self.config.get("diagnostic_adoption_until", 0)
+        until = max(self.config.get("diagnostic_adoption_until", 0),
+                    self._factory_until if self._factory_window_active() else 0)
         if until <= time.time():
             return web.json_response({"error": "Adoption window closed"}, status=503)
         try:
@@ -2637,7 +2653,8 @@ class CandidateService:
         return response
 
     async def _verify_management(self, request: web.Request,
-                                 username: object, password: object) -> bool:
+                                 username: object, password: object, *,
+                                 allow_factory: bool = False) -> bool:
         peer = request.remote or "unknown"
         async with self._auth_lock:
             now = time.monotonic()
@@ -2651,7 +2668,15 @@ class CandidateService:
             if len(failures) >= 10 or (peer not in self._auth_failures
                                        and len(self._auth_failures) >= 256):
                 return False
-            valid = await asyncio.to_thread(self.credentials.verify, username, password)
+            # Factory access is only for the explicit, short first-management
+            # window, never login. No header may stand in for the TCP peer.
+            valid = (allow_factory and self._factory_window_active()
+                     and self.credentials.credential is None
+                     and self.adoption.state is None
+                     and peer == self.config["controller_ip"]
+                     and username == "ui" and password == "ui")
+            if not valid:
+                valid = await asyncio.to_thread(self.credentials.verify, username, password)
             if valid:
                 self._auth_failures.pop(peer, None)
             else:
@@ -3479,7 +3504,7 @@ class CandidateService:
                             self.last_result = "websocket_101"
                             until = self.config.get("diagnostic_hello_until", 0)
                             diagnostic = until > time.time()
-                            active_control = diagnostic or self.adoption.adopted
+                            active_control = self._control_enabled()
                             expiry_task = None
                             event_expiry_task = None
                             try:
@@ -3497,7 +3522,7 @@ class CandidateService:
                                     if message.type == aiohttp.WSMsgType.BINARY:
                                         self.ws_binary_frames += 1
                                         self.ws_last_frame_bytes = len(message.data)
-                                        if active_control:
+                                        if self._control_enabled():
                                             await self._handle_diagnostic_frame(ws, message.data)
                                     elif message.type == aiohttp.WSMsgType.TEXT:
                                         self.ws_text_frames += 1

@@ -87,3 +87,32 @@ existing target. Never remove uncertainty by reinitializing adopted state.
 The [source/fixture evidence](evidence/first-run-aiport-browser-20261102.md)
 separates synthetic browser and local-file qualification from a real independent
 installer, native adoption/result, actual-service GUI and broader acceptance.
+
+## First native enrollment (Protect 7.3.74)
+
+A new, camera-free identity has no rotated management credential. Protect sends
+its first management request before rotating that credential. The default
+five-field profile deliberately refuses that request; enabling diagnostic hello
+and adoption alone does not solve this ordering.
+
+For an explicitly authorized fresh enrollment, add `factory_enrollment_until`
+to the private `config.json`: an absolute integer Unix timestamp at most 600
+seconds in the future. Do not extend it automatically or add it to retained
+production identities. The existing provisioning wizard leaves it absent.
+This enables bounded hello/control negotiation and permits factory `ui` / `ui`
+only on the HTTPS management adoption route, only from the configured controller
+TCP address, only while there is neither a credential nor any adoption state.
+It never enables factory login, camera pairing or stream processing. Forwarded
+headers cannot replace the TCP peer. Expiry uses wall and monotonic deadlines.
+
+The management payload must still name the pinned controller and supply a valid
+bounded token. The pending state is durably written before reconnect; adoption
+is confirmed only after the token-bearing, certificate-pinned WebSocket upgrade.
+Pending/adopted state or a rotated credential disables factory management.
+After native adoption, remove the temporary field and restart the same identity.
+Verify stored adoption, controller connectivity and unchanged original cameras;
+HTTP 200 or Protect's displayed adoption alone is insufficient.
+
+[The isolated native check](evidence/aiport-first-enrollment-20261106.md) passed
+fresh adoption and a genuine container stop/start without the field. It does not
+qualify a newly built release image, Mac networking or automatic reconciliation.
